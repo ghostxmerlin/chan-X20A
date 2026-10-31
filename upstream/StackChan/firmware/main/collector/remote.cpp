@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "remote.h"
 #include "remote_protocol.h"
+#include "startup_pose.h"
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
 #include <espnow.h>
@@ -42,6 +43,7 @@ std::atomic_bool ready{false}, motor_ready{false}, enabled{false};
 stackchan::motion::ServoFeedback yaw_feedback, pitch_feedback;
 int applied_yaw = 0, applied_pitch = 0, applied_speed = 0;
 const char* motor_state = "starting";
+const char* startup_state = "waiting_feedback";
 
 esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t* rx)
 {
@@ -70,10 +72,11 @@ esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t
 
 void motor_task(void*)
 {
-    // Prepare the calibrated receiver on boot without homing or replaying a goal.
+    // Boot pitch is a one-shot pose; the official receiver can preempt it.
     // The official remote works independently of the observer connection.
     bool was_enabled = false;
     int64_t last_feedback = 0;
+    StartupPose startup;
     TickType_t wake = xTaskGetTickCount();
     while (true) {
         const int64_t now = esp_timer_get_time();
@@ -98,6 +101,7 @@ void motor_task(void*)
             vTaskDelay(pdMS_TO_TICKS(20));wake = xTaskGetTickCount();continue;
         }
         auto& motion = GetStackChan().motion();
+        stackchan::motion::ServoFeedback startup_feedback;
         if (now - last_feedback >= 100000) {
             const auto yaw = motion.yawServo().readFeedback();
             const auto pitch = motion.pitchServo().readFeedback();
@@ -105,6 +109,7 @@ void motor_task(void*)
             yaw_feedback = yaw; pitch_feedback = pitch;
             feedback_timestamp = esp_timer_get_time();
             last_feedback = now;
+            startup_feedback = pitch;
             // Feedback is observation data. Factory receiver control does not
             // disable itself because an optional position read failed.
         }
@@ -115,6 +120,17 @@ void motor_task(void*)
             after = arm_after_seq;
             packet = history[sequence % kHistory];
         }
+        const auto pitch_limits = motion.pitchServo().getAngleLimit();
+        const bool valid_start = startup_feedback.valid && startup_feedback.angle >= pitch_limits.x &&
+                                 startup_feedback.angle <= pitch_limits.y;
+        const auto pose_action = startup.step(now, active, packet.seq > after, valid_start,
+                                              motion.pitchServo().isTrajectoryComplete());
+        if (pose_action == StartupPose::Action::Start) {
+            motion.pitchServo().moveFromFeedbackWithSpeed(startup_feedback, StartupPose::kPitch, StartupPose::kSpeed);
+            ESP_LOGI("CollectorRemote", "Startup pitch: measured %.1f -> target %.1f deg (10%%), speed %d",
+                     startup_feedback.angle / 10.0f, StartupPose::kPitch / 10.0f, StartupPose::kSpeed);
+        }
+        { std::lock_guard<std::mutex> lock(mutex); startup_state = startup.state(); }
         if (!active) {
             if (was_enabled) {
                 motion.yawServo().cancelMotion();
@@ -146,7 +162,9 @@ void motor_task(void*)
             // the factory automatic torque release when the motion has settled.
             if (applied_seq > after) motion.update();
             else {
-                std::lock_guard<std::mutex> lock(mutex); motor_state = "waiting_for_input";
+                if (pose_action != StartupPose::Action::None) motion.pitchServo().update();
+                std::lock_guard<std::mutex> lock(mutex);
+                motor_state = strcmp(startup_state, "moving") == 0 ? "startup_pose" : "waiting_for_input";
             }
         }
         was_enabled = active;
@@ -264,6 +282,8 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     motor["applied_seq"] = applied_seq;
     if (applied_seq) { motor["yaw_target_deg"] = applied_yaw / 10.0f; motor["pitch_target_deg"] = applied_pitch / 10.0f; motor["applied_speed"] = applied_speed; }
     motor["speed_limit"] = kRemoteSpeedLimit;
+    motor["startup_pitch_target_deg"] = StartupPose::kPitch / 10.0f;
+    motor["startup_pose_state"] = startup_state;
     add_feedback(motor["yaw"].to<ArduinoJson::JsonObject>(), yaw_feedback);
     add_feedback(motor["pitch"].to<ArduinoJson::JsonObject>(), pitch_feedback);
 }

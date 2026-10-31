@@ -1,24 +1,35 @@
 {
   "date": "2026-10-31",
-  "firmware": "collector-0.3.4",
+  "firmware": "collector-0.3.5",
   "android": {
     "version": "0.3.4",
     "version_code": 6
   },
   "upstream_commit": "f901cc2969189f3f0e96af1442c0f96e77e1e2c1",
   "esp_idf": "5.5.4",
-  "status": "state_fix_verified_motion_pending_feedback_unresolved",
-  "deployed_firmware_sha256": "099f69c78c148ee93916887aa0f324bb24d9b3b259f58607781bba97d2e39770",
+  "status": "green_home_and_startup_pitch_deployed_feedback_root_cause_unresolved",
+  "deployed_firmware_sha256": "e2b06660f7297e3da17f10512a695379c035bda78bf0a4512c08fc03dbcc9160",
   "deployed_apk_sha256": "d408fe6fb2498a559e1624d489759f4c1f3942ca4d5e02cbe78be738f4173916",
   "validation": {
     "firmware_build_and_app_flash_verification": "passed",
-    "apk_build_and_install": "passed",
+    "lvgl_actual_render_and_touch_state_tests": "passed",
+    "startup_pose_host_tests": "passed",
+    "startup_target_pitch_deg": 13,
+    "startup_measured_pitch_deg": 12.8,
+    "startup_valid_feedback_samples": "117/117 both axes",
     "startup_requested_and_enabled_samples": "117/117",
-    "ui_reenable_requested_and_enabled_samples": "122/122 during 30 seconds",
-    "startup_both_axis_position_valid_samples": "19/117",
-    "ui_reenable_invalid_feedback_samples": "119/122",
-    "physical_remote_motion_for_0_3_4": "not verified",
-    "servo_position_transport": "unresolved"
+    "physical_remote_motion_for_0_3_5": "full joystick/posture regression not repeated",
+    "screen_physical_tap_acceptance": "pending user confirmation",
+    "servo_position_transport": "previous corruption root cause unresolved; this boot valid",
+    "after_audio_monitor_restored": {
+      "samples": 80,
+      "both_valid": 78,
+      "enabled_all": true,
+      "pitch_angles": [
+        12.8
+      ]
+    },
+    "android_audio_monitor": "restored and UI confirmed ON"
   },
   "scope": "Source and public configuration snapshot; hashes refer to privately retained deployed binaries, not publicly hosted downloads.",
   "excluded": [
@@ -36,7 +47,18 @@
     "servo_transport_test": "passed",
     "android_host_tests": "passed",
     "shell_syntax": "passed",
-    "firmware_sources_match_deployed_snapshot": 24,
-    "private_credentials_in_staged_files": "none detected"
+    "private_credentials_in_staged_files": "none detected",
+    "startup_pose_test": "passed",
+    "lvgl_render_and_touch_test": "passed"
+  },
+  "previous_validation_0_3_4": {
+    "firmware_build_and_app_flash_verification": "passed",
+    "apk_build_and_install": "passed",
+    "startup_requested_and_enabled_samples": "117/117",
+    "ui_reenable_requested_and_enabled_samples": "122/122 during 30 seconds",
+    "startup_both_axis_position_valid_samples": "19/117",
+    "ui_reenable_invalid_feedback_samples": "119/122",
+    "physical_remote_motion_for_0_3_4": "not verified",
+    "servo_position_transport": "unresolved"
   }
 }

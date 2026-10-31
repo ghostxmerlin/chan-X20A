@@ -80,6 +80,10 @@ public:
     // A failed bus read must never be presented as a measured angle.
     virtual ServoFeedback readFeedback() { return {}; }
     void cancelMotion() { setTorqueEnabled(false); stop_motion_at_angle(Servo::getCurrentAngle()); }
+    // Start an automatic pose from a validated sample, without a second UART
+    // read that could substitute an internal fallback angle for the start point.
+    bool moveFromFeedbackWithSpeed(const ServoFeedback& feedback, int angle, int speed);
+    bool isTrajectoryComplete() { return _angle_anim.done() && !_snap_to_target_on_rest; }
 
     /**
      * @brief

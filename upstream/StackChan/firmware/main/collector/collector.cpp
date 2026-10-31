@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "collector.h"
 #include "remote.h"
+#include "screen.h"
 #include "remote_protocol.h"
 #include <ArduinoJson.hpp>
 #include <board.h>
@@ -86,7 +87,7 @@ constexpr size_t kImuHistory = 100; // 2 seconds at 50 Hz; loss after this is re
 std::array<Sensors, kImuHistory> imu_history;
 std::vector<SsidItem> networks;
 esp_netif_t* station = nullptr;
-lv_obj_t* status_label = nullptr;
+bool screen_initialized = false;
 
 std::string random_hex(size_t bytes)
 {
@@ -690,23 +691,19 @@ void update_screen(const std::string& ip)
 {
     auto display = static_cast<StackChanAvatarDisplay*>(Board::GetInstance().GetDisplay());
     display->LvglLock();
-    if (!status_label) {
-        auto screen = lv_screen_active();
-        lv_obj_set_style_bg_color(screen, lv_color_hex(0x101922), 0);
-        status_label = lv_label_create(screen);
-        lv_obj_set_width(status_label, 306);
-        lv_obj_align(status_label, LV_ALIGN_TOP_LEFT, 7, 8);
-        lv_obj_set_style_text_color(status_label, lv_color_hex(0xE8F3F4), 0);
-        lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
+    if (!screen_initialized) {
+        screen_create(lv_screen_active());
+        lv_timer_create([](lv_timer_t*) {
+            const auto touch = hal_bridge::get_touch_point();
+            const int64_t now = esp_timer_get_time();
+            if (touch.valid && now - touch.timestampUs < 100000)
+                screen_touch(touch.num > 0, static_cast<uint32_t>(now / 1000));
+        }, 20, nullptr);
+        screen_initialized = true;
     }
-    char text[512];
     uint8_t channel = 0; wifi_second_chan_t secondary; esp_wifi_get_channel(&channel, &secondary);
-    snprintf(text, sizeof(text), "COLLECTOR 0.3 | MIC + CAM ON\nRemote CH %u / ID 1 | Motor %s\n\n%s:8080\nAudio :8081 | %s\n\nPAIRING TOKEN (local HTTP)\n%.16s\n%s\n\nCamera #%lu Audio %s\nWi-Fi fallback: USB JSON command",
-             channel, remote_display_state(),
-             ip.empty() ? "Wi-Fi waiting" : ip.c_str(), audio_client ? "STREAMING" : "READY",
-             token.c_str(), token.c_str() + 16, static_cast<unsigned long>(frame_seq.load()),
-             audio_ready ? "capturing" : "starting");
-    lv_label_set_text(status_label, text);
+    screen_update({kVersion, ip.c_str(), token.c_str(), remote_display_state(), channel,
+                   frame_seq.load(), audio_ready.load(), audio_client.load()});
     display->LvglUnlock();
 }
 } // namespace

@@ -1,5 +1,17 @@
 # 会话交接记录
 
+## 2026-10-31：0.3.5 绿色笑面男与 10% 启动俯仰
+
+- 固件 `collector-0.3.5` 已刷入，2,480,400 字节，SHA256 `e2b06660f7297e3da17f10512a695379c035bda78bf0a4512c08fc03dbcc9160`。再次核对开发设备身份、分区和 otadata，只写 `ota_1 / 0x510000`，独立 verify 通过。Android 仍为 `0.3.4 / code6`，本轮没有 APK 变更。
+- 机身首页为绿色笑面男，轻触切换 Mac 绿色终端风格的信息页，再点返回；信息保留版本、相机帧数、MIC、遥控 CH/ID/状态、HTTP 地址、音频端口、配对码与 USB Wi-Fi 提示。每次启动默认首页；长按不反复翻页。静态图形 216×216，新增 JetBrains Mono ASCII 字库；来源许可见根目录 NOTICE。
+- 启动俯仰目标是当前 5–85° 安全行程的 10%，即 13°；yaw 不主动归位。使用原厂弹簧 `moveWithSpeed` / `update`、速度 250，保留原厂限位、俯仰堵转与到位释放。新入口只允许用有效、限位内实测角度初始化轨迹，不用回退值冒充测量，也不额外读一次位置作为起点。
+- 一次启动最多执行一次；等待有效俯仰回传最多 5 秒，超时明确 `feedback_unavailable` 并跳过，不在很久以后突然归位。遥控输入优先且立即接管；手动停用取消启动动作，再启用不会重放。额外反馈仍不决定遥控是否启用。telemetry 新增 `startup_pitch_target_deg` / `startup_pose_state`，`trajectory_complete` 仅表示轨迹计算结束，实测仍看 pitch.valid / angle_deg。
+- 本次实机日志从有效 46.2° 开始，目标 13°；35 秒启动观察所得 117 组两轴回传全部有效，俯仰均 12.8°，requested/enabled 均 true，无遥控包、无 POST enable。首次 0.3.5 启动表现良好不能证明之前的串口损坏根因已修复；完整摇杆/姿态动作回归未重复。
+- 同一 LVGL 代码离线渲染 320×240 两页并逐图检查，无截断；启动首页、短按抬手、抖动、长按不翻页与点回首页通过。主机启动姿态用例、十万随机遥控协议用例及 Python 15 项通过。实物显示/触摸已向用户发出一次确认，尚待回复。
+- Android 自动重连 0.3.5，ADB 已恢复声音监听并截图确认开启；随后 80 组反馈中 78 组两轴有效，控制请求保持开启，俯仰有效值为 [12.8]°。
+- 本机证据：`artifacts/collector-0.3.5/`、`logs/collector-v035-{build-final,boot}.log`、`logs/collector-v035-summary.json`、`logs/display-v035/`。不上传现场截图、原始日志或凭据。
+
+
 ## 2026-10-31：建立公开仓库 chan-X20A
 
 项目根目录现在是统一 Git 仓库，`main` 分支；`origin` 指向 `ghostxmerlin/chan-X20A`，`upstream` 指向 `m5stack/StackChan`。官方提交历史保留，源文件位于 `upstream/StackChan/`，它不是 submodule；下面对“独立 dirty checkout”和旧开发分支的描述属于历史。

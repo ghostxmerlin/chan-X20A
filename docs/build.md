@@ -18,7 +18,7 @@ cp config/collector-0.3.4.sdkconfig upstream/StackChan/firmware/sdkconfig
 ./scripts/idf.sh build
 ```
 
-`config/collector-0.3.4.sdkconfig` 与已部署构建的配置一致，不含 Wi-Fi 密码或设备 token。`scripts/idf.sh` 仅在当前进程载入 `.tools/esp-idf-v5.5.4`，不修改系统 shell 配置。依赖补丁由官方 `fetch_repos.py` 应用。
+`config/collector-0.3.4.sdkconfig` 同时用于 0.3.4 / 0.3.5，两版配置完全一致，不含 Wi-Fi 密码或设备 token。`scripts/idf.sh` 仅在当前进程载入 `.tools/esp-idf-v5.5.4`，不修改系统 shell 配置。依赖补丁由官方 `fetch_repos.py` 应用。
 
 产物位于 `upstream/StackChan/firmware/build/`。构建完成不等于设备验收通过；本版本的已知舵机回传问题见 [验证记录](collector-validation.md)。
 
@@ -62,3 +62,30 @@ ctest --test-dir .cache/motion-tests --output-on-failure
 ```
 
 Android 原生运行时测试见 `android/Collector/test-android-runtime`，需已连接模拟器或测试设备。实际遥控、机械动作与声音仍须实机验证，不能用主机模拟测试代替。
+
+### 机身屏幕与启动姿态
+
+屏幕采用 LVGL；黑底 `#020704`、窗口栏 `#0C1C12`、分隔线 `#244C32`、辅助文字 `#72A980` 和主色 `#79FF97`，搭配 JetBrains Mono 15 px。320×240 首页居中显示 216×216 静态笑面男，底部保留轻触提示；信息页使用 28 px 窗口栏、等宽状态行及两行配对码。图形和字库已生成并提交，普通固件编译不需要 Node/Pillow。
+
+使用同一份 LVGL 屏幕代码离线渲染两页并验证轻触/长按行为：
+
+```sh
+cmake -S tests/display -B .cache/display -DCMAKE_BUILD_TYPE=Debug
+cmake --build .cache/display -j 8
+mkdir -p .cache/display-preview
+.cache/display/display_preview .cache/display-preview
+c++ -std=c++17 tests/startup_pose_test.cpp -o .cache/startup_pose_test
+.cache/startup_pose_test
+```
+
+预览输出 PPM，使用合成 IP/配对码。启动姿态测试覆盖等待有效回传、遥控抢占、停用再启用、超时跳过与一次启动仅执行一次；实际机械到位仍以实机反馈为准。
+
+需要修改图形/字体时，在本地安装可选生成工具，并准备 Pillow：
+
+```sh
+npm install --prefix .tools/ui-assets --no-audit --no-fund @resvg/resvg-js@2.6.2 lv_font_conv@1.5.3
+curl -fL https://raw.githubusercontent.com/JetBrains/JetBrainsMono/v2.304/fonts/ttf/JetBrainsMono-Regular.ttf -o .tools/ui-assets/JetBrainsMono-Regular.ttf
+python3 scripts/generate-screen-assets.py
+```
+
+生成器只修改 collector 内两份 C 资源文件；来源和许可见根目录 `NOTICE.md`。

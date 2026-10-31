@@ -95,6 +95,17 @@ void Servo::moveWithSpeed(int angle, int speed)
     moveWithSpringParams(angle, spring_options.stiffness, spring_options.damping);
 }
 
+bool Servo::moveFromFeedbackWithSpeed(const ServoFeedback& feedback, int angle, int speed)
+{
+    if (!feedback.valid || feedback.angle < _angle_limit.x || feedback.angle > _angle_limit.y) return false;
+    stop_motion_at_angle(feedback.angle);
+    const bool previous_sync = _auto_angle_sync_enabled;
+    _auto_angle_sync_enabled = false;
+    moveWithSpeed(angle, speed);
+    _auto_angle_sync_enabled = previous_sync;
+    return true;
+}
+
 int Servo::getCurrentAngle()
 {
     return _angle_anim.directValue();
