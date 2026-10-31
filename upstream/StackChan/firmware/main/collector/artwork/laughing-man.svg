@@ -1,12 +1,12 @@
-<svg viewBox="0 0 26 26" height="216" width="216" xmlns="http://www.w3.org/2000/svg">
-<!-- Static green adaptation; source and license: NOTICE.md at repository root. -->
-<path fill="black" stroke="#79ff97" d="M 24 12 A 11 11 0 1 0 24 15"/>
-<path id="0" stroke="none" fill="none" d="M 13.01 4.5 A 9 9 0 1 1 13 4.5"></path>
-<text font-size="1.4" fill="#79ff97"><textPath href="#0" font-family="JetBrains Mono">I thought what I'd do was pretend I was one of those deaf-mutes.</textPath></text>
+<svg viewBox="0 1.5 26 24" height="240" width="260" xmlns="http://www.w3.org/2000/svg">
+<!-- Layered green adaptation; source and license: NOTICE.md at repository root. -->
+<path id="outline" fill="none" stroke="#79ff97" d="M 24 12 A 11 11 0 1 0 24 15"/>
+<defs><path id="letter-path" d="M 13.01 4.5 A 9 9 0 1 1 13 4.5"/></defs>
+<g id="lettering"><text font-size="1.4" fill="#79ff97"><textPath href="#letter-path" font-family="JetBrains Mono">I thought what I'd do was pretend I was one of those deaf-mutes.</textPath></text></g>
 
-<svg x="4" y="4" height="18" width="22">
-<path fill="black" stroke="#79ff97" d="M 1 9 A 8.1 8.1 0 0 0 17 11 L 20 11 A 1 1 0 0 0 20 8 L 17 8 A 8.25 8.25 0 0 0 1 8 L 17 8 M 9 1 L 9 2 M 4 11 A 5.1 5.1 0 0 0 14 11 L 4 11 A 5.1 5.1 0 0 0 14 11"/>
+<svg id="face" x="4" y="4" height="18" width="22">
+<path fill="#000000" stroke="#79ff97" d="M 1 9 A 8.1 8.1 0 0 0 17 11 L 20 11 A 1 1 0 0 0 20 8 L 17 8 A 8.25 8.25 0 0 0 1 8 L 17 8 M 9 1 L 9 2 M 4 11 A 5.1 5.1 0 0 0 14 11 L 4 11 A 5.1 5.1 0 0 0 14 11"/>
 <path fill="#79ff97" d="M 5 10 A 1 1 0 0 1 7 10 M 11 10 A 1 1 0 0 1 13 10"/>
-<path fill="black" d="M 5 10 A 1 0.5 0 0 1 7 10 M 11 10 A 1 0.5 0 0 1 13 10"/>
+<path fill="#000000" d="M 5 10 A 1 0.5 0 0 1 7 10 M 11 10 A 1 0.5 0 0 1 13 10"/>
 </svg>
 </svg>

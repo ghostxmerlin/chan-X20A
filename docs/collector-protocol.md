@@ -57,6 +57,10 @@
 
 0.3.1 每轴位置回传增加 `transport_error`（0 正常、1 无回复、2 校验失败、3 ID 不符、4 长度不符）、`servo_status`、`position_raw`。仅位置事务正常、舵机状态为 0、原始位置在 0…1000 时 `valid=true` 并给出角度；负载/电流有各自的 `load_valid` / `current_valid`，可选读回失败不否定有效位置。拒绝包的诊断 `last_rejected` 保留长度、时间和可解出的字段，不作为已接受的输入。
 
+0.3.6 在 info/telemetry 的 `remote` 增加 `yaw_control_enabled=true`、`pitch_control_enabled=false`、`pitch_input_role="reserved"`。两种官方遥控模式均只执行水平轴；`last.pitch_deg`、历史包和 `remote.csv` 中的上下输入仍原样保存，不能作为已执行的俯仰目标。`motor.pitch_target_deg=null`，导出的 `servos.csv` 对应单元格留空；`yaw_target_deg` / `applied_speed` 仍表示遥控实际应用的水平目标/速度。
+
+启动俯仰沿用 0.3.5 的单次 13° 目标（5–85° 行程的 10%），通过 `startup_pitch_target_deg` 和 `startup_pose_state` 单独表达，实际角度仍须看 `motor.pitch.valid` / `angle_deg`。从 0.3.6 起左右遥控不取消或重启这条启动轨迹；手动停止会取消，重新启用不会再次归位。最多等待有效起始位置 5 秒，无有效回传时跳过；轨迹结束不等于有效实测到位。Android 0.3.6 将蓝点标为“输入”，明确提示“仅左右转动 · 上下输入保留”，兼容旧固件的双轴目标显示。
+
 0.3.2 的 info/telemetry `remote.control_mode="standalone"`、`requires_observer=false`，兼容字段 `lease_ms=0`。`POST /v1/remote` 使用同一 Bearer 鉴权，JSON `{"enabled":true}` 开启接收执行，`false` 停止并释放力矩；不需要续约。`motor.requested` 是请求状态，`motor.enabled` 是执行任务的当前状态，UI 以机器人的返回值为准。Android 0.3.2 仅在用户明确点击开关时发送控制请求，连接、断线、重连、boot 更新均不自动停用独立接收器；对旧固件仍保留原 750 ms 续约。
 
 启动默认准备底座 VM 和舵机，只读校准、关闭力矩、不归位；等待本次启动的新遥控输入。停止后再启用只处理启用以后收到的包。0.3.4 的 info/telemetry 新增 `remote.feedback_required_for_control=false`，`remote.motor.feedback_valid` 表示本次两轴位置是否同时有效。位置读回失败不修改 `motor.requested`，也不阻止用户重新启用；无效位置仍不提供角度，不作为实测值绘图或记录。此前 0.3.2 的失败锁停是采集与控制耦合错误，已撤掉。水平夹到 ±128°、俯仰夹到 5–85°；速度保留官方包的 0…1000（原厂摇杆与姿态模式均发 600），取消此前 400 上限。

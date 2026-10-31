@@ -23,8 +23,13 @@ public final class ChartRenderTest {
         MotionChart accel=new MotionChart(context,history,false),gyro=new MotionChart(context,history,true);accel.refresh(false);gyro.refresh(false);
         draw(accel,c,w-Math.round(28*d),Math.round(130*d),0);draw(gyro,c,w-Math.round(28*d),Math.round(130*d),Math.round(140*d));
         JSONObject remote=new JSONObject("{\"last\":{\"yaw_deg\":25,\"pitch_deg\":55,\"speed\":600,\"rssi_dbm\":-58},\"motor\":{\"feedback_age_ms\":20,\"yaw\":{\"valid\":true,\"angle_deg\":15},\"pitch\":{\"valid\":true,\"angle_deg\":48}}}");
+        remote.put("pitch_control_enabled",false);
+        remote.getJSONObject("motor").getJSONObject("pitch").put("angle_deg",12.8);
         RemoteView rv=new RemoteView(context);rv.update(remote,false);draw(rv,c,w-Math.round(28*d),Math.round(96*d),Math.round(285*d));
+        if(!rv.getContentDescription().toString().contains("上下输入仅记录、不驱动舵机"))throw new AssertionError("yaw-only input must not be labeled as applied pitch");
         try(FileOutputStream out=new FileOutputStream(destination)){if(!bitmap.compress(Bitmap.CompressFormat.PNG,100,out))throw new AssertionError("PNG encode");}
+        remote.remove("pitch_control_enabled");rv.update(remote,false);draw(rv,c,w-Math.round(28*d),Math.round(96*d),Math.round(285*d));
+        if(rv.getContentDescription().toString().contains("不驱动舵机"))throw new AssertionError("legacy firmware must retain both-axis labels");
         System.out.println("PASS: native Android chart components rendered offscreen at "+w+"x"+h+"; synthetic data explicitly labeled");
     }
 }

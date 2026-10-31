@@ -123,7 +123,9 @@ StackChanAvatarDisplay::StackChanAvatarDisplay(esp_lcd_panel_io_handle_t panel_i
     // port_cfg.task_priority   = 20;
     port_cfg.task_priority = 3;
 #if CONFIG_SOC_CPU_CORES_NUM > 1
-    port_cfg.task_affinity = 1;
+    // Collector encodes JPEG on core 1. Keep the animated display on core 0
+    // so its higher-priority rendering does not starve that encoder.
+    port_cfg.task_affinity = hal_bridge::is_collector_mode() ? 0 : 1;
 #endif
     lvgl_port_init(&port_cfg);
 

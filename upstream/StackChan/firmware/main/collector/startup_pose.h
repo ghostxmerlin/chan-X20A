@@ -3,15 +3,15 @@
 #include <cstdint>
 
 namespace collector {
-// One attempt per boot; explicit control/stop always takes precedence.
+// One pitch attempt per boot. Stop cancels it; yaw-only remote input is unrelated.
 class StartupPose {
 public:
     enum class Action { None, Start, Update };
     static constexpr int kPitch = 50 + (850 - 50) / 10; // 10% of 5..85 degrees
     static constexpr int kSpeed = 250;
-    Action step(int64_t now_us, bool enabled, bool fresh_remote, bool valid_pitch, bool trajectory_done)
+    Action step(int64_t now_us, bool enabled, bool valid_pitch, bool trajectory_done)
     {
-        if (!enabled || fresh_remote) { state_ = State::Cancelled; return Action::None; }
+        if (!enabled) { state_ = State::Cancelled; return Action::None; }
         if (state_ == State::Waiting) {
             if (started_at_ < 0) started_at_ = now_us;
             if (now_us - started_at_ >= 5000000) state_ = State::Unavailable;

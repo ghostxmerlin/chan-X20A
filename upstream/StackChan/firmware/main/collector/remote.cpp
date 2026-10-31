@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "remote.h"
 #include "remote_protocol.h"
+#include "remote_actuation.h"
 #include "startup_pose.h"
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
@@ -41,7 +42,7 @@ bool control_requested = true;
 uint32_t arm_after_seq = 0, applied_seq = 0;
 std::atomic_bool ready{false}, motor_ready{false}, enabled{false};
 stackchan::motion::ServoFeedback yaw_feedback, pitch_feedback;
-int applied_yaw = 0, applied_pitch = 0, applied_speed = 0;
+int applied_yaw = 0, applied_speed = 0;
 const char* motor_state = "starting";
 const char* startup_state = "waiting_feedback";
 
@@ -72,7 +73,7 @@ esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t
 
 void motor_task(void*)
 {
-    // Boot pitch is a one-shot pose; the official receiver can preempt it.
+    // Boot pitch is a one-shot pose, independent of yaw-only remote input.
     // The official remote works independently of the observer connection.
     bool was_enabled = false;
     int64_t last_feedback = 0;
@@ -123,7 +124,7 @@ void motor_task(void*)
         const auto pitch_limits = motion.pitchServo().getAngleLimit();
         const bool valid_start = startup_feedback.valid && startup_feedback.angle >= pitch_limits.x &&
                                  startup_feedback.angle <= pitch_limits.y;
-        const auto pose_action = startup.step(now, active, packet.seq > after, valid_start,
+        const auto pose_action = startup.step(now, active, valid_start,
                                               motion.pitchServo().isTrajectoryComplete());
         if (pose_action == StartupPose::Action::Start) {
             motion.pitchServo().moveFromFeedbackWithSpeed(startup_feedback, StartupPose::kPitch, StartupPose::kSpeed);
@@ -142,30 +143,25 @@ void motor_task(void*)
             enabled = true;
             // Do not replay any packet received before the user enabled control.
             if (packet.seq > after && packet.seq != applied_seq) {
-                const auto limited = limit_remote_motion(packet.command);
-                const int yaw = limited.yaw;
-                const int pitch = limited.pitch;
-                const int speed = limited.speed;
                 // Sync to the physical pose for a new control session, then retain the
                 // official spring velocity across subsequent remote packets.
-                motion.setAutoAngleSyncEnabled(applied_seq <= after);
-                motion.moveWithSpeed(yaw, pitch, speed);
-                // Use the factory position-write path; no extra per-packet torque command.
-                motion.update();
+                const auto target = apply_remote_yaw(motion.yawServo(), packet.command, applied_seq <= after);
                 std::lock_guard<std::mutex> lock(mutex);
                 applied_seq = packet.seq;
-                applied_yaw = yaw; applied_pitch = pitch; applied_speed = speed;
+                applied_yaw = target.yaw; applied_speed = target.speed;
                 motor_state = "following";
             }
             // Match factory remote control: finish the spring trajectory even
             // when a held joystick sends no new packet. Servo::update retains
             // the factory automatic torque release when the motion has settled.
-            if (applied_seq > after) motion.update();
+            if (applied_seq > after) motion.yawServo().update();
             else {
-                if (pose_action != StartupPose::Action::None) motion.pitchServo().update();
                 std::lock_guard<std::mutex> lock(mutex);
                 motor_state = strcmp(startup_state, "moving") == 0 ? "startup_pose" : "waiting_for_input";
             }
+            // Only the boot-pose state machine can drive pitch. Remote packets
+            // never create a pitch target, cancel it, or restart its trajectory.
+            if (pose_action != StartupPose::Action::None) motion.pitchServo().update();
         }
         was_enabled = active;
         xTaskDelayUntil(&wake, pdMS_TO_TICKS(20));
@@ -263,6 +259,9 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     target["auxiliary_output_enabled"] = false;
     target["feedback_required_for_control"] = false;
     target["control_mode"] = "standalone";
+    target["yaw_control_enabled"] = true;
+    target["pitch_control_enabled"] = kRemotePitchControlEnabled;
+    target["pitch_input_role"] = "reserved";
     target["requires_observer"] = false;
     target["lease_ms"] = 0; // Legacy field; no lease in standalone mode.
     if (sequence) add_packet(target["last"].to<ArduinoJson::JsonObject>(), history[sequence % kHistory]);
@@ -280,7 +279,8 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     motor["timestamp_us"] = feedback_timestamp;
     motor["feedback_age_ms"] = feedback_timestamp ? (esp_timer_get_time() - feedback_timestamp) / 1000 : -1;
     motor["applied_seq"] = applied_seq;
-    if (applied_seq) { motor["yaw_target_deg"] = applied_yaw / 10.0f; motor["pitch_target_deg"] = applied_pitch / 10.0f; motor["applied_speed"] = applied_speed; }
+    if (applied_seq) { motor["yaw_target_deg"] = applied_yaw / 10.0f; motor["applied_speed"] = applied_speed; }
+    motor["pitch_target_deg"] = nullptr; // No pitch target is applied from remote input.
     motor["speed_limit"] = kRemoteSpeedLimit;
     motor["startup_pitch_target_deg"] = StartupPose::kPitch / 10.0f;
     motor["startup_pose_state"] = startup_state;

@@ -3,6 +3,7 @@
 #include "remote.h"
 #include "screen.h"
 #include "remote_protocol.h"
+#include "remote_actuation.h"
 #include <ArduinoJson.hpp>
 #include <board.h>
 #include <audio/audio_codec.h>
@@ -384,6 +385,9 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["remote"]["motion_default"] = "enabled; waits for fresh remote input";
     doc["remote"]["feedback_required_for_control"] = false;
     doc["remote"]["control_mode"] = "standalone";
+    doc["remote"]["yaw_control_enabled"] = true;
+    doc["remote"]["pitch_control_enabled"] = kRemotePitchControlEnabled;
+    doc["remote"]["pitch_input_role"] = "reserved";
     doc["remote"]["requires_observer"] = false;
     doc["remote"]["speed_limit"] = kRemoteSpeedLimit;
     auto audio = doc["audio"].to<JsonObject>();
@@ -612,7 +616,9 @@ void audio_stream_task(void* parameter)
         }
         if (!available) {
             if (esp_timer_get_time() - last_audio_us.load() > 3000000) break;
-            vTaskDelay(pdMS_TO_TICKS(5));
+            // At 100 Hz, 5 ms rounds to zero ticks. A priority-4 busy loop
+            // starves JPEG/display work while waiting for the next audio block.
+            vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(5)));
             continue;
         }
         put_le(wire.data() + 4, block->seq, 4);
@@ -696,6 +702,7 @@ void update_screen(const std::string& ip)
         lv_timer_create([](lv_timer_t*) {
             const auto touch = hal_bridge::get_touch_point();
             const int64_t now = esp_timer_get_time();
+            screen_tick(static_cast<uint32_t>(now / 1000));
             if (touch.valid && now - touch.timestampUs < 100000)
                 screen_touch(touch.num > 0, static_cast<uint32_t>(now / 1000));
         }, 20, nullptr);

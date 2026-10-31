@@ -1,18 +1,30 @@
 /* SPDX-License-Identifier: MIT */
 #include "screen.h"
+#include "laughing_man.h"
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#ifdef ESP_PLATFORM
+#include <esp_heap_caps.h>
+#include <esp_log.h>
+#endif
 
-LV_IMAGE_DECLARE(collector_laughing_man);
 LV_FONT_DECLARE(collector_mono_15);
 
 namespace collector {
 namespace {
 // Phosphor palette: ink, chrome, rule, muted text, signal.
-constexpr uint32_t kInk = 0x020704, kChrome = 0x0C1C12, kRule = 0x244C32;
+constexpr uint32_t kInk = 0x000000, kChrome = 0x0C1C12, kRule = 0x244C32;
 constexpr uint32_t kMuted = 0x72A980, kSignal = 0x79FF97;
-lv_obj_t *home, *terminal, *body, *footer;
+lv_obj_t *home, *terminal, *body, *footer, *portrait;
+uint16_t* animation_pixels = nullptr;
+lv_image_dsc_t animation_image;
+uint32_t animation_frame = 0;
 bool showing_status = false, pressed = false;
 uint32_t pressed_at = 0, last_release = 0;
+uint32_t animation_last_ms = 0, animation_render_ms = 0, animation_phase_ms = 0;
+bool animation_clock_ready = false;
+constexpr uint32_t kRotationMs = 12000, kAnimationFrameMs = kRotationMs / COLLECTOR_FACE_FRAME_COUNT;
 
 lv_obj_t* box(lv_obj_t* parent, int x, int y, int w, int h, uint32_t color)
 {
@@ -40,14 +52,23 @@ void screen_create(lv_obj_t* parent)
     lv_obj_set_style_bg_color(parent, lv_color_hex(kInk), 0);
     lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     home = box(parent, 0, 0, 320, 240, kInk);
-    auto face = lv_image_create(home);
-    lv_image_set_src(face, &collector_laughing_man);
-    lv_obj_set_style_image_recolor(face, lv_color_hex(kSignal), 0);
-    lv_obj_set_style_image_recolor_opa(face, LV_OPA_COVER, 0);
-    lv_obj_set_pos(face, 52, 1);
-    auto hint = label(home, 0, 218, "TAP FOR STATUS", kMuted);
-    lv_obj_set_width(hint, 320);
-    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+    portrait = lv_image_create(home);
+    if (!animation_pixels) {
+#ifdef ESP_PLATFORM
+        animation_pixels = static_cast<uint16_t*>(heap_caps_malloc(collector_laughing_man.data_size,
+                                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!animation_pixels) ESP_LOGE("CollectorScreen", "Animation buffer unavailable; keeping static home");
+#else
+        animation_pixels = static_cast<uint16_t*>(std::malloc(collector_laughing_man.data_size));
+#endif
+    }
+    if (animation_pixels) {
+        std::memcpy(animation_pixels, collector_laughing_man.data, collector_laughing_man.data_size);
+        animation_image = collector_laughing_man;
+        animation_image.data = reinterpret_cast<const uint8_t*>(animation_pixels);
+        lv_image_set_src(portrait, &animation_image);
+    } else lv_image_set_src(portrait, &collector_laughing_man);
+    lv_obj_set_pos(portrait, 30, 0);
 
     terminal = box(parent, 0, 0, 320, 240, kInk);
     box(terminal, 0, 0, 320, 28, kChrome);
@@ -67,6 +88,41 @@ void screen_create(lv_obj_t* parent)
     showing_status = false;
     pressed = false;
     last_release = 0;
+    animation_clock_ready = false;
+    animation_phase_ms = 0;
+    animation_frame = 0;
+}
+void screen_tick(uint32_t now_ms)
+{
+    if (!portrait || !animation_pixels) return;
+    if (!animation_clock_ready) {
+        animation_last_ms = animation_render_ms = now_ms;
+        animation_clock_ready = true;
+    }
+    const uint32_t elapsed = now_ms - animation_last_ms;
+    animation_last_ms = now_ms;
+    if (showing_status) return;
+    animation_phase_ms = (animation_phase_ms + elapsed % kRotationMs) % kRotationMs;
+    if (now_ms - animation_render_ms < kAnimationFrameMs) return;
+    animation_render_ms = now_ms;
+    const uint32_t frame = animation_phase_ms * COLLECTOR_FACE_FRAME_COUNT / kRotationMs;
+    if (frame == animation_frame) return;
+    animation_frame = frame;
+    const uint8_t* pixels = collector_laughing_man_frames + frame * COLLECTOR_FACE_CHANGED_PIXELS;
+    const auto* offsets = collector_laughing_man_offsets;
+    const auto* palette = collector_laughing_man_palette;
+    for (size_t i = 0; i < COLLECTOR_FACE_CHANGED_PIXELS; ++i)
+        animation_pixels[offsets[i]] = palette[pixels[i]];
+    // The S3 only copies an opaque image. Real-time rotated alpha layers made
+    // the higher-priority LVGL task starve the camera encoder on core 1.
+    lv_area_t bounds;
+    lv_obj_get_coords(portrait, &bounds);
+    for (size_t i = 0; i < COLLECTOR_FACE_REGION_COUNT; ++i) {
+        auto area = collector_laughing_man_regions[i];
+        area.x1 += bounds.x1; area.x2 += bounds.x1;
+        area.y1 += bounds.y1; area.y2 += bounds.y1;
+        lv_obj_invalidate_area(portrait, &area);
+    }
 }
 void screen_update(const ScreenStatus& s)
 {
@@ -95,6 +151,7 @@ void screen_touch(bool down, uint32_t now_ms)
         lv_obj_update_flag(home, LV_OBJ_FLAG_HIDDEN, showing_status);
         lv_obj_update_flag(terminal, LV_OBJ_FLAG_HIDDEN, !showing_status);
         last_release = now_ms;
+        animation_last_ms = animation_render_ms = now_ms;
     }
     pressed = down;
 }
