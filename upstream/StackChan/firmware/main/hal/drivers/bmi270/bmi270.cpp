@@ -78,8 +78,10 @@ void BMI270::bmi2_delay_us(uint32_t period, void* intf_ptr)
     }
 }
 
-bool BMI270::begin()
+bool BMI270::begin(uint8_t accelRangeG)
 {
+    if (accelRangeG != 2 && accelRangeG != 4 && accelRangeG != 8 && accelRangeG != 16) return false;
+    _accel_range_g = accelRangeG;
     int8_t rslt;
 
     // Initialize bmi270
@@ -95,7 +97,7 @@ bool BMI270::begin()
     rslt        = bmi2_get_sensor_config(&config, 1, &_bmi);
     if (rslt == BMI2_OK) {
         config.cfg.acc.odr         = BMI2_ACC_ODR_100HZ;
-        config.cfg.acc.range       = BMI2_ACC_RANGE_2G;
+        config.cfg.acc.range       = accelRangeG == 16 ? BMI2_ACC_RANGE_16G : accelRangeG == 8 ? BMI2_ACC_RANGE_8G : accelRangeG == 4 ? BMI2_ACC_RANGE_4G : BMI2_ACC_RANGE_2G;
         config.cfg.acc.bwp         = BMI2_ACC_NORMAL_AVG4;
         config.cfg.acc.filter_perf = BMI2_PERF_OPT_MODE;
         rslt                       = bmi2_set_sensor_config(&config, 1, &_bmi);
@@ -142,10 +144,9 @@ bool BMI270::update()
 
     if (rslt == BMI2_OK) {
         // Convert Accel
-        // Assuming 2G range and 16-bit resolution as configured
-        _data.accel_x = lsb_to_mps2(sens_data.acc.x, 2.0f, 16);
-        _data.accel_y = lsb_to_mps2(sens_data.acc.y, 2.0f, 16);
-        _data.accel_z = lsb_to_mps2(sens_data.acc.z, 2.0f, 16);
+        _data.accel_x = lsb_to_mps2(sens_data.acc.x, _accel_range_g, 16);
+        _data.accel_y = lsb_to_mps2(sens_data.acc.y, _accel_range_g, 16);
+        _data.accel_z = lsb_to_mps2(sens_data.acc.z, _accel_range_g, 16);
 
         // Convert Gyro
         // Assuming 2000dps range and 16-bit resolution

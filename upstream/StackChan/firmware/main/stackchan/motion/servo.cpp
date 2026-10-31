@@ -35,6 +35,14 @@ void Servo::init()
     setTorqueEnabled(false);
 }
 
+void Servo::initPassive()
+{
+    setTorqueEnabled(false);
+    apply_default_spring_options();
+    _angle_anim.teleport(getCurrentAngle());
+    _snap_to_target_on_rest = false;
+}
+
 void Servo::update()
 {
     // Keep update in at most 50Hz

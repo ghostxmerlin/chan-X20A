@@ -24,6 +24,7 @@ struct ServoConfig_t {
     std::string settingZeroPositionKey;
     bool enablePwmMode = false;
     bool enableStallProtection = false;
+    bool persistDefaults = true;
 };
 
 class ScsServo : public Servo {
@@ -39,7 +40,8 @@ public:
         reset_runtime_limits();
         set_angle_limit(_config.angleLimit);
         get_zero_pos_from_nvs();
-        Servo::init();
+        if (_config.persistDefaults) Servo::init();
+        else initPassive();
     }
 
     void get_zero_pos_from_nvs()
@@ -66,8 +68,10 @@ public:
             _zero_pos = _config.defaultZeroPos;
             mclog::tagInfo(_tag, "id: {} override zero pos to default: {}", _config.id, _zero_pos);
 
-            Settings settings(_config.settingNs, true);
-            settings.SetInt(_config.settingZeroPositionKey, _zero_pos);
+            if (_config.persistDefaults) {
+                Settings settings(_config.settingNs, true);
+                settings.SetInt(_config.settingZeroPositionKey, _zero_pos);
+            }
         }
     }
 
@@ -100,6 +104,24 @@ public:
         angle     = uitk::clamp(angle, getAngleLimit().x, getAngleLimit().y);
         // mclog::tagInfo(_tag, "id: {} current pos: {} angle: {}", _id, current_pos, angle);
         return angle;
+    }
+
+    ServoFeedback readFeedback() override
+    {
+        ServoFeedback result;
+        // Collector observation is best-effort and must not monopolize the
+        // factory motion loop. Keep its read timeout local to this transaction.
+        const auto previous_timeout = _scs_bus.IOTimeOut;
+        _scs_bus.IOTimeOut = 2;
+        result.position_raw = _scs_bus.ReadPos(_config.id);
+        result.transport_error = _scs_bus.getLastError();
+        result.servo_status = _scs_bus.getState();
+        _scs_bus.IOTimeOut = previous_timeout;
+        result.valid = result.transport_error == 0 && result.servo_status == 0 && is_raw_pos_valid(result.position_raw);
+        if (result.valid) {
+            result.angle = raw_pos_to_angle(result.position_raw);
+        }
+        return result;
     }
 
     bool is_moving_impl() override
@@ -328,7 +350,7 @@ private:
     }
 };
 
-void Hal::servo_init()
+void Hal::servo_init(bool persistDefaults)
 {
     mclog::tagInfo("HAL-Servo", "init");
 
@@ -342,15 +364,17 @@ void Hal::servo_init()
     yaw_servo_config.settingNs              = "servo";
     yaw_servo_config.settingZeroPositionKey = "zero_pos_1";
     yaw_servo_config.enablePwmMode          = true;
+    yaw_servo_config.persistDefaults        = persistDefaults;
 
     ServoConfig_t pitch_servo_config;
     pitch_servo_config.id                     = 2;
     pitch_servo_config.defaultZeroPos         = 620;
-    pitch_servo_config.angleLimit             = Vector2i(30, 870);
+    pitch_servo_config.angleLimit             = persistDefaults ? Vector2i(30, 870) : Vector2i(50, 850);
     pitch_servo_config.rawPosLimit            = Vector2i(0, 1000);
     pitch_servo_config.settingNs              = "servo";
     pitch_servo_config.settingZeroPositionKey = "zero_pos_2";
     pitch_servo_config.enableStallProtection  = true;
+    pitch_servo_config.persistDefaults        = persistDefaults;
 
     auto yaw_servo   = std::make_unique<ScsServo>(yaw_servo_config);
     auto pitch_servo = std::make_unique<ScsServo>(pitch_servo_config);

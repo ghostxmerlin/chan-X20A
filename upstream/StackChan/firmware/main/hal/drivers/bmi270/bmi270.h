@@ -32,7 +32,7 @@ public:
      * @return true if successful
      * @return false if failed
      */
-    bool begin();
+    bool begin(uint8_t accelRangeG = 2);
 
     /**
      * @brief Read sensor data
@@ -51,6 +51,7 @@ private:
     struct bmi2_dev _bmi;
     uint8_t _addr;
     bool _initialized;
+    uint8_t _accel_range_g = 2;
     BMI270_Data _data;
 
     static BMI2_INTF_RETURN_TYPE bmi2_i2c_read(uint8_t reg_addr, uint8_t* reg_data, uint32_t len, void* intf_ptr);

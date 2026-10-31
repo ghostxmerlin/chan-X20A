@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "stackchan_display.h"
+#include "hal_bridge.h"
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
@@ -180,7 +181,7 @@ StackChanAvatarDisplay::StackChanAvatarDisplay(esp_lcd_panel_io_handle_t panel_i
     esp_timer_create(&preview_timer_args, &preview_timer_);
 
     // Create boot logo label if not warm boot
-    if (GetHAL().getWarmRebootTarget() < 0) {
+    if (!hal_bridge::is_collector_mode() && GetHAL().getWarmRebootTarget() < 0) {
         ESP_LOGI(TAG, "Create boot logo label");
         Lock();
         {

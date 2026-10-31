@@ -17,6 +17,7 @@
 #include <mutex>
 #include <assets.h>
 #include <settings.h>
+#include <esp_timer.h>
 
 static const char* _tag = "HAL_BRIDGE";
 
@@ -34,6 +35,10 @@ namespace hal_bridge {
 
 static std::mutex _mutex;
 static Data_t _data;
+static bool _collector_mode = false;
+
+void set_collector_mode(bool enabled) { _collector_mode = enabled; }
+bool is_collector_mode() { return _collector_mode; }
 
 void lock()
 {
@@ -56,6 +61,14 @@ void set_touch_point(int num, int x, int y)
     _data.touchPoint.num = num;
     _data.touchPoint.x   = x;
     _data.touchPoint.y   = y;
+    _data.touchPoint.valid = true;
+    _data.touchPoint.timestampUs = esp_timer_get_time();
+}
+
+void invalidate_touch_point()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    _data.touchPoint.valid = false;
 }
 
 TouchPoint_t get_touch_point()

@@ -10,6 +10,13 @@
 
 namespace stackchan::motion {
 
+struct ServoFeedback {
+    bool valid = false;
+    bool load_valid = false, current_valid = false;
+    int angle = 0, position_raw = -1, load_raw = 0, current_raw = 0;
+    int transport_error = 0, servo_status = 0;
+};
+
 /**
  * @brief
  *
@@ -69,6 +76,10 @@ public:
      * @return int
      */
     virtual int getCurrentAngle();
+
+    // A failed bus read must never be presented as a measured angle.
+    virtual ServoFeedback readFeedback() { return {}; }
+    void cancelMotion() { setTorqueEnabled(false); stop_motion_at_angle(Servo::getCurrentAngle()); }
 
     /**
      * @brief
@@ -145,6 +156,9 @@ public:
     }
 
 protected:
+    // Prepare interpolation without writing a target or enabling torque.
+    void initPassive();
+
     Servo()
     {
     }

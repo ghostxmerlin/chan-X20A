@@ -887,10 +887,10 @@ bool StackChanCamera::StreamCaptures()
             }
 
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-            ESP_LOGW(TAG, "mmap_buffers_[buf.index].length = %d, sensor_width = %d, sensor_height = %d",
+            ESP_LOGD(TAG, "mmap_buffers_[buf.index].length = %d, sensor_width = %d, sensor_height = %d",
                      mmap_buffers_[buf.index].length, sensor_width_, sensor_height_);
 #else
-            ESP_LOGW(TAG, "mmap_buffers_[buf.index].length = %d, frame.width = %d, frame.height = %d",
+            ESP_LOGD(TAG, "mmap_buffers_[buf.index].length = %d, frame.width = %d, frame.height = %d",
                      mmap_buffers_[buf.index].length, frame_.width, frame_.height);
 #endif  // CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
             ESP_LOG_BUFFER_HEXDUMP(TAG, mmap_buffers_[buf.index].start, MIN(mmap_buffers_[buf.index].length, 256),

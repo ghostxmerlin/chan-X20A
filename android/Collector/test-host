@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+COLLECTOR_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+COLLECTOR_JAVA="${COLLECTOR_JAVA_HOME:-${JAVA_HOME:-$HOME/.local/jdks/temurin-17}}"
+cd "$COLLECTOR_ROOT"
+mkdir -p build/test-classes
+"$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -d build/test-classes app/src/main/java/dev/stackchan/collector/AudioBlock.java tests/AudioBlockTest.java
+"$COLLECTOR_JAVA/bin/java" -cp build/test-classes dev.stackchan.collector.AudioBlockTest
+"$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -d build/test-classes app/src/main/java/dev/stackchan/collector/MotionHistory.java tests/MotionHistoryTest.java
+"$COLLECTOR_JAVA/bin/java" -cp build/test-classes dev.stackchan.collector.MotionHistoryTest

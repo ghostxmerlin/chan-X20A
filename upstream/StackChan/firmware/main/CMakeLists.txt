@@ -19,6 +19,8 @@ set(STACK_CHAN_INCLUDE_DIRS
     "."
 )
 list(APPEND STACK_CHAN_SOURCES main.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/collector.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/remote.cpp)
 
 # Define source files
 set(SOURCES "audio/audio_codec.cc"
@@ -298,6 +300,8 @@ idf_component_register(SRCS ${SOURCES}
                         esp_psram
                         esp_netif
                         esp_http_client
+                        esp_http_server
+                        esp_driver_usb_serial_jtag
                         mbedtls
                         json
                         esp_driver_gpio

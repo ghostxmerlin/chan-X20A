@@ -303,6 +303,9 @@ public:
     void getMicWaveformFrame(std::vector<int16_t>& data);
     void clearupMicTest();
 
+    // Collector reuses the calibrated driver without writing default calibration to NVS.
+    void initCollectorMotion() { io_expander_init(true); servo_init(false); }
+
 private:
     bool _xiaozhi_start_requested = false;
 
@@ -310,9 +313,9 @@ private:
     void lvgl_init();
     void xiaozhi_mcp_init();
     void ble_init(bool useAltUuid);
-    void servo_init();
+    void servo_init(bool persistDefaults = true);
     void head_touch_init();
-    void io_expander_init();
+    void io_expander_init(bool collectorOnly = false);
     void imu_init();
     void rtc_init();
 };

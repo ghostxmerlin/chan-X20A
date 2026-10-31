@@ -1,0 +1,27 @@
+#!/bin/bash
+set -euo pipefail
+COLLECTOR_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+COLLECTOR_SDK="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
+COLLECTOR_JAVA="${COLLECTOR_JAVA_HOME:-${JAVA_HOME:-$HOME/.local/jdks/temurin-17}}"
+COLLECTOR_SERIAL="${1:-emulator-5556}"
+COLLECTOR_SUITE="${2:-all}"
+cd "$COLLECTOR_ROOT"
+mkdir -p build/runtime-test/classes build/runtime-test/dex
+"$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -classpath "$COLLECTOR_SDK/platforms/android-35/android.jar" -d build/runtime-test/classes \
+ app/src/main/java/dev/stackchan/collector/AudioBlock.java app/src/main/java/dev/stackchan/collector/SessionRecorder.java \
+ app/src/main/java/dev/stackchan/collector/MotionHistory.java app/src/main/java/dev/stackchan/collector/MotionChart.java app/src/main/java/dev/stackchan/collector/RemoteView.java app/src/main/java/dev/stackchan/collector/CollectorClient.java tests/CollectorControlTest.java tests/RecorderIntegrationTest.java tests/ChartRenderTest.java tests/AndroidRuntimeSuite.java
+"$COLLECTOR_JAVA/bin/jar" cf build/runtime-test/input.jar -C build/runtime-test/classes .
+JAVA_HOME="$COLLECTOR_JAVA" "$COLLECTOR_SDK/build-tools/35.0.0/d8" --min-api 26 --lib "$COLLECTOR_SDK/platforms/android-35/android.jar" --output build/runtime-test/dex build/runtime-test/input.jar
+"$COLLECTOR_SDK/build-tools/35.0.0/aapt2" link -o build/runtime-test/base.apk --manifest tests/RuntimeManifest.xml -I "$COLLECTOR_SDK/platforms/android-35/android.jar"
+python3 - <<'PY'
+import shutil,zipfile
+shutil.copyfile('build/runtime-test/base.apk','build/runtime-test/unsigned.apk')
+with zipfile.ZipFile('build/runtime-test/unsigned.apk','a',zipfile.ZIP_DEFLATED) as z:z.write('build/runtime-test/dex/classes.dex','classes.dex')
+PY
+"$COLLECTOR_SDK/build-tools/35.0.0/zipalign" -f 4 build/runtime-test/unsigned.apk build/runtime-test/aligned.apk
+JAVA_HOME="$COLLECTOR_JAVA" "$COLLECTOR_SDK/build-tools/35.0.0/apksigner" sign --ks .private/debug.jks --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out build/runtime-test/tests.apk build/runtime-test/aligned.apk
+"$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" install -r build/runtime-test/tests.apk
+"$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" shell am instrument -w -e suite "$COLLECTOR_SUITE" dev.stackchan.collector.tests/dev.stackchan.collector.AndroidRuntimeSuite
+if [[ "$COLLECTOR_SUITE" != control ]]; then
+    "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat files/chart-render.png > build/runtime-test/chart-render.png
+fi

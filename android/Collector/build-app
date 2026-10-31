@@ -1,0 +1,37 @@
+#!/bin/bash
+set -euo pipefail
+COLLECTOR_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+COLLECTOR_SDK="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
+COLLECTOR_TOOLS="$COLLECTOR_SDK/build-tools/35.0.0"
+COLLECTOR_JAVA="${COLLECTOR_JAVA_HOME:-${JAVA_HOME:-$HOME/.local/jdks/temurin-17}}"
+export JAVA_HOME="$COLLECTOR_JAVA"
+export PATH="$COLLECTOR_JAVA/bin:$PATH"
+cd "$COLLECTOR_ROOT"
+rm -rf build/gen build/classes build/dex
+mkdir -p build/gen build/classes build/dex build/outputs/apk/debug .private
+chmod 700 .private
+"$COLLECTOR_TOOLS/aapt2" compile --dir app/src/main/res -o build/resources.zip
+"$COLLECTOR_TOOLS/aapt2" link -o build/base.apk --manifest app/src/main/AndroidManifest.xml -I "$COLLECTOR_SDK/platforms/android-35/android.jar" --java build/gen build/resources.zip
+python3 - <<'PY'
+from pathlib import Path
+files=sorted(Path('app/src/main/java').rglob('*.java'))+sorted(Path('build/gen').rglob('*.java'))
+Path('build/sources.txt').write_text('\n'.join(str(p) for p in files)+'\n')
+PY
+"$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -classpath "$COLLECTOR_SDK/platforms/android-35/android.jar" -d build/classes @build/sources.txt
+"$COLLECTOR_JAVA/bin/jar" cf build/classes.jar -C build/classes .
+"$COLLECTOR_TOOLS/d8" --release --min-api 26 --lib "$COLLECTOR_SDK/platforms/android-35/android.jar" --output build/dex build/classes.jar
+python3 - <<'PY'
+from pathlib import Path
+import shutil,zipfile
+shutil.copyfile('build/base.apk','build/unsigned.apk')
+with zipfile.ZipFile('build/unsigned.apk','a',zipfile.ZIP_DEFLATED) as z:
+    for p in sorted(Path('build/dex').glob('*.dex')): z.write(p,p.name)
+PY
+if [ ! -f .private/debug.jks ]; then
+  umask 077
+  "$COLLECTOR_JAVA/bin/keytool" -genkeypair -keystore .private/debug.jks -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=StackChan Collector Development,O=Local,C=CN" >/dev/null 2>&1
+fi
+"$COLLECTOR_TOOLS/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
+"$COLLECTOR_TOOLS/apksigner" sign --ks .private/debug.jks --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out build/outputs/apk/debug/StackChan-Collector-debug.apk build/aligned.apk
+"$COLLECTOR_TOOLS/apksigner" verify --verbose build/outputs/apk/debug/StackChan-Collector-debug.apk
+printf 'APK: %s/build/outputs/apk/debug/StackChan-Collector-debug.apk\n' "$COLLECTOR_ROOT"

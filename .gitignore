@@ -1,0 +1,26 @@
+.DS_Store
+.tools/
+.cache/
+logs/
+artifacts/
+backups/
+.env
+.env.*
+!.env.example
+**/sdkconfig.defaults.local
+android/**/build/
+android/**/.private/
+android/**/.gradle/
+android/**/local.properties
+__pycache__/
+.private/
+
+# Private keys and local device captures
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.key
+*.pem
+**/.private/
+**/.DS_Store

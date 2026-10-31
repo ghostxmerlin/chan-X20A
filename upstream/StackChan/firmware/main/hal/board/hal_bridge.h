@@ -16,6 +16,8 @@ struct TouchPoint_t {
     int num = 0;
     int x   = -1;
     int y   = -1;
+    bool valid = false;
+    int64_t timestampUs = 0;
 };
 
 struct Data_t {
@@ -36,7 +38,11 @@ void unlock();
 Data_t& get_data();
 
 void set_touch_point(int num, int x, int y);
+void invalidate_touch_point();
 TouchPoint_t get_touch_point();
+void set_collector_mode(bool enabled);
+bool is_collector_mode();
+bool board_get_power_snapshot(int& level, bool& charging, int64_t& timestamp_us);
 
 bool is_xiaozhi_mode();
 void set_xiaozhi_mode(bool mode);

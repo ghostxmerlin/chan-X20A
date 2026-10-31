@@ -1,4 +1,5 @@
 #include "cores3_audio_codec.h"
+#include "hal_bridge.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -33,29 +34,30 @@ CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rat
         .addr = aw88298_addr,
         .bus_handle = i2c_master_handle,
     };
-    out_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    assert(out_ctrl_if_ != NULL);
-
-    gpio_if_ = audio_codec_new_gpio();
-    assert(gpio_if_ != NULL);
-
-    aw88298_codec_cfg_t aw88298_cfg = {};
-    aw88298_cfg.ctrl_if = out_ctrl_if_;
-    aw88298_cfg.gpio_if = gpio_if_;
-    aw88298_cfg.reset_pin = GPIO_NUM_NC;
-    aw88298_cfg.hw_gain.pa_voltage = 5.0;
-    aw88298_cfg.hw_gain.codec_dac_voltage = 3.3;
-    aw88298_cfg.hw_gain.pa_gain = 1;
-    out_codec_if_ = aw88298_codec_new(&aw88298_cfg);
-    assert(out_codec_if_ != NULL);
-
-    esp_codec_dev_cfg_t dev_cfg = {
-        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
-        .codec_if = out_codec_if_,
-        .data_if = data_if_,
-    };
-    output_dev_ = esp_codec_dev_new(&dev_cfg);
-    assert(output_dev_ != NULL);
+    // aw88298_codec_new() powers/unmutes the amplifier during construction.
+    // Collector must never call it: the Board holds RESET_N low instead.
+    if (!hal_bridge::is_collector_mode()) {
+        out_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
+        assert(out_ctrl_if_ != NULL);
+        gpio_if_ = audio_codec_new_gpio();
+        assert(gpio_if_ != NULL);
+        aw88298_codec_cfg_t aw88298_cfg = {};
+        aw88298_cfg.ctrl_if = out_ctrl_if_;
+        aw88298_cfg.gpio_if = gpio_if_;
+        aw88298_cfg.reset_pin = GPIO_NUM_NC;
+        aw88298_cfg.hw_gain.pa_voltage = 5.0;
+        aw88298_cfg.hw_gain.codec_dac_voltage = 3.3;
+        aw88298_cfg.hw_gain.pa_gain = 1;
+        out_codec_if_ = aw88298_codec_new(&aw88298_cfg);
+        assert(out_codec_if_ != NULL);
+        esp_codec_dev_cfg_t output_cfg = {
+            .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+            .codec_if = out_codec_if_,
+            .data_if = data_if_,
+        };
+        output_dev_ = esp_codec_dev_new(&output_cfg);
+        assert(output_dev_ != NULL);
+    }
 
     // Audio Input(Microphone)
     i2c_cfg.addr = es7210_addr;
@@ -68,8 +70,11 @@ CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rat
     in_codec_if_ = es7210_codec_new(&es7210_cfg);
     assert(in_codec_if_ != NULL);
 
-    dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
-    dev_cfg.codec_if = in_codec_if_;
+    esp_codec_dev_cfg_t dev_cfg = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .codec_if = in_codec_if_,
+        .data_if = data_if_,
+    };
     input_dev_ = esp_codec_dev_new(&dev_cfg);
     assert(input_dev_ != NULL);
 
@@ -77,16 +82,18 @@ CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rat
 }
 
 CoreS3AudioCodec::~CoreS3AudioCodec() {
-    ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
-    esp_codec_dev_delete(output_dev_);
+    if (output_dev_) {
+        ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+        esp_codec_dev_delete(output_dev_);
+    }
     ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
     esp_codec_dev_delete(input_dev_);
 
     audio_codec_delete_codec_if(in_codec_if_);
     audio_codec_delete_ctrl_if(in_ctrl_if_);
-    audio_codec_delete_codec_if(out_codec_if_);
-    audio_codec_delete_ctrl_if(out_ctrl_if_);
-    audio_codec_delete_gpio_if(gpio_if_);
+    if (out_codec_if_) audio_codec_delete_codec_if(out_codec_if_);
+    if (out_ctrl_if_) audio_codec_delete_ctrl_if(out_ctrl_if_);
+    if (gpio_if_) audio_codec_delete_gpio_if(gpio_if_);
     audio_codec_delete_data_if(data_if_);
 }
 
@@ -183,6 +190,7 @@ void CoreS3AudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gp
 }
 
 void CoreS3AudioCodec::SetOutputVolume(int volume) {
+    if (!output_dev_) return;
     ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, volume));
     AudioCodec::SetOutputVolume(volume);
 }
@@ -211,6 +219,7 @@ void CoreS3AudioCodec::EnableInput(bool enable) {
 }
 
 void CoreS3AudioCodec::EnableOutput(bool enable) {
+    if (!output_dev_) return;
     if (enable == output_enabled_) {
         return;
     }
@@ -233,9 +242,11 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
 
 int CoreS3AudioCodec::Read(int16_t* dest, int samples) {
     if (input_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
+        const auto result = esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t));
+        if (result != ESP_OK) return 0;
+        return samples;
     }
-    return samples;
+    return 0;
 }
 
 int CoreS3AudioCodec::Write(const int16_t* data, int samples) {

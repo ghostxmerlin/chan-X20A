@@ -8,12 +8,13 @@
 #include "drivers/PY32IOExpander_Class/PY32IOExpander_Class.hpp"
 #include <mooncake_log.h>
 #include <memory>
+#include <esp_log.h>
 
 static const std::string_view _tag = "HAL-IOE";
 
 static std::unique_ptr<m5::PY32IOExpander_Class> _io_expander;
 
-void Hal::io_expander_init()
+void Hal::io_expander_init(bool collectorOnly)
 {
     mclog::tagInfo(_tag, "init");
 
@@ -44,6 +45,11 @@ void Hal::io_expander_init()
         GetHAL().setServoPowerEnabled(true);
         vTaskDelay(pdMS_TO_TICKS(200));
 
+        if (collectorOnly) {
+            ESP_LOGI("CollectorMotion", "Base IO expander ready; VM enable asserted");
+            return;
+        }
+
         // RGB
         _io_expander->setDirection(13, true);   // Output
         _io_expander->setPullMode(13, true);    // Pull-up
@@ -56,6 +62,7 @@ void Hal::io_expander_init()
 
         mclog::tagInfo(_tag, "init done");
     }
+    else if (collectorOnly) ESP_LOGE("CollectorMotion", "Base IO expander unavailable; VM not enabled");
 }
 
 void Hal::setServoPowerEnabled(bool enabled)

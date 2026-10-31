@@ -220,13 +220,19 @@ public:
     // Exanpd IO Init
     Aw9523(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr)
     {
-        WriteReg(0x02, 0b00000111);  // P0
+        // P0.2 is AW88298 RESET_N (see ResetAw88298 below). Observation
+        // firmware keeps the amplifier in hardware reset for the entire boot.
+        WriteReg(0x02, hal_bridge::is_collector_mode() ? 0b00000011 : 0b00000111);
         WriteReg(0x03, 0b10001111);  // P1
         WriteReg(0x04, 0b00011000);  // CONFIG_P0
         WriteReg(0x05, 0b00001100);  // CONFIG_P1
         WriteReg(0x11, 0b00010000);  // GCR P0 port is Push-Pull mode.
         WriteReg(0x12, 0b11111111);  // LEDMODE_P0
         WriteReg(0x13, 0b11111111);  // LEDMODE_P1
+        if (hal_bridge::is_collector_mode()) {
+            ESP_ERROR_CHECK((ReadReg(0x02) & 0x04) == 0 ? ESP_OK : ESP_FAIL);
+            ESP_LOGI(TAG, "Collector: speaker AW88298 RESET_N held LOW; output codec disabled");
+        }
     }
 
     void ResetAw88298()
@@ -350,6 +356,8 @@ private:
         int battery_level        = 0;
         bool status_valid        = false;
         bool battery_level_valid = false;
+        int64_t timestamp_us = 0;
+        bool latest_read_valid = false;
     };
 
     i2c_master_bus_handle_t i2c_bus_;
@@ -370,6 +378,7 @@ private:
 
     bool ShouldEnablePowerSave(bool has_external_power, bool is_discharging) const
     {
+        if (hal_bridge::is_collector_mode()) return false;
         return is_discharging || (has_external_power && xiaozhi_config_.allowShutdownWhenCharging);
     }
 
@@ -398,6 +407,8 @@ private:
 
         {
             std::lock_guard<std::mutex> lock(power_state_mutex_);
+            power_state_.latest_read_valid = status_err == ESP_OK && level_err == ESP_OK;
+            if (power_state_.latest_read_valid) power_state_.timestamp_us = esp_timer_get_time();
             if (status_err == ESP_OK) {
                 power_state_.has_external_power = has_external_power;
                 power_state_.charging           = charging;
@@ -528,6 +539,7 @@ private:
     void PollTouchpad()
     {
         if (!ft6336_->UpdateTouchPoint()) {
+            hal_bridge::invalidate_touch_point();
             return;
         }
         auto& touch_point = ft6336_->GetTouchPoint();
@@ -748,9 +760,24 @@ public:
     {
         return i2c_bus_;
     }
+
+    bool GetPowerSnapshot(int& level, bool& charging, int64_t& timestamp_us)
+    {
+        std::lock_guard<std::mutex> lock(power_state_mutex_);
+        level = power_state_.battery_level;
+        charging = power_state_.charging;
+        timestamp_us = power_state_.timestamp_us;
+        return power_state_.latest_read_valid && timestamp_us > 0 &&
+               esp_timer_get_time() - timestamp_us < 3000000;
+    }
 };
 
 DECLARE_BOARD(M5StackCoreS3Board);
+
+bool hal_bridge::board_get_power_snapshot(int& level, bool& charging, int64_t& timestamp_us)
+{
+    return static_cast<M5StackCoreS3Board&>(Board::GetInstance()).GetPowerSnapshot(level, charging, timestamp_us);
+}
 
 i2c_master_bus_handle_t hal_bridge::board_get_i2c_bus()
 {

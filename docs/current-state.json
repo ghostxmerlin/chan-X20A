@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-31",
+  "firmware": "collector-0.3.4",
+  "android": {
+    "version": "0.3.4",
+    "version_code": 6
+  },
+  "upstream_commit": "f901cc2969189f3f0e96af1442c0f96e77e1e2c1",
+  "esp_idf": "5.5.4",
+  "status": "state_fix_verified_motion_pending_feedback_unresolved",
+  "deployed_firmware_sha256": "099f69c78c148ee93916887aa0f324bb24d9b3b259f58607781bba97d2e39770",
+  "deployed_apk_sha256": "d408fe6fb2498a559e1624d489759f4c1f3942ca4d5e02cbe78be738f4173916",
+  "validation": {
+    "firmware_build_and_app_flash_verification": "passed",
+    "apk_build_and_install": "passed",
+    "startup_requested_and_enabled_samples": "117/117",
+    "ui_reenable_requested_and_enabled_samples": "122/122 during 30 seconds",
+    "startup_both_axis_position_valid_samples": "19/117",
+    "ui_reenable_invalid_feedback_samples": "119/122",
+    "physical_remote_motion_for_0_3_4": "not verified",
+    "servo_position_transport": "unresolved"
+  },
+  "scope": "Source and public configuration snapshot; hashes refer to privately retained deployed binaries, not publicly hosted downloads.",
+  "excluded": [
+    "device credentials",
+    "signing private keys",
+    "original flash backup",
+    "raw serial logs",
+    "camera and microphone recordings",
+    "local build artifacts",
+    "toolchains"
+  ],
+  "publication_checks": {
+    "python_protocol_tests": "15 passed",
+    "remote_protocol_test": "passed, including 100000 random payloads",
+    "servo_transport_test": "passed",
+    "android_host_tests": "passed",
+    "shell_syntax": "passed",
+    "firmware_sources_match_deployed_snapshot": 24,
+    "private_credentials_in_staged_files": "none detected"
+  }
+}
