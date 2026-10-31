@@ -19,7 +19,7 @@
     "startup_valid_feedback_samples": "117/117 both axes",
     "startup_requested_and_enabled_samples": "117/117",
     "physical_remote_motion_for_0_3_5": "full joystick/posture regression not repeated",
-    "screen_physical_tap_acceptance": "pending user confirmation",
+    "screen_physical_tap_acceptance": "passed; user confirmed display and both page transitions",
     "servo_position_transport": "previous corruption root cause unresolved; this boot valid",
     "after_audio_monitor_restored": {
       "samples": 80,
