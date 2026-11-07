@@ -8,6 +8,7 @@
 #include "runtime_log.h"
 #include "playback.h"
 #include "voice_library.h"
+#include "voice_policy.h"
 #include "wifi_profiles.h"
 #include "face_detection.h"
 #include "face_pixels.h"
@@ -984,8 +985,8 @@ esp_err_t web_control_handler(httpd_req_t* request)
         m12_set_mode(function);
         result["request_seq"] = m12_view_request() >> 2;
     } else if (strcmp(request->uri, "/v1/voice/play") == 0) {
-        if (!doc["clip_id"].is<int>() || doc["clip_id"].as<int>()<0 || doc["clip_id"].as<int>()>20) {
-            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected clip_id 0..20"); return ESP_OK;
+        if (!doc["clip_id"].is<int>() || doc["clip_id"].as<int>()<0 || doc["clip_id"].as<int>()>kVoiceCount) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected clip_id 0..40"); return ESP_OK;
         }
         uint32_t job=0; int selected=0;
         const auto error=playback_voice(doc["clip_id"].as<int>(),false,&job,&selected);

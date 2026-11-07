@@ -2,7 +2,18 @@
 #pragma once
 #include <cstdint>
 namespace collector {
-inline constexpr int kVoiceCount=20;
+inline constexpr int kVoiceCount=40;
+inline constexpr int kAsrVoiceStartDelayMs=800;
+inline int64_t voice_not_before(bool from_asr, int64_t accepted_us)
+{ return accepted_us+(from_asr ? kAsrVoiceStartDelayMs*1000 : 0); }
+// Called only by the playback worker, never by the UART receive task. The
+// existing playback gate remains reserved while this yields to other tasks.
+template<class Clock> void wait_voice_start(int64_t not_before_us, Clock& clock)
+{
+    if (clock.now()>=not_before_us) return;
+    clock.state("waiting");
+    do { clock.pause(); } while (clock.now()<not_before_us);
+}
 inline int choose_voice(int requested, uint32_t random, int last)
 {
     if (requested<0 || requested>kVoiceCount) return 0;

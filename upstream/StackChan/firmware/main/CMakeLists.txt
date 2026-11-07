@@ -302,7 +302,7 @@ endif()
 
 get_filename_component(VOICE_ASSET_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../.private/voice-library" ABSOLUTE)
 if(NOT EXISTS "${VOICE_ASSET_DIR}/voice-library.bin" OR NOT EXISTS "${VOICE_ASSET_DIR}/voice_assets.h")
-    message(FATAL_ERROR "Prepare local voice assets: python3 scripts/prepare-voice-library.py /path/to/20261107-playable-20")
+    message(FATAL_ERROR "Prepare local voice assets: python3 scripts/prepare-voice-library.py /path/to/voice/outputs/stackchan_playable_40.json")
 endif()
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}

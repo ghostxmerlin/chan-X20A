@@ -39,6 +39,7 @@ std::atomic_bool voice_audio_ready{false};
 VoiceCooldown voice_cooldown;
 int current_voice_id=0, last_voice_id=0;
 uint32_t asr_voice_received=0, asr_voice_accepted=0, asr_voice_dropped=0;
+int64_t voice_accepted_us=0, voice_output_started_us=0;
 
 void set_state(const char* value)
 {
@@ -81,11 +82,13 @@ struct Job {
     uint32_t id = 0;
     RemoteReaction reaction = RemoteReaction::None;
     const VoiceClip* voice = nullptr;
+    int64_t not_before_us = 0;
 };
 
 struct Output {
     CoreS3AudioCodec* codec;
     int64_t write_deadline_us = 0;
+    int64_t now() { return esp_timer_get_time(); }
     void state(const char* value) { set_state(value); }
     void submitted(size_t bytes) { std::lock_guard<std::mutex> lock(status_mutex); submitted_bytes = bytes; }
     void pause() { vTaskDelay(1); }
@@ -102,6 +105,10 @@ struct Output {
         if (err != ESP_OK) return err;
         vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(50)));
         err = codec->BeginCollectorOutput(kPlaybackVolume);
+        if (err==ESP_OK) {
+            std::lock_guard<std::mutex> lock(status_mutex);
+            if (current_voice_id) voice_output_started_us=esp_timer_get_time();
+        }
         // Eight seconds maximum media plus two seconds of scheduling/drain
         // allowance; slow successful writes cannot hold the single slot forever.
         write_deadline_us = esp_timer_get_time() + 10000000;
@@ -178,6 +185,7 @@ void playback_task(void* context)
         auto* codec = static_cast<CoreS3AudioCodec*>(Board::GetInstance().GetAudioCodec());
         output_codec = codec;
         Output output{codec};
+        wait_voice_start(job->not_before_us,output);
         result = run_pcm_playback(job->pcm, upload, output);
     } else { result.error = failure; result.stage = failure_stage; }
     ESP_LOGI(kTag, "job %lu %s: submitted %u/%u bytes, error %d (%s), cleanup %d",
@@ -297,6 +305,7 @@ void playback_set_audio_ready() { voice_audio_ready=true; }
 esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int* selected_id)
 {
     if (requested_id<0 || requested_id>kVoiceCount) return ESP_ERR_INVALID_ARG;
+    const int64_t accepted_us=esp_timer_get_time();
     int selected;
     {
         std::lock_guard<std::mutex> lock(status_mutex);
@@ -311,6 +320,7 @@ esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int*
     auto* job=new (std::nothrow) Job;
     if (job) {
         job->voice=voice_clip(selected);
+        job->not_before_us=voice_not_before(from_asr,accepted_us);
         job->bytes=job->voice->frames*sizeof(int16_t);
         job->pcm=static_cast<int16_t*>(heap_caps_malloc(job->bytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
     }
@@ -324,6 +334,7 @@ esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int*
     {
         std::lock_guard<std::mutex> lock(status_mutex);
         id=job->id=++job_sequence; current_voice_id=selected; last_voice_id=selected;
+        voice_accepted_us=accepted_us; voice_output_started_us=0;
         source=from_asr?"asr_open":"web_voice";
         state="starting"; error_code=cleanup_error=0; error_stage="none";
         expected_bytes=job->bytes; received_bytes=submitted_bytes=0;
@@ -371,6 +382,9 @@ void playback_json(ArduinoJson::JsonObject target)
     target["asr_open_accepted"]=asr_voice_accepted;
     target["asr_open_dropped"]=asr_voice_dropped;
     target["asr_cooldown_ms"]=1200;
+    target["asr_start_delay_ms"]=kAsrVoiceStartDelayMs;
+    target["voice_accepted_us"]=current_voice_id ? voice_accepted_us : 0;
+    target["voice_output_started_us"]=current_voice_id ? voice_output_started_us : 0;
     target["output_enabled"] = playback_output_enabled();
     const int reset = hal_bridge::board_speaker_reset_state();
     if (reset < 0) target["hardware_reset_held"] = nullptr;

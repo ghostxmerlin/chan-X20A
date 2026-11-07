@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Convert the user's 20 verified PCM files into local, embedded IMA blocks."""
+"""Convert the user's 40 verified PCM files into local, embedded 16 kHz IMA blocks."""
 import argparse
+import array
 import hashlib
 import json
 import pathlib
 import struct
 import subprocess
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -26,8 +28,10 @@ def main():
     parser.add_argument('--output', type=pathlib.Path, default=ROOT / '.private/voice-library')
     args = parser.parse_args()
     source, out = args.source.resolve(), args.output.resolve()
-    data = json.loads((source / 'stackchan_playable_20.json').read_text())['candidates']
-    assert len(data) == 20 and [x['id'] for x in data] == [f'PLAY-{i:03}' for i in range(1, 21)]
+    index = source if source.is_file() else source / 'stackchan_playable_40.json'
+    source = index.parent
+    data = json.loads(index.read_text())['candidates']
+    assert len(data) == 40 and [x['id'] for x in data] == [f'PLAY-{i:03}' for i in range(1, 41)]
     out.mkdir(parents=True, exist_ok=True)
     bundle, entries, rows = bytearray(), [], []
     for i, clip in enumerate(data, 1):
@@ -37,32 +41,50 @@ def main():
         assert 0 < len(pcm) <= 384000 and len(pcm) % 2 == 0
         assert hashlib.sha256(pcm).hexdigest() == clip['sha256']['pcm']
         assert clip['audio_format']['sample_rate_hz'] == 24000 and clip['audio_format']['channels'] == 1
-        wav = out / f'{clip["id"]}.ima.wav'
+        frames = len(pcm)//2
+        # Resample before block encoding so padding does not change clip duration.
+        pcm16 = out / f'{clip["id"]}.16k.pcm'
         subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 's16le', '-ar', '24000', '-ac', '1',
-                        '-i', str(pcm_path), '-c:a', 'adpcm_ima_wav', '-block_size', '256', str(wav)], check=True)
+                        '-i', str(pcm_path), '-ar', '16000', '-f', 's16le', str(pcm16)], check=True)
+        assert pcm16.stat().st_size == ((frames*2+2)//3)*2
+        wav = out / f'{clip["id"]}.ima.wav'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 's16le', '-ar', '16000', '-ac', '1',
+                        '-i', str(pcm16), '-c:a', 'adpcm_ima_wav', '-block_size', '256', str(wav)], check=True)
         parts = dict(chunks(wav.read_bytes()))
         fmt = parts[b'fmt ']
-        assert struct.unpack_from('<HHI', fmt) == (0x11, 1, 24000)
+        assert struct.unpack_from('<HHI', fmt) == (0x11, 1, 16000)
         assert struct.unpack_from('<HH', fmt, 12) == (256, 4)
         encoded = parts[b'data']
         assert len(encoded) % 256 == 0
         decoded = out / f'{clip["id"]}.reference.pcm'
         subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(wav), '-f', 's16le', str(decoded)], check=True)
-        assert decoded.stat().st_size >= len(pcm)
+        assert decoded.stat().st_size >= pcm16.stat().st_size
+        reference16 = array.array('h')
+        reference16.frombytes(decoded.read_bytes()[:pcm16.stat().st_size])
+        if sys.byteorder != 'little': reference16.byteswap()
+        reference24 = array.array('h')
+        for frame in range(frames):
+            at, fraction = divmod(frame*2, 3)
+            value = reference16[at]*(3-fraction) + reference16[min(at+1,len(reference16)-1)]*fraction
+            reference24.append((abs(value)//3) * (-1 if value<0 else 1))
+        if sys.byteorder != 'little': reference24.byteswap()
+        decoded.write_bytes(reference24.tobytes())
         (out / f'{clip["id"]}.adpcm').write_bytes(encoded)
         row = {'id': i, 'source_id': clip['id'], 'title': clip['title'], 'text': clip['original_text'],
-               'offset': len(bundle), 'bytes': len(encoded), 'frames': len(pcm)//2,
+               'offset': len(bundle), 'bytes': len(encoded), 'frames': frames,
                'source_sha256': clip['sha256']['pcm'], 'encoded_sha256': hashlib.sha256(encoded).hexdigest()}
         rows.append(row)
         strings = ', '.join(json.dumps(row[k], ensure_ascii=False) for k in ('source_id', 'title', 'text'))
-        entries.append(f'    {{{i}, {strings}, {row["offset"]}, {len(encoded)}, {len(pcm)//2}}},')
+        entries.append(f'    {{{i}, {strings}, {row["offset"]}, {len(encoded)}, {frames}}},')
         bundle.extend(encoded)
-    assert len(bundle) < 1300000, 'Voice bundle exceeds reserved application budget'
+    assert len(bundle) < 1500000, 'Voice bundle exceeds reserved application budget'
     (out / 'voice-library.bin').write_bytes(bundle)
     (out / 'voice_assets.h').write_text('// Generated locally by scripts/prepare-voice-library.py\n#pragma once\n'
+        'inline constexpr int kVoiceEncodedRate=16000, kVoicePlaybackRate=24000;\n'
         'inline constexpr VoiceClip kVoiceClips[] = {\n' + '\n'.join(entries) + '\n};\n')
     (out / 'manifest.json').write_text(json.dumps({'format': 'ima_wav_mono_blocks', 'block_bytes': 256,
-        'sample_rate': 24000, 'bundle_sha256': hashlib.sha256(bundle).hexdigest(), 'clips': rows}, ensure_ascii=False, indent=2))
+        'sample_rate': 16000, 'playback_sample_rate': 24000,
+        'bundle_sha256': hashlib.sha256(bundle).hexdigest(), 'clips': rows}, ensure_ascii=False, indent=2))
     print(f'Prepared {len(rows)} clips, {len(bundle)} encoded bytes; source hashes verified')
 
 

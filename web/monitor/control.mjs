@@ -11,7 +11,7 @@ export class Controls {
     if (input.action==='m12_mode' && !['standby','face_detector','face_recognition'].includes(input.mode)) fail(400,'未知 M12 模式');
     if (input.action==='yaw' && ![-5,5].includes(input.delta_deg)) fail(400,'左右每次只调整 5°');
     if (input.action==='pitch' && (typeof input.angle_deg!=='number' || !Number.isFinite(input.angle_deg) || input.angle_deg<5 || input.angle_deg>85 || Math.abs(input.angle_deg*10-Math.round(input.angle_deg*10))>1e-7)) fail(400,'仰角须为 5–85°，步长 0.1°');
-    if (input.action==='voice' && (!Number.isInteger(input.clip_id) || input.clip_id<0 || input.clip_id>20)) fail(400,'请选择 1–20 条台词，或随机播放');
+    if (input.action==='voice' && (!Number.isInteger(input.clip_id) || input.clip_id<0 || input.clip_id>40)) fail(400,'请选择 1–40 条台词，或随机播放');
     const m=this.monitor,s=m.snapshot();
     if (!m.running || !s.online || !s.fresh.telemetry || !m.client.verified) fail(409,'请恢复监控并等待新的机器人状态');
     if (typeof input.boot!=='string' || input.boot !== s.boot) fail(409,'机器人已重启，请根据新状态重新操作');

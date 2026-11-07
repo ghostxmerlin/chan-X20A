@@ -1,5 +1,21 @@
 # 会话交接记录
 
+## 2026-11-07：40条台词与ASR等待OK（collector-0.4.26）
+
+用户在0.4.25实播后确认open都是本人说出，ASR模组会先回OK，要求ASR触发延迟800毫秒再播放；同时将语音助手制作的PLAY021–040一起加入。此节覆盖下方20条版本；本轮基于本地提交 `9f075ff` 继续，不推送。
+
+- 网页选择及ASR随机池扩为40条，固件/代理/网页边界统一0随机、1–40指定，仍排除紧接上一条。音源使用 `voice/outputs/stackchan_playable_40.json` 和两批目录，原文件哈希均核对。总172.254秒、最长7.6秒；无裁剪/变速，未播放全40条做听感验收。
+- 40条24kHz IMA预计2101504字节超过应用余量；改为16kHz IMA共1402880字节，在原有有界PCM缓冲内倒序线性插值回原24kHz帧数，保持完整时长，不改变共享I²S设置/分区表。有损转换与听感分开；全部40条实际C++解码/扩展与独立FFmpeg加Python参考逐字节一致。
+- ASR新open帧的接受时间确定最早启动时刻+800ms；只在播放worker让出调度等待，UART接收任务不等待。整个等待gate占用、输出未初始化，新请求仍拒绝/丢弃；网页不增加800ms等待。新增waiting状态、voice_accepted_us/voice_output_started_us和asr_start_delay_ms。后者开始时间是codec初始化成功，不是声学测量；实际还有原有输出初始化/DMA时间。结束后1.2秒ASR冷却保留。
+- Python38项中34通过/4旧情绪依赖跳过，Node34通过。独立复核确认40条端到端边界、等待/功放顺序；2400组ASan+UBSan原地扩展/截断边界通过，含1–2048、随机和192000帧。两处旧20条文案已修复，无未解决Critical/Important。主机测试不能替代实际音质和机械验收。
+- 使用已安装Python3.13虚拟环境的PATH运行固定IDF5.5.4（系统默认Python3.14使初次export查找不存在环境，未构建/刷写；修正后完整及最终增量构建通过）。最终应用4965248字节，槽余212096字节，SHA256 `007550d68a61273d168d3ec4e9dd9dd580494682b3c1098e99d755addb9a029f`；归档 `artifacts/collector-0.4.26-voice40/`。
+- 重新核对USB设备身份/ESP32-S3/16MB/活动ota_1/otadata CRC，完整0.4.25槽备份5177344字节，SHA256 `30dad04d601de7a95eb641de07b0f6eb567ca9807236ed8f4632f22447572269`，应用前缀与归档完全一致；仅0x510000应用写入并独立verify_flash通过。没有写bootloader、分区表、otadata或NVS。
+- 初始联网等待窗口55秒未连，随后HTTP确认0.4.26/40条/800ms，并已实际收到3次open、接受3次；捕获job3/clip11 completed、152064字节全提交、error/cleanup_error=0、输出关闭/硬件复位保持。accepted→codec初始化1017.914ms，符合至少800ms等待；未完整捕获前两个job的全过程。
+- 为检查启动读取USB日志时出现USB_UART_CHIP_RESET，无捕获到panic；随后停止串口读取并等网络恢复。该断连不能当作持续在线或固件崩溃结论。新boot初始idle/job0、无ASR历史回放，40条/保存10°/request_seq0/remote_pitch_enabled=false均重新确认。没有追加遥控上下运动测试，重负载机械问题仍未修复。
+- 恢复后真实网页同一 `/api/control` 点播clip40/job1返回202；completed，172800字节全提交，error/cleanup_error=0，output_enabled=false/hardware_reset_held=true。接受到codec初始化290.473ms，未加ASR专用等待。此项是本机API到真实设备链路；浏览器仍需刷新加载新JS，未冒充新按钮点击/窄屏视觉验收。已向用户询问OK与随机台词的实际衔接，现场答复待补。
+
+证据：`logs/voice-v0426/`、`logs/voice-v0426-host.log`、`logs/voice-v0426-node.log`、`logs/collector-v0426-build-final.log`；启动原始串口仅 `.private/voice-v0426/boot-monitor.log`。不提交私密配置/媒体/备份；他人新增 `assets/immplement.md` 保留且未纳入。
+
 ## 2026-11-07：20条本体台词与遥控仅左右（collector-0.4.25）
 
 用户对0.4.24反馈“上下移动幅度变小”，决定暂时屏蔽遥控上下，增加voice文件夹20条随机台词，由网页和ASR open触发。分支 `codex/random-voice-yaw-only`，基于 `71fe438`；本轮不推送。

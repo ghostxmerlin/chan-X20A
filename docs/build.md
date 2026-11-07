@@ -161,6 +161,6 @@ python3 scripts/generate-screen-assets.py
 
 0.3.7 实心无圈表情与图形摘要版已构建、部署并独立校验；最终产物与实机结果以 [验证记录](collector-validation.md) 最新段为准，不能将主机预览或首候选帧率直接作为后续候选的验收结果。
 
-## 0.4.25 本体台词资源
+## 0.4.26 本体台词资源
 
-构建需要本机20条资源包，先运行 `python3 scripts/prepare-voice-library.py /path/to/20261107-playable-20`（需要FFmpeg）。生成的`.private/voice-library`只在本机，音频不入库；缺失时构建明确失败。详细格式和操作见[观察台说明](../web/monitor/README.md)。
+构建需要本机40条总索引及其引用的两批资源包，先运行 `python3 scripts/prepare-voice-library.py /path/to/voice/outputs/stackchan_playable_40.json`（需要FFmpeg）。生成的`.private/voice-library`只在本机，音频不入库；缺失时构建明确失败。详细格式和操作见[观察台说明](../web/monitor/README.md)。

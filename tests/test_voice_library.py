@@ -17,7 +17,7 @@ class VoiceLibraryTest(unittest.TestCase):
             if not (assets/'manifest.json').exists():
                 return  # Pure malformed-input/policy regressions always run on clean checkouts.
             manifest = json.loads((assets/'manifest.json').read_text())
-            self.assertEqual(len(manifest['clips']),20)
+            self.assertEqual(len(manifest['clips']),40)
             for clip in manifest['clips']:
                 decoded = pathlib.Path(directory) / 'decoded.pcm'
                 subprocess.run([str(binary), str(assets/(clip['source_id']+'.adpcm')),

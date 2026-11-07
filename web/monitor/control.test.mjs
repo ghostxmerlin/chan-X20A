@@ -17,10 +17,11 @@ test('local voice is explicit, bounded, fresh, audio-ready and single-job',async
  await assert.rejects(c.execute(request));
  m.info.capabilities.voice_library='supported';m.telemetry.health={audio_ready:true};m.telemetry.playback={busy:false};
  await c.execute(request);assert.equal(calls[0][0],'/v1/voice/play');assert.deepEqual(calls[0][1],{clip_id:0});
- for(const id of [-1,21,1.5,'1',null]) await assert.rejects(c.execute({...request,clip_id:id}));
+ for(const id of [21,40]) {await c.execute({...request,clip_id:id});assert.equal(calls.at(-1)[1].clip_id,id);}
+ for(const id of [-1,41,1.5,'1',null]) await assert.rejects(c.execute({...request,clip_id:id}));
  m.telemetry.playback.busy=true;await assert.rejects(c.execute({...request,clip_id:1}));
  m.telemetry.playback.busy=false;m.telemetry.health.audio_ready=false;await assert.rejects(c.execute(request));
- assert.equal(calls.length,1);
+ assert.equal(calls.length,3);
 });
 test('recognition requires new capability and an exact manual mode',async()=>{
  const {m,c,calls}=fixture();

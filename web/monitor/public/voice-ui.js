@@ -1,4 +1,4 @@
-const stages={idle:'等待播放',starting:'准备播放',playing:'播放中',draining:'收尾中',completed:'播放完成',failed:'播放失败',uploading:'其他音频上传中'};
+const stages={idle:'等待播放',waiting:'等待 ASR 的 OK 结束',starting:'准备播放',playing:'播放中',draining:'收尾中',completed:'播放完成',failed:'播放失败',uploading:'其他音频上传中'};
 export class VoicePanel {
   constructor(doc,send=async body=>{
     const r=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(7000)});
@@ -10,7 +10,7 @@ export class VoicePanel {
   }
   el(id){return this.doc.getElementById(id);}
   async play(id){
-    if(!this.ready || this.pending || !Number.isInteger(id) || id<0 || id>20)return;
+    if(!this.ready || this.pending || !Number.isInteger(id) || id<0 || id>40)return;
     const boot=this.state.boot;this.pending=true;this.el('voice-command').textContent='正在发送…';this.render(this.state,this.fresh);
     try{const result=await this.send({action:'voice',clip_id:id,boot});this.el('voice-command').textContent=this.state.boot===boot?result.message:'机器人已重启，请核对当前状态';}
     catch(e){this.el('voice-command').textContent=e.name==='TimeoutError'?'结果未确认；不会自动重发':e.message;}

@@ -16,6 +16,13 @@ test('voice render and reconnect never play; explicit random/selected preserve b
  await el('voice-play').click();assert.equal(calls[1].clip_id,1);
  s.boot='b';ui.render(s,true);assert.equal(calls.length,2);
 });
+test('new clip 40 is selectable and waiting for ASR blocks another request',async()=>{
+ const {ui,s,calls,el}=setup();s.voiceLibrary.clips.push({id:40,text:'new',title:'new',seconds:2});
+ ui.render(s,true);el('voice-select').value='40';await el('voice-play').click();assert.equal(calls[0].clip_id,40);
+ s.telemetry.playback={busy:true,state:'waiting',source:'asr_open'};ui.render(s,true);
+ assert.match(el('voice-status').textContent,/等待 ASR/);assert.equal(el('voice-play').disabled,true);
+ await el('voice-random').click();assert.equal(calls.length,1);
+});
 test('busy, stale, unready and old firmware block playback and never replay',async()=>{
  const {ui,s,calls,el}=setup();s.telemetry.playback={busy:true,state:'playing',voice_text:'hello',source:'asr_open',submitted_bytes:24000,expected_bytes:48000};
  ui.render(s,true);assert.match(el('voice-status').textContent,/播放中/);assert.match(el('voice-current').textContent,/hello/);

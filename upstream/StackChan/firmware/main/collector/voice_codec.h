@@ -39,4 +39,21 @@ inline bool decode_voice_ima(const uint8_t* data, size_t bytes, int16_t* out, si
     }
     return written==frames;
 }
+// Expand backwards so the decoded 16 kHz samples can share the bounded 24 kHz
+// output allocation. Keep the original frame count/duration and clamp the tail.
+inline void expand_voice_16k_to_24k(int16_t* pcm, size_t frames)
+{
+    const size_t input_frames=(frames*2+2)/3;
+    for (size_t i=frames; i-- > 0;) {
+        const size_t at=i*2/3, fraction=i*2%3;
+        const int a=pcm[at], b=pcm[std::min(at+1,input_frames-1)];
+        pcm[i]=static_cast<int16_t>((a*int(3-fraction)+b*int(fraction))/3);
+    }
+}
+inline bool decode_voice_16k_to_24k(const uint8_t* data, size_t bytes, int16_t* out, size_t frames)
+{
+    if (!frames || frames>192000 || !decode_voice_ima(data,bytes,out,(frames*2+2)/3)) return false;
+    expand_voice_16k_to_24k(out,frames);
+    return true;
+}
 }
