@@ -3,6 +3,7 @@
 #include "playback_session.h"
 #include "voice_library.h"
 #include "voice_policy.h"
+#include "hearing_policy.h"
 #include "eyes/eyes.h"
 #include "eyes/voice_cue.h"
 #include <board.h>
@@ -39,6 +40,9 @@ size_t expected_bytes = 0, received_bytes = 0, submitted_bytes = 0;
 std::atomic<CoreS3AudioCodec*> output_codec{nullptr};
 std::atomic_bool voice_audio_ready{false};
 VoiceCooldown voice_cooldown;
+hearing::PlaybackOwner hearing_owner;
+std::atomic<int64_t> self_tail_until{0};
+uint32_t hearing_job=0;
 int current_voice_id=0, last_voice_id=0;
 uint32_t asr_voice_received=0, asr_voice_accepted=0, asr_voice_dropped=0;
 int64_t voice_accepted_us=0, voice_output_started_us=0;
@@ -86,6 +90,7 @@ struct Job {
     const VoiceClip* voice = nullptr;
     int64_t not_before_us = 0;
     bool from_asr = false;
+    uint32_t hearing_session = 0;
 };
 
 struct Output {
@@ -96,14 +101,16 @@ struct Output {
     int64_t now() { return esp_timer_get_time(); }
     void state(const char* value) { set_state(value); }
     void submitted(size_t bytes) {
-        {std::lock_guard<std::mutex> lock(status_mutex);submitted_bytes=bytes;}
-        if(cue.submitted(bytes) && job && job->voice)
+        std::lock_guard<std::mutex> lock(status_mutex);
+        submitted_bytes=bytes;
+        if(cue.submitted(bytes) && job && job->voice && hearing_owner.allowed(job->hearing_session))
             eyes::voice_started(job->id,job->voice->id,(job->voice->frames*1000u+23999u)/24000u);
     }
     void pause() { vTaskDelay(1); }
     void drain() { vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(100))); }
     esp_err_t begin()
     {
+        if(job && !hearing_owner.allowed(job->hearing_session))return ESP_ERR_INVALID_STATE;
         auto err = hal_bridge::board_set_speaker_reset(true);
         if (err != ESP_OK) return err;
         err = codec->PrepareCollectorOutput();
@@ -125,6 +132,7 @@ struct Output {
     }
     esp_err_t write(const int16_t* data, size_t count)
     {
+        if(job && !hearing_owner.allowed(job->hearing_session))return ESP_ERR_INVALID_STATE;
         if (esp_timer_get_time() >= write_deadline_us) return ESP_ERR_TIMEOUT;
         const auto error = codec->WriteCollectorOutput(data, count);
         return error == ESP_OK && esp_timer_get_time() >= write_deadline_us ? ESP_ERR_TIMEOUT : error;
@@ -194,11 +202,11 @@ void playback_task(void* context)
         auto* codec = static_cast<CoreS3AudioCodec*>(Board::GetInstance().GetAudioCodec());
         output_codec = codec;
         Output output{codec};
-        output.job=job;output.cue.from_asr=job->from_asr;
+        output.job=job;output.cue.from_asr=job->from_asr || job->hearing_session;
         wait_voice_start(job->not_before_us,output);
         result = run_pcm_playback(job->pcm, upload, output);
     } else { result.error = failure; result.stage = failure_stage; }
-    if(job->from_asr)eyes::cancel_voice(job->id);
+    if(job->from_asr || job->hearing_session)eyes::cancel_voice(job->id);
     ESP_LOGI(kTag, "job %lu %s: submitted %u/%u bytes, error %d (%s), cleanup %d",
              static_cast<unsigned long>(job->id), result.error ? "failed" : "completed",
              static_cast<unsigned>(result.submitted), static_cast<unsigned>(job->bytes),
@@ -218,6 +226,8 @@ void playback_task(void* context)
         }
         remote_job = false;
         voice_cooldown.finished(esp_timer_get_time());
+        self_tail_until=esp_timer_get_time()+1200000;
+        hearing_job=0;
         gate.release();
     }
     break;
@@ -313,7 +323,7 @@ bool playback_reaction(RemoteReaction reaction)
 
 void playback_set_audio_ready() { voice_audio_ready=true; }
 
-esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int* selected_id)
+static esp_err_t playback_voice_impl(int requested_id, bool from_asr, uint32_t* job_id, int* selected_id, uint32_t hearing_session)
 {
     if (requested_id<0 || requested_id>kVoiceCount) return ESP_ERR_INVALID_ARG;
     const int64_t accepted_us=esp_timer_get_time();
@@ -321,7 +331,7 @@ esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int*
     {
         std::lock_guard<std::mutex> lock(status_mutex);
         if (from_asr) ++asr_voice_received;
-        if (!voice_audio_ready || (from_asr && !voice_cooldown.allowed(esp_timer_get_time())) || !gate.acquire()) {
+        if (!hearing_owner.allowed(hearing_session) || !voice_audio_ready || (from_asr && !voice_cooldown.allowed(esp_timer_get_time())) || !gate.acquire()) {
             if (from_asr) ++asr_voice_dropped;
             return ESP_ERR_INVALID_STATE;
         }
@@ -332,6 +342,7 @@ esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int*
     if (job) {
         job->voice=voice_clip(selected);
         job->from_asr=from_asr;
+        job->hearing_session=hearing_session;
         job->not_before_us=voice_not_before(from_asr,accepted_us);
         job->bytes=job->voice->frames*sizeof(int16_t);
         job->pcm=static_cast<int16_t*>(heap_caps_malloc(job->bytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
@@ -347,7 +358,8 @@ esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int*
         std::lock_guard<std::mutex> lock(status_mutex);
         id=job->id=++job_sequence; current_voice_id=selected; last_voice_id=selected;
         voice_accepted_us=accepted_us; voice_output_started_us=0;
-        source=from_asr?"asr_open":"web_voice";
+        source=hearing_session?"hearing_emotion":from_asr?"asr_open":"web_voice";
+        hearing_job=hearing_session?id:0;
         state="starting"; error_code=cleanup_error=0; error_stage="none";
         expected_bytes=job->bytes; received_bytes=submitted_bytes=0;
     }
@@ -362,6 +374,26 @@ esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int*
     if (job_id) *job_id=id;
     if (selected_id) *selected_id=selected;
     return ESP_OK;
+}
+
+esp_err_t playback_voice(int requested_id,bool from_asr,uint32_t* job_id,int* selected_id)
+{
+    return playback_voice_impl(requested_id,from_asr,job_id,selected_id,0);
+}
+esp_err_t playback_hearing(int clip,uint32_t session)
+{
+    if(!session)return ESP_ERR_INVALID_ARG;
+    return playback_voice_impl(clip,false,nullptr,nullptr,session);
+}
+void playback_set_hearing_session(uint32_t session)
+{
+    std::lock_guard<std::mutex> lock(status_mutex);
+    hearing_owner.activate(session);
+    if(hearing_job)eyes::cancel_voice(hearing_job);
+}
+bool playback_self_sounding()
+{
+    return gate.busy() || esp_timer_get_time()<self_tail_until.load();
 }
 
 void playback_asr_command(uint8_t id, bool has_value)

@@ -16,4 +16,7 @@ esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id = nul
 void playback_asr_command(uint8_t id, bool has_value);
 void playback_json(ArduinoJson::JsonObject target);
 bool playback_output_enabled();
+esp_err_t playback_hearing(int clip,uint32_t session);
+void playback_set_hearing_session(uint32_t session);
+bool playback_self_sounding();
 }

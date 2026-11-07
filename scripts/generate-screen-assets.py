@@ -73,9 +73,16 @@ for y in range(0, 240, 16):
                             max(x for x, y in points), max(y for x, y in points)))
 assert len(regions) <= 28
 palette = sorted({frame[i] for frame in frames for i in offsets})
-assert len(palette) <= 256, f"RGB565 palette exceeds one byte: {len(palette)}"
+assert len(palette) <= 32, f"RGB565 palette exceeds five bits: {len(palette)}"
 palette_index = {value: i for i, value in enumerate(palette)}
-changes = bytes(palette_index[frame[i]] for frame in frames for i in offsets)
+frame_bytes = (len(offsets)*5+7)//8
+changes = bytearray(frame_count*frame_bytes)
+for f, frame in enumerate(frames):
+    for i, offset in enumerate(offsets):
+        value = palette_index[frame[offset]]
+        byte, shift = divmod(i*5, 8)
+        changes[f*frame_bytes+byte] |= (value << shift) & 255
+        if shift > 3: changes[f*frame_bytes+byte+1] |= value >> (8-shift)
 base_pixels = bytes(byte for value in base for byte in (value & 255, value >> 8))
 def values_c(name, values, value_type):
     lines = [f"const {value_type} {name}[] = {{"]
@@ -96,7 +103,7 @@ text += "\nconst lv_area_t collector_laughing_man_regions[] = {\n" + \
 #ifdef __cplusplus
 extern "C" {{
 #endif
-enum {{ COLLECTOR_FACE_FRAME_COUNT = {frame_count}, COLLECTOR_FACE_CHANGED_PIXELS = {len(offsets)}, COLLECTOR_FACE_REGION_COUNT = {len(regions)} }};
+enum {{ COLLECTOR_FACE_FRAME_COUNT = {frame_count}, COLLECTOR_FACE_CHANGED_PIXELS = {len(offsets)}, COLLECTOR_FACE_FRAME_BYTES = {frame_bytes}, COLLECTOR_FACE_REGION_COUNT = {len(regions)} }};
 LV_IMAGE_DECLARE(collector_laughing_man);
 extern const uint16_t collector_laughing_man_offsets[];
 extern const uint16_t collector_laughing_man_palette[];

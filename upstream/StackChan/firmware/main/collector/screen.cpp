@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "screen.h"
 #include "laughing_man.h"
+#include "packed_palette.h"
 #include "remote_gestures.h"
 #include "eyes/view.h"
 #include <cstdio>
@@ -570,11 +571,11 @@ void screen_tick(uint32_t now_ms)
     const uint32_t frame = animation_phase_ms * COLLECTOR_FACE_FRAME_COUNT / kRotationMs;
     if (frame == animation_frame) return;
     animation_frame = frame;
-    const uint8_t* pixels = collector_laughing_man_frames + frame * COLLECTOR_FACE_CHANGED_PIXELS;
+    const uint8_t* pixels = collector_laughing_man_frames + frame * COLLECTOR_FACE_FRAME_BYTES;
     const auto* offsets = collector_laughing_man_offsets;
     const auto* palette = collector_laughing_man_palette;
     for (size_t i = 0; i < COLLECTOR_FACE_CHANGED_PIXELS; ++i)
-        animation_pixels[offsets[i]] = palette[pixels[i]];
+        animation_pixels[offsets[i]] = palette[palette5(pixels,i)];
     // The S3 only copies an opaque image. Real-time rotated alpha layers made
     // the higher-priority LVGL task starve the camera encoder on core 1.
     lv_area_t bounds;

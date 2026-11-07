@@ -7,6 +7,7 @@
 #include "screen.h"
 #include "runtime_log.h"
 #include "playback.h"
+#include "hearing.h"
 #include "eyes/eyes.h"
 #include "eyes/http.h"
 #include "voice_library.h"
@@ -469,7 +470,10 @@ void audio_task(void*)
             block.timestamp_us = ok ? completed - (1000000LL * kFrames / kSampleRate) : 0;
             if (ok) memcpy(block.samples.data(), input.data(), kPcmBytes);
         }
-        if (ok) last_audio_us = completed;
+        if (ok) {
+            last_audio_us = completed;
+            hearing::feed_audio(input.data(),kFrames,audio_sequence,completed-20000);
+        }
         else {
             ++audio_errors;
             vTaskDelay(pdMS_TO_TICKS(20));
@@ -711,7 +715,9 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["emotion"]["enabled"] = false;
     auto capabilities = doc["capabilities"].to<JsonObject>();
     capabilities["eyes"]="supported";
+    capabilities["hearing"]="supported";
     eyes::catalog_json(doc["eyes"].to<JsonObject>());
+    hearing::json(doc["hearing"].to<JsonObject>());
     for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature", "web_control", "m12_recognition", "voice_library"}) capabilities[name] = "supported";
     capabilities["face_detection"] = "unsupported";
     capabilities["remote_pitch"] = "unsupported";
@@ -929,6 +935,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     if (speaker_reset < 0) health["speaker_hardware_reset_held"] = nullptr;
     else health["speaker_hardware_reset_held"] = speaker_reset != 0;
     playback_json(doc["playback"].to<JsonObject>());
+    hearing::json(doc["hearing"].to<JsonObject>());
     eyes::status_json(doc["eyes"].to<JsonObject>());
     asr_json(doc["asr"].to<JsonObject>());
     m12_json(doc["m12"].to<JsonObject>());
@@ -1202,7 +1209,7 @@ void start_server(int port, int control_port, bool audio_only)
     config.ctrl_port = control_port;
     config.stack_size = 8192;
     config.max_open_sockets = audio_only ? kAudioHttpSessions : kMainHttpSessions;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.max_resp_headers = 10;
     config.recv_wait_timeout = 3;
     config.send_wait_timeout = 3;
@@ -1232,6 +1239,13 @@ void start_server(int port, int control_port, bool audio_only)
             };
             ESP_ERROR_CHECK(httpd_register_uri_handler(server,&endpoint));
         }
+        httpd_uri_t hearing_control{};
+        hearing_control.uri="/v1/hearing";hearing_control.method=HTTP_POST;
+        hearing_control.handler=[](httpd_req_t* r)->esp_err_t {
+            if(!authorize(r)||!control_boot_matches(r,true))return ESP_FAIL;
+            return hearing::handle(r);
+        };
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server,&hearing_control));
         httpd_uri_t control{};
         control.uri = "/v1/remote"; control.method = HTTP_POST; control.handler = remote_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &control));
@@ -1434,6 +1448,7 @@ void run()
     m12_init();
     temperature_init();
     eyes::start();
+    hearing::init(device_id,boot_id);
     update_screen({});
     ESP_ERROR_CHECK(xTaskCreate(sensor_task, "collector_sensors", 6144, nullptr, 3, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(environment_task, "collector_environment", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
