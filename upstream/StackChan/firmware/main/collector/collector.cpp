@@ -1328,15 +1328,17 @@ void update_screen(const std::string& ip)
             }
             // Unit ASR: "forward" shows the home heart, "backward" the reject X.
             // Display only: the unit already speaks its own reply, and a second
-            // sound would also reach the microphone.
-            // "turn on" opens the M12 face view, "turn off" returns home (and puts
-            // the M12 in standby, camera off); a tap on the face view does the same.
-            static uint32_t asr_seen = 0;
-            static bool face_view = false;
+            // sound would also reach the microphone. "turn on" opens the M12 face
+            // page, "turn off" (or a tap on it) returns home. What the M12 runs is
+            // decided by its policy (m12_unit.h); any command, touch or remote
+            // input counts as activity and wakes it from standby.
+            static uint32_t asr_seen = 0, remote_rx_seen = 0;
+            static bool face_view = false, touch_down = false;
             const uint32_t asr = asr_latest();
             const auto tick_ms = static_cast<uint32_t>(now / 1000);
             if (asr != asr_seen) {
                 asr_seen = asr;
+                m12_wake();
                 const uint8_t id = asr & 0xFF;
                 const auto spoken = asr_reaction(id);
                 if (spoken != AsrReaction::none)
@@ -1344,13 +1346,20 @@ void update_screen(const std::string& ip)
                 const int face_switch = asr_face_switch(id);
                 if (face_switch != 0) {
                     face_view = face_switch > 0;
-                    m12_request_faces(face_view);
+                    m12_set_view(face_view);
                     screen_show_faces(face_view, tick_ms);
                 }
             }
+            const bool touching = touch.valid && now - touch.timestampUs < 100000 && touch.num > 0;
+            if (touching && !touch_down) m12_wake();
+            touch_down = touching;
+            if (remote.rx_packets != remote_rx_seen) {
+                remote_rx_seen = remote.rx_packets;
+                m12_wake();
+            }
             if (face_view && !screen_showing_faces()) {
                 face_view = false;
-                m12_request_faces(false);
+                m12_set_view(false);
             }
             if (face_view) {
                 static uint32_t shown_seq = 0, status_ms = 0;
@@ -1358,8 +1367,9 @@ void update_screen(const std::string& ip)
                 if (m12.result_seq != shown_seq || tick_ms - status_ms >= 500) {
                     shown_seq = m12.result_seq;
                     status_ms = tick_ms;
+                    const bool identifying = m12.phase == M12Phase::identifying;
                     const bool answered = m12.requested_us > 0 && m12.last_result_us > m12.requested_us;
-                    const bool fresh = answered && now - m12.last_result_us < 1500000;
+                    const bool fresh = !identifying && answered && now - m12.last_result_us < 1500000;
                     ScreenFace boxes[kScreenMaxFaces];
                     size_t shown = 0;
                     for (size_t i = 0; fresh && i < m12.count && shown < kScreenMaxFaces; ++i) {
@@ -1367,14 +1377,19 @@ void update_screen(const std::string& ip)
                         boxes[shown].x = b.x; boxes[shown].y = b.y; boxes[shown].w = b.w; boxes[shown].h = b.h;
                         ++shown;
                     }
+                    // Who the last recognition burst found, shown for five minutes.
+                    const char* who = "";
+                    if (m12.identity.at_us && now - m12.identity.at_us < 300000000)
+                        who = m12.identity.known ? m12.identity.name : "unknown";
                     char status[64];
                     const auto waited_s = static_cast<unsigned long>(m12.requested_us > 0 ? (now - m12.requested_us) / 1000000 : 0);
                     if (!m12.valid) std::snprintf(status, sizeof(status), "M12 serial unavailable");
+                    else if (identifying) std::snprintf(status, sizeof(status), "who is it? ...");
                     else if (!answered && m12.rx_bytes == 0 && waited_s >= 10)
                         std::snprintf(status, sizeof(status), "no data from M12 - check blue port");
-                    else if (!answered) std::snprintf(status, sizeof(status), "starting M12... %lus", waited_s);
-                    else if (!fresh || shown == 0) std::snprintf(status, sizeof(status), "no face   (turn off: home)");
-                    else std::snprintf(status, sizeof(status), "faces %u   (turn off: home)", static_cast<unsigned>(shown));
+                    else if (!answered) std::snprintf(status, sizeof(status), "starting M12... %lus  %s", waited_s, who);
+                    else if (!fresh || shown == 0) std::snprintf(status, sizeof(status), "no face  %s", who);
+                    else std::snprintf(status, sizeof(status), "faces %u  %s", static_cast<unsigned>(shown), who);
                     screen_update_faces(boxes, shown, status);
                 }
             }

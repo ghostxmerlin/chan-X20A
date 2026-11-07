@@ -92,5 +92,68 @@ int main()
             }
         }
     }
-    std::cout << "PASS: M12 commands, face results, clipping, mirror mapping, replies/errors, line assembly, 3000 random streams\n";
+    {   // Face Recognition result: name and match probability per face.
+        auto r = parse_m12_line(R"({"num":1,"face":[{"x":100.4,"y":60.6,"w":80,"h":90,"prob":0.97,"match_prob":0.83,"name":"papa"}],"running":"Face Recognition"})");
+        assert(r.kind == M12LineKind::faces && r.recognition && r.count == 1);
+        assert(std::strcmp(r.faces[0].name, "papa") == 0 && r.faces[0].match_prob > 0.82f && r.faces[0].x == 100);
+        auto d = parse_m12_line(R"({"num":1,"face":[{"x":1,"y":1,"w":9,"h":9,"prob":0.9}],"running":"Face Detector"})");
+        assert(!d.recognition && d.faces[0].name[0] == 0);
+    }
+    {   // Policy: look around after boot, identify a new face, keep watching, doze when idle.
+        constexpr int64_t s = 1000000;
+        M12Policy p;
+        assert(p.function() == M12Function::none);
+        p.start(0);
+        assert(p.phase() == M12Phase::looking && p.function() == M12Function::detect);
+        p.tick(30 * s);
+        assert(p.function() == M12Function::detect);                  // M12 still booting: keep looking
+        p.result(35 * s, 1, false, nullptr, 0);                        // first face: who is it?
+        assert(p.phase() == M12Phase::identifying && p.function() == M12Function::recognize);
+        p.result(36 * s, 1, false, nullptr, 0);                        // trailing detector result: ignored
+        p.result(38 * s, 1, true, "", 0.2f);                           // not matched yet
+        assert(p.phase() == M12Phase::identifying);
+        p.result(39 * s, 1, true, "papa", 0.81f);
+        assert(p.phase() == M12Phase::watching && p.function() == M12Function::detect);
+        assert(p.identity().known && std::strcmp(p.identity().name, "papa") == 0 && p.identity().at_us == 39 * s);
+        p.result(41 * s, 1, false, nullptr, 0);
+        p.result(70 * s, 1, false, nullptr, 0);                        // new after 29 s, but cooldown: no burst
+        assert(p.phase() == M12Phase::watching);
+        p.tick(95 * s);                                                // look window from first result (35+60) is over
+        assert(p.phase() == M12Phase::watching);
+        p.tick(129 * s);
+        assert(p.function() == M12Function::detect);                   // 59 s since last face
+        p.tick(130 * s);
+        assert(p.phase() == M12Phase::dozing && p.function() == M12Function::standby);
+        p.result(131 * s, 1, false, nullptr, 0);                       // stray result while switching: stays dozing
+        assert(p.phase() == M12Phase::dozing);
+        p.wake(200 * s);                                               // voice / touch / remote
+        assert(p.phase() == M12Phase::looking && p.function() == M12Function::detect);
+        p.result(205 * s, 1, false, nullptr, 0);                       // new face, cooldown over: identify again
+        assert(p.phase() == M12Phase::identifying);
+        for (int i = 0; i < M12Policy::kUnknownAfter; ++i) p.result((206 + i) * s, 1, true, "", 0.1f);
+        assert(p.phase() == M12Phase::watching && !p.identity().known);   // nobody enrolled matched
+        p.view(true, 220 * s);                                         // face page open: never doze
+        p.tick(1000 * s);
+        assert(p.function() == M12Function::detect);
+        p.view(false, 1000 * s);
+        p.tick(1059 * s);
+        assert(p.function() == M12Function::detect);
+        p.tick(1060 * s);
+        assert(p.function() == M12Function::standby);
+        p.view(true, 1100 * s);                                        // "turn on" from standby wakes it
+        assert(p.phase() == M12Phase::looking);
+        p.result(1105 * s, 1, false, nullptr, 0);
+        assert(p.phase() == M12Phase::identifying);
+        p.tick(1115 * s);                                              // no recognition answer within 10 s
+        assert(p.phase() == M12Phase::watching && !p.identity().known);
+    }
+    {   // No M12 at all: look for 60 s, then doze.
+        M12Policy p;
+        p.start(0);
+        p.tick(59999999);
+        assert(p.function() == M12Function::detect);
+        p.tick(60000000);
+        assert(p.function() == M12Function::standby);
+    }
+    std::cout << "PASS: M12 commands, face results, clipping, mirror mapping, replies/errors, line assembly, 3000 random streams, recognition fields, look/identify/watch/doze policy\n";
 }

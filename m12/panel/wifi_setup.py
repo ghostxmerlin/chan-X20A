@@ -7,6 +7,8 @@ are written to the device's /etc/wpa_supplicant.conf (a backup is kept as .bak).
 Usage:  python3 wifi_setup.py            add/replace networks, then show connection status
         python3 wifi_setup.py --status   only show connection status
         python3 wifi_setup.py --dry-run  show the new config (PSKs masked) without writing
+        python3 wifi_setup.py --order "A" "B" ...   reorder saved networks only (no passwords);
+                                     listed first = tried first, unlisted ones go after them
 Env:    UNITV2_HOST (10.254.239.1)  UNITV2_USER (m5stack)  UNITV2_PASS (12345678, also used for sudo)
 """
 import getpass
@@ -86,6 +88,38 @@ def make_block(ssid, password, priority):
             "}"]
 
 
+def set_priority(block, priority):
+    lines = [l for l in block if not re.match(r"\s*priority=", l)]
+    return lines[:-1] + [f"\tpriority={priority}"] + lines[-1:]  # keep the closing "}" last
+
+
+def reorder(names, dry):
+    code, current, err = ssh(f"cat {CONF}")
+    if code != 0:
+        sys.exit(f"连不上设备 {HOST}：{(err or current).strip()}")
+    header, blocks = parse_conf(current)
+    by_ssid = {block_ssid(b): b for b in blocks}
+    wanted = [n.encode("utf-8") for n in names]
+    missing = [n for n, b in zip(names, wanted) if b not in by_ssid]
+    if missing:
+        sys.exit(f"设备上没有保存这些 WiFi：{', '.join(missing)}。先用不带参数的 wifi_setup.py 添加。")
+    rest = [b for b in blocks if block_ssid(b) not in wanted]  # keep their current relative order
+    rest.sort(key=lambda b: -max([0] + [int(m.group(1)) for l in b if (m := re.match(r"\s*priority=(\d+)", l))]))
+    ordered = [by_ssid[b] for b in wanted] + rest
+    total = len(ordered)
+    new_blocks = [set_priority(b, total - i) for i, b in enumerate(ordered)]
+    text = "\n".join(header + [l for b in new_blocks for l in b]) + "\n"
+    print("新的连接顺序：" + " > ".join(block_ssid(b).decode("utf-8", "replace") for b in ordered))
+    if dry:
+        print(re.sub(r"psk=[0-9a-f]{64}", "psk=<hidden>", text))
+        return
+    code, out, err = sudo(f"sh -c 'cp {CONF} {CONF}.bak && cat > {CONF} && wpa_cli -i wlan0 reconfigure'", text)
+    if code != 0:
+        sys.exit(f"写入失败：{(err or out).strip()}")
+    print(f"已写入（原配置备份在 {CONF}.bak）。只改了优先级，密码不变。")
+    show_status(wait=40)
+
+
 def status():
     code, out, err = sudo("wpa_cli -i wlan0 status")
     if code != 0:
@@ -124,6 +158,12 @@ def main():
         show_status(hints=False)
         return
     dry = "--dry-run" in sys.argv
+    if "--order" in sys.argv:
+        names = [a for a in sys.argv[sys.argv.index("--order") + 1:] if a != "--dry-run"]
+        if not names:
+            sys.exit('用法：wifi_setup.py --order "第一个" "第二个" ...')
+        reorder(names, dry)
+        return
 
     code, current, err = ssh(f"cat {CONF}")
     if code != 0:
