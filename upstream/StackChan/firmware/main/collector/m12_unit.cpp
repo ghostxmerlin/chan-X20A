@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "m12_unit.h"
+#include "web_control.h"
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_log.h>
@@ -26,8 +27,7 @@ constexpr int64_t kResendUs = 8000000;
 constexpr int64_t kSlowResendUs = 30000000;
 constexpr int kFastResends = 6;
 
-std::atomic<uint32_t> view_seq{0};
-std::atomic_bool view_on{false};
+std::atomic<uint32_t> view_request{0};
 std::mutex state_mutex;
 M12Snapshot state;
 // Diagnostics (task-owned writes, read under the same mutex).
@@ -110,9 +110,9 @@ void m12_task(void*)
     uint32_t stats_results = 0, results = 0;
     while (true) {
         const int64_t loop_us = esp_timer_get_time();
-        if (const uint32_t v = view_seq.load(); v != seen_view) {
+        if (const uint32_t v = view_request.load(); v != seen_view) {
             seen_view = v;
-            policy.view(view_on.load(), loop_us);
+            policy.view((v & 1) != 0, loop_us);
         }
         policy.tick(loop_us);
         if (policy.phase() != logged_phase) {
@@ -231,9 +231,11 @@ void m12_wake() {}
 
 void m12_set_view(bool on)
 {
-    view_on = on;
-    ++view_seq;
+    auto previous = view_request.load();
+    while (!view_request.compare_exchange_weak(previous, next_view_request(previous, on))) {}
 }
+
+uint32_t m12_view_request() { return view_request.load(); }
 
 const char* m12_phase_name(M12Phase phase)
 {
@@ -257,6 +259,9 @@ M12Snapshot m12_snapshot()
 void m12_json(ArduinoJson::JsonObject out)
 {
     std::lock_guard<std::mutex> lock(state_mutex);
+    const auto view = view_request.load();
+    out["view_enabled"] = (view & 1) != 0;
+    out["view_seq"] = view >> 1;
     out["valid"] = state.valid;
     out["phase"] = m12_phase_name(state.phase);
     out["function"] = function_name(state.function);

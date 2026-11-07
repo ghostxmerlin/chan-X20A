@@ -1,3 +1,4 @@
+import { ControlPanel } from '/control-ui.js';
 import { renderM12, renderThermal } from '/m12-ui.js';
 const $ = id => document.getElementById(id);
 const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) el.textContent = next; };
@@ -5,6 +6,7 @@ const num = (n, digits = 1) => Number.isFinite(n) ? n.toFixed(digits) : '—';
 const bool = (v, yes, no) => v === true ? yes : v === false ? no : '—';
 const duration = seconds => { const s = Math.max(0, Math.floor(seconds || 0)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 60)}m ${s % 60}s`; };
 const age = (t, stamp) => stamp > 0 && t >= stamp ? `${duration((t - stamp) / 1e6)} 前` : '尚无数据';
+const controls = new ControlPanel(document);
 let source, state, received = 0, paused = false, generation = 0, frameSeq = null, frameURL = null, framePending = false;
 let lastBoot = '', lastEvent = -1, listening = false, audioContext, audioAbort, audioGeneration = 0;
 
@@ -68,7 +70,7 @@ function render() {
   $('status-dot').classList.toggle('live', !!fresh);
   text('status', paused ? '监控已暂停' : fresh ? '实时连接' : connected ? '数据过期' : '等待机器人');
   text('firmware', state?.firmware || 'StackChan');
-  text('notice', paused ? '此页面已暂停；其他已打开的观察页面仍可继续采集。' : !bridge ? '本机数据桥未连接，正在重试…' : !connected ? (state?.error || '正在验证机器人并建立连接…') : !fresh ? '遥测未更新，旧数据已隐藏。' : '只读监控 · 声音需手动开启 · 不改变机器人工作模式');
+  text('notice', paused ? '此页面已暂停；其他已打开的观察页面仍可继续采集。' : !bridge ? '本机数据桥未连接，正在重试…' : !connected ? (state?.error || '正在验证机器人并建立连接…') : !fresh ? '遥测未更新，旧数据已隐藏。' : '实时监控 · 点击控制按钮才发送操作 · 声音需手动开启');
   $('notice').classList.toggle('warn', !paused && !fresh);
   text('camera-status', cameraFresh ? '实时画面' : paused ? '已暂停' : (state?.cameraError || '等待新画面'));
   text('frame-meta', cameraFresh ? `#${state.frame.seq} · ${num(state.frame.bytes / 1024, 1)} KB` : '—');
@@ -85,7 +87,7 @@ function render() {
   text('yaw', motor.yaw?.valid ? `${num(motor.yaw.angle_deg)}°` : '无有效反馈');
   text('pitch', motor.pitch?.valid ? `${num(motor.pitch.angle_deg)}°` : '无有效反馈');
   $('yaw').classList.toggle('warn', !!fresh && !motor.yaw?.valid); $('pitch').classList.toggle('warn', !!fresh && !motor.pitch?.valid);
-  const pose = { feedback_unavailable: '反馈不可用', complete: '动作已完成', completed: '动作已完成', moving: '运动中', waiting: '等待反馈', idle: '空闲', cancelled: '已取消' };
+  const pose = { feedback_unavailable: '反馈不可用', complete: '动作已完成', completed: '动作已完成', moving: '运动中', waiting: '等待反馈', idle: '空闲', superseded: '已由新设置替代', cancelled: '已取消' };
   text('startup-pose', pose[motor.startup_pose_state] || motor.startup_pose_state);
   text('pitch-saved', t.pitch_setting ? `${num(t.pitch_setting.configured_deg)}° · ${bool(t.pitch_setting.persisted, '已保存', '未保存')}` : '—');
   for (const id of ['system-panel','servo-panel','m12-panel','asr-panel','mag-panel']) $(id).classList.toggle('stale', !fresh);
@@ -114,6 +116,7 @@ function render() {
   text('asr-state', t.asr ? `${bool(t.asr.valid, '串口就绪', '串口异常')} · ${t.asr.frames} 帧` : '—');
   const last = t.asr?.events?.at(-1);
   text('asr-last', last ? `${last.word || last.id} · ${age(t.timestamp_us, last.timestamp_us)}` : '尚无指令');
+  controls.render(state, fresh && !document.hidden);
   renderM12(state, fresh, bridge);
   renderThermal(t.temperature, fresh ? state.thermalHistory : [], t.timestamp_us);
   const asrList = $('asr-events'); asrList.replaceChildren();

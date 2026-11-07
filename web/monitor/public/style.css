@@ -25,3 +25,12 @@
 .asr-events li span+span{color:var(--muted);font-size:14px}
 @media(max-width:1000px){.m12-layout{grid-template-columns:1fr 1fr}.m12-readings{gap:8px}.m12-readings strong{font-size:26px}.m12-visual-head{flex-wrap:wrap}}
 @media(max-width:700px){.m12-layout{grid-template-columns:1fr}.m12-visual{border-right:0;border-bottom:1px solid var(--line)}.m12-panel{margin-top:12px}.m12-readings{padding:0 14px 12px}.m12-readings span,.m12-readings small{font-size:13px}.thermal-caption{font-size:12px}.m12-readings strong{font-size:27px}}
+
+/* Controls remain beside their measured feedback, with a distinct stop action. */
+.control-block{margin:12px 18px 18px;border-top:1px solid var(--line);padding-top:14px}
+.control-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.control-buttons button{flex:1;min-width:125px}
+.stop-button{color:var(--warn);border-color:#70572f}.stop-button:hover{background:#302617;border-color:var(--warn)}
+.control-note,.command-result{font-size:13px;line-height:1.6;margin:8px 0;color:var(--muted)}.command-result{color:var(--green);min-height:22px}
+.pitch-label{display:block;margin:14px 0 8px}.pitch-controls{display:flex;gap:8px}.pitch-controls input{min-width:0;width:110px;flex:1;background:#000;color:var(--green);border:1px solid var(--line);padding:10px;font:inherit}.pitch-controls input:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.m12-controls{margin-top:0;border-top:0;padding-top:0;border-bottom:1px solid var(--line);padding-bottom:8px}
+@media(max-width:700px){.control-block{margin-left:14px;margin-right:14px}.control-buttons button{min-width:110px}}

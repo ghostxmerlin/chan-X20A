@@ -705,7 +705,7 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["emotion"]["supported"] = false;
     doc["emotion"]["enabled"] = false;
     auto capabilities = doc["capabilities"].to<JsonObject>();
-    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature"}) capabilities[name] = "supported";
+    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature", "web_control"}) capabilities[name] = "supported";
     capabilities["face_detection"] = "unsupported";
     capabilities["emotion_display"] = "unsupported";
     environment_json(doc, true);
@@ -934,9 +934,60 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     return send_json(request, doc);
 }
 
+bool control_boot_matches(httpd_req_t* request, bool required = false)
+{
+    const size_t length = httpd_req_get_hdr_value_len(request, "X-Boot-Id");
+    if (!length && !required) return true;
+    char value[80]{};
+    if (!length || length >= sizeof(value) || httpd_req_get_hdr_value_str(request, "X-Boot-Id", value, sizeof(value)) != ESP_OK || boot_id != value) {
+        httpd_resp_set_status(request, "409 Conflict");
+        httpd_resp_sendstr(request, "Robot restarted; refresh state before control"); return false;
+    }
+    return true;
+}
+
+esp_err_t web_control_handler(httpd_req_t* request)
+{
+    if (!authorize(request) || !control_boot_matches(request, true)) return ESP_FAIL;
+    if (request->content_len < 1 || request->content_len > 128) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid control body"); return ESP_FAIL;
+    }
+    char body[129]{}; int total = 0;
+    const int64_t deadline = esp_timer_get_time() + 3000000;
+    while (total < request->content_len) {
+        const int n = httpd_req_recv(request, body + total, request->content_len - total);
+        if (n <= 0 || esp_timer_get_time() > deadline) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete control body"); return ESP_FAIL;
+        }
+        total += n;
+    }
+    JsonDocument doc, result;
+    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() != 1) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected one control field"); return ESP_OK;
+    }
+    if (strcmp(request->uri, "/v1/m12/view") == 0) {
+        if (!doc["enabled"].is<bool>()) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK; }
+        if (doc["enabled"].as<bool>() && !m12_snapshot().valid) return unavailable(request, "M12 serial unavailable");
+        m12_set_view(doc["enabled"].as<bool>());
+        result["request_seq"] = m12_view_request() >> 1;
+    } else {
+        if (!doc["delta_deg"].is<int>() || (doc["delta_deg"].as<int>() != -5 && doc["delta_deg"].as<int>() != 5)) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected delta_deg -5 or 5"); return ESP_OK;
+        }
+        uint32_t seq = 0;
+        if (remote_step_yaw(doc["delta_deg"].as<int>() * 10, &seq) != ESP_OK) {
+            httpd_resp_set_status(request, "409 Conflict");
+            return httpd_resp_sendstr(request, "Yaw unavailable: enable control, wait for valid feedback and settled motion");
+        }
+        result["request_seq"] = seq;
+    }
+    result["accepted"] = true;
+    httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
+}
+
 esp_err_t remote_handler(httpd_req_t* request)
 {
-    if (!authorize(request)) return ESP_OK;
+    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
     if (request->content_len < 1 || request->content_len > 128) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
     }
@@ -958,7 +1009,7 @@ esp_err_t remote_handler(httpd_req_t* request)
 
 esp_err_t pitch_handler(httpd_req_t* request)
 {
-    if (!authorize(request)) return ESP_FAIL;
+    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
     if (request->content_len < 1 || request->content_len > 128) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected angle_deg number from 5 to 85");
         return ESP_FAIL; // Do not leave oversized/unknown body bytes to HTTP purge.
@@ -1120,7 +1171,7 @@ void start_server(int port, int control_port, bool audio_only)
     config.ctrl_port = control_port;
     config.stack_size = 8192;
     config.max_open_sockets = audio_only ? kAudioHttpSessions : kMainHttpSessions;
-    config.max_uri_handlers = 9;
+    config.max_uri_handlers = 11;
     config.max_resp_headers = 10;
     config.recv_wait_timeout = 3;
     config.send_wait_timeout = 3;
@@ -1146,6 +1197,10 @@ void start_server(int port, int control_port, bool audio_only)
         httpd_uri_t pitch{};
         pitch.uri = "/v1/settings/pitch"; pitch.method = HTTP_POST; pitch.handler = pitch_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &pitch));
+        for (const char* uri : {"/v1/m12/view", "/v1/motion/yaw-step"}) {
+            httpd_uri_t endpoint{}; endpoint.uri = uri; endpoint.method = HTTP_POST; endpoint.handler = web_control_handler;
+            ESP_ERROR_CHECK(httpd_register_uri_handler(server, &endpoint));
+        }
         httpd_uri_t playback{};
         playback.uri = "/v1/playback"; playback.method = HTTP_POST;
         playback.handler = [](httpd_req_t* request) -> esp_err_t {
@@ -1243,6 +1298,7 @@ void update_screen(const std::string& ip)
             // home and requests standby. Other inputs never wake the M12.
             static uint32_t asr_seen = 0;
             static bool face_view = false;
+            static uint32_t view_seen = 0;
             const uint32_t asr = asr_latest();
             const auto tick_ms = static_cast<uint32_t>(now / 1000);
             if (asr != asr_seen) {
@@ -1253,10 +1309,13 @@ void update_screen(const std::string& ip)
                     screen_show_reaction(spoken == AsrReaction::heart ? ScreenReaction::Heart : ScreenReaction::Reject, tick_ms);
                 const int face_switch = asr_face_switch(id);
                 if (face_switch != 0) {
-                    face_view = face_switch > 0;
-                    m12_set_view(face_view);
-                    screen_show_faces(face_view, tick_ms);
+                    m12_set_view(face_switch > 0);
                 }
+            }
+            const uint32_t requested_view = m12_view_request();
+            if (requested_view != view_seen) {
+                view_seen = requested_view; face_view = (requested_view & 1) != 0;
+                screen_show_faces(face_view, tick_ms);
             }
             if (face_view && !screen_showing_faces()) {
                 face_view = false;

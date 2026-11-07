@@ -13,14 +13,15 @@ export function validateBinding(value) {
   return { address: url.origin, token: value.token, device_id: value.device_id };
 }
 
-function launchCurl(url, token, streaming = false) {
+function launchCurl(url, token, streaming = false, {method = "GET", body, boot} = {}) {
   // -q must be first: never inherit redirects or credential traces from .curlrc.
+  const extra = method === 'POST' ? ['--request','POST','--data-binary',JSON.stringify(body)] : [];
   const child = spawn('/usr/bin/curl', ['-q', '--noproxy', '*', '--proto', '=http', '--connect-timeout', '3',
     '--max-time', streaming ? '0' : '5', '--speed-limit', '1', '--speed-time', '5',
-    '--silent', '--show-error', '--include', '--no-buffer', '--header', '@-', url], { stdio: ['pipe', 'pipe', 'pipe'] });
+    '--silent', '--show-error', '--include', '--no-buffer', '--header', '@-', ...extra, url], { stdio: ['pipe', 'pipe', 'pipe'] });
   // Credentials travel through stdin, never process arguments or the browser.
   child.stdin.on('error', () => {});
-  child.stdin.end((token ? `Authorization: Bearer ${token}\n` : '') + 'Connection: close\n');
+  child.stdin.end((token ? `Authorization: Bearer ${token}\n` : '') + (method === 'POST' ? `Content-Type: application/json\nX-Boot-Id: ${boot}\n` : '') + 'Connection: close\n');
   child.stderr.resume();
   return child;
 }
@@ -30,16 +31,17 @@ function splitResponse(data) {
   if (at < 0 || at > 16384) throw new Error('设备响应头无效');
   const lines = data.subarray(0, at).toString('latin1').split('\r\n');
   const status = Number(lines.shift()?.match(/^HTTP\/\S+ (\d{3})/)?.[1]);
-  if (status !== 200) throw new Error(`设备 HTTP ${status || '无效响应'}`);
+  if (status < 200 || status >= 300 || !status) throw Object.assign(new Error(`设备 HTTP ${status || '无效响应'}`), {status});
   const headers = {};
   for (const line of lines) { const i = line.indexOf(':'); if (i > 0) headers[line.slice(0, i).toLowerCase()] = line.slice(i + 1).trim(); }
   return { headers, body: data.subarray(at + 4) };
 }
 
-export function deviceRequest(url, { token, maxBytes = 524288, signal } = {}) {
+export function deviceRequest(url, { token, maxBytes = 524288, signal, method = "GET", body, boot } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new Error('监控已暂停')); return; }
-    const child = launchCurl(url, token); const chunks = []; let size = 0, error;
+    if (!['GET','POST'].includes(method) || (method === 'POST' && !/^[\w-]{1,79}$/.test(boot || ''))) { reject(new Error('写入请求无效')); return; }
+    const child = launchCurl(url, token, false, {method,body,boot}); const chunks = []; let size = 0, error;
     const abort = () => { error = new Error('监控已暂停'); child.kill(); };
     signal?.addEventListener('abort', abort, { once: true });
     child.stdout.on('data', data => {
@@ -57,7 +59,7 @@ export function deviceRequest(url, { token, maxBytes = 524288, signal } = {}) {
 }
 
 export class DeviceClient {
-  constructor(binding) { this.binding = validateBinding(binding); this.verified = false; }
+  constructor(binding) { this.binding = validateBinding(binding); this.verified = false; this.requestTail = Promise.resolve(); }
   async connect(signal) {
     this.verified = false;
     const nonce = randomBytes(16).toString('hex');
@@ -78,8 +80,20 @@ export class DeviceClient {
     } catch (err) { this.verified = false; throw err; }
   }
   async request(path, signal) {
+    return this.serialRequest(() => {
     if (!this.verified || !path.startsWith('/v1/')) throw new Error('等待验证机器人');
     return deviceRequest(this.binding.address + path, { token: this.binding.token, signal });
+    });
+  }
+  serialRequest(work) {
+    const next = this.requestTail.then(work); this.requestTail = next.catch(() => {}); return next;
+  }
+  async control(path, body, boot, check) {
+    return this.serialRequest(async () => {
+      check();
+      if (!this.verified || this.info?.boot_id !== boot || !['/v1/m12/view','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch'].includes(path)) throw new Error('控制状态已变化');
+      return JSON.parse((await deviceRequest(this.binding.address+path, {token:this.binding.token, method:'POST', body, boot, maxBytes:16384})).body);
+    });
   }
   async json(path, signal) { return JSON.parse((await this.request(path, signal)).body); }
   openAudio() {
@@ -180,7 +194,7 @@ export class Monitor extends EventEmitter {
     const fresh = { telemetry: !!this.telemetryAt && now - this.telemetryAt < 1500,
       camera: !!this.frame?.at && now - this.frame.at < 1500, audio: !!this.audio.at && now - this.audio.at < 1000 };
     return { online: this.online, active: this.running, error: this.error, viewers: this.viewers,
-      firmware: this.info?.firmware || '', boot: this.info?.boot_id || '', address: this.client.binding?.address || '',
+      capabilities: this.info?.capabilities || {}, firmware: this.info?.firmware || '', boot: this.info?.boot_id || '', address: this.client.binding?.address || '',
       receivedAt: this.telemetryAt, fresh, telemetry: this.telemetry,
       frame: this.frame ? { seq: this.frame.seq, at: this.frame.at, bytes: this.frame.bytes.length } : null,
       audio: { ...this.audio, error: this.audioError }, cameraError: this.cameraError,

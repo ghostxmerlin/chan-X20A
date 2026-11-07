@@ -27,6 +27,7 @@ void remote_init();
 void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_history, bool include_servo_diagnostics = false);
 bool remote_arm(bool enabled);
 bool remote_enabled();
+esp_err_t remote_step_yaw(int delta_tenths, uint32_t* request_seq);
 const char* remote_display_state();
 // Commit one collector setting, then queue one explicit pitch attempt. ESP_OK
 // confirms persistence/acceptance, not measured arrival. Disabled returns

@@ -3,13 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DeviceClient, Monitor } from './core.mjs';
+import { Controls } from './control.mjs';
 import { M12System } from './m12-system.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export const root = path.resolve(directory, '../..');
-export function createMonitorServer(monitor) {
+export function createMonitorServer(monitor, controls = new Controls(monitor)) {
   const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']],
-    ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
+    ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -21,8 +22,26 @@ export function createMonitorServer(monitor) {
     const respond = (code, message) => { res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(message); };
     if (!allowedHosts.includes(req.headers.host) || (origin && !allowedHosts.some(host => origin === 'http://' + host)) ||
         req.headers['sec-fetch-site'] === 'cross-site') { respond(403, '仅允许本机观察台访问'); return; }
-    if (req.method !== 'GET') { respond(405, '观察台只提供读取接口'); return; }
     const url = new URL(req.url, 'http://' + req.headers.host);
+    if (req.method === 'POST' && url.pathname === '/api/control') {
+      if (origin !== 'http://' + req.headers.host) { respond(403,'控制操作必须来自当前观察页面'); return; }
+      if (req.headers['content-type'] !== 'application/json') { respond(415,'控制只接受 JSON'); return; }
+      let body='', size=0, ended=false;
+      const timer=setTimeout(()=>{ if (!ended) {ended=true; respond(408,'控制请求超时'); req.destroy();} },3000);
+      req.on('close',()=>clearTimeout(timer));
+      req.on('data',chunk=>{
+        size+=chunk.length;
+        if(size>512) {ended=true;clearTimeout(timer);respond(413,'控制参数过长');req.destroy();} else body+=chunk;
+      });
+      req.on('end',async()=>{
+        clearTimeout(timer);if(ended)return;ended=true;
+        let input;try { input=JSON.parse(body); } catch {respond(400,'无效 JSON');return;}
+        try {const result=await controls.execute(input);res.writeHead(202,{'Content-Type':'application/json'});res.end(JSON.stringify(result));}
+        catch(error) {respond(error.status || 502,error.message);}
+      });
+      return;
+    }
+    if (req.method !== 'GET') { respond(405, '此路径不接受写入'); return; }
     if (url.pathname === '/health') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ service: 'stackchan-monitor', pid: process.pid })); return; }
     if (assets.has(url.pathname)) {
       const [filename, type] = assets.get(url.pathname);

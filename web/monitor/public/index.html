@@ -25,10 +25,19 @@
           <div class="thermal-caption"><span id="chip-temperature-note">ESP32-S3 · 等待读数</span><span>最近 2 分钟</span></div><canvas id="chip-thermal" aria-label="StackChan 芯片温度趋势"></canvas>
         </section>
         <section class="panel" id="servo-panel">
-          <div class="panel-head"><h2>舵机反馈</h2><span id="motor-status" class="muted">—</span></div>
+          <div class="panel-head"><h2>舵机控制与反馈</h2><span id="motor-status" class="muted">—</span></div>
           <div class="angle-row"><div><span>左右轴 · 实测</span><strong id="yaw">—</strong></div><div><span>俯仰轴 · 实测</span><strong id="pitch">—</strong></div></div>
           <dl class="metrics compact"><div><dt>保存仰角</dt><dd id="pitch-saved">—</dd></div><div><dt>启动姿态</dt><dd id="startup-pose">—</dd></div></dl>
-          <p class="note">只读反馈 · 无效反馈不显示为实际角度</p>
+          <div class="control-block">
+            <div class="control-buttons"><button id="motor-enable" disabled>启用舵机</button><button id="motor-disable" class="stop-button" disabled>停用舵机</button></div>
+            <div class="control-buttons"><button id="yaw-left" disabled>← 左转 5°</button><button id="yaw-right" disabled>右转 5° →</button></div>
+            <p id="controls-note" class="control-note">等待有效状态</p>
+            <p class="control-note">左右动作：<span id="yaw-command-state">—</span></p>
+            <label class="pitch-label" for="pitch-input">仰角设置（5–85°）</label>
+            <div class="pitch-controls"><input id="pitch-input" type="number" min="5" max="85" step="0.1" inputmode="decimal" disabled><button id="pitch-apply" disabled>保存并应用</button></div>
+            <p class="control-note">立即尝试调整，并保存为下次开机角度。<br>仰角动作：<span id="pitch-command-state">—</span></p>
+            <p id="servo-command" class="command-result" role="status">点击按钮发送操作；目标值与实测角度分别显示。</p>
+          </div>
         </section>
       </div>
     </div>
@@ -41,8 +50,9 @@
           <p class="note">显示 M12 返回的位置与置信度；此处为检测坐标，暂不传输原始视频。</p>
         </div>
         <div class="m12-details">
+          <div class="control-block m12-controls"><div class="control-buttons"><button id="m12-start" disabled>开始人脸检测</button><button id="m12-stop" class="stop-button" disabled>退出待机</button></div><p id="m12-command" class="command-result" role="status">手动切换；ASR turn on / turn off 仍然有效。</p></div>
           <div class="m12-readings">
-            <div><span>芯片温度</span><strong id="m12-temperature">—</strong><small id="m12-temperature-note">M12 网络未接入</small></div>
+            <div><span>芯片温度</span><strong id="m12-temperature">—</strong><small id="m12-temperature-note">等待 M12 网络数据</small></div>
             <div><span>检测更新率</span><strong id="m12-fps">—</strong><small>结果 / 秒 · 5 秒窗口</small></div>
             <div><span>当前人脸</span><strong id="m12-count">—</strong><small id="m12-confidence">等待检测结果</small></div>
           </div>
@@ -84,7 +94,7 @@
         <p class="note">连接 / ASR / 状态变化 · 完整固件日志仍在 USB</p>
       </section>
     </div>
-    <footer><span>StackChan · 本机只读观察台</span><span id="freshness">尚未收到数据</span><span>关闭页面后释放采集连接</span></footer>
+    <footer><span>StackChan · 本机监控与手动控制观察台</span><span id="freshness">尚未收到数据</span><span>关闭页面后释放采集连接</span></footer>
   </main>
 </body>
 </html>

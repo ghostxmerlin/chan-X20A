@@ -33,6 +33,7 @@ void m12_init();
 void m12_wake();
 // Explicit request: true selects Face Detector; false selects standby. Non-blocking.
 void m12_set_view(bool on);
+uint32_t m12_view_request();
 M12Snapshot m12_snapshot();
 const char* m12_phase_name(M12Phase phase);
 void m12_json(ArduinoJson::JsonObject out);

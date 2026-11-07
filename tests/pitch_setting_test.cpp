@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "../upstream/StackChan/firmware/main/collector/pitch_setting.h"
+#include "../upstream/StackChan/firmware/main/collector/web_control.h"
 #include "../upstream/StackChan/firmware/main/collector/startup_pose.h"
 #include "../upstream/StackChan/firmware/main/collector/remote_stop.h"
 #include "../upstream/StackChan/firmware/main/stackchan/motion/servo.h"
@@ -26,6 +27,7 @@ public:
     void setTorqueEnabled(bool enabled) override { torque = enabled; }
     bool getTorqueEnabled() override { return torque; }
     void limits(int lower, int upper) { set_angle_limit({lower, upper}); }
+    void passive() { initPassive(); }
     int command_start() { return Servo::getCurrentAngle(); }
 protected:
     void set_angle_impl(int angle) override { commands.push_back(angle); torque = true; }
@@ -176,10 +178,30 @@ static void terminal_states()
     assert(std::strcmp(limit.state(), "target_unavailable") == 0);
 }
 
+static void passive_yaw_first_command()
+{
+    Axis axis; axis.limits(-1280, 1280); axis.passive();
+    assert(axis.commands.empty());
+    // Reproduce the real passive Servo state that blocked the first web command.
+    assert(!axis.isTrajectoryComplete());
+    collector::ManualYaw request;
+    assert(request.submit(-50, true, true, collector::manual_yaw_idle(false, axis.isTrajectoryComplete()),
+                          40, 100, 100));
+    assert(request.take(110, collector::manual_yaw_idle(false, axis.isTrajectoryComplete())));
+    ServoFeedback feedback; feedback.valid = true; feedback.angle = 40;
+    assert(axis.moveFromFeedbackWithSpeed(feedback, request.target, 100));
+    request.finish(true);
+    assert(!collector::manual_yaw_idle(true, axis.isTrajectoryComplete()));
+    for (int i = 0; i < 1000 && !axis.isTrajectoryComplete(); ++i) { test_tick_ms += 20; axis.update(); }
+    assert(axis.isTrajectoryComplete()); request.complete();
+    assert(!axis.commands.empty() && axis.commands.back() == -10);
+    assert(!std::strcmp(request.state, "trajectory_complete"));
+}
+
 int main()
 {
     smooth_ui_toolkit::ui_hal::on_get_tick([] { return test_tick_ms; });
-    storage_and_request_generation(); feedback_boundary(); terminal_states();
+    storage_and_request_generation(); feedback_boundary(); terminal_states(); passive_yaw_first_command();
     trajectory({20}, 150, true);
     trajectory({19, 21}, 130, true);
     trajectory({40}, 850, true);

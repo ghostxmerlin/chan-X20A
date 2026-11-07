@@ -5,6 +5,7 @@
 #include "startup_pose.h"
 #include "remote_stop.h"
 #include "pitch_setting.h"
+#include "web_control.h"
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
 #include <espnow.h>
@@ -52,6 +53,8 @@ int64_t feedback_timestamp = 0;
 // Collector is also the remote receiver app: it does not need an Android lease.
 bool control_requested = true;
 RemoteStopLatch stop_latch;
+ManualYaw manual_yaw;
+std::atomic_bool web_yaw_active{false};
 uint32_t arm_after_seq = 0, applied_seq = 0;
 std::atomic_bool ready{false}, motor_ready{false}, enabled{false};
 stackchan::motion::ServoFeedback yaw_feedback, pitch_feedback;
@@ -59,6 +62,7 @@ stackchan::motion::ServoDiagnostics yaw_diagnostics, pitch_diagnostics;
 stackchan::motion::ServoDeadbandSnapshot yaw_deadband, pitch_deadband;
 int64_t diagnostics_timestamp = 0;
 bool yaw_trajectory_complete = false, pitch_trajectory_complete = false;
+bool yaw_command_started = false;
 int applied_yaw = 0, applied_speed = 0;
 const char* motor_state = "starting";
 const char* startup_state = "waiting_feedback";
@@ -103,6 +107,11 @@ esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t
         return ESP_OK;
     }
     if (!remote_for_receiver(command, kReceiver)) { ++wrong_target; return ESP_OK; }
+    const auto old_target = remote_yaw_target(history[sequence % kHistory].command);
+    const auto new_target = remote_yaw_target(command);
+    if (!command.center_v1 || old_target.yaw != new_target.yaw || old_target.speed != new_target.speed) {
+        manual_yaw.cancel(); web_yaw_active = false;
+    }
     Packet packet;
     packet.command = command;
     packet.seq = ++sequence;
@@ -190,6 +199,7 @@ void motor_task(void*)
         if (stop_pending) {
             apply_remote_stop(startup, motion, now);
             was_enabled = false;
+            yaw_command_started = false;
         }
         if (latest_pitch.sequence != pitch_request.sequence) {
             // Only a successfully committed, explicit request replaces pitch.
@@ -255,8 +265,10 @@ void motor_task(void*)
                 // Center-v1 heartbeats refresh link/press observation, but must
                 // not wake an unchanged yaw target or delay torque release.
                 if (!packet.command.center_v1 || applied_seq <= after ||
-                    target.yaw != applied_yaw || target.speed != applied_speed)
+                    target.yaw != applied_yaw || target.speed != applied_speed) {
                     apply_remote_yaw(motion.yawServo(), packet.command, applied_seq <= after);
+                    yaw_command_started = true; // motor-task owned
+                }
                 std::lock_guard<std::mutex> lock(mutex);
                 applied_seq = packet.seq;
                 applied_yaw = target.yaw; applied_speed = target.speed;
@@ -265,7 +277,20 @@ void motor_task(void*)
             // Match factory remote control: finish the spring trajectory even
             // when a held joystick sends no new packet. Servo::update retains
             // the factory automatic torque release when the motion has settled.
-            if (applied_seq > after) motion.yawServo().update();
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                // Recheck stop after feedback reads; do not move from HTTP or a second UART owner.
+                if (control_requested && manual_yaw.take(esp_timer_get_time(), manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()))) {
+                    const bool fresh = yaw_feedback.valid && feedback_timestamp > 0 &&
+                        esp_timer_get_time() - feedback_timestamp < 1000000;
+                    const auto limits = motion.yawServo().getAngleLimit();
+                    const bool accepted = fresh && manual_yaw.target >= limits.x && manual_yaw.target <= limits.y &&
+                        motion.yawServo().moveFromFeedbackWithSpeed(yaw_feedback, manual_yaw.target, 100);
+                    manual_yaw.finish(accepted); web_yaw_active = accepted;
+                    if (accepted) yaw_command_started = true;
+                }
+            }
+            if (applied_seq > after || web_yaw_active) motion.yawServo().update();
             else {
                 std::lock_guard<std::mutex> lock(mutex);
                 motor_state = strcmp(startup.state(), "moving") == 0 ?
@@ -299,7 +324,8 @@ void motor_task(void*)
             std::lock_guard<std::mutex> lock(mutex);
             yaw_diagnostics = motion.yawServo().diagnostics();
             pitch_diagnostics = motion.pitchServo().diagnostics();
-            yaw_trajectory_complete = motion.yawServo().isTrajectoryComplete();
+            yaw_trajectory_complete = manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete());
+            if (yaw_trajectory_complete) manual_yaw.complete();
             pitch_trajectory_complete = motion.pitchServo().isTrajectoryComplete();
             diagnostics_timestamp = esp_timer_get_time();
         }
@@ -464,11 +490,22 @@ bool remote_arm(bool active)
     std::lock_guard<std::mutex> lock(mutex);
     if (active && !ready) return false;
     if (active && !control_requested) arm_after_seq = sequence;
-    if (!active) { stop_latch.request(); pitch_requests.stop(); }
+    if (!active) { stop_latch.request(); pitch_requests.stop(); manual_yaw.cancel(); web_yaw_active = false; }
     control_requested = active;
     return true;
 }
 bool remote_enabled() { return enabled; }
+esp_err_t remote_step_yaw(int delta_tenths, uint32_t* request_seq)
+{
+    if (delta_tenths != -50 && delta_tenths != 50) return ESP_ERR_INVALID_ARG;
+    std::lock_guard<std::mutex> lock(mutex);
+    if ((sequence > arm_after_seq && sequence != applied_seq) ||
+        !manual_yaw.submit(delta_tenths, control_requested && enabled && motor_ready,
+            yaw_feedback.valid, yaw_trajectory_complete, yaw_feedback.angle,
+            feedback_timestamp, esp_timer_get_time())) return ESP_ERR_INVALID_STATE;
+    if (request_seq) *request_seq = manual_yaw.sequence;
+    return ESP_OK;
+}
 
 esp_err_t remote_set_pitch(int angle_tenths, uint32_t* request_seq)
 {
@@ -619,6 +656,12 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
         for (uint32_t i = std::max(first, after + 1); i <= sequence; ++i) add_packet(packets.add<ArduinoJson::JsonObject>(), history[i % kHistory]);
     }
     auto motor = target["motor"].to<ArduinoJson::JsonObject>();
+    auto web_yaw = motor["web_yaw"].to<ArduinoJson::JsonObject>();
+    web_yaw["request_seq"] = manual_yaw.sequence;
+    web_yaw["target_deg"] = manual_yaw.target / 10.0f;
+    web_yaw["state"] = manual_yaw.state;
+    web_yaw["requested_us"] = manual_yaw.requested_us;
+    motor["yaw_trajectory_complete"] = yaw_trajectory_complete;
     motor["enabled"] = enabled.load();
     motor["requested"] = control_requested;
     motor["feedback_valid"] = yaw_feedback.valid && pitch_feedback.valid;
