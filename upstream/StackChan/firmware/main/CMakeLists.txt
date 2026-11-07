@@ -25,8 +25,9 @@ list(APPEND STACK_CHAN_SOURCES collector/asr_unit.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/m12_unit.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/runtime_log.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/playback.cpp)
-list(APPEND STACK_CHAN_SOURCES collector/face_detection.cpp)
-list(APPEND STACK_CHAN_SOURCES collector/screen.cpp collector/laughing_man.c collector/collector_mono_15.c collector/collector_emotion_14.c)
+# Basic profile: retain the experimental detector source, but do not link or run it.
+list(APPEND STACK_CHAN_SOURCES collector/face_detection_disabled.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/screen.cpp collector/laughing_man.c collector/collector_mono_15.c)
 
 # Define source files
 set(SOURCES "audio/audio_codec.cc"

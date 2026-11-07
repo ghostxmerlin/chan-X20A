@@ -1,5 +1,22 @@
 # Collector 验证记录
 
+## 2026-11-07：0.4.17 基础版
+
+- Python：`python3 -B -m unittest discover -s tests`，30 通过、4 跳过（情绪运行依赖不在本机）。
+- ASR、M12、遥控协议：实际 C++ 生产逻辑测试通过；M12 包含启动待机、长期显式检测、无关唤醒/迟到结果不切换、快速 off/on 命令选择；3,000 个随机 M12 流保留。
+- LVGL：新首页无情绪文字断言先失败再通过；四组页面/导航/熄屏/反应/M12 页面验证通过，反应基准 90 次通过。主机预览在 `.cache/display-preview-basic/`，已目视核对首页、参数、人脸页。
+- Android：指定本机 JDK 17 后 `test-host` 五组通过；未改 APK、未部署手机。
+- 固件：ESP-IDF 5.5.4 构建通过，最终 `stack-chan.bin` 3,544,144 字节，SHA256 `d6bf0562b65a8b6f8abbb1393e237effb208626457008fdd0028af0aaf553ff5`；依赖锁/配置未变。保留已有上游警告。
+- 审阅：发现快速关闭再开启会被旧检测复用抑制；删除优化、增加生产命令选择回归（先失败后通过），复核解除部署阻塞。
+- 本机情绪进程：管理脚本报告 stopped，无匹配进程；未操作服务器耳朵服务。
+- 部署：身份/16 MB/实际分区表/otadata CRC 与活动 ota_1/旧 0.4.16 均确认；完整回退备份与归档应用匹配。仅写 `ota_1 / 0x510000`，独立 verify 通过。首次默认速率完整回读 120 秒超时且未写入；恢复后 921600 回读 63.6 秒通过。
+- 启动：45 秒串口记录显示 0.4.17、一次 boot、ASR UART 就绪，无崩溃标记；M12 回复 Audio FFT，后续发送数仍 1，检测/识别数 0，显式模式生效。
+- HTTP：系统 curl 身份挑战通过；情绪/机身检测 POST 均 404，情绪遥测缺席，机身检测 supported/enabled/ready=false；取得 7,103 字节 JPEG 和 SCA1 音频头。Python 直连曾报 No route to host，而系统 curl 同地址成功，未归因也未更改网络。
+- 舵机：保存 10°、persisted=true、request_seq=0/source=boot。启动姿态 feedback_unavailable，后续单次回传 -3.7°；旧问题仍在，未补调角/校准，不称保存姿态实测到位。
+- 证据：`logs/basic-controls-v0417/{deployment,boot-summary,http-summary,network-check}.json`；原始串口含配对凭据，只保留在 `.private/basic-controls-v0417/`。
+- 未验：真人 ASR turn on/off、M12 长时间待机后开启、实际屏幕/提示音、舵机手感、手机新固件联调；历史验收不自动覆盖本版。
+
+
 ## 2026-11-07：0.4.10–0.4.13 Unit ASR 与 M12 人脸视图（实机）
 
 **主机测试（0.4.13 源码）：**

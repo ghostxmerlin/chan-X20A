@@ -81,23 +81,6 @@ std::atomic<uint32_t> published_frames{0};
 std::atomic<int64_t> last_audio_us{0};
 std::atomic<uint32_t> camera_processing_us{0}, camera_jpeg_us{0}, camera_jpeg_bytes{0};
 std::mutex audio_mutex, frame_mutex, sensor_mutex;
-std::mutex emotion_mutex;
-EmotionState emotion_state;
-
-EmotionView emotion_snapshot(int64_t now)
-{
-    std::lock_guard<std::mutex> lock(emotion_mutex);
-    return emotion_state.view(now);
-}
-void emotion_json(JsonObject out)
-{
-    const auto snapshot = emotion_snapshot(esp_timer_get_time());
-    out["connected"] = snapshot.connected;
-    out["emotion"] = kEmotionNames[static_cast<unsigned>(snapshot.emotion)];
-    out["stt_state"] = kSttNames[static_cast<unsigned>(snapshot.stt)];
-    out["evidence"] = kEvidenceNames[static_cast<unsigned>(snapshot.evidence)];
-    out["inferred"] = true;
-}
 
 struct AudioBlock {
     uint32_t seq;
@@ -717,11 +700,13 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["timestamp_clock"] = "esp_timer_monotonic_us_since_boot";
     doc["audio_port"] = 8081;
     doc["audio_max_clients"] = 2;
-    doc["emotion"]["endpoint"] = "/v1/emotion";
-    doc["emotion"]["lease_ms"] = EmotionState::kLeaseUs / 1000;
-    doc["emotion"]["evidence_ttl_ms"] = EmotionState::kEvidenceUs / 1000;
+    doc["profile"] = "basic";
+    doc["emotion"]["supported"] = false;
+    doc["emotion"]["enabled"] = false;
     auto capabilities = doc["capabilities"].to<JsonObject>();
-    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "face_detection", "emotion_display", "asr_unit", "m12_serial"}) capabilities[name] = "supported";
+    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial"}) capabilities[name] = "supported";
+    capabilities["face_detection"] = "unsupported";
+    capabilities["emotion_display"] = "unsupported";
     environment_json(doc, true);
     remote_pitch_setting_json(doc["pitch_setting"].to<JsonObject>());
     face_detection_json(doc["face_detection"].to<JsonObject>());
@@ -729,9 +714,6 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["pitch_setting"]["min_deg"] = 5;
     doc["pitch_setting"]["max_deg"] = 85;
     doc["pitch_setting"]["step_deg"] = 0.1;
-    doc["face_detection"]["endpoint"] = "/v1/settings/face-detection";
-    doc["face_detection"]["frame_header"] = "X-Face-Detection";
-    doc["face_detection"]["coordinates"] = "normalized_0_1000_xyxy";
     doc["discovery"]["udp_port"] = 8082;
     doc["discovery"]["endpoint"] = "/v1/discovery";
     doc["discovery"]["requires_existing_binding"] = true;
@@ -846,7 +828,6 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     JsonDocument doc;
     doc["boot_id"] = boot_id;
     doc["seq"] = sample.seq;
-    emotion_json(doc["emotion"].to<JsonObject>());
     doc["timestamp_us"] = sample.timestamp_us;
     auto imu = doc["imu"].to<JsonObject>();
     imu["valid"] = sample.imu_valid;
@@ -1018,73 +999,6 @@ esp_err_t pitch_handler(httpd_req_t* request)
     return send_json(request, result);
 }
 
-esp_err_t face_handler(httpd_req_t* request)
-{
-    if (!authorize(request)) return ESP_FAIL;
-    if (request->content_len < 1 || request->content_len > 64) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_FAIL;
-    }
-    char body[65]{}; int total = 0;
-    const int64_t deadline = esp_timer_get_time() + 3000000;
-    while (total < request->content_len) {
-        const int count = httpd_req_recv(request, body + total, request->content_len - total);
-        if (count <= 0 || esp_timer_get_time() > deadline) {
-            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete face setting"); return ESP_FAIL;
-        }
-        total += count;
-    }
-    JsonDocument doc;
-    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() != 1 || !doc["enabled"].is<bool>()) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean only"); return ESP_OK;
-    }
-    face_detection_set(doc["enabled"].as<bool>());
-    JsonDocument result; result["accepted"] = true;
-    face_detection_json(result["face_detection"].to<JsonObject>());
-    return send_json(request, result);
-}
-
-// Authenticated, RAM-only inference display. Never controls a motor or speaker.
-esp_err_t emotion_handler(httpd_req_t* request)
-{
-    if (!authorize(request)) return ESP_FAIL;
-    if (request->content_len < 1 || request->content_len > 512) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid emotion payload size"); return ESP_FAIL;
-    }
-    char body[513]{}; int total = 0;
-    const int64_t deadline = esp_timer_get_time() + 3000000;
-    while (total < request->content_len) {
-        const int count = httpd_req_recv(request, body + total, request->content_len - total);
-        if (count <= 0 || esp_timer_get_time() > deadline) {
-            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete emotion payload"); return ESP_FAIL;
-        }
-        total += count;
-    }
-    JsonDocument doc;
-    Emotion emotion; SttState stt; EmotionEvidence evidence;
-    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() != 8 ||
-        !doc["boot_id"].is<const char*>() || !doc["session_id"].is<const char*>() ||
-        !doc["seq"].is<uint32_t>() || !doc["observed_at_us"].is<int64_t>() ||
-        !doc["inferred"].is<bool>() || !doc["inferred"].as<bool>() ||
-        !parse_emotion_enum(doc["emotion"].as<const char*>(), kEmotionNames, emotion) ||
-        !parse_emotion_enum(doc["stt_state"].as<const char*>(), kSttNames, stt) ||
-        !parse_emotion_enum(doc["evidence"].as<const char*>(), kEvidenceNames, evidence)) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid emotion fields"); return ESP_OK;
-    }
-    bool accepted = false;
-    if (boot_id == doc["boot_id"].as<const char*>()) {
-        std::lock_guard<std::mutex> lock(emotion_mutex);
-        accepted = emotion_state.accept(doc["session_id"], doc["seq"], emotion, stt, evidence,
-                                        doc["observed_at_us"], esp_timer_get_time());
-    }
-    if (!accepted) {
-        httpd_resp_set_status(request, "409 Conflict");
-        return httpd_resp_sendstr(request, "Stale emotion, session or boot");
-    }
-    JsonDocument result; result["accepted"] = true;
-    emotion_json(result["emotion"].to<JsonObject>());
-    return send_json(request, result);
-}
-
 esp_err_t frame_handler(httpd_req_t* request)
 {
     if (!authorize(request)) return ESP_OK;
@@ -1229,12 +1143,6 @@ void start_server(int port, int control_port, bool audio_only)
         httpd_uri_t pitch{};
         pitch.uri = "/v1/settings/pitch"; pitch.method = HTTP_POST; pitch.handler = pitch_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &pitch));
-        httpd_uri_t face{};
-        face.uri = "/v1/settings/face-detection"; face.method = HTTP_POST; face.handler = face_handler;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &face));
-        httpd_uri_t emotion{};
-        emotion.uri = "/v1/emotion"; emotion.method = HTTP_POST; emotion.handler = emotion_handler;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &emotion));
         httpd_uri_t playback{};
         playback.uri = "/v1/playback"; playback.method = HTTP_POST;
         playback.handler = [](httpd_req_t* request) -> esp_err_t {
@@ -1267,7 +1175,6 @@ void update_screen(const std::string& ip)
     ScreenStatus status{};
     status.version = kVersion; status.ip = ip.c_str(); status.token = token.c_str();
     status.motor = remote_display_state();
-    status.emotion = emotion_snapshot(now);
     uint8_t channel = 0; wifi_second_chan_t secondary; esp_wifi_get_channel(&channel, &secondary);
     status.channel = channel; status.frame = current_frame;
     status.audio_ready = audio_ready.load(); status.audio_streaming = audio_clients.load() > 0;
@@ -1329,16 +1236,14 @@ void update_screen(const std::string& ip)
             // Unit ASR: "forward" shows the home heart, "backward" the reject X.
             // Display only: the unit already speaks its own reply, and a second
             // sound would also reach the microphone. "turn on" opens the M12 face
-            // page, "turn off" (or a tap on it) returns home. What the M12 runs is
-            // decided by its policy (m12_unit.h); any command, touch or remote
-            // input counts as activity and wakes it from standby.
-            static uint32_t asr_seen = 0, remote_rx_seen = 0;
-            static bool face_view = false, touch_down = false;
+            // page and requests detection; "turn off" (or a tap on it) returns
+            // home and requests standby. Other inputs never wake the M12.
+            static uint32_t asr_seen = 0;
+            static bool face_view = false;
             const uint32_t asr = asr_latest();
             const auto tick_ms = static_cast<uint32_t>(now / 1000);
             if (asr != asr_seen) {
                 asr_seen = asr;
-                m12_wake();
                 const uint8_t id = asr & 0xFF;
                 const auto spoken = asr_reaction(id);
                 if (spoken != AsrReaction::none)
@@ -1350,13 +1255,6 @@ void update_screen(const std::string& ip)
                     screen_show_faces(face_view, tick_ms);
                 }
             }
-            const bool touching = touch.valid && now - touch.timestampUs < 100000 && touch.num > 0;
-            if (touching && !touch_down) m12_wake();
-            touch_down = touching;
-            if (remote.rx_packets != remote_rx_seen) {
-                remote_rx_seen = remote.rx_packets;
-                m12_wake();
-            }
             if (face_view && !screen_showing_faces()) {
                 face_view = false;
                 m12_set_view(false);
@@ -1367,9 +1265,8 @@ void update_screen(const std::string& ip)
                 if (m12.result_seq != shown_seq || tick_ms - status_ms >= 500) {
                     shown_seq = m12.result_seq;
                     status_ms = tick_ms;
-                    const bool identifying = m12.phase == M12Phase::identifying;
                     const bool answered = m12.requested_us > 0 && m12.last_result_us > m12.requested_us;
-                    const bool fresh = !identifying && answered && now - m12.last_result_us < 1500000;
+                    const bool fresh = answered && now - m12.last_result_us < 1500000;
                     ScreenFace boxes[kScreenMaxFaces];
                     size_t shown = 0;
                     for (size_t i = 0; fresh && i < m12.count && shown < kScreenMaxFaces; ++i) {
@@ -1377,19 +1274,15 @@ void update_screen(const std::string& ip)
                         boxes[shown].x = b.x; boxes[shown].y = b.y; boxes[shown].w = b.w; boxes[shown].h = b.h;
                         ++shown;
                     }
-                    // Who the last recognition burst found, shown for five minutes.
-                    const char* who = "";
-                    if (m12.identity.at_us && now - m12.identity.at_us < 300000000)
-                        who = m12.identity.known ? m12.identity.name : "unknown";
                     char status[64];
                     const auto waited_s = static_cast<unsigned long>(m12.requested_us > 0 ? (now - m12.requested_us) / 1000000 : 0);
                     if (!m12.valid) std::snprintf(status, sizeof(status), "M12 serial unavailable");
-                    else if (identifying) std::snprintf(status, sizeof(status), "who is it? ...");
                     else if (!answered && m12.rx_bytes == 0 && waited_s >= 10)
                         std::snprintf(status, sizeof(status), "no data from M12 - check blue port");
-                    else if (!answered) std::snprintf(status, sizeof(status), "starting M12... %lus  %s", waited_s, who);
-                    else if (!fresh || shown == 0) std::snprintf(status, sizeof(status), "no face  %s", who);
-                    else std::snprintf(status, sizeof(status), "faces %u  %s", static_cast<unsigned>(shown), who);
+                    else if (!answered) std::snprintf(status, sizeof(status), "starting M12... %lus", waited_s);
+                    else if (!fresh) std::snprintf(status, sizeof(status), "M12 data stale");
+                    else if (shown == 0) std::snprintf(status, sizeof(status), "no face");
+                    else std::snprintf(status, sizeof(status), "faces %u", static_cast<unsigned>(shown));
                     screen_update_faces(boxes, shown, status);
                 }
             }

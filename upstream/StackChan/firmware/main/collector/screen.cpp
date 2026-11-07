@@ -16,7 +16,6 @@ namespace hal_bridge { void board_set_display_backlight_enabled(bool enabled); }
 #endif
 
 LV_FONT_DECLARE(collector_mono_15);
-LV_FONT_DECLARE(collector_emotion_14);
 
 namespace collector {
 namespace {
@@ -25,7 +24,6 @@ constexpr uint32_t kInk = 0x000000, kChrome = 0x0C1C12, kRule = 0x244C32;
 constexpr uint32_t kMuted = 0x72A980, kSignal = 0x79FF97;
 lv_obj_t *home, *summary, *terminal, *log_viewport, *log_body, *portrait, *reaction_overlay;
 lv_obj_t *summary_title, *summary_rows[10], *pairing, *pairing_body;
-lv_obj_t* emotion_label = nullptr;
 lv_obj_t *faces_page = nullptr, *faces_status = nullptr, *face_boxes[kScreenMaxFaces] = {};
 lv_obj_t* screen_root = nullptr;
 lv_display_t* screen_display = nullptr;
@@ -412,10 +410,6 @@ void screen_create(lv_obj_t* parent)
     reaction_overlay = box(home, 30, 0, 260, 240, kInk);
     lv_obj_add_event_cb(reaction_overlay, reaction_draw, LV_EVENT_DRAW_POST, nullptr);
     lv_obj_add_flag(reaction_overlay, LV_OBJ_FLAG_HIDDEN);
-    // Small opaque corner badge, above both the portrait and reaction layer.
-    auto emotion_box = box(home, 2, 220, 102, 20, kInk);
-    emotion_label = label(emotion_box, 2, 2, "情绪：未连接", kMuted);
-    lv_obj_set_style_text_font(emotion_label, &collector_emotion_14, 0);
 #ifdef ESP_PLATFORM
     lv_display_add_event_cb(screen_display, reaction_refresh, LV_EVENT_RENDER_START, nullptr);
     lv_display_add_event_cb(screen_display, reaction_refresh, LV_EVENT_RENDER_READY, nullptr);
@@ -601,7 +595,6 @@ void screen_update(const ScreenStatus& s)
     }
     status_pending = false;
     char text[160];
-    set_text(emotion_label, emotion_caption(s.emotion));
     const char* version = s.version ? s.version : "";
     if (std::strncmp(version, "collector-", 10) == 0) version += 10;
     std::snprintf(text, sizeof(text), "chan-X20A             %.8s", version);

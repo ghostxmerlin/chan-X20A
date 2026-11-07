@@ -25,9 +25,8 @@ constexpr gpio_num_t kTx = GPIO_NUM_17, kRx = GPIO_NUM_18; // CoreS3 Port C: G17
 constexpr int64_t kResendUs = 8000000;
 constexpr int64_t kSlowResendUs = 30000000;
 constexpr int kFastResends = 6;
-constexpr int64_t kLiveUs = 1500000; // a running detector is reused if it answered this recently
 
-std::atomic<uint32_t> wake_seq{0}, view_seq{0};
+std::atomic<uint32_t> view_seq{0};
 std::atomic_bool view_on{false};
 std::mutex state_mutex;
 M12Snapshot state;
@@ -49,7 +48,6 @@ const char* command_for(M12Function f)
 {
     switch (f) {
     case M12Function::detect: return kM12FaceDetectorCommand;
-    case M12Function::recognize: return kM12FaceRecognitionCommand;
     default: return kM12StandbyCommand;
     }
 }
@@ -105,8 +103,8 @@ void m12_task(void*)
     std::array<uint8_t, 256> bytes{};
     M12Function active = M12Function::none;
     M12Phase logged_phase = M12Phase::idle;
-    int64_t requested_us = 0, last_detect_us = 0, last_recog_us = 0, logged_identity_us = 0;
-    uint32_t seen_wake = 0, seen_view = 0;
+    int64_t requested_us = 0, last_detect_us = 0, last_recog_us = 0, last_standby_us = 0;
+    uint32_t seen_view = 0;
     int resends = 0, raw_logged = 0;
     int64_t stats_logged_us = 0;
     uint32_t stats_results = 0, results = 0;
@@ -116,26 +114,15 @@ void m12_task(void*)
             seen_view = v;
             policy.view(view_on.load(), loop_us);
         }
-        if (const uint32_t w = wake_seq.load(); w != seen_wake) {
-            seen_wake = w;
-            policy.wake(loop_us);
-        }
         policy.tick(loop_us);
         if (policy.phase() != logged_phase) {
             ESP_LOGI(kTag, "phase: %s -> %s", m12_phase_name(logged_phase), m12_phase_name(policy.phase()));
             logged_phase = policy.phase();
         }
         const M12Function want = policy.function();
-        if (want != active && want != M12Function::none) {
-            if (want == M12Function::detect && last_detect_us > 0 && loop_us - last_detect_us < kLiveUs) {
-                // Already running (e.g. only StackChan restarted): no 2.5 s restart.
-                std::lock_guard<std::mutex> lock(state_mutex);
-                state.requested_us = requested_us = loop_us;
-                ESP_LOGI(kTag, "Face Detector already running, reused");
-            } else {
-                requested_us = send(want);
-                ESP_LOGI(kTag, "send %s", function_name(want));
-            }
+        if (m12_switch_required(active, want)) {
+            requested_us = send(want);
+            ESP_LOGI(kTag, "send %s", function_name(want));
             active = want;
             resends = 0;
             raw_logged = 0;
@@ -143,8 +130,11 @@ void m12_task(void*)
                    loop_us - requested_us >= (resends < kFastResends ? kResendUs : kSlowResendUs)) {
             bool unanswered = false;
             if (active == M12Function::detect) unanswered = last_detect_us < requested_us;
-            else if (active == M12Function::recognize) unanswered = last_recog_us < requested_us;
-            else unanswered = std::max(last_detect_us, last_recog_us) > requested_us + 4000000; // standby ignored
+            // Standby produces no periodic output, so silence alone is not an
+            // acknowledgement (especially while the M12 is still booting).
+            // Stop retrying after its switch reply unless face output resumes.
+            else unanswered = last_standby_us < requested_us ||
+                              std::max(last_detect_us, last_recog_us) > last_standby_us + 4000000;
             if (unanswered) {
                 ++resends;
                 requested_us = send(active);
@@ -156,12 +146,6 @@ void m12_task(void*)
             state.phase = policy.phase();
             state.function = active;
             state.identity = policy.identity();
-        }
-        if (policy.identity().at_us != logged_identity_us) {
-            logged_identity_us = policy.identity().at_us;
-            if (policy.identity().known)
-                ESP_LOGI(kTag, "identified: %s (match %.2f)", policy.identity().name, policy.identity().match_prob);
-            else ESP_LOGI(kTag, "identified: nobody enrolled matched");
         }
         if (active == M12Function::detect && loop_us - stats_logged_us >= 10000000) {
             ESP_LOGI(kTag, "faces: %lu results in 10 s, rx=%lu lines=%lu invalid=%lu",
@@ -176,6 +160,12 @@ void m12_task(void*)
         for (int i = 0; i < count; ++i) {
             if (!buffer.push(static_cast<char>(bytes[i]), line)) continue;
             const M12Line result = parse_m12_line(line);
+            if ((result.kind == M12LineKind::reply &&
+                 (std::strcmp(result.text, "function switched to audio_fft.") == 0 ||
+                  std::strcmp(result.text, "function switched to Audio FFT.") == 0)) ||
+                (result.kind == M12LineKind::other &&
+                 (std::strcmp(result.running, "Audio FFT") == 0 || std::strcmp(result.running, "audio_fft") == 0)))
+                last_standby_us = now;
             // The first two lines after a switch show the real output format.
             if (raw_logged < 2 && result.kind != M12LineKind::reply && result.kind != M12LineKind::error) {
                 ++raw_logged;
@@ -237,7 +227,7 @@ void m12_init()
         ESP_LOGE(kTag, "M12 task unavailable");
 }
 
-void m12_wake() { ++wake_seq; }
+void m12_wake() {}
 
 void m12_set_view(bool on)
 {
@@ -316,16 +306,14 @@ void m12_info_json(ArduinoJson::JsonObject out)
     out["frame_height"] = kM12FrameHeight;
     out["max_faces"] = kM12MaxFaces;
     auto policy = out["policy"].to<ArduinoJson::JsonObject>();
-    policy["look_s"] = M12Policy::kLookUs / 1000000;
-    policy["idle_to_standby_s"] = M12Policy::kIdleUs / 1000000;
-    policy["identify_max_s"] = M12Policy::kIdentifyMaxUs / 1000000;
-    policy["identify_cooldown_s"] = M12Policy::kIdentifyCooldownUs / 1000000;
-    policy["new_face_gap_s"] = M12Policy::kNewFaceGapUs / 1000000;
-    policy["match_threshold"] = M12Policy::kMatch;
-    policy["wake"] = "any ASR command, screen touch, remote input, face page";
+    policy["mode"] = "explicit";
+    policy["boot"] = "standby";
+    policy["automatic_recognition"] = false;
+    policy["automatic_wake"] = false;
+    policy["detect"] = "ASR turn on opens the face page";
+    policy["standby"] = "ASR turn off or leave the face page";
     auto commands = out["commands"].to<ArduinoJson::JsonObject>();
     commands["detect"] = "{\"function\":\"Face Detector\",\"args\":\"\"}";
-    commands["recognize"] = "{\"function\":\"Face Recognition\",\"args\":\"\"}";
     commands["standby"] = "{\"function\":\"Audio FFT\",\"args\":\"\"}";
 }
 } // namespace collector

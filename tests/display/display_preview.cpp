@@ -86,14 +86,10 @@ int main(int argc, char** argv)
     collector::screen_update(status);
     assert(!collector::screen_showing_status());
     collector::screen_tick(0);
-    auto emotion_label = find_label(lv_screen_active(), "情绪：");
-    assert(emotion_label && std::strcmp(lv_label_get_text(emotion_label), "情绪：未连接") == 0);
-    status.emotion = {true, collector::Emotion::Happy, collector::SttState::Listening, collector::EmotionEvidence::Both};
-    collector::screen_update(status);
-    assert(std::strcmp(lv_label_get_text(emotion_label), "推测：开心") == 0);
-    snapshot(output + "/emotion-happy.ppm");
-    status.emotion = {};
-    collector::screen_update(status);
+    // The basic home is portrait/feedback only: no emotion or other text
+    // controls remain in its real LVGL object tree, including hidden labels.
+    auto home_page = lv_obj_get_child(lv_screen_active(), 0);
+    assert(home_page && !find_label(home_page, ""));
     const auto home = snapshot(output + "/home.ppm");
     lv_tick_inc(100); lv_timer_handler();
     flushed_pixels = flush_calls = 0;
@@ -365,6 +361,7 @@ int main(int argc, char** argv)
     assert(snapshot() == before_dark_reaction); // no reaction replay or ring jump
     collector::screen_tick(68420);
     assert(snapshot() != before_dark_reaction);
+    assert(!find_label(home_page, "")); // status changes and wake never add a badge
     lv_tick_inc(100); lv_timer_handler();
     lv_timer_delete(service_timer);
     puts("PASS: off has zero partial flushes, service timers keep running, all pages/latest owned status/log resume, rapid gates balance, touch waits for release, reactions drop, ring phase pauses");

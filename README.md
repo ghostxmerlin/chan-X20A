@@ -1,5 +1,7 @@
 # chan-X20A
 
+**当前版本：collector-0.4.17 基础版已部署（2026-11-07）。** 用户要求先保留首页、参数、日志、舵机、爱心/叉号及 ASR 控制 M12，后续逐项增加。情绪角落/接收接口、机身 ESP-DL 人脸检测、M12 自动识别与自动唤醒已停用。M12 启动请求待机，turn on 请求检测，turn off 或轻触人脸页退出请求待机。基础音视频采集与 Android 连接保留。构建/部署状态以[最新交接](docs/session-handoff.md)为准；下文按日期保留历史。
+
 2026-11-07：固件 **collector-0.4.13** 已部署：顶部黑口的 Unit ASR 说 forward / backward 显示爱心 / 叉号，说 turn on 让蓝口的 M12 做人脸检测并在屏幕上画框，turn off 回首页、M12 待机。日志只走 USB，三个串口分给 M12、舵机和 ASR。实测和限制见[交接](docs/session-handoff.md)与[协议](docs/collector-protocol.md)。
 
 2026-11-01 晚：[Mac 情绪观察试验](emotion/README.md)接入机器人 Wi-Fi 音视频、AIHubMix 实时 STT 与本地 Qwen3-VL。先在 Mac 测试；机器人仍为 0.4.8，准备中的 0.4.9 首页角落显示尚未刷入。最新供电、CH6/ID1 与 10°保存姿态见[交接](docs/session-handoff.md)。
@@ -14,7 +16,7 @@
 
 本仓库 fork 自 [m5stack/StackChan](https://github.com/m5stack/StackChan)，开发起点为 [`f901cc2`](https://github.com/m5stack/StackChan/commit/f901cc2969189f3f0e96af1442c0f96e77e1e2c1)。保留上游提交历史，官方源码统一放在 `upstream/StackChan/`。
 
-## 当前状态
+## 历史状态（2026-11-01）
 
 截至 2026-11-01，Android **0.4.4 / code 14** 已安装到开发观察台模拟器，机器人固件仍为 **collector-0.4.3**。首页左侧为瞬时音量柱，读取最新音频块的真实电平；中间保留完整相机画面；右上加速度、角速度左右并排，共用最近 **4 秒**时间范围、各自保留单位和刻度。右下直接显示磁场 XYZ µT 和 XY 投影，光照、接近读数放大至16sp。保持纯黑、亮绿，无顶部标题，记录列表在「⋮ → 记录」。
 

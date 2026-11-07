@@ -9,14 +9,14 @@ namespace collector {
 // RX GPIO18 (CoreS3 pin table). The log console runs on USB Serial/JTAG only, so
 // UART0 is free. The task and its UART interrupt live on core 1.
 //
-// What the M12 runs follows M12Policy: after boot it looks around with face
-// detection, identifies a new face with a short recognition burst, keeps detecting
-// while someone is there, and dozes in standby (camera off) when idle.
+// M12Policy starts in standby (camera off). Only m12_set_view(true) requests
+// detection; false returns to standby. Other input and face results do not select
+// a function. Recognition data is retained for diagnostics only.
 struct M12Snapshot {
     bool valid = false;           // UART driver and task running
     M12Phase phase = M12Phase::idle;
-    M12Function function = M12Function::none; // what the M12 was last told (or found) to run
-    int64_t requested_us = 0;     // last command written, or the moment a running detector was reused
+    M12Function function = M12Function::none; // last requested function, not confirmed device state
+    int64_t requested_us = 0;      // last command written
     uint32_t results = 0;         // Face Detector results since boot
     uint32_t result_seq = 0;      // increments on every Face Detector result
     int64_t last_result_us = 0;
@@ -26,12 +26,12 @@ struct M12Snapshot {
     uint16_t num = 0;             // faces the M12 reported in the last detector result
     size_t count = 0;             // faces kept (at most kM12MaxFaces)
     M12Face faces[kM12MaxFaces];
-    M12Identity identity;         // last recognition burst
+    M12Identity identity;         // reserved; basic controls do not identify anyone
 };
 void m12_init();
-// Someone is interacting (voice command, touch, remote): wake up from standby.
+// Compatibility no-op: ordinary interaction must not start the camera.
 void m12_wake();
-// The face page is shown (never doze) or closed. Non-blocking.
+// Explicit request: true selects Face Detector; false selects standby. Non-blocking.
 void m12_set_view(bool on);
 M12Snapshot m12_snapshot();
 const char* m12_phase_name(M12Phase phase);

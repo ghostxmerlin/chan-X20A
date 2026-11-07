@@ -1,238 +1,146 @@
 {
-  "date": "2026-11-01",
-  "firmware": "collector-0.4.8",
+  "date": "2026-11-07",
+  "firmware": "collector-0.4.17",
   "android": {
     "version": "0.4.7",
     "version_code": 17,
-    "deployment": "identified vivo V2337A; installed bytes verified; emulator production remains stopped"
+    "deployment": "Last recorded vivo installation 0.4.7/code17; no APK change or device revalidation this session"
   },
   "upstream_commit": "f901cc2969189f3f0e96af1442c0f96e77e1e2c1",
   "esp_idf": "5.5.4",
-  "status": "mac_emotion_preview_running_firmware_0_4_9_built_unflashed_user_defers_live_test",
-  "deployed_firmware_sha256": "f1144c5eb61810fe134d26e456b53bd78bd8a2f55f702deda8df63d8712ae411",
+  "status": "basic_profile_deployed_verified_live_asr_actions_pending",
+  "deployed_firmware_sha256": "d6bf0562b65a8b6f8abbb1393e237effb208626457008fdd0028af0aaf553ff5",
   "deployed_apk_sha256": "8a58d664dea2439a5f8a7126d7c503f57409541cf7a056c7ae71f2184913f774",
   "validation": {
-    "diagnostic_scope": "cannot power on and remote unresponsive; no new firmware or APK deployed",
-    "identity": "current HTTP random challenge PASS; boot unchanged from evening diagnostics",
-    "remote": {
-      "robot_channel_before": 6,
-      "remote_channel_before": 11,
-      "receiver_id": 1,
-      "mode": "joystick",
-      "cause": "remote fixed CH11 while robot connected fallback Wi-Fi CH6",
-      "action": "user changed remote to CH6 / ID1",
-      "user_acceptance": "可以",
-      "observation": {
-        "samples": 569,
-        "probe_errors": 0,
-        "observed_span_s": 179.860537,
-        "rx_first": 25,
-        "rx_last": 842,
-        "applied_first": 25,
-        "applied_last": 842,
-        "rejected_last": 0,
-        "other_target_last": 0,
-        "all_remote_valid": true,
-        "all_following": true,
-        "single_boot": true,
-        "all_saved_pitch_10": true,
-        "yaw_valid_samples": 568,
-        "pitch_valid_samples": 569
+    "source_branch": "codex/basic-controls-v0417",
+    "source_base": "f06d6e1",
+    "host": {
+      "python_passed": 30,
+      "python_skipped": 4,
+      "protocols": [
+        "asr",
+        "m12",
+        "remote"
+      ],
+      "lvgl_groups": 4,
+      "reaction_benchmark_iterations": 90,
+      "android_host_groups": 5,
+      "idf_build": "PASS",
+      "independent_review": "PASS after quick off/on correction"
+    },
+    "deployment": {
+      "identity_matches": true,
+      "active_partition": "ota_1",
+      "offset": "0x510000",
+      "old_firmware": "collector-0.4.16",
+      "backup": "backups/ota_1-collector-0.4.16-before-basic-20261107.bin",
+      "backup_matches_archived_app": true,
+      "new_firmware": "collector-0.4.17",
+      "bytes": 3544144,
+      "sha256": "d6bf0562b65a8b6f8abbb1393e237effb208626457008fdd0028af0aaf553ff5",
+      "write_and_independent_verify": "PASS"
+    },
+    "boot": {
+      "captured_seconds": 45.0,
+      "bytes": 13969,
+      "firmware_seen": true,
+      "boot_markers": 1,
+      "crash_markers": false,
+      "asr_uart_seen": true,
+      "m12_send_functions": [
+        "standby"
+      ],
+      "m12_phases": [
+        "idle -> dozing"
+      ],
+      "m12_replies": [
+        "function switched to audio_fft.",
+        "Running Audio FFT, Copyright 2021 M5Stack Technology Co., Ltd. "
+      ],
+      "m12_errors": [
+        "invalid json format."
+      ],
+      "http_started": true,
+      "network_address_seen": true,
+      "saved_pitch_boot_lines": []
+    },
+    "http": {
+      "identity_challenge": "PASS",
+      "firmware": "collector-0.4.17",
+      "profile": "basic",
+      "disabled_capabilities": "PASS",
+      "emotion_telemetry_absent": true,
+      "emotion_post_status": 404,
+      "face_detection_post_status": 404,
+      "camera_jpeg_bytes": 7103,
+      "audio_stream_magic": "SCA1",
+      "pitch_setting": {
+        "configured_deg": 10,
+        "persisted": true,
+        "request_seq": 0,
+        "request_source": "boot",
+        "requested_deg": 10,
+        "request_timestamp_us": 0,
+        "state": "feedback_unavailable",
+        "feedback_valid": true,
+        "feedback_timestamp_us": 104165515,
+        "measured_deg": -3.7,
+        "command_start_deg": null,
+        "storage_error": 0,
+        "speed": 250,
+        "min_deg": 5,
+        "max_deg": 85,
+        "state_semantics": "trajectory_state_not_measured_arrival"
       },
-      "preferred_connection_failure_reason": "unknown; disconnect reason not recorded"
-    },
-    "power_on": {
-      "usb_supplied_runtime_observed": true,
-      "initial_uptime_s": 2211.675721,
-      "initial_battery_percent": 98,
-      "initial_charging": true,
-      "standalone_cold_boot": "not validated; symptom clarification pending",
-      "collector_idle_power_save": "disabled in existing source; initialization thresholds not proof of shutdown",
-      "reported_failure_condition": "USB removed; user short-pressed correct side power button",
-      "usb_to_battery_test": "PASS once; USB node absent, charging false, same boot, user still operating",
-      "battery_power_button_off_on_test": "PASS once; user home screen, new boot, identity reverified, telemetry and remote recovered",
-      "result": {
-        "samples": 794,
-        "probe_errors": 25,
-        "boot_count": 2,
-        "segments": [
-          {
-            "boot_index": 0,
-            "samples": 320,
-            "first_uptime_s": 2579.532961,
-            "last_uptime_s": 2681.51537,
-            "observed_duration_s": 101.982409,
-            "usb_absent_samples": 241,
-            "usb_absent_span_s": 76.779651,
-            "battery_first": 100,
-            "battery_last": 99,
-            "charging_last": false,
-            "display_enabled_all": true,
-            "control_enabled_all": true,
-            "remote_rx_first": 1516,
-            "remote_rx_last": 1943,
-            "remote_applied_first": 1516,
-            "remote_applied_last": 1943,
-            "remote_valid_all": true,
-            "channels": [
-              6
-            ],
-            "saved_pitch_values": [
-              10
-            ],
-            "pitch_request_seq_last": 0,
-            "pitch_source_last": "boot",
-            "camera_seq_delta": 1020,
-            "audio_seq_delta": 5099,
-            "health_error_deltas": {
-              "camera_errors": 0,
-              "audio_errors": 0,
-              "audio_skipped_blocks": 0
-            }
-          },
-          {
-            "boot_index": 1,
-            "samples": 474,
-            "first_uptime_s": 37.325846,
-            "last_uptime_s": 186.305559,
-            "observed_duration_s": 148.979713,
-            "usb_absent_samples": 474,
-            "usb_absent_span_s": 148.979713,
-            "battery_first": 98,
-            "battery_last": 95,
-            "charging_last": false,
-            "display_enabled_all": true,
-            "control_enabled_all": true,
-            "remote_rx_first": 33,
-            "remote_rx_last": 675,
-            "remote_applied_first": 33,
-            "remote_applied_last": 675,
-            "remote_valid_all": true,
-            "channels": [
-              6
-            ],
-            "saved_pitch_values": [
-              10
-            ],
-            "pitch_request_seq_last": 0,
-            "pitch_source_last": "boot",
-            "camera_seq_delta": 1464,
-            "audio_seq_delta": 7449,
-            "health_error_deltas": {
-              "camera_errors": 0,
-              "audio_errors": 0,
-              "audio_skipped_blocks": 0
-            }
-          }
-        ],
-        "network_gaps": [
-          {
-            "receive_gap_s": 48.73372721672058,
-            "boot_changed": true
-          }
-        ],
-        "user_unplug_observation": "仍正常运行",
-        "user_battery_cold_start_observation": "正常亮屏进入首页",
-        "test_count": {
-          "usb_to_battery": 1,
-          "battery_power_button_off_on": 1
-        },
-        "changes": {
-          "firmware_flash": false,
-          "software_reset": false,
-          "settings_write": false
-        },
-        "limits": [
-          "Original failure not reproduced and root cause unknown",
-          "Battery percentage is a PMIC estimate, not load voltage or capacity measurement",
-          "One successful cold start does not prove intermittent failure resolved"
-        ]
+      "display_enabled": true,
+      "m12": {
+        "valid": true,
+        "phase": "dozing",
+        "function": "standby",
+        "sends": 1,
+        "running": "Audio FFT",
+        "last_reply": "Running Audio FFT, Copyright 2021 M5Stack Technology Co., Ltd. ",
+        "results": 0,
+        "recognitions": 0,
+        "rx_bytes": 194
       },
-      "original_failure_root_cause": "unknown; not reproduced; not declared repaired"
+      "m12_policy": {
+        "mode": "explicit",
+        "boot": "standby",
+        "automatic_recognition": false,
+        "automatic_wake": false,
+        "detect": "ASR turn on opens the face page",
+        "standby": "ASR turn off or leave the face page"
+      },
+      "asr": {
+        "valid": true,
+        "frames": 0,
+        "last_id": null,
+        "rx_bytes": null
+      }
     },
-    "final_state": {
-      "phone_usb": "not detected by ADB",
-      "robot_usb": "disconnected; battery powered",
-      "network": "fallback Wi-Fi",
-      "wifi_channel": 6,
-      "remote_channel": 6,
-      "remote_id": 1,
-      "remote_mode": "joystick",
-      "recording": "previous vivo capture status still unverified",
-      "monitor": "previous vivo monitor state unverified",
-      "face_detection": false,
-      "display": true,
-      "servo_control": true,
-      "saved_pitch_deg": 10,
-      "pitch_source": "boot",
-      "pitch_request_seq": 0,
-      "phone_bridge": "previous jar cleanup unverified",
-      "battery_percent": 95,
-      "charging": false
-    },
-    "this_continuation_actions": {
-      "flash": false,
-      "restart": true,
-      "pitch_change": false,
-      "code_change": false,
-      "restart_method": "user physically held power key off and short-pressed on, USB absent",
-      "software_reset": false,
-      "physical_power_cycles": 1
-    },
-    "known_limits": [
-      "One battery transfer and one battery power-button boot succeeded; original intermittent power-on failure not reproduced, root cause unknown",
-      "why preferred hotspot was unavailable not known",
-      "prior recording and phone cleanup still unverified",
-      "old servo feedback/centering issues not declared fixed"
+    "unverified": [
+      "real spoken ASR commands and screen transitions",
+      "M12 prolonged standby then reopen",
+      "physical servo control and reaction sound",
+      "Android integration with this firmware"
     ],
-    "emotion_mac": {
-      "stage": "Mac first; user deferred live speech/face test",
-      "stt_provider": "aihubmix",
-      "stt_model": "gpt-live-transcribe",
-      "inference_model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
-      "model_revision": "2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b",
-      "camera_inference": "local only; YuNet face-count gate; conservative unknown",
-      "mac_preview": true,
-      "firmware_flashed": false,
-      "tests_passed": 34,
-      "synthetic_stt_first_text_s": 2.128,
-      "synthetic_stt_audio_s": 7.8522083333333335,
-      "real_no_text_timeout_s": 600.071,
-      "socket_close_after_timeout_s": 2.009,
-      "sound_wake": "fake-network automated test passed; live test deferred",
-      "observed_audio_sequence_discontinuities": 44,
-      "audio_gap_cloud_restarts": 4,
-      "new_firmware_artifact_sha256": "8ae1077ac168073d3dafa23eb23862e457a1ca5391fbb4ded5b8805632858096",
-      "new_firmware_bytes": 4618144,
-      "known_limits": [
-        "Live face/speech fusion and wake not validated",
-        "Audio gap source unknown",
-        "Neutral self-report sample returned unknown",
-        "Old firmware supports one audio subscriber",
-        "New display and two subscribers untested on hardware"
-      ]
-    }
+    "known_issue": "Saved pitch remains 10 deg; startup feedback_unavailable, later one -3.7 deg feedback sample. No corrective motion or calibration attempted."
   },
-  "scope": "Source and public configuration snapshot; hashes refer to privately retained deployed binaries, not publicly hosted downloads.",
-  "excluded": [
-    "device credentials",
-    "signing private keys",
-    "original flash backup",
-    "raw serial logs",
-    "camera and microphone recordings",
-    "local build artifacts",
-    "toolchains"
+  "scope": [
+    "home, summary/parameters, live log and pairing",
+    "left/right servo control and center display toggle",
+    "one-second heart/reject reactions and original tones",
+    "explicit ASR controlled M12 detection/standby",
+    "existing camera/audio/sensor capture and Android connection"
   ],
-  "publication_checks": {
-    "python_protocol_tests": "23 PASS;final playback queue/louder regression PASS",
-    "android_host_tests": "0.4.6 PASS",
-    "android_native_runtime_tests": "0.4.6 all PASS;final hud/ui PASS",
-    "android_recorded_session_verification": "0.4.6 PASS;87.145s,263 JPEG decoded,4346audio/4345IMU continuous;6 timing intervals over150ms",
-    "lvgl_render_and_touch_test": "0.4.6 PASS",
-    "fixed_sdkconfig": "socket budget increased10 to16 in defaults/shared/runtime config; toolchain and dependency locks retained",
-    "private_credentials_in_staged_files": "922 tracked/nonignored files scanned; current credentials/address/phone serial zero matches; no upload",
-    "diff_check": "passed"
-  },
+  "excluded": [
+    "emotion inference input and home label",
+    "onboard ESP-DL face detection",
+    "automatic M12 recognition, waking and idle scheduling",
+    "server ear integration",
+    "new motion or calibration changes"
+  ],
   "previous_validation_0_3_4": {
     "firmware_build_and_app_flash_verification": "passed",
     "apk_build_and_install": "passed",
@@ -1905,5 +1813,217 @@
       "old servo feedback/heading/glasses limits unchanged"
     ],
     "dependencies": "IDF5.5.4; dependencies.lock/repos.json unchanged; face isolation guard PASS"
+  },
+  "previous_validation_2026_11_01_evening": {
+    "diagnostic_scope": "cannot power on and remote unresponsive; no new firmware or APK deployed",
+    "identity": "current HTTP random challenge PASS; boot unchanged from evening diagnostics",
+    "remote": {
+      "robot_channel_before": 6,
+      "remote_channel_before": 11,
+      "receiver_id": 1,
+      "mode": "joystick",
+      "cause": "remote fixed CH11 while robot connected fallback Wi-Fi CH6",
+      "action": "user changed remote to CH6 / ID1",
+      "user_acceptance": "可以",
+      "observation": {
+        "samples": 569,
+        "probe_errors": 0,
+        "observed_span_s": 179.860537,
+        "rx_first": 25,
+        "rx_last": 842,
+        "applied_first": 25,
+        "applied_last": 842,
+        "rejected_last": 0,
+        "other_target_last": 0,
+        "all_remote_valid": true,
+        "all_following": true,
+        "single_boot": true,
+        "all_saved_pitch_10": true,
+        "yaw_valid_samples": 568,
+        "pitch_valid_samples": 569
+      },
+      "preferred_connection_failure_reason": "unknown; disconnect reason not recorded"
+    },
+    "power_on": {
+      "usb_supplied_runtime_observed": true,
+      "initial_uptime_s": 2211.675721,
+      "initial_battery_percent": 98,
+      "initial_charging": true,
+      "standalone_cold_boot": "not validated; symptom clarification pending",
+      "collector_idle_power_save": "disabled in existing source; initialization thresholds not proof of shutdown",
+      "reported_failure_condition": "USB removed; user short-pressed correct side power button",
+      "usb_to_battery_test": "PASS once; USB node absent, charging false, same boot, user still operating",
+      "battery_power_button_off_on_test": "PASS once; user home screen, new boot, identity reverified, telemetry and remote recovered",
+      "result": {
+        "samples": 794,
+        "probe_errors": 25,
+        "boot_count": 2,
+        "segments": [
+          {
+            "boot_index": 0,
+            "samples": 320,
+            "first_uptime_s": 2579.532961,
+            "last_uptime_s": 2681.51537,
+            "observed_duration_s": 101.982409,
+            "usb_absent_samples": 241,
+            "usb_absent_span_s": 76.779651,
+            "battery_first": 100,
+            "battery_last": 99,
+            "charging_last": false,
+            "display_enabled_all": true,
+            "control_enabled_all": true,
+            "remote_rx_first": 1516,
+            "remote_rx_last": 1943,
+            "remote_applied_first": 1516,
+            "remote_applied_last": 1943,
+            "remote_valid_all": true,
+            "channels": [
+              6
+            ],
+            "saved_pitch_values": [
+              10
+            ],
+            "pitch_request_seq_last": 0,
+            "pitch_source_last": "boot",
+            "camera_seq_delta": 1020,
+            "audio_seq_delta": 5099,
+            "health_error_deltas": {
+              "camera_errors": 0,
+              "audio_errors": 0,
+              "audio_skipped_blocks": 0
+            }
+          },
+          {
+            "boot_index": 1,
+            "samples": 474,
+            "first_uptime_s": 37.325846,
+            "last_uptime_s": 186.305559,
+            "observed_duration_s": 148.979713,
+            "usb_absent_samples": 474,
+            "usb_absent_span_s": 148.979713,
+            "battery_first": 98,
+            "battery_last": 95,
+            "charging_last": false,
+            "display_enabled_all": true,
+            "control_enabled_all": true,
+            "remote_rx_first": 33,
+            "remote_rx_last": 675,
+            "remote_applied_first": 33,
+            "remote_applied_last": 675,
+            "remote_valid_all": true,
+            "channels": [
+              6
+            ],
+            "saved_pitch_values": [
+              10
+            ],
+            "pitch_request_seq_last": 0,
+            "pitch_source_last": "boot",
+            "camera_seq_delta": 1464,
+            "audio_seq_delta": 7449,
+            "health_error_deltas": {
+              "camera_errors": 0,
+              "audio_errors": 0,
+              "audio_skipped_blocks": 0
+            }
+          }
+        ],
+        "network_gaps": [
+          {
+            "receive_gap_s": 48.73372721672058,
+            "boot_changed": true
+          }
+        ],
+        "user_unplug_observation": "仍正常运行",
+        "user_battery_cold_start_observation": "正常亮屏进入首页",
+        "test_count": {
+          "usb_to_battery": 1,
+          "battery_power_button_off_on": 1
+        },
+        "changes": {
+          "firmware_flash": false,
+          "software_reset": false,
+          "settings_write": false
+        },
+        "limits": [
+          "Original failure not reproduced and root cause unknown",
+          "Battery percentage is a PMIC estimate, not load voltage or capacity measurement",
+          "One successful cold start does not prove intermittent failure resolved"
+        ]
+      },
+      "original_failure_root_cause": "unknown; not reproduced; not declared repaired"
+    },
+    "final_state": {
+      "phone_usb": "not detected by ADB",
+      "robot_usb": "disconnected; battery powered",
+      "network": "fallback Wi-Fi",
+      "wifi_channel": 6,
+      "remote_channel": 6,
+      "remote_id": 1,
+      "remote_mode": "joystick",
+      "recording": "previous vivo capture status still unverified",
+      "monitor": "previous vivo monitor state unverified",
+      "face_detection": false,
+      "display": true,
+      "servo_control": true,
+      "saved_pitch_deg": 10,
+      "pitch_source": "boot",
+      "pitch_request_seq": 0,
+      "phone_bridge": "previous jar cleanup unverified",
+      "battery_percent": 95,
+      "charging": false
+    },
+    "this_continuation_actions": {
+      "flash": false,
+      "restart": true,
+      "pitch_change": false,
+      "code_change": false,
+      "restart_method": "user physically held power key off and short-pressed on, USB absent",
+      "software_reset": false,
+      "physical_power_cycles": 1
+    },
+    "known_limits": [
+      "One battery transfer and one battery power-button boot succeeded; original intermittent power-on failure not reproduced, root cause unknown",
+      "why preferred hotspot was unavailable not known",
+      "prior recording and phone cleanup still unverified",
+      "old servo feedback/centering issues not declared fixed"
+    ],
+    "emotion_mac": {
+      "stage": "Mac first; user deferred live speech/face test",
+      "stt_provider": "aihubmix",
+      "stt_model": "gpt-live-transcribe",
+      "inference_model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+      "model_revision": "2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b",
+      "camera_inference": "local only; YuNet face-count gate; conservative unknown",
+      "mac_preview": true,
+      "firmware_flashed": false,
+      "tests_passed": 34,
+      "synthetic_stt_first_text_s": 2.128,
+      "synthetic_stt_audio_s": 7.8522083333333335,
+      "real_no_text_timeout_s": 600.071,
+      "socket_close_after_timeout_s": 2.009,
+      "sound_wake": "fake-network automated test passed; live test deferred",
+      "observed_audio_sequence_discontinuities": 44,
+      "audio_gap_cloud_restarts": 4,
+      "new_firmware_artifact_sha256": "8ae1077ac168073d3dafa23eb23862e457a1ca5391fbb4ded5b8805632858096",
+      "new_firmware_bytes": 4618144,
+      "known_limits": [
+        "Live face/speech fusion and wake not validated",
+        "Audio gap source unknown",
+        "Neutral self-report sample returned unknown",
+        "Old firmware supports one audio subscriber",
+        "New display and two subscribers untested on hardware"
+      ]
+    }
+  },
+  "previous_publication_checks_2026_11_01": {
+    "python_protocol_tests": "23 PASS;final playback queue/louder regression PASS",
+    "android_host_tests": "0.4.6 PASS",
+    "android_native_runtime_tests": "0.4.6 all PASS;final hud/ui PASS",
+    "android_recorded_session_verification": "0.4.6 PASS;87.145s,263 JPEG decoded,4346audio/4345IMU continuous;6 timing intervals over150ms",
+    "lvgl_render_and_touch_test": "0.4.6 PASS",
+    "fixed_sdkconfig": "socket budget increased10 to16 in defaults/shared/runtime config; toolchain and dependency locks retained",
+    "private_credentials_in_staged_files": "922 tracked/nonignored files scanned; current credentials/address/phone serial zero matches; no upload",
+    "diff_check": "passed"
   }
 }

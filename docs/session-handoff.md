@@ -1,5 +1,29 @@
 # 会话交接记录
 
+## 2026-11-07：0.4.17 基础版，暂停自动感知（Codex）
+
+用户要求先关闭无关功能，只保留首页、参数、log、舵机控制、爱心/叉号及 ASR 驱动 M12，再逐项增加；随后明确选择 M12 手动流程。
+
+**本轮变更：**
+- 首页去掉情绪角落，移除固件情绪接收接口和状态生产；本机 `emotion-service.py stop/status` 确认没有匹配的服务运行。情绪试验源码、模型和配置保留，Claude 的 `server/ear` 未操作。
+- 机身 ESP-DL 人脸检测改链接恒关闭适配器，旧 Android 开关依据 `supported=false` 不可用；保留基础音视频/传感器采集及 Android 连接。
+- M12 启动请求 Audio FFT；仅 ASR turn on 请求检测，turn off 或轻触人脸页退出请求待机。不开自动识别，不响应普通交互/遥控心跳唤醒，不因空闲自动停检测。
+- 每次明确切换均发命令，删除最近检测结果复用优化，避免快速 off→on 漏发开启；待机明确 ACK 后停止重发，未回应仍按 8 秒/30 秒节奏重试。
+- 保留首页/参数/log/配对、左右舵机、中心开关屏、1 秒心心/叉号和原提示音。没有修改舵机运动参数、校准或保存角度，也未修改依赖锁与 IDF 5.5.4。
+
+**源码与构建：** 分支 `codex/basic-controls-v0417`；产物 `artifacts/collector-0.4.17-basic/stack-chan.bin`，3,544,144 字节，SHA256 `d6bf0562b65a8b6f8abbb1393e237effb208626457008fdd0028af0aaf553ff5`。最终构建日志 `logs/collector-v0417-build-final.log`。源文件和本机产物分别保留。
+
+**验证：** Python 34 项中的 30 项通过、4 项因缺少情绪运行依赖跳过；ASR/M12/遥控协议通过，LVGL 四组和 90 次反馈基准通过，Android 五组主机测试通过。后者默认 JDK 路径已失效，使用本机 `COLLECTOR_JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home` 验证。独立审阅发现并已复核快速 off→on 修复；新回归先红后绿。旧依赖编译警告仍有，本轮无构建失败。
+
+**部署已完成：** 重新核对原开发机身份、16 MB Flash、真实分区表、otadata CRC/有效槽和 ota_1 当前版本 0.4.16 后，完整备份 `backups/ota_1-collector-0.4.16-before-basic-20261107.bin`，应用前缀与归档 0.4.16 完全一致；只写 `ota_1 / 0x510000` 并独立 verify 通过，随后硬件复位。未由刷机写入 bootloader、分区表、otadata、assets 或 NVS。默认速率第一次完整回读在 120 秒超时、当时尚未写入并已恢复原机；改 921600 后 63.6 秒完整回读通过。证据 `logs/basic-controls-v0417/deployment.json`。
+
+**实机启动与接口：** 45 秒启动捕获有一次 boot、0.4.17 版本和 ASR UART 就绪，无崩溃标记。M12 明确回复 Audio FFT，后续 HTTP 显示发送数 1、检测/识别数 0、mode=explicit，自动识别/唤醒均 false。新身份挑战通过；情绪与机身检测 POST 均为 404，情绪遥测缺席、机身检测 supported/enabled/ready 均 false；JPEG 读取 7,103 字节、音频读到 SCA1 头。Python 直连曾报 No route to host，系统 curl 同地址成功；不能称网络或该 Python 环境根因已修复。证据 `boot-summary.json`、`http-summary.json`、`network-check.json`。
+
+**舵机与手机边界：** 保存角度仍为 10°、persisted=true、request_seq=0/source=boot，未提交调角。启动姿态 state=feedback_unavailable，后续单次反馈为 -3.7°，不能据此声称已经到达保存角度；保留旧回传问题，不自动补动作或校准。Android 未重新安装；真人 ASR 开关、实际屏幕观感/提示音、舵机手感与长待机重开尚未本轮验收。
+
+**验收边界：** 源码/构建及模拟不代替真人 ASR、M12 长待机重开、真实屏幕听感与舵机动作验收；历史 UART 回传问题、M12 长待机可能不响应的问题未声称修复。M12 的 `valid/function` 仍分别是串口就绪/请求态。
+
+
 ## 2026-11-07：0.4.13 Unit ASR + M12 人脸视图已部署（Claude Opus）
 
 用户先把另一台机器上未提交的 0.4.8/0.4.9 工作推到 `dev`，本机合并进 `main`（提交 `7dfadd4`），保留 main 当天的眼睛资源、M12、耳朵与 `server/ear` 提交；只有 README 冲突，两边内容都保留。

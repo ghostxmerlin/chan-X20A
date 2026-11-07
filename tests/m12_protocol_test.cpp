@@ -99,61 +99,62 @@ int main()
         auto d = parse_m12_line(R"({"num":1,"face":[{"x":1,"y":1,"w":9,"h":9,"prob":0.9}],"running":"Face Detector"})");
         assert(!d.recognition && d.faces[0].name[0] == 0);
     }
-    {   // Policy: look around after boot, identify a new face, keep watching, doze when idle.
-        constexpr int64_t s = 1000000;
-        M12Policy p;
-        assert(p.function() == M12Function::none);
-        p.start(0);
-        assert(p.phase() == M12Phase::looking && p.function() == M12Function::detect);
-        p.tick(30 * s);
-        assert(p.function() == M12Function::detect);                  // M12 still booting: keep looking
-        p.result(35 * s, 1, false, nullptr, 0);                        // first face: who is it?
-        assert(p.phase() == M12Phase::identifying && p.function() == M12Function::recognize);
-        p.result(36 * s, 1, false, nullptr, 0);                        // trailing detector result: ignored
-        p.result(38 * s, 1, true, "", 0.2f);                           // not matched yet
-        assert(p.phase() == M12Phase::identifying);
-        p.result(39 * s, 1, true, "papa", 0.81f);
-        assert(p.phase() == M12Phase::watching && p.function() == M12Function::detect);
-        assert(p.identity().known && std::strcmp(p.identity().name, "papa") == 0 && p.identity().at_us == 39 * s);
-        p.result(41 * s, 1, false, nullptr, 0);
-        p.result(70 * s, 1, false, nullptr, 0);                        // new after 29 s, but cooldown: no burst
-        assert(p.phase() == M12Phase::watching);
-        p.tick(95 * s);                                                // look window from first result (35+60) is over
-        assert(p.phase() == M12Phase::watching);
-        p.tick(129 * s);
-        assert(p.function() == M12Function::detect);                   // 59 s since last face
-        p.tick(130 * s);
-        assert(p.phase() == M12Phase::dozing && p.function() == M12Function::standby);
-        p.result(131 * s, 1, false, nullptr, 0);                       // stray result while switching: stays dozing
-        assert(p.phase() == M12Phase::dozing);
-        p.wake(200 * s);                                               // voice / touch / remote
-        assert(p.phase() == M12Phase::looking && p.function() == M12Function::detect);
-        p.result(205 * s, 1, false, nullptr, 0);                       // new face, cooldown over: identify again
-        assert(p.phase() == M12Phase::identifying);
-        for (int i = 0; i < M12Policy::kUnknownAfter; ++i) p.result((206 + i) * s, 1, true, "", 0.1f);
-        assert(p.phase() == M12Phase::watching && !p.identity().known);   // nobody enrolled matched
-        p.view(true, 220 * s);                                         // face page open: never doze
-        p.tick(1000 * s);
-        assert(p.function() == M12Function::detect);
-        p.view(false, 1000 * s);
-        p.tick(1059 * s);
-        assert(p.function() == M12Function::detect);
-        p.tick(1060 * s);
-        assert(p.function() == M12Function::standby);
-        p.view(true, 1100 * s);                                        // "turn on" from standby wakes it
-        assert(p.phase() == M12Phase::looking);
-        p.result(1105 * s, 1, false, nullptr, 0);
-        assert(p.phase() == M12Phase::identifying);
-        p.tick(1115 * s);                                              // no recognition answer within 10 s
-        assert(p.phase() == M12Phase::watching && !p.identity().known);
-    }
-    {   // No M12 at all: look for 60 s, then doze.
+    {   // Boot and unrelated events never start the camera or identity recognition.
+        constexpr int64_t second = 1000000;
         M12Policy p;
         p.start(0);
-        p.tick(59999999);
+        assert(p.function() == M12Function::standby);
+        p.wake(second); // ordinary ASR, touch or remote input
+        p.result(2 * second, 1, false, nullptr, 0);
+        p.result(3 * second, 1, true, "papa", 0.9f);
+        p.tick(120 * second);
+        assert(p.function() == M12Function::standby && p.identity().at_us == 0);
+    }
+    {   // Explicit turn on remains detection despite absence, faces and late recognition.
+        constexpr int64_t second = 1000000;
+        M12Policy p;
+        p.start(0);
+        p.view(true, second);
         assert(p.function() == M12Function::detect);
-        p.tick(60000000);
+        p.tick(61 * second); // no M12 replies: keep requesting detection
+        assert(p.function() == M12Function::detect);
+        p.result(62 * second, 1, false, nullptr, 0);
+        assert(p.function() == M12Function::detect); // a face must not start recognition
+        p.result(63 * second, 1, true, "papa", 0.9f);
+        p.wake(64 * second);
+        p.tick(1000 * second);
+        assert(p.function() == M12Function::detect && p.identity().at_us == 0);
+        p.view(false, 1001 * second); // turn off or leave the face page: immediate standby
+        assert(p.function() == M12Function::standby);
+        p.result(1002 * second, 1, false, nullptr, 0);
+        p.result(1003 * second, 1, true, "papa", 0.9f);
+        p.wake(1004 * second);
+        p.tick(2000 * second);
+        assert(p.function() == M12Function::standby);
+        p.view(true, 2001 * second); // the next explicit turn on still works
+        assert(p.function() == M12Function::detect);
+        p.view(true, 2002 * second);
+        assert(p.function() == M12Function::detect);
+        p.view(false, 2003 * second);
+        p.view(false, 2004 * second);
         assert(p.function() == M12Function::standby);
     }
-    std::cout << "PASS: M12 commands, face results, clipping, mirror mapping, replies/errors, line assembly, 3000 random streams, recognition fields, look/identify/watch/doze policy\n";
+    {   // Command selection must send detector after a quick off/on, despite trailing frames.
+        M12Function active = M12Function::none;
+        std::vector<M12Function> commands;
+        auto request = [&](M12Function want) {
+            if (m12_switch_required(active, want)) commands.push_back(want);
+            active = want;
+        };
+        request(M12Function::standby);
+        request(M12Function::detect);
+        request(M12Function::standby);
+        // Face timestamps are deliberately absent from the command selector:
+        // even a trailing detector frame cannot suppress this command.
+        request(M12Function::detect);
+        request(M12Function::detect); // an unchanged request does not restart detection
+        assert(commands == std::vector<M12Function>({M12Function::standby, M12Function::detect,
+                                                    M12Function::standby, M12Function::detect}));
+    }
+    std::cout << "PASS: M12 commands, face results, clipping, mirror mapping, replies/errors, line assembly, 3000 random streams, recognition fields, explicit standby/detector policy, quick off/on command selection\n";
 }

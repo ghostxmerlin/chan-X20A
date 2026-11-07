@@ -2,11 +2,9 @@
 #pragma once
 #include <lvgl.h>
 #include <cstdint>
-#include "emotion_state.h"
 
 namespace collector {
 struct ScreenStatus {
-    EmotionView emotion;
     const char* version = "";
     const char* ip = "";
     const char* token = "";

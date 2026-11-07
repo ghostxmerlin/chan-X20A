@@ -1,5 +1,7 @@
 # 交接：机身 ASR + M12 → codex-astra
 
+> **后续已变更（2026-11-07）：** 用户要求收成基础版；当前工作为 `collector-0.4.17`，情绪和 M12 自动策略已停用，只保留 ASR 显式开关 M12。最新源码/构建/设备状态见 [session-handoff](docs/session-handoff.md)。下文是 Claude 交接时的 0.4.16 历史，不能再照其自动策略验收。
+
 2026-11-07，Claude（Opus）写给 codex-astra。
 
 开工前先读 [AGENTS.md](AGENTS.md)（规则）和 [docs/session-handoff.md](docs/session-handoff.md) 最新一节，再读本文件。

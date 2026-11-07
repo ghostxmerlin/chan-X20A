@@ -1,5 +1,16 @@
 # Collector 局域网协议 v1
 
+## 0.4.17 基础版（当前源码）
+
+- `/v1/info.profile` 为 `basic`；`capabilities.emotion_display` 和 `capabilities.face_detection` 为 `unsupported`。情绪 `supported/enabled=false`；不再生产情绪遥测、情绪首页标签。
+- `POST /v1/emotion`、`POST /v1/settings/face-detection` 不再注册（404）。机身检测适配器恒关闭，`face_detection.supported/enabled/ready=false`，`reason=disabled_in_basic_profile`；Android 旧版会将人脸框开关置为不可用。M12 检测独立保留。
+- M12 开机请求 Audio FFT 待机；ASR turn on 显式请求 Face Detector 并打开人脸页；turn off 或轻触退出后请求待机。检测持续到显式关闭，不因无人脸或时间自动待机；普通触摸、遥控心跳和其他 ASR 指令不唤醒。
+- 不发 Face Recognition 命令、不显示缓存身份。`m12.phase` 运行只用 watching/dozing，`function` 是请求态，`valid` 仅表示 UART/任务就绪，不证明模组执行成功；画面数据过期显示 `M12 data stale`。
+- 每次功能切换发送对应命令。没有回应时先六次每 8 秒重发，再每 30 秒重发；待机收到明确 Audio FFT 回复后停止重发。长时间待机无法切回检测的历史症状仍需单独实测。
+- 基础相机/音频/传感器采集、HTTP/UDP 连接、舵机/仰角、屏幕开关和心心/叉号及提示音保留，不改 NVS 中的设置。
+
+下文各旧版章节仅为历史协议，不覆盖以上当前行为。
+
 ## 0.4.11–0.4.13 M12 人脸视图（顶部蓝色口）
 
 用户 2026-11-07 要求：说 “turn on” 时，StackChan 启动 M12 的人脸检测，在自己屏幕上标出人脸方框；说 “turn off” 时关闭，回到首页。
@@ -453,7 +464,7 @@ Android 0.4.3 底栏显示 lx 与接近 raw，机器人设置显示磁场 XYZ µ
 
 USB配置命令可附`"priority":true`。首选SSID和密码作为单个`collector/wifi_primary` JSON值提交；既有`wifi_ssid/wifi_password`及工厂SSID存储保留。启动顺序为首选、旧采集配置、去重后的工厂配置。同名SSID使用靠前的密码；每项最多3次、间隔10s，连接成功后停止轮询。下次断线从首选重新尝试，不为扫描首选强拆健康连接。`health`提供`wifi_profile_count`、`wifi_preferred_configured`和已关联时的`wifi_on_preferred`，不返回SSID或密码。热点频道变化时，ESP-NOW遥控器必须同步设置频道。
 
-## 0.4.9 情绪角落接口（已构建，尚未部署）
+## 历史 0.4.9 情绪角落接口（0.4.10 起曾随固件上机，0.4.17 停用）
 
 鉴权 `POST /v1/emotion` 只更新内存中的首页文字，不控制舵机、声音或持久设置。最多512字节JSON，接收有3秒期限；仅允许如下8个字段：
 
