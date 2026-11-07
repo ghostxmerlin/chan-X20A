@@ -1,3 +1,4 @@
+import { renderM12, renderThermal } from '/m12-ui.js';
 const $ = id => document.getElementById(id);
 const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) el.textContent = next; };
 const num = (n, digits = 1) => Number.isFinite(n) ? n.toFixed(digits) : '—';
@@ -87,7 +88,7 @@ function render() {
   const pose = { feedback_unavailable: '反馈不可用', complete: '动作已完成', completed: '动作已完成', moving: '运动中', waiting: '等待反馈', idle: '空闲', cancelled: '已取消' };
   text('startup-pose', pose[motor.startup_pose_state] || motor.startup_pose_state);
   text('pitch-saved', t.pitch_setting ? `${num(t.pitch_setting.configured_deg)}° · ${bool(t.pitch_setting.persisted, '已保存', '未保存')}` : '—');
-  for (const id of ['system-panel','servo-panel','m12-panel','mag-panel']) $(id).classList.toggle('stale', !fresh);
+  for (const id of ['system-panel','servo-panel','m12-panel','asr-panel','mag-panel']) $(id).classList.toggle('stale', !fresh);
   text('db', audioFresh ? num(state.audio.db) : '—');
   const meterValue = audioFresh ? Math.max(-60, Math.min(0, state.audio.db)) : -60;
   $('meter-fill').style.width = `${(meterValue + 60) / 60 * 100}%`;
@@ -113,10 +114,14 @@ function render() {
   text('asr-state', t.asr ? `${bool(t.asr.valid, '串口就绪', '串口异常')} · ${t.asr.frames} 帧` : '—');
   const last = t.asr?.events?.at(-1);
   text('asr-last', last ? `${last.word || last.id} · ${age(t.timestamp_us, last.timestamp_us)}` : '尚无指令');
-  text('m12-request', t.m12?.function);
-  text('m12-running', t.m12?.running || (fresh ? '尚无报告' : '—'));
-  text('m12-age', fresh ? age(t.timestamp_us, t.m12?.last_rx_us) : '—');
-  text('m12-faces', t.m12 ? `${t.m12.num ?? 0} 个 · ${age(t.timestamp_us, t.m12.last_result_us)}` : '—');
+  renderM12(state, fresh);
+  renderThermal(t.temperature, fresh ? state.thermalHistory : [], t.timestamp_us);
+  const asrList = $('asr-events'); asrList.replaceChildren();
+  for (const event of (t.asr?.events || []).slice(-6).reverse()) {
+    const li = document.createElement('li'), word = document.createElement('span'), when = document.createElement('span');
+    word.textContent = event.word || `指令 ${event.id}`; when.textContent = age(t.timestamp_us, event.timestamp_us);
+    li.append(word, when); asrList.append(li);
+  }
   const events = state?.events || [];
   if (events.at(-1)?.id !== lastEvent) {
     lastEvent = events.at(-1)?.id; const list = $('events'); list.replaceChildren();

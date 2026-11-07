@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { M12Tracker } from './m12.mjs';
 
 export function validateBinding(value) {
   const url = new URL(value.address);
@@ -126,6 +127,7 @@ export class Monitor extends EventEmitter {
     super(); this.client = client; this.info = null; this.telemetry = null; this.telemetryAt = 0;
     this.frame = null; this.motion = []; this.audio = { at: 0, db: -96, gaps: 0, history: [] };
     this.events = []; this.eventSeq = 0; this.asrSeq = 0; this.online = false; this.running = false;
+    this.m12Tracker = new M12Tracker(); this.thermalHistory = [];
     this.viewers = 0; this.epoch = 0; this.error = ''; this.audioError = ''; this.cameraError = '';
   }
   event(kind, text, at = Date.now()) {
@@ -133,6 +135,7 @@ export class Monitor extends EventEmitter {
     if (this.events.length > 120) this.events.shift();
   }
   clearStreams() {
+    this.m12Tracker.clear(); this.thermalHistory = [];
     this.frame = null; this.motion = []; this.audio = { at: 0, db: -96, gaps: 0, history: [] };
     this.audioChild?.kill(); this.audioChild = null; this.audioEpoch = (this.audioEpoch || 0) + 1;
     this.emit('audioReset');
@@ -148,6 +151,12 @@ export class Monitor extends EventEmitter {
     if (data.boot_id !== this.info?.boot_id || !Number.isSafeInteger(data.seq)) throw new Error('遥测启动标识不匹配');
     if (data.seq === this.telemetry?.seq) return;
     const previous = this.telemetry; this.telemetry = data; this.telemetryAt = now;
+    this.m12Tracker.accept(data);
+    const thermal = data.temperature;
+    if (thermal?.valid && Number.isFinite(thermal.celsius) && thermal.timestamp_us > (this.thermalHistory.at(-1)?.timestamp_us || 0)) {
+      this.thermalHistory.push({ timestamp_us: thermal.timestamp_us, celsius: thermal.celsius });
+      this.thermalHistory = this.thermalHistory.filter(p => thermal.timestamp_us - p.timestamp_us <= 120000000).slice(-121);
+    }
     const samples = data.imu_samples || [{ seq: data.seq, timestamp_us: data.imu?.timestamp_us || data.timestamp_us, ...data.imu }];
     for (const s of samples) {
       if (s.seq <= (this.motion.at(-1)?.seq ?? -1)) continue;
@@ -174,6 +183,7 @@ export class Monitor extends EventEmitter {
       receivedAt: this.telemetryAt, fresh, telemetry: this.telemetry,
       frame: this.frame ? { seq: this.frame.seq, at: this.frame.at, bytes: this.frame.bytes.length } : null,
       audio: { ...this.audio, error: this.audioError }, cameraError: this.cameraError,
+      m12: this.m12Tracker.snapshot(this.telemetry, this.online && fresh.telemetry), thermalHistory: this.thermalHistory,
       motion: this.motion, events: this.events, now };
   }
   addViewer() {

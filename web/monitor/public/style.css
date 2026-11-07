@@ -3,3 +3,25 @@
 @media(min-width:1300px){.camera-stage{aspect-ratio:4/2.9}}
 @media(max-width:1000px){main{padding:16px}.top-grid{grid-template-columns:minmax(0,1.2fr) minmax(300px,1fr)}.camera-stage{min-height:410px;height:100%;max-height:560px}.camera-panel{display:flex;flex-direction:column}.camera-stage{flex:1}.signals-grid{grid-template-columns:1fr}.details-grid{grid-template-columns:1fr 1fr}.events-panel{grid-column:1/-1}#events{height:180px}.imu-charts canvas{height:180px}}
 @media(max-width:700px){main{padding:12px}.toolbar{align-items:flex-start;flex-direction:column;gap:12px}.actions{width:100%}.actions button{flex:1}.notice{margin:12px 0}.top-grid,.details-grid{grid-template-columns:1fr}.side-stack{grid-template-columns:1fr}.camera-stage{height:auto;min-height:0;aspect-ratio:4/3;flex:auto}.panel-head,.panel-foot{padding-left:14px;padding-right:14px}.panel-head{gap:8px}.metrics{padding-left:14px;padding-right:14px}.imu-charts{grid-template-columns:1fr;padding:14px;gap:22px}.imu-charts canvas{height:150px}.legend{gap:7px}.legend span{margin-left:0;font-size:14px}.angle-row strong{font-size:28px}.events-panel{grid-column:auto}.mag-reading{justify-content:flex-start}.mag-reading .metrics{max-width:200px}.events-panel #events{height:215px}footer{gap:8px;line-height:1.5}.connection{gap:9px}.connection #firmware{font-size:14px}.details-grid,.signals-grid,.top-grid,.side-stack{gap:12px}}
+/* Dedicated device monitoring. Keep sensor provenance visible. */
+.thermal-caption{display:flex;justify-content:space-between;gap:12px;padding:0 18px;color:var(--muted);font-size:12px}
+#chip-thermal{height:68px;margin:8px 18px 0;width:calc(100% - 36px)}
+.m12-panel{margin-top:16px}
+.m12-layout{display:grid;grid-template-columns:minmax(280px,1fr) minmax(420px,1.2fr)}
+.m12-visual{padding:16px;border-right:1px solid var(--line)}
+.m12-visual-head{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:14px;margin-bottom:12px}
+#m12-faces-canvas{height:auto;aspect-ratio:4/3;background:#000;border:1px solid var(--line)}
+.m12-visual .note{margin:10px 0 0}
+.m12-details{padding-top:18px}
+.m12-readings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:0 18px 12px;gap:14px}
+.m12-readings>div{border-right:1px solid var(--line);padding-right:10px}
+.m12-readings>div:last-child{border:0;padding:0}
+.m12-readings span,.m12-readings small{display:block;color:var(--muted);font-size:14px;line-height:1.6}
+.m12-readings strong{display:block;font-size:30px;font-weight:400;margin:10px 0}
+.face-details{padding:0 18px;max-height:130px;overflow:auto;color:var(--green);font-size:14px}
+.face-details p{margin:7px 0;line-height:1.6}
+.asr-events{list-style:none;margin:0;padding:0 18px;max-height:190px;overflow:auto}
+.asr-events li{display:flex;justify-content:space-between;gap:12px;padding:7px 0;line-height:1.5;border-bottom:1px solid #142a1c}
+.asr-events li span+span{color:var(--muted);font-size:14px}
+@media(max-width:1000px){.m12-layout{grid-template-columns:1fr 1fr}.m12-readings{gap:8px}.m12-readings strong{font-size:26px}.m12-visual-head{flex-wrap:wrap}}
+@media(max-width:700px){.m12-layout{grid-template-columns:1fr}.m12-visual{border-right:0;border-bottom:1px solid var(--line)}.m12-panel{margin-top:12px}.m12-readings{padding:0 14px 12px}.m12-readings span,.m12-readings small{font-size:13px}.thermal-caption{font-size:12px}.m12-readings strong{font-size:27px}}

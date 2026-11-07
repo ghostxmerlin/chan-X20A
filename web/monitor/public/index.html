@@ -21,7 +21,8 @@
       <div class="side-stack">
         <section class="panel" id="system-panel">
           <div class="panel-head"><h2>运行状态</h2><span id="uptime" class="muted">—</span></div>
-          <dl class="metrics"><div><dt>电量</dt><dd id="battery">—</dd></div><div><dt>Wi-Fi</dt><dd id="wifi">—</dd></div><div><dt>光照</dt><dd id="light">—</dd></div><div><dt>接近</dt><dd id="proximity">—</dd></div><div><dt>可用内存</dt><dd id="heap">—</dd></div><div><dt>遥控器</dt><dd id="remote">—</dd></div><div><dt>显示</dt><dd id="display">—</dd></div></dl>
+          <dl class="metrics"><div><dt>芯片温度</dt><dd id="chip-temperature">—</dd></div><div><dt>电量</dt><dd id="battery">—</dd></div><div><dt>Wi-Fi</dt><dd id="wifi">—</dd></div><div><dt>光照</dt><dd id="light">—</dd></div><div><dt>接近</dt><dd id="proximity">—</dd></div><div><dt>可用内存</dt><dd id="heap">—</dd></div><div><dt>遥控器</dt><dd id="remote">—</dd></div><div><dt>显示</dt><dd id="display">—</dd></div></dl>
+          <div class="thermal-caption"><span id="chip-temperature-note">ESP32-S3 · 等待读数</span><span>最近 2 分钟</span></div><canvas id="chip-thermal" aria-label="StackChan 芯片温度趋势"></canvas>
         </section>
         <section class="panel" id="servo-panel">
           <div class="panel-head"><h2>舵机反馈</h2><span id="motor-status" class="muted">—</span></div>
@@ -31,6 +32,26 @@
         </section>
       </div>
     </div>
+    <section class="panel m12-panel" id="m12-panel">
+      <div class="panel-head"><h2>M12 视觉模块</h2><span id="m12-state" class="muted">等待状态</span></div>
+      <div class="m12-layout">
+        <div class="m12-visual">
+          <div class="m12-visual-head"><span>检测框示意 · 640 × 480</span><span id="m12-visual-state">等待检测</span></div>
+          <canvas id="m12-faces-canvas" aria-label="M12 人脸检测框坐标示意，非摄像头原图"></canvas>
+          <p class="note">显示 M12 返回的位置与置信度；原始画面待 M12 网络接入。</p>
+        </div>
+        <div class="m12-details">
+          <div class="m12-readings">
+            <div><span>芯片温度</span><strong id="m12-temperature">—</strong><small id="m12-temperature-note">M12 网络未接入</small></div>
+            <div><span>检测更新率</span><strong id="m12-fps">—</strong><small>结果 / 秒 · 5 秒窗口</small></div>
+            <div><span>当前人脸</span><strong id="m12-count">—</strong><small id="m12-confidence">等待检测结果</small></div>
+          </div>
+          <dl class="metrics"><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近检测结果</dt><dd id="m12-result-age">—</dd></div><div><dt>累计检测 / 串口异常</dt><dd id="m12-counters">—</dd></div></dl>
+          <div id="m12-face-details" class="face-details"></div>
+          <p class="note">检测更新率来自设备结果计数，不是网页或视频帧率。待机、切换或结果过期时清空检测框。</p>
+        </div>
+      </div>
+    </section>
     <div class="signals-grid">
       <section class="panel audio-panel">
         <div class="panel-head"><h2>麦克风</h2><span id="audio-status" class="muted">等待音频</span></div>
@@ -46,10 +67,11 @@
       </section>
     </div>
     <div class="details-grid">
-      <section class="panel" id="m12-panel">
-        <div class="panel-head"><h2>ASR / M12</h2><span id="asr-state" class="muted">—</span></div>
-        <dl class="metrics"><div><dt>最近指令</dt><dd id="asr-last">—</dd></div><div><dt>M12 请求</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近检测结果</dt><dd id="m12-faces">—</dd></div></dl>
-        <p class="note">turn on 开检测 · turn off / 触摸退出待机<br>M12 镜头画面未通过此接口传输</p>
+      <section class="panel" id="asr-panel">
+        <div class="panel-head"><h2>ASR 语音指令</h2><span id="asr-state" class="muted">—</span></div>
+        <dl class="metrics"><div><dt>最近指令</dt><dd id="asr-last">—</dd></div></dl>
+        <ol id="asr-events" class="asr-events"><li>尚无指令</li></ol>
+        <p class="note">Unit ASR · 黑口 Port B<br>turn on 开检测 · turn off 退出待机</p>
       </section>
       <section class="panel" id="mag-panel">
         <div class="panel-head"><h2>磁场</h2><span class="muted">µT</span></div>

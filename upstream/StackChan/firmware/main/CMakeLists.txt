@@ -23,6 +23,7 @@ list(APPEND STACK_CHAN_SOURCES collector/collector.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/remote.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/asr_unit.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/m12_unit.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/temperature.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/runtime_log.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/playback.cpp)
 # Basic profile: retain the experimental detector source, but do not link or run it.
@@ -311,6 +312,7 @@ idf_component_register(SRCS ${SOURCES}
                         esp_driver_usb_serial_jtag
                         mbedtls
                         json
+                        esp_driver_tsens
                         esp_driver_gpio
                         esp_driver_uart
                         esp_driver_spi

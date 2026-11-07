@@ -1,5 +1,12 @@
 # Collector 局域网协议 v1
 
+## 0.4.18：芯片温度遥测
+
+`GET /v1/info` 和 `GET /v1/telemetry` 增加 `temperature`；`capabilities.chip_temperature=supported`。
+字段：`available`（驱动启用）、`valid`（读取成功且小于三秒）、`celsius`（无效为 null）、`timestamp_us`、`seq`、`error`；固定 `source=esp32s3_internal`、`scope=chip_not_ambient_or_case`、`unit=degC`、`range_min=20`、`range_max=100`、`target_hz=1`。这是 ESP32-S3 芯片内部温度，不是 M12、舵机、外壳或室温。独立低优先级任务采样，HTTP 只读缓存；旧客户端可忽略该字段。
+
+M12 仍使用已有 `results/last_result_us/requested_us/faces` 等字段；网页基于设备计数计算实际结果更新率。没有新增 M12 温度或视频的串口字段。
+
 ## 0.4.17 基础版（当前源码）
 
 - `/v1/info.profile` 为 `basic`；`capabilities.emotion_display` 和 `capabilities.face_detection` 为 `unsupported`。情绪 `supported/enabled=false`；不再生产情绪遥测、情绪首页标签。

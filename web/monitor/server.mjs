@@ -8,7 +8,7 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 export const root = path.resolve(directory, '../..');
 export function createMonitorServer(monitor) {
   const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']],
-    ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
+    ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];

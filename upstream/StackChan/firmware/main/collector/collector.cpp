@@ -2,6 +2,7 @@
 #include "collector.h"
 #include "asr_unit.h"
 #include "m12_unit.h"
+#include "temperature.h"
 #include "remote.h"
 #include "screen.h"
 #include "runtime_log.h"
@@ -704,10 +705,11 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["emotion"]["supported"] = false;
     doc["emotion"]["enabled"] = false;
     auto capabilities = doc["capabilities"].to<JsonObject>();
-    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial"}) capabilities[name] = "supported";
+    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature"}) capabilities[name] = "supported";
     capabilities["face_detection"] = "unsupported";
     capabilities["emotion_display"] = "unsupported";
     environment_json(doc, true);
+    temperature_json(doc["temperature"].to<JsonObject>());
     remote_pitch_setting_json(doc["pitch_setting"].to<JsonObject>());
     face_detection_json(doc["face_detection"].to<JsonObject>());
     doc["pitch_setting"]["endpoint"] = "/v1/settings/pitch";
@@ -859,6 +861,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
         }
     }
     environment_json(doc, false);
+    temperature_json(doc["temperature"].to<JsonObject>());
     remote_json(doc["remote"].to<JsonObject>(), remote_after, remote_requested, servo_diag_requested && servo_diag == 1);
     remote_pitch_setting_json(doc["pitch_setting"].to<JsonObject>());
     face_detection_json(doc["face_detection"].to<JsonObject>());
@@ -1325,6 +1328,7 @@ void run()
     remote_init();
     asr_init();
     m12_init();
+    temperature_init();
     update_screen({});
     ESP_ERROR_CHECK(xTaskCreate(sensor_task, "collector_sensors", 6144, nullptr, 3, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(environment_task, "collector_environment", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
