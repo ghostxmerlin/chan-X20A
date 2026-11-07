@@ -29,35 +29,37 @@
 **Files:** server/ear/hearing_protocol.py (new validation/SEA1/enrollment persistence), ear_server.py, deploy.sh, tests/test_ear_protocol.py.
 **Interfaces:** parse_audio_packet(data, framing) -> packet; authenticate(path, header, token) -> bool; enrollment request carries request_id/name/count=5/replace; events carry request_id, progress/done/error/cancelled.
 
-- [ ] Write/run failing protocol/auth/atomic enrollment/cancellation/self-overlap tests.
-- [ ] Implement bounded input validation, 24k Opus declaration, SEA1 sequence/timestamp and gap VAD reset, bounded inference tasks; capture immutable self/enrollment generation at slicing time.
-- [ ] Preserve legacy Mac PCM16 and token compatibility. Enrollment has120s timeout, count5, valid1–12s speech, cancellation/disconnect barrier and atomic save/backup.
-- [ ] Run Python tests and syntax checks; commit independently testable backend.
+- [x] Write/run failing protocol/auth/atomic enrollment/cancellation/self-overlap tests.
+- [x] Implement bounded input validation, 24k Opus declaration, SEA1 sequence/timestamp and gap VAD reset, bounded inference tasks; capture immutable self/enrollment generation at slicing time.
+- [x] Preserve legacy Mac PCM16 and token compatibility. Enrollment has120s timeout, count5, valid1–12s speech, cancellation/disconnect barrier and atomic save/backup.
+- [x] Run Python tests and syntax checks; commit independently testable backend.
 
 ## Task 2 — Device direct hearing and owned playback
 
 **Files:** collector/hearing.{h,cpp}, hearing_policy.h (new); collector.cpp, asr_unit.cpp, playback.{h,cpp}, CMakeLists.txt; tests/ host policy harness.
 **Interfaces:** hearing::init(device_id,boot_id); feed_audio(interleaved,frames,seq,t_us); asr_command(id,has_value); json(JsonObject); handle(httpd_req_t*); playback_hearing(clip,session); playback_cancel_hearing().
 
-- [ ] Write/run failing host tests for ASR IDs0x12/0x13, nonneutral emotion pools, everyone policy, stale/dedup/cooldown, stop ownership.
-- [ ] Implement idle/listening/enrolling state, NVS config, bounded capture queue, Opus+SEA1, strict backend parsing, fresh-session reconnect and immediate cancellation.
-- [ ] Extend playback successful-PCM eye cue to hearing origin; cancel only hearing-owned playback on stop. Include self output tail state in capture metadata.
-- [ ] Add authenticated boot-bound POST /v1/hearing, redacted telemetry/info, ASR dispatch; build fixed toolchain, confirm image fits app slot.
-- [ ] Run host regressions; commit.
+- [x] Write/run failing host tests for ASR IDs0x12/0x13, nonneutral emotion pools, everyone policy, stale/dedup/cooldown, stop ownership.
+- [x] Implement idle/listening/enrolling state, NVS config, bounded capture queue, Opus+SEA1, strict backend parsing, fresh-session reconnect and immediate cancellation.
+- [x] Extend playback successful-PCM eye cue to hearing origin; cancel only hearing-owned playback on stop. Include self output tail state in capture metadata.
+- [x] Add authenticated boot-bound POST /v1/hearing, redacted telemetry/info, ASR dispatch; build fixed toolchain, confirm image fits app slot.
+- [x] Run host regressions; commit.
 
 ## Task 3 — Web configuration and enrollment
 
 **Files:** web/monitor/hearing.mjs, public/hearing-ui.js (new); control.mjs, core.mjs, server.mjs, public/index.html/app.js/style.css; Node tests.
 **Interfaces:** action hearing_config/listen/enroll/cancel; explicit boot field, strict fields/types; new hearing telemetry redacted. Curl body goes over fd3, credentials over stdin headers.
 
-- [ ] Write/run failing control validation, secret transport and UI state tests.
-- [ ] Add configuration, password blank-preserve, identity/status, start/stop, five-phrase enrollment and explicit replacement/cancel UI.
-- [ ] Add local existing-backend configuration import without returning token to browser. No automatic config/write/listen on page load.
-- [ ] Run Node tests; document configuration and readiness/physical limits; commit.
+- [x] Write/run failing control validation, secret transport and UI state tests.
+- [x] Add configuration, password blank-preserve, identity/status, start/stop, five-phrase enrollment and explicit replacement/cancel UI.
+- [x] Add local existing-backend configuration import without returning token to browser. No automatic config/write/listen on page load.
+- [x] Run Node tests; document configuration and readiness/physical limits; commit.
 
 ## Task 4 — Integration, review, delivery
 
-- [ ] Preserve remote port/start arguments and remote modifications; back up code before deploy; deploy tested backend only after compare.
-- [ ] Verify actual backend hello, 24k SEA1/Opus acceptance, disconnect/cancel, recording metadata and no secret disclosure. No user enrollment without actual speech.
-- [ ] Run all relevant Python/Node/firmware checks and independent final code review; fix findings.
-- [ ] Update handoff/version/artifact evidence, commit and push branch. If device remains deferred, clearly separate server deployed from firmware built but not flashed.
+- [x] Preserve remote port/start arguments and remote modifications; back up code before deploy; deploy tested backend only after compare.
+- [x] Verify actual backend hello, 24k SEA1/Opus acceptance, disconnect/cancel, recording metadata and no secret disclosure. No user enrollment without actual speech.
+- [x] Run all relevant Python/Node/firmware checks and independent final code review; fix findings.
+- [x] Update handoff/version/artifact evidence, commit and push branch. If device remains deferred, clearly separate server deployed from firmware built but not flashed.
+
+执行证据与实现调整见 docs/continuous-hearing.md、docs/collector-validation.md。Task4中的代码推送在最终交接提交后执行；实机依用户安排待接回。

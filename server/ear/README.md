@@ -1,3 +1,5 @@
+> 2026-11-08：StackChan SEA1 / 24k Opus、Bearer鉴权、可取消五句声纹录入与声学独立判定已接入。旧Mac客户端继续支持。操作与部署边界见[连续听觉](../../docs/continuous-hearing.md)。根目录.env加载后，可运行 `$SOUL_MAC_PYTHON server/ear/smoke_client.py` 检查实际握手/静音输入/取消；不保存新声纹。部署前备份代码及speakers.npz并比对远端，保留现有unit端口参数。
+
 # 耳朵服务端（server/ear）
 
 这是 soul 的耳朵。机器人把麦克风音频经 WebSocket 推上来（目前由 Mac 测试客户端代替机器人），服务器负责切段、转文字、认人和分类声音，每 100 ms 回一个心跳帧，事件跟着心跳一起回来。耳朵只报告事实和置信档位，不做决定。

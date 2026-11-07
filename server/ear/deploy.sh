@@ -2,7 +2,7 @@
 # Copy the ear server code to the server and restart its systemd unit. Settings come from .env.
 #   server/ear/deploy.sh            copy changed files, restart, wait until it listens again
 #   server/ear/deploy.sh --dry-run  only list what would be copied; changes nothing
-# Only the three code files are copied. Models, token, speakers.npz and recordings on the server
+# Only the four code files are copied. Models, token, speakers.npz and recordings on the server
 # are never touched, and nothing is deleted there.
 set -eu
 . "$(dirname "$0")/_env.sh"

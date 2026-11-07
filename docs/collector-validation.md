@@ -1,5 +1,15 @@
 # Collector 验证记录
 
+
+## 2026-11-08 · collector-0.4.28 连续听觉（本体尚未刷入）
+
+- 最终固定IDF5.5.4构建：应用0x4a8190 / 4882832字节；原0x4f0000槽余294512。SHA256 `bf92399c2b898b5a5a76b6d0026f94dcbf57319e95004871aca6cfa658cb8284`；日志`logs/hearing-final-build.txt`，artifact `artifacts/collector-0.4.28-hearing/`。
+- Python59项，55通过/4既有跳过（`logs/hearing-final-python.txt`）；Node43通过（`logs/hearing-web-final.txt`）。后端13项含延迟取消/跨录入代际、自身标记、声学独立于身份、缺口前滚和旧队列作废；主机策略含start/stop/播放归属/冷却/IPv4/有界传输片段与取消。真实curl POST测试证明密钥不入argv。
+- 720资产帧解码、三款真实LVGL、心叉/熄屏/停用通过（`logs/hearing-display-validation.txt`）；旧首页120帧全部897360索引与原版SHA一致，5位无损打包省336480字节；不是改变动画外观或帧数。
+- 服务器备份旧代码/声纹后部署，原unit显式端口参数保留。真实服务鉴权、旧Mac兼容、错误token拒绝、20个24k Opus包解码19200个16k样本、录入启动/取消通过（`logs/hearing-live-smoke.json`）；录音元数据与OpusHead输入24k、20包/19200样本匹配；旧声纹库哈希未变（`logs/hearing-server-recording.json`）。未真人录新身份。
+- 独立审阅638ea24..5171463：5项Important已在a6b3ddb修正，缺口/身份测试RED→GREEN；异步WebSocket改为单worker同步IDF transport，共享连接2秒/发送200ms预算。未重复派审，遵循一次复核与测试修正流程。保留Minor：应用握手前远端关闭可能固定1秒重试。
+- Mac仍未枚举StackChan USB，网页离线；用户先代码推送、稍后接的安排持续。本轮未写设备flash/NVS/SD、没有机械动作。真人声纹质量、真实ASR/音画/长时间稳定性待设备接回验收。新网页浏览器宿主不可用，独立Chrome显示服务失败未产图，故只报组件/API通过，不报视觉通过。
+
 ## 2026-11-07：三款眼睛与ASR台词（collector-0.4.27，待设备部署）
 
 - Python43项：39通过、4旧情绪依赖跳过；Node38通过。真实资产服务用ASan/UBSan验证双缓冲、迟到取消、去重、优先级、坏文件和取消中加载；切新款失败保留旧启用状态先复现再修正。
