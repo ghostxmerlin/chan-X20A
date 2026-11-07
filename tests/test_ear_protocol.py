@@ -147,3 +147,24 @@ class EarLifecycleTest(unittest.IsolatedAsyncioTestCase):
         before = len(self.ear.outbox)
         self.ear.post({'type':'speech'})
         self.assertEqual(len(self.ear.outbox),before)
+
+    async def test_voiceprint_does_not_change_acoustic_eligibility(self):
+        self.models.voice_p=lambda _: .2
+        known=self.ear.voice([],{'band':'known'})
+        unknown=self.ear.voice([],{'band':'unknown'})
+        self.assertEqual(known.get('acoustic_band'),'unclear')
+        self.assertEqual(unknown.get('acoustic_band'),'unclear')
+
+    async def test_gap_drops_queued_speech_and_clamps_pre_roll(self):
+        self.ear.ring.write(np.ones(8000,dtype=np.float32))
+        self.ear.self_history.add(0,8000,{'sounding':True,'moving':False})
+        self.ear.post({'type':'speech','phase':'end','emotion':'happy'})
+        self.ear.reset_segment()
+        self.assertFalse(any(e['type']=='speech' for e in self.ear.outbox))
+        self.ear.ring.write(np.zeros(32000,dtype=np.float32))
+        self.ear.self_history.add(8000,40000,{'sounding':False,'moving':False})
+        context=self.ear.segment_context(self.ear.new_utterance(8000),4000,40000)
+        self.assertFalse(context['self']['sounding'])
+        audio=self.ear.segment_audio(8000,40000)
+        self.assertEqual(len(audio),32000)
+        self.assertEqual(np.count_nonzero(audio),0)

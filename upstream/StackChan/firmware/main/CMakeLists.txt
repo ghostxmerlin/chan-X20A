@@ -33,7 +33,7 @@ list(APPEND STACK_CHAN_SOURCES collector/asr_unit.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/m12_unit.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/temperature.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/runtime_log.cpp)
-list(APPEND STACK_CHAN_SOURCES collector/playback.cpp collector/hearing.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/playback.cpp collector/hearing.cpp collector/hearing_socket.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/voice_library.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/eyes/player.cpp collector/eyes/eyes.cpp collector/eyes/runtime.cpp collector/eyes/view.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/eyes/http.cpp)
@@ -323,6 +323,7 @@ idf_component_register(SRCS ${SOURCES}
                         esp_psram
                         esp_netif
                         esp_http_client
+                        tcp_transport
                         esp_http_server
                         esp_driver_usb_serial_jtag
                         mbedtls

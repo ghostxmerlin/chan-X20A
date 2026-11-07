@@ -16,7 +16,13 @@ inline bool valid_url(const std::string& url) {
     const auto colon=authority.find(':');
     const auto host=authority.substr(0,colon);
     if(host.empty())return false;
-    for(char c:host)if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='.'||c=='-'))return false;
+    unsigned octets=0,value=0,digits=0;
+    for(char c:host+"."){
+        if(c=='.'){if(!digits||digits>3||value>255)return false;++octets;value=digits=0;}
+        else if(c>='0'&&c<='9'){if(digits==1&&value==0)return false;value=value*10+c-'0';++digits;}
+        else return false;
+    }
+    if(octets!=4)return false;
     if(colon!=std::string::npos) {
         const auto port=authority.substr(colon+1);if(port.empty()||port.size()>5)return false;
         unsigned n=0;for(char c:port){if(c<'0'||c>'9')return false;n=n*10+c-'0';}if(!n||n>65535)return false;

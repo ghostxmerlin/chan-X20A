@@ -4,6 +4,7 @@ export function validateHearingConfig(url,token) {
  if(typeof url!=='string'||url.length>256||!/^(wss?):\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[^\s?#@\\]*)?$/.test(url))throw new Error('请填写不含密钥的 ws:// 或 wss:// 地址');
  let parsed;try{parsed=new URL(url);}catch{throw new Error('后端地址或端口无效');}
  if(parsed.port==='0')throw new Error('后端端口无效');
+ if(url.match(/^wss?:\/\/([^/:]+)/)?.[1]!==parsed.hostname || !/^\d+\.\d+\.\d+\.\d+$/.test(parsed.hostname)||parsed.hostname.split('.').some(n=>Number(n)>255))throw new Error('此版本请填写后端 IPv4 地址');
  if(typeof token!=='string'||token.length>192||/[^\x21-\x7e]/.test(token))throw new Error('密钥须为最多 192 个可见英文字符；留空保留原值');
  return {url,token};
 }

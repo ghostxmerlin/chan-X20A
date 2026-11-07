@@ -264,10 +264,14 @@ class Ear:
         task.add_done_callback(done)
 
     def segment_context(self, cur, start, end):
-        return {**cur, "self":self.self_history.overlap(start, end)}
+        return {**cur, "self":self.self_history.overlap(max(start, self.vad_origin), end)}
+
+    def segment_audio(self, start, end):
+        return self.ring.read(max(start - PRE_ROLL, self.vad_origin), end)
 
     def reset_segment(self):
         self.vad.reset()
+        self.outbox = [ev for ev in self.outbox if ev.get("type") != "speech"]
         self.vad_origin = self.ring.end
         self.stream_generation += 1
         self.cur, self.speaking = None, False
@@ -314,7 +318,8 @@ class Ear:
             band = "voice"
         else:
             band = "unclear" if p >= self.voice_lo else "none"
-        return {"p": round(p, 2), "band": band}
+        acoustic = "voice" if p >= self.voice_hi else "unclear" if p >= self.voice_lo else "none"
+        return {"p": round(p, 2), "band": band, "acoustic_band": acoustic}
 
     async def run(self, fn):
         def locked():
@@ -404,7 +409,7 @@ class Ear:
             cur = self.cur if self.cur and abs(self.cur["onset"] - start) < SR else None
             if cur is None:
                 cur = self.new_utterance(start)
-            audio = self.ring.read(start - PRE_ROLL, end)          # original audio, not the VAD's dithered copy
+            audio = self.segment_audio(start, end)          # original audio, not the VAD's dithered copy
             self.spawn(self.end_speech(self.segment_context(cur, start - PRE_ROLL, end), audio, start, end, t_pop))
             self.cur = None
             self.speaking = self.vad.is_speech_detected()
@@ -421,9 +426,11 @@ class Ear:
 
     # ---------- speech ----------
     async def early_speaker(self, cur):
-        audio = self.ring.read(cur["onset"] - PRE_ROLL, cur["onset"] + EARLY_SPK)
+        audio = self.segment_audio(cur["onset"], cur["onset"] + EARLY_SPK)
         t0 = time.monotonic()
         e, tags = await self.run(lambda: (self.m.embed(audio), self.m.tags(audio)))
+        if self.closed or cur["generation"] != self.stream_generation:
+            return
         sp = self.speaker(e)
         self.post({"type": "speech", "phase": "start", "id": cur["id"], "pos": [cur["onset"], None],
                    "t": cur["t"], "speaker": sp, "voice": self.voice(tags, sp), "self": cur["self"],
@@ -465,7 +472,7 @@ class Ear:
                         "asr_ms": ms(t2 - t1), "tag_ms": ms(t3 - t2), "server_ms": ms(time.monotonic() - t_pop)}}
         self.post(ev)
         ready = self.enroll.accept(cur["enroll_epoch"], e, dur,
-                                   ev["voice"]["band"] == "voice" and ev["event"] == "speech" and bool(text),
+                                   ev["voice"]["acoustic_band"] == "voice" and ev["event"] == "speech" and bool(text),
                                    cur["self"]["sounding"], time.monotonic())
         if self.enroll.active and cur["enroll_epoch"] == self.enroll.epoch:
             self.post({**self.enroll.progress(), "phase":"progress"})

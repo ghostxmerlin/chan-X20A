@@ -2,8 +2,7 @@
 #include "hearing.h"
 #include "hearing_policy.h"
 #include "playback.h"
-#include <esp_network.h>
-#include <web_socket.h>
+#include "hearing_socket.h"
 #include <esp_opus_enc.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -25,6 +24,7 @@ namespace {
 constexpr size_t kFrames=480,kQueue=32;
 struct Block {uint32_t session,seq;int64_t us;bool sounding;int16_t pcm[kFrames];};
 std::mutex mutex;
+std::shared_ptr<HearingSocket> active_socket;
 QueueHandle_t queue=nullptr;
 StaticQueue_t queue_control;
 std::atomic<uint32_t> capture_session{0},dropped{0};
@@ -42,6 +42,7 @@ int pending_clip=0;int64_t pending_us=0;
 
 void new_session_locked() {
     capture_session=0;++generation;
+    if(active_socket)active_socket->Abort();
     connected=audio_ack=enroll_ack=false;pending_clip=0;last_tick=0;
     policy.seen=0; // Keep cooldown across reconnects.
     playback_set_hearing_session(requested&&!enrolling?generation:0);
@@ -94,6 +95,8 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             } else if(!std::strcmp(phase,"error")||!std::strcmp(phase,"cancelled")) {
                 finish_enroll_locked(phase,event["error"]|"enrollment_cancelled");return;
             }
+        } else if(!std::strcmp(type,"audio_gap")) {
+            pending_clip=0;
         } else if(!std::strcmp(type,"error")) {
             error=std::string(event["error"]|"backend_error").substr(0,160);
             if(enrolling){const auto why=error;finish_enroll_locked("error",why.c_str());return;}
@@ -109,17 +112,16 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             const int64_t age_samples=doc["rx"].as<int64_t>()-end.as<int64_t>();
             const double processing=(event["debug"]["server_ms"]|100000.0)+(event["debug"]["tick_wait_ms"]|100000.0);
             const bool valid=end.is<int64_t>()&&age_samples>=0&&age_samples<=80000&&processing>=0&&processing<=5000&&
-                !std::strcmp(event["event"]|"","speech")&&!std::strcmp(event["voice"]["band"]|"","voice")&&!text.empty();
+                !std::strcmp(event["event"]|"","speech")&&!std::strcmp(event["voice"]["acoustic_band"]|"","voice")&&!text.empty();
             const bool self= !event["self"]["sounding"].is<bool>()||event["self"]["sounding"].as<bool>()||playback_self_sounding();
             const int clip=policy.consider(seq,emotion.c_str(),valid,self,valid?static_cast<int>(processing):-1,now,esp_random());
             if(clip&&!pending_clip){pending_clip=clip;pending_us=now;}
         }
     }
 }
-bool send_json(WebSocket& socket,JsonDocument& doc) {std::string value;serializeJson(doc,value);return socket.Send(value);}
+bool send_json(HearingSocket& socket,JsonDocument& doc) {std::string value;serializeJson(doc,value);return socket.Send(value);}
 
 void worker(void*) {
-    EspNetwork network;
     unsigned retry=0;
     for(;;) {
         uint32_t session;std::string endpoint,key;bool enrollment;
@@ -130,8 +132,8 @@ void worker(void*) {
         }
         if(!session){retry=0;vTaskDelay(pdMS_TO_TICKS(50));continue;}
         xQueueReset(queue);
-        auto socket=network.CreateWebSocket();
-        socket->SetReceiveBufferSize(8192);
+        auto socket=std::make_shared<HearingSocket>();
+        {std::lock_guard<std::mutex> lock(mutex);if(generation==session)active_socket=socket;else socket->Abort();}
         const std::string authorization="Bearer "+key;
         socket->SetHeader("Authorization",authorization.c_str());
         socket->OnData([session](const char* data,size_t len,bool binary){receive(session,data,len,binary);});
@@ -156,6 +158,7 @@ void worker(void*) {
         const int64_t handshake_deadline=esp_timer_get_time()+5000000;
         bool enrollment_sent=false;
         while(ok&&live(session)&&socket->IsConnected()) {
+            socket->Poll();
             bool activated=false,ack=false;
             JsonDocument enrollment_msg;
             {
@@ -179,6 +182,7 @@ void worker(void*) {
         unsigned blocks=0;uint32_t previous=0,wire_seq=0;bool sent=false,sounding=false;
         int64_t first_us=0;
         while(ok&&live(session)&&socket->IsConnected()) {
+            socket->Poll();
             int clip=0;
             {
                 std::lock_guard<std::mutex> lock(mutex);
@@ -212,7 +216,8 @@ void worker(void*) {
         }
         capture_session=0;
         if(encoder)esp_opus_enc_close(encoder);
-        socket.reset(); // Join transport callback task without holding our state mutex.
+        {std::lock_guard<std::mutex> lock(mutex);if(active_socket==socket)active_socket.reset();}
+        socket.reset(); // Synchronous transport: every callback has already returned.
         uint32_t wait_generation=0;
         {
             std::lock_guard<std::mutex> lock(mutex);

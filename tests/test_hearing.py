@@ -4,6 +4,11 @@ import tempfile
 import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 class HearingTest(unittest.TestCase):
+    def test_transport(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out=str(pathlib.Path(tmp)/'transport')
+            subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror','-I'+str(ROOT/'upstream/StackChan/firmware/main/collector'),str(ROOT/'tests/hearing_transport_test.cpp'),'-o',out],check=True)
+            subprocess.run([out],check=True)
     def test_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = str(pathlib.Path(tmp)/'hearing')

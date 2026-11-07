@@ -6,7 +6,7 @@ Mac 与机器人连接同一 Wi-Fi 后，双击仓库里的 `scripts/open-stackc
 
 ## 启停
 
-collector-0.4.28 候选增加“语音后端 · 配置与声纹”。点击“使用本机现有后端”从根目录私密 `.env` 读取 `SOUL_EAR_URL` / `SOUL_EAR_TOKEN`，经鉴权写入本体 NVS；密钥不返回浏览器、不进入 curl 参数。也可以手动填写 ws/wss 地址和密钥，空密钥保留旧值。保存后待机，开机也默认待机。
+collector-0.4.28 候选增加“语音后端 · 配置与声纹”。点击“使用本机现有后端”从根目录私密 `.env` 读取 `SOUL_EAR_URL` / `SOUL_EAR_TOKEN`，经鉴权写入本体 NVS；密钥不返回浏览器、不进入 curl 参数。也可以手动填写 ws/wss IPv4 地址和密钥，空密钥保留旧值。保存后待机，开机也默认待机。
 
 说 **start** 开始本体直连 sherpa-onnx 连续监听，说 **stop** 停止；网页也有明确按钮。此监听与“在 Mac 听麦克风”的按钮独立，关闭网页不会停止。回应所有人，声纹仅显示身份。完整语音的 happy/sad/angry/fearful/disgusted/surprised 标签映射到本体台词与眼睛，neutral/unknown 不播放，至少间隔10秒；自身播放被标记排除。后端沿用原录音留存行为。
 

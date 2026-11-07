@@ -5,8 +5,9 @@ using namespace collector::hearing;
 int main() {
   assert(asr_action(0x12,false)==1 && asr_action(0x13,false)==-1);
   assert(asr_action(0x12,true)==0 && asr_action(0x10,false)==0);
-  assert(valid_url("ws://ear.local:8765/") && valid_url("wss://ear.example/robot"));
+  assert(valid_url("ws://127.0.0.1:8765/") && valid_url("wss://192.168.1.2/robot"));
   for(auto s:{"http://ear/","ws://u:p@ear/","ws://ear/?token=x","ws://ear:abc/","ws://ear:70000/","ws://ear/\r\nX:a"}) assert(!valid_url(s));
+  assert(!valid_url("ws://01.2.3.4/")); // no DNS fallback for ambiguous numeric spelling
   ResponsePolicy p;
   // Identity deliberately absent: a stranger gets exactly the same behavior.
   assert(p.consider(1,"happy",true,false,100,1000000,1)>0);
