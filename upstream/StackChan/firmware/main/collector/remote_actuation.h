@@ -4,7 +4,7 @@
 #include "pitch_setting.h"
 
 namespace collector {
-constexpr bool kRemotePitchControlEnabled = true;
+constexpr bool kRemotePitchControlEnabled = false; // Loaded head: physical up/down temporarily blocked.
 struct RemoteYawTarget { int yaw, speed; };
 struct RemotePitchTarget { int pitch, speed; };
 // Current sender: (Y_CENTER 1960 - Y_MIN 310) * 900 / (Y_MAX 3460 - Y_MIN 310).
@@ -37,6 +37,7 @@ class RemotePitchControl {
 public:
     bool accept(const RemoteCommand& input, bool enabled, int64_t packet_us, int64_t setting_us)
     {
+        enabled = enabled && kRemotePitchControlEnabled;
         // Compare input, not mapped targets: a saved-neutral change must not
         // turn the next unchanged heartbeat into a new physical command.
         const RemotePitchTarget target{input.center_v1 ? remote_pitch_input(input.pitch) :

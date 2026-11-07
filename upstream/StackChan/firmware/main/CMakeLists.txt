@@ -26,6 +26,7 @@ list(APPEND STACK_CHAN_SOURCES collector/m12_unit.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/temperature.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/runtime_log.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/playback.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/voice_library.cpp)
 # Basic profile: retain the experimental detector source, but do not link or run it.
 list(APPEND STACK_CHAN_SOURCES collector/face_detection_disabled.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/screen.cpp collector/laughing_man.c collector/collector_mono_15.c)
@@ -299,6 +300,10 @@ if(CONFIG_IDF_TARGET_ESP32S3)
     list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/boards/common/esp32_camera.cc")
 endif()
 
+get_filename_component(VOICE_ASSET_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../.private/voice-library" ABSOLUTE)
+if(NOT EXISTS "${VOICE_ASSET_DIR}/voice-library.bin" OR NOT EXISTS "${VOICE_ASSET_DIR}/voice_assets.h")
+    message(FATAL_ERROR "Prepare local voice assets: python3 scripts/prepare-voice-library.py /path/to/20261107-playable-20")
+endif()
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
@@ -333,6 +338,8 @@ idf_component_register(SRCS ${SOURCES}
                         mooncake_log
                         smooth_ui_toolkit
                     )
+target_include_directories(${COMPONENT_LIB} PRIVATE "${VOICE_ASSET_DIR}")
+target_add_binary_data(${COMPONENT_LIB} "${VOICE_ASSET_DIR}/voice-library.bin" BINARY RENAME_TO voice_library)
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE

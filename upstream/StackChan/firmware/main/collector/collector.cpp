@@ -7,6 +7,7 @@
 #include "screen.h"
 #include "runtime_log.h"
 #include "playback.h"
+#include "voice_library.h"
 #include "wifi_profiles.h"
 #include "face_detection.h"
 #include "face_pixels.h"
@@ -453,6 +454,7 @@ void audio_task(void*)
     std::vector<int16_t> input(kFrames * kChannels);
     codec->EnableInput(true);
     audio_ready = true;
+    playback_set_audio_ready();
     while (true) {
         const bool ok = codec->InputData(input);
         const int64_t completed = esp_timer_get_time();
@@ -705,8 +707,10 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["emotion"]["supported"] = false;
     doc["emotion"]["enabled"] = false;
     auto capabilities = doc["capabilities"].to<JsonObject>();
-    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature", "web_control", "m12_recognition", "remote_pitch"}) capabilities[name] = "supported";
+    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature", "web_control", "m12_recognition", "voice_library"}) capabilities[name] = "supported";
     capabilities["face_detection"] = "unsupported";
+    capabilities["remote_pitch"] = "unsupported";
+    voice_library_json(doc["voice_library"].to<JsonObject>());
     capabilities["emotion_display"] = "unsupported";
     environment_json(doc, true);
     temperature_json(doc["temperature"].to<JsonObject>());
@@ -748,7 +752,7 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["remote"]["yaw_control_enabled"] = true;
     doc["remote"]["yaw_input_to_target_sign"] = -1;
     doc["remote"]["pitch_control_enabled"] = kRemotePitchControlEnabled;
-    doc["remote"]["pitch_input_role"] = "home_reaction";
+    doc["remote"]["pitch_input_role"] = "disabled";
     doc["remote"]["reaction_duration_ms"] = kReactionDurationMs;
     doc["remote"]["center_input_role"] = "display_toggle";
     doc["remote"]["nod_trigger"] = "none";
@@ -979,6 +983,18 @@ esp_err_t web_control_handler(httpd_req_t* request)
         if (function != M12Function::standby && !m12_snapshot().valid) return unavailable(request, "M12 serial unavailable");
         m12_set_mode(function);
         result["request_seq"] = m12_view_request() >> 2;
+    } else if (strcmp(request->uri, "/v1/voice/play") == 0) {
+        if (!doc["clip_id"].is<int>() || doc["clip_id"].as<int>()<0 || doc["clip_id"].as<int>()>20) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected clip_id 0..20"); return ESP_OK;
+        }
+        uint32_t job=0; int selected=0;
+        const auto error=playback_voice(doc["clip_id"].as<int>(),false,&job,&selected);
+        if (error==ESP_ERR_INVALID_STATE) {
+            httpd_resp_set_status(request,"409 Conflict");
+            return httpd_resp_sendstr(request,"Playback busy or audio not ready");
+        }
+        if (error!=ESP_OK) return unavailable(request,"Voice playback could not start");
+        result["job_id"]=job; result["clip_id"]=selected;
     } else {
         if (!doc["delta_deg"].is<int>() || (doc["delta_deg"].as<int>() != -5 && doc["delta_deg"].as<int>() != 5)) {
             httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected delta_deg -5 or 5"); return ESP_OK;
@@ -1210,6 +1226,9 @@ void start_server(int port, int control_port, bool audio_only)
             httpd_uri_t endpoint{}; endpoint.uri = uri; endpoint.method = HTTP_POST; endpoint.handler = web_control_handler;
             ESP_ERROR_CHECK(httpd_register_uri_handler(server, &endpoint));
         }
+        httpd_uri_t voice{};
+        voice.uri="/v1/voice/play"; voice.method=HTTP_POST; voice.handler=web_control_handler;
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server,&voice));
         httpd_uri_t playback{};
         playback.uri = "/v1/playback"; playback.method = HTTP_POST;
         playback.handler = [](httpd_req_t* request) -> esp_err_t {

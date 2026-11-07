@@ -1,5 +1,21 @@
 # 会话交接记录
 
+## 2026-11-07：20条本体台词与遥控仅左右（collector-0.4.25）
+
+用户对0.4.24反馈“上下移动幅度变小”，决定暂时屏蔽遥控上下，增加voice文件夹20条随机台词，由网页和ASR open触发。分支 `codex/random-voice-yaw-only`，基于 `71fe438`；本轮不推送。
+
+- 所有实体遥控协议的上下接管入口关闭，实时能力标记disabled；左右方向和中心开关屏保留。网页显式保存角/启动姿态仍保留，当前持久角10°、启动后request_seq=0；没有追加上下运动测试，也不声称负载抖动或承重问题已修复。
+- 音源为 `voice/outputs/20261107-playable-20` 的PLAY001–020，不是旧300条候选。新增转换脚本校验20条索引、PCM哈希/24kHz单声道/长度，编码为IMA ADPCM，生成文件仅 `.private/voice-library/`。原PCM共4258024字节，嵌入包1082624字节，最长7.184秒；20条C++实际解码均与FFmpeg独立解码逐字节一致。这证明解码一致，不证明有损编码听感。
+- 新鉴权接口 `/v1/voice/play` 强制当前boot，仅接收整数clip_id=0（随机）或1–20。共用既有播放gate/worker/功放收尾；完整有界解码后才开启输出，忙时拒绝，无队列/自动重试。随机排除上一条，当前音量80不变。ASR UART接收任务只处理新的open无值帧，不重放历史；播放完成后1.2秒冷却，不能据此保证没有自声误识别。ASR与音源都在本体，运行不依赖Mac/网页。
+- 网页增加20条选择、播放所选、随机播放、实际播放状态/提交进度；过期/忙/音频未就绪/旧能力时禁用，页面初始化与重连不自动播放。独立审阅发现底层DeviceClient路由白名单遗漏，已修复并新增真实DeviceClient→curl→本机HTTP的RED→GREEN回归。复核无Critical/Important阻塞。
+- Python38项中34通过、4个原情绪依赖跳过；Node33通过；ESP-IDF5.5.4构建通过，应用4642368字节，占0x4f0000槽，余0x829c0。最终SHA256 `48051d8b533d7c6b004af2bb0cd32c7ac3d0edf46257f3fe1f63a9dd55ca5d25`，产物 `artifacts/collector-0.4.25-voice/`。
+- USB原端口不存在，按串口设备身份核对新端口后重新读取身份/分区/otadata CRC；完整旧0.4.24活动槽备份5177344字节，SHA256 `15fc1f48a6d923341f8214c617cdf26afd60db168c383e9fb6cf127b39c53ead`，前缀与归档匹配。只写活动ota_1/0x510000应用并独立verify_flash通过，未写bootloader/分区表/otadata/NVS。重启HTTP已确认0.4.25、20条、remote_pitch_enabled=false；启动idle/job0、输出关闭/硬件复位保持，没有开机自动播放。
+- Chrome已确认新版台词控件和可用状态；用户同时在操作浏览器，未继续抢占窗口，窄屏/控制台检查未完成。实际点播使用本机网页同一 `/api/control` 路径：clip1/job1返回202，捕获starting→playing→draining→completed，214272/214272字节，error/cleanup_error均0，输出关闭/硬件复位保持。此项是实际网页控制API验证，不冒充浏览器按钮点击。
+- 随后实际UART收到9次open并接受9次，现场已捕获job2–5多条随机播放完成（12→11→20→4），最新job10/clip19也completed、214414字节全部提交、error/cleanup_error=0、输出关闭。其间job6采样在playing时结束，不用后来的job10替它补写完成。用户已确认open均由本人连续说出；ASR模组会先回OK，要求后续版本在ASR触发后等800毫秒再播放。不把软件播放完成等同于声音无卡顿。
+- 本轮没有修改M12程序/身份库、没有自动恢复其状态；用户在测试中自行操作M12网页，因此旧“待机/资料保留”快照不能替代其最新状态。新增未跟踪的 `assets/immplement.md` 为其他工作，未纳入本轮。
+
+证据：`logs/voice-host.log`、`logs/voice-node.log`、`logs/collector-v0425-build.log`、`logs/voice-v0425/`；私密配置、原音频、备份及现场采样不提交。
+
 ## 2026-11-07：负载俯仰缓动版（collector-0.4.24）
 
 用户已确认0.4.23松手能回到保存10°；新增反馈为装饰和M12负载下“运动时来回抖、过冲”。被动35样本中俯仰反馈维持10°，电流/负载遥测无效，不能据此判定扭矩不足或机械根因。

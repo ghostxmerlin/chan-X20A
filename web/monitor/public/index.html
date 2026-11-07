@@ -31,6 +31,7 @@
           <div class="control-block">
             <div class="control-buttons"><button id="motor-enable" disabled>启用舵机</button><button id="motor-disable" class="stop-button" disabled>停用舵机</button></div>
             <div class="control-buttons"><button id="yaw-left" disabled>← 左转 5°</button><button id="yaw-right" disabled>右转 5° →</button></div>
+            <p id="remote-pitch-note" class="control-note">等待遥控上下状态。</p>
             <p id="controls-note" class="control-note">等待有效状态</p>
             <p class="control-note">左右动作：<span id="yaw-command-state">—</span></p>
             <label class="pitch-label" for="pitch-input">仰角设置（5–85°）</label>
@@ -41,6 +42,19 @@
         </section>
       </div>
     </div>
+    <section class="panel voice-panel" aria-labelledby="voice-heading">
+      <div class="panel-head"><h2 id="voice-heading">随机台词</h2><span id="voice-count" class="muted">等待台词库</span></div>
+      <div class="voice-layout">
+        <div class="voice-actions">
+          <label for="voice-select">选择台词</label>
+          <select id="voice-select" disabled aria-label="选择本体播放的台词"></select>
+          <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div>
+          <p id="voice-command" class="command-result" role="status">点击后由 StackChan 本体发声。</p>
+        </div>
+        <div class="voice-now"><span id="voice-status" class="muted">等待连接</span><p id="voice-current">尚未播放台词</p><p id="voice-progress" class="note">网页点播或说 open，每次播放一条</p></div>
+      </div>
+      <p class="note">ASR open 随机播放 · 播放中忽略新的语音触发 · 随机不连续重复 · 关闭网页后仍可用 ASR</p>
+    </section>
     <section class="panel m12-panel" id="m12-panel">
       <div class="panel-head"><h2>M12 视觉模块</h2><span id="m12-state" class="muted">等待状态</span></div>
       <div class="m12-layout">
@@ -82,7 +96,7 @@
         <div class="panel-head"><h2>ASR 语音指令</h2><span id="asr-state" class="muted">—</span></div>
         <dl class="metrics"><div><dt>最近指令</dt><dd id="asr-last">—</dd></div></dl>
         <ol id="asr-events" class="asr-events"><li>尚无指令</li></ol>
-        <p class="note">Unit ASR · 黑口 Port B<br>turn on 开检测 · turn off 退出待机</p>
+        <p class="note">Unit ASR · 黑口 Port B<br>open 随机台词 · turn on 开检测 · turn off 退出待机</p>
       </section>
       <section class="panel" id="mag-panel">
         <div class="panel-head"><h2>磁场</h2><span class="muted">µT</span></div>

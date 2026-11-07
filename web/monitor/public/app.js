@@ -1,4 +1,5 @@
 import { ControlPanel } from '/control-ui.js';
+import { VoicePanel } from '/voice-ui.js';
 import { renderM12, renderThermal } from '/m12-ui.js';
 const $ = id => document.getElementById(id);
 const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) el.textContent = next; };
@@ -7,6 +8,7 @@ const bool = (v, yes, no) => v === true ? yes : v === false ? no : '—';
 const duration = seconds => { const s = Math.max(0, Math.floor(seconds || 0)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 60)}m ${s % 60}s`; };
 const age = (t, stamp) => stamp > 0 && t >= stamp ? `${duration((t - stamp) / 1e6)} 前` : '尚无数据';
 const controls = new ControlPanel(document);
+const voices = new VoicePanel(document);
 let source, state, received = 0, paused = false, generation = 0, frameSeq = null, frameURL = null, framePending = false;
 let lastBoot = '', lastEvent = -1, listening = false, audioContext, audioAbort, audioGeneration = 0;
 
@@ -117,6 +119,7 @@ function render() {
   const last = t.asr?.events?.at(-1);
   text('asr-last', last ? `${last.word || last.id} · ${age(t.timestamp_us, last.timestamp_us)}` : '尚无指令');
   controls.render(state, fresh && !document.hidden);
+  voices.render(state, fresh && !document.hidden);
   renderM12(state, fresh, bridge);
   renderThermal(t.temperature, fresh ? state.thermalHistory : [], t.timestamp_us);
   const asrList = $('asr-events'); asrList.replaceChildren();

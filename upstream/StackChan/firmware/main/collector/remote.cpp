@@ -653,7 +653,7 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     target["yaw_control_enabled"] = true;
     target["yaw_input_to_target_sign"] = -1;
     target["pitch_control_enabled"] = kRemotePitchControlEnabled;
-    target["pitch_input_role"] = "servo_pitch";
+    target["pitch_input_role"] = "disabled";
     target["pitch_mapping"] = "center_v1_saved_neutral_legacy_absolute";
     target["pitch_neutral_input_deg"] = kRemotePitchCenter / 10.0f;
     target["pitch_neutral_target_deg"] = pitch_configured / 10.0f;

@@ -124,20 +124,15 @@ int main()
             }
         }
     }
-    { // Heartbeats preserve saved pitch; fresh vertical movement owns only pitch.
+    { // Loaded head: all physical vertical inputs are blocked, including legacy packets.
         collector::RemotePitchControl pitch;
-        collector::RemoteCommand c{1, 123, 450, 600, false}; c.center_v1 = true;
-        assert(!pitch.accept(c, true, 100, 0));
-        c.pitch = 460; assert(pitch.accept(c, true, 200, 0)); assert(pitch.active());
-        pitch.release(); // new web setting, without replaying held joystick
-        assert(!pitch.accept(c, true, 300, 250)); assert(!pitch.active());
-        c.pitch = 470; assert(!pitch.accept(c, true, 400, 450));
-        c.pitch = 480; assert(pitch.accept(c, true, 500, 450));
-        c.pitch = 490; assert(!pitch.accept(c, false, 600, 450)); assert(!pitch.active());
-        assert(!pitch.accept(c, true, 700, 450));
-        c.pitch = 500; assert(pitch.accept(c, true, 800, 450));
-        assert(collector::remote_pitch_target({1,0,-100,1200,false}).pitch == 50);
-        assert(collector::remote_pitch_target({1,0,1000,1200,false}).pitch == 850);
+        for (bool center : {true, false}) for (int raw = -32768; raw <= 32767; ++raw) {
+            collector::RemoteCommand c{1,123,static_cast<int16_t>(raw),600,false}; c.center_v1 = center;
+            assert(!pitch.accept(c, true, 100000 + raw, 0));
+            assert(!pitch.active());
+            assert(collector::remote_yaw_target(c).yaw == -123);
+        }
+        assert(!collector::kRemotePitchControlEnabled);
     }
     center_display_events();
     RemoteGestureInput input;

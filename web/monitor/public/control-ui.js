@@ -45,5 +45,6 @@ export class ControlPanel {
     this.el('yaw-command-state').textContent=fresh ? names[m.web_yaw?.state] || m.web_yaw?.state || '尚无网页动作' : '—';
     const pitchState=p.state==='feedback_unavailable' && p.feedback_valid && Number.isFinite(p.measured_deg) ? `反馈角度 ${p.measured_deg.toFixed(1)}°，未能启动调整` : names[p.state] || p.state || '—';
     this.el('pitch-command-state').textContent=fresh ? pitchState : '—';
+    this.el('remote-pitch-note').textContent=!fresh?'遥控状态已过期':t.remote?.pitch_control_enabled===false?'实体遥控上下已屏蔽，左右与中心开关屏保留。':t.remote?.pitch_control_enabled===true?'实体遥控上下仍启用，等待固件更新。':'等待遥控上下状态。';
   }
 }

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "asr_unit.h"
+#include "playback.h"
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_log.h>
@@ -75,6 +76,8 @@ void asr_task(void*)
             latest = (event.seq << 8) | frame.id;
             ++frames;
             rx_seen = true;
+            // Consume each newly parsed frame once, independent of webpage/LVGL polling.
+            playback_asr_command(frame.id,frame.has_value);
             const char* word = asr_word(frame.id);
             if (frame.has_value)
                 ESP_LOGI(kTag, "#%lu id=0x%02X value=0x%02X %s", static_cast<unsigned long>(event.seq), frame.id,
@@ -140,5 +143,6 @@ void asr_info_json(ArduinoJson::JsonObject out)
     reactions["0x14 turn on"] = "M12 face view";
     reactions["0x15 turn off"] = "home";
     out["reaction_sound"] = false;
+    out["open_action"] = "random_local_voice";
 }
 } // namespace collector

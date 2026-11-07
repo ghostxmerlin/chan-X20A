@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: MIT */
 #include "playback.h"
 #include "playback_session.h"
+#include "voice_library.h"
+#include "voice_policy.h"
 #include <board.h>
 #include <hal/board/cores3_audio_codec.h>
 #include <hal/board/hal_bridge.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <lwip/sockets.h>
@@ -32,6 +35,10 @@ int error_code = 0, cleanup_error = 0;
 uint32_t job_sequence = 0;
 size_t expected_bytes = 0, received_bytes = 0, submitted_bytes = 0;
 std::atomic<CoreS3AudioCodec*> output_codec{nullptr};
+std::atomic_bool voice_audio_ready{false};
+VoiceCooldown voice_cooldown;
+int current_voice_id=0, last_voice_id=0;
+uint32_t asr_voice_received=0, asr_voice_accepted=0, asr_voice_dropped=0;
 
 void set_state(const char* value)
 {
@@ -73,6 +80,7 @@ struct Job {
     size_t bytes = 0;
     uint32_t id = 0;
     RemoteReaction reaction = RemoteReaction::None;
+    const VoiceClip* voice = nullptr;
 };
 
 struct Output {
@@ -151,6 +159,14 @@ void playback_task(void* context)
         const auto completion_error = complete_request(job->request, failure != 0);
         if (!failure && completion_error != ESP_OK) { failure = completion_error; failure_stage = "response"; }
         job->request = nullptr;
+    } else if (job->voice) {
+        if (!voice_decode(*job->voice, job->pcm)) {
+            failure=ESP_ERR_INVALID_SIZE; failure_stage="voice_decode";
+        } else {
+            upload.append(job->bytes);
+            std::lock_guard<std::mutex> lock(status_mutex);
+            received_bytes=job->bytes;
+        }
     } else {
         synthesize_reaction(job->reaction, job->pcm, job->bytes / sizeof(int16_t));
         upload.append(job->bytes);
@@ -182,6 +198,7 @@ void playback_task(void* context)
             continue;
         }
         remote_job = false;
+        voice_cooldown.finished(esp_timer_get_time());
         gate.release();
     }
     break;
@@ -213,6 +230,7 @@ esp_err_t playback_handle(httpd_req_t* request)
     {
         std::lock_guard<std::mutex> lock(status_mutex);
         job->id = ++job_sequence;
+        current_voice_id=0;
         state = "uploading"; source = "upload"; error_code = cleanup_error = 0; error_stage = "none";
         expected_bytes = job->bytes; received_bytes = submitted_bytes = 0;
     }
@@ -258,6 +276,7 @@ bool playback_reaction(RemoteReaction reaction)
     {
         std::lock_guard<std::mutex> lock(status_mutex);
         job->id = ++job_sequence;
+        current_voice_id=0;
         source = reaction == RemoteReaction::Heart ? "remote_heart" : "remote_reject";
         state = "starting"; error_code = cleanup_error = 0; error_stage = "none";
         expected_bytes = job->bytes; received_bytes = submitted_bytes = 0;
@@ -271,6 +290,60 @@ bool playback_reaction(RemoteReaction reaction)
         remote_job = false; gate.release();
     }
     return false;
+}
+
+void playback_set_audio_ready() { voice_audio_ready=true; }
+
+esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int* selected_id)
+{
+    if (requested_id<0 || requested_id>kVoiceCount) return ESP_ERR_INVALID_ARG;
+    int selected;
+    {
+        std::lock_guard<std::mutex> lock(status_mutex);
+        if (from_asr) ++asr_voice_received;
+        if (!voice_audio_ready || (from_asr && !voice_cooldown.allowed(esp_timer_get_time())) || !gate.acquire()) {
+            if (from_asr) ++asr_voice_dropped;
+            return ESP_ERR_INVALID_STATE;
+        }
+        remote_job=false;
+        selected=choose_voice(requested_id,esp_random(),last_voice_id);
+    }
+    auto* job=new (std::nothrow) Job;
+    if (job) {
+        job->voice=voice_clip(selected);
+        job->bytes=job->voice->frames*sizeof(int16_t);
+        job->pcm=static_cast<int16_t*>(heap_caps_malloc(job->bytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    }
+    if (!job || !job->pcm) {
+        delete job;
+        std::lock_guard<std::mutex> lock(status_mutex);
+        if (from_asr) ++asr_voice_dropped;
+        gate.release(); return ESP_ERR_NO_MEM;
+    }
+    uint32_t id;
+    {
+        std::lock_guard<std::mutex> lock(status_mutex);
+        id=job->id=++job_sequence; current_voice_id=selected; last_voice_id=selected;
+        source=from_asr?"asr_open":"web_voice";
+        state="starting"; error_code=cleanup_error=0; error_stage="none";
+        expected_bytes=job->bytes; received_bytes=submitted_bytes=0;
+    }
+    if (xTaskCreate(playback_task,"collector_playback",8192,job,3,nullptr)!=pdPASS) {
+        heap_caps_free(job->pcm); delete job;
+        std::lock_guard<std::mutex> lock(status_mutex);
+        state="failed"; error_code=ESP_ERR_NO_MEM; error_stage="task";
+        if (from_asr) ++asr_voice_dropped;
+        gate.release(); return ESP_ERR_NO_MEM;
+    }
+    if (from_asr) { std::lock_guard<std::mutex> lock(status_mutex); ++asr_voice_accepted; }
+    if (job_id) *job_id=id;
+    if (selected_id) *selected_id=selected;
+    return ESP_OK;
+}
+
+void playback_asr_command(uint8_t id, bool has_value)
+{
+    if (voice_asr_open(id,has_value)) playback_voice(0,true);
 }
 
 bool playback_output_enabled()
@@ -290,6 +363,14 @@ void playback_json(ArduinoJson::JsonObject target)
     target["format"] = "s16le"; target["volume"] = kPlaybackVolume;
     target["source"] = source; target["reaction_dropped"] = reaction_dropped;
     target["reaction_queued"] = reaction_queued;
+    target["voice_clip_id"]=current_voice_id;
+    if (const auto* clip=voice_clip(current_voice_id)) {
+        target["voice_text"]=clip->text; target["voice_title"]=clip->title;
+    }
+    target["asr_open_received"]=asr_voice_received;
+    target["asr_open_accepted"]=asr_voice_accepted;
+    target["asr_open_dropped"]=asr_voice_dropped;
+    target["asr_cooldown_ms"]=1200;
     target["output_enabled"] = playback_output_enabled();
     const int reset = hal_bridge::board_speaker_reset_state();
     if (reset < 0) target["hardware_reset_held"] = nullptr;

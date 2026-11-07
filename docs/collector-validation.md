@@ -1,5 +1,15 @@
 # Collector 验证记录
 
+## 2026-11-07：本体随机台词与遥控上下屏蔽（collector-0.4.25）
+
+- 用户要求暂时放弃上下运动；真实remote.accept路径对全部int16输入、center/legacy协议均不接管俯仰，左右/中心行为回归通过。保存10°未改，没有新增物理上下测试，机械过冲问题不声明已修复。
+- Python38项中34通过/4旧情绪依赖跳过；Node33通过；IDF5.5.4构建和独立审阅通过。解码损坏边界、所有20条与FFmpeg解码逐字节比较、随机排除上条、ASR仅open新帧/冷却、实际DeviceClient路由与boot回归均通过；测试不能替代实际听感。
+- 已核对同一设备身份/活动槽/otadata CRC，备份0.4.24完整ota_1并校验归档，只写0x510000应用并独立verify。0.4.25应用4642368字节，SHA256 `48051d8b533d7c6b004af2bb0cd32c7ac3d0edf46257f3fe1f63a9dd55ca5d25`；HTTP确认20条和遥控俯仰disabled，初始job0/idle、输出关闭，没有开机播放。
+- 实际网页API clip1/job1：202后starting→playing→draining→completed，214272字节全部提交，error=cleanup_error=0，结束output_enabled=false/hardware_reset_held=true。Chrome仅确认新版控件与可用状态；没有声称按钮实点或窄屏视觉通过。
+- 实际ASR收到9次open、接受9次；捕获job2–5完整结束、不同台词12→11→20→4，最新job10/clip19完整提交214414字节并正常关闭输出。没有覆盖每个job的全程，软件状态不能证明每条实际听感。用户确认open由本人连续触发，要求后续版本等待800毫秒再播，避开模组OK。
+
+完整行为和部署边界见最新[交接](session-handoff.md)；证据 `logs/voice-v0425/`、`logs/voice-host.log`、`logs/voice-node.log`、`logs/collector-v0425-build.log`。本轮未修改M12或身份库，用户自行操作后的状态单独核实，不沿用旧待机结论。
+
 ## 2026-11-07：负载俯仰缓动版（collector-0.4.24）
 
 用户已确认0.4.23松手能回到保存10°；新增反馈为装饰和M12负载下“运动时来回抖、过冲”。被动35样本中俯仰反馈维持10°，电流/负载遥测无效，不能据此判定扭矩不足或机械根因。
