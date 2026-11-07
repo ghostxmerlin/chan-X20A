@@ -1,5 +1,9 @@
 # Collector 验证记录
 
+## 2026-11-07：M12 Wi-Fi 温度到网页
+
+Node 19/19 与独立只读审阅通过。真实网页 API 连续收到 M12 67–68°C、Wi-Fi up、audio_fft 和前进的运行时间；真实 API 状态经生产渲染组件的 Node DOM/Canvas stub 显示温度/连接/工作进程，并验证独立于本体连接和暂停清空。CUA不可用，浏览器目视检查未完成。未修改/刷写设备或开启检测/视频；证据 `logs/thermal-v0418/m12-web-{network,render}.json`。
+
 ## 2026-11-07：0.4.18 温度与独立 M12 面板
 
 - IDF 5.5.4 构建；Python 31 通过/4 跳过；Node 15 通过；独立审阅及待机报告语义复核无阻塞。

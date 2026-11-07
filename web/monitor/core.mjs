@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { M12Tracker } from './m12.mjs';
+import { M12System } from './m12-system.mjs';
 
 export function validateBinding(value) {
   const url = new URL(value.address);
@@ -123,8 +124,8 @@ export class AudioDecoder {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export class Monitor extends EventEmitter {
-  constructor(client) {
-    super(); this.client = client; this.info = null; this.telemetry = null; this.telemetryAt = 0;
+  constructor(client, m12System = new M12System(null)) {
+    super(); this.m12System = m12System; this.client = client; this.info = null; this.telemetry = null; this.telemetryAt = 0;
     this.frame = null; this.motion = []; this.audio = { at: 0, db: -96, gaps: 0, history: [] };
     this.events = []; this.eventSeq = 0; this.asrSeq = 0; this.online = false; this.running = false;
     this.m12Tracker = new M12Tracker(); this.thermalHistory = [];
@@ -183,7 +184,8 @@ export class Monitor extends EventEmitter {
       receivedAt: this.telemetryAt, fresh, telemetry: this.telemetry,
       frame: this.frame ? { seq: this.frame.seq, at: this.frame.at, bytes: this.frame.bytes.length } : null,
       audio: { ...this.audio, error: this.audioError }, cameraError: this.cameraError,
-      m12: this.m12Tracker.snapshot(this.telemetry, this.online && fresh.telemetry), thermalHistory: this.thermalHistory,
+      m12: { ...this.m12Tracker.snapshot(this.telemetry, this.online && fresh.telemetry),
+        system: this.m12System.snapshot(now), temperature: this.m12System.snapshot(now).temperature }, thermalHistory: this.thermalHistory,
       motion: this.motion, events: this.events, now };
   }
   addViewer() {
@@ -197,10 +199,11 @@ export class Monitor extends EventEmitter {
   start() {
     if (this.running) return;
     this.running = true; const epoch = ++this.epoch; this.controller = new AbortController();
+    this.m12System.start();
     this.event('connection', '开始监控'); void this.loop(epoch, this.controller.signal);
   }
   stop() {
-    this.running = false; this.online = false; this.epoch++; this.controller?.abort();
+    this.running = false; this.online = false; this.epoch++; this.controller?.abort(); this.m12System.stop();
     this.client.verified = false; this.clearStreams(); this.event('connection', '监控已暂停，设备采集连接已释放');
     this.emit('state', this.snapshot());
   }

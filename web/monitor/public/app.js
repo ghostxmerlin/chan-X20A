@@ -114,7 +114,7 @@ function render() {
   text('asr-state', t.asr ? `${bool(t.asr.valid, '串口就绪', '串口异常')} · ${t.asr.frames} 帧` : '—');
   const last = t.asr?.events?.at(-1);
   text('asr-last', last ? `${last.word || last.id} · ${age(t.timestamp_us, last.timestamp_us)}` : '尚无指令');
-  renderM12(state, fresh);
+  renderM12(state, fresh, bridge);
   renderThermal(t.temperature, fresh ? state.thermalHistory : [], t.timestamp_us);
   const asrList = $('asr-events'); asrList.replaceChildren();
   for (const event of (t.asr?.events || []).slice(-6).reverse()) {

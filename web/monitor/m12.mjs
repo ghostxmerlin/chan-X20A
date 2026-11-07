@@ -29,7 +29,6 @@ export class M12Tracker {
     } else if (status === 'stalled') fps = 0;
     const faces = status === 'detecting' ? (m.faces || []).filter(f =>
       ['x','y','w','h','prob'].every(k => Number.isFinite(f[k])) && f.w > 0 && f.h > 0 && f.prob >= 0 && f.prob <= 1).slice(0, 10) : [];
-    return { status, fps, windowSeconds: 5, ageSeconds: age, faces, count: status === 'detecting' ? m.num : null,
-      temperature: { available: false, valid: false, celsius: null, reason: 'M12 网络未接入', source: 'M12 芯片 / TEMP_R' } };
+    return { status, fps, windowSeconds: 5, ageSeconds: age, faces, count: status === 'detecting' ? m.num : null };
   }
 }

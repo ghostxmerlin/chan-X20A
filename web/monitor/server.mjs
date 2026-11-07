@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DeviceClient, Monitor } from './core.mjs';
+import { M12System } from './m12-system.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export const root = path.resolve(directory, '../..');
@@ -70,7 +71,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const config = JSON.parse(fs.readFileSync(filename));
   const port = config.port ?? 8787;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('本机端口无效');
-  const monitor = new Monitor(new DeviceClient(config));
+  const monitor = new Monitor(new DeviceClient(config), new M12System(config.m12, {root}));
   const server = createMonitorServer(monitor);
   server.on('error', error => { console.error('本机观察台启动失败：' + error.code); process.exit(1); });
   server.listen(port, '127.0.0.1', () => console.log(`StackChan 观察台：http://127.0.0.1:${port}/`));

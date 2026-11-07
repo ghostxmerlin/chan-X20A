@@ -7,13 +7,21 @@ function surface(id) {
   return { context, width, height };
 }
 const age = seconds => seconds == null ? '尚无结果' : seconds < 60 ? `${seconds.toFixed(1)} 秒前` : `${Math.floor(seconds / 60)} 分钟前`;
-export function renderM12(state, fresh) {
+export function renderM12(state, fresh, bridge = true) {
   const summary = fresh ? state?.m12 : null, m = fresh ? state?.telemetry?.m12 : null;
   const status = summary?.status || 'disconnected';
   const labels = {disconnected:'数据未连接',serial_unavailable:'串口未就绪',standby:'已请求待机 · 曾收到待机报告',standby_pending:'已请求待机 · 等待 M12 回应',starting:'等待本次检测结果',stalled:'检测结果已过期',detecting:'检测中'};
   text('m12-state', labels[status]); text('m12-visual-state', labels[status]);
   $('m12-state').classList.toggle('warn', ['stalled','serial_unavailable','standby_pending'].includes(status));
-  text('m12-temperature', '—'); text('m12-temperature-note', 'M12 网络未接入');
+  const hardware = bridge ? state?.m12?.system : null;
+  const temperature = hardware?.temperature;
+  const thermalValid = temperature?.valid && Date.now()-temperature.at < 6000;
+  text('m12-temperature', thermalValid ? `${temperature.celsius.toFixed(0)} °C` : '—');
+  text('m12-temperature-note', thermalValid ? '芯片温度 · 实时' : bridge ? temperature?.reason || hardware?.error || '等待网络数据' : '监控已暂停或连接中断');
+  $('m12-temperature').classList.toggle('warn', thermalValid && temperature.celsius >= 90);
+  text('m12-network', hardware?.connected ? '已连接 · 独立 Wi-Fi 采集' : hardware?.error || '未连接');
+  const processes = {audio_fft:'Audio FFT（待机）',face_detector:'Face Detector',face_recognition:'Face Recognition',none:'未发现视觉进程'};
+  text('m12-process', hardware?.connected ? processes[hardware.mode] || hardware.mode : '—');
   text('m12-fps', summary?.fps != null ? `${summary.fps.toFixed(1)}` : status === 'detecting' ? '计量中' : '—');
   text('m12-count', summary?.count ?? '—');
   const faces = summary?.faces || [];

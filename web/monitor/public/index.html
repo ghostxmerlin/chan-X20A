@@ -38,7 +38,7 @@
         <div class="m12-visual">
           <div class="m12-visual-head"><span>检测框示意 · 640 × 480</span><span id="m12-visual-state">等待检测</span></div>
           <canvas id="m12-faces-canvas" aria-label="M12 人脸检测框坐标示意，非摄像头原图"></canvas>
-          <p class="note">显示 M12 返回的位置与置信度；原始画面待 M12 网络接入。</p>
+          <p class="note">显示 M12 返回的位置与置信度；此处为检测坐标，暂不传输原始视频。</p>
         </div>
         <div class="m12-details">
           <div class="m12-readings">
@@ -46,7 +46,7 @@
             <div><span>检测更新率</span><strong id="m12-fps">—</strong><small>结果 / 秒 · 5 秒窗口</small></div>
             <div><span>当前人脸</span><strong id="m12-count">—</strong><small id="m12-confidence">等待检测结果</small></div>
           </div>
-          <dl class="metrics"><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近检测结果</dt><dd id="m12-result-age">—</dd></div><div><dt>累计检测 / 串口异常</dt><dd id="m12-counters">—</dd></div></dl>
+          <dl class="metrics"><div><dt>网络监控</dt><dd id="m12-network">等待连接</dd></div><div><dt>设备工作进程</dt><dd id="m12-process">—</dd></div><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近检测结果</dt><dd id="m12-result-age">—</dd></div><div><dt>累计检测 / 串口异常</dt><dd id="m12-counters">—</dd></div></dl>
           <div id="m12-face-details" class="face-details"></div>
           <p class="note">检测更新率来自设备结果计数，不是网页或视频帧率。待机、切换或结果过期时清空检测框。</p>
         </div>
