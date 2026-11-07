@@ -129,16 +129,33 @@ inline M12Line parse_m12_line(const std::string& line)
     return out;
 }
 
-// Basic controls (2026-11-07): standby after boot; only an explicit face-page
-// request selects Face Detector. Time, face results and ordinary wake events
-// must never change the requested function. Recognition parsing remains available
-// for diagnostics, but this policy never requests Face Recognition.
-enum class M12Function : uint8_t { none, detect, recognize, standby };
+// Explicit modes only: no timer, face result or ordinary wake changes the mode.
+enum class M12Function : uint8_t { standby = 0, detect = 1, recognize = 2, none = 3 };
+inline bool m12_recognition_report(const M12Line& line)
+{
+    return line.kind != M12LineKind::error &&
+        (std::strcmp(line.running, "Face Recognition") == 0 ||
+         std::strcmp(line.text, "function switched to face_recognition.") == 0);
+}
+inline bool m12_recognition_unanswered(int64_t requested, int64_t result, int64_t report)
+{
+    return std::max(result, report) < requested;
+}
+inline uint32_t next_m12_request(uint32_t previous, M12Function mode)
+{
+    return ((previous & ~uint32_t{3}) + 4) | static_cast<uint32_t>(mode);
+}
+inline M12Function m12_requested_function(uint32_t request) { return static_cast<M12Function>(request & 3); }
+inline bool m12_requested_view(uint32_t request) { return (request & 3) == 1 || (request & 3) == 2; }
+inline bool m12_known_name(const char* name, float probability)
+{
+    return name && name[0] && std::strcmp(name, "unknown") && std::strcmp(name, "Unknown") && probability >= .5f && probability <= 1;
+}
 // A recent detector frame may trail a standby request. Every requested function
 // change must therefore send a command, independently of received face data.
-inline bool m12_switch_required(M12Function active, M12Function want)
+inline bool m12_switch_required(M12Function active, M12Function want, bool explicit_request = false)
 {
-    return want != active && want != M12Function::none;
+    return (want != active || explicit_request) && want != M12Function::none;
 }
 enum class M12Phase : uint8_t { idle, looking, watching, identifying, dozing };
 struct M12Identity {
@@ -149,17 +166,27 @@ struct M12Identity {
 };
 class M12Policy {
 public:
-    void start(int64_t) { detecting_ = false; }
+    void start(int64_t) { mode_ = M12Function::standby; identity_ = {}; }
     void wake(int64_t) {} // compatibility: ordinary interaction cannot start the camera
-    void view(bool on, int64_t) { detecting_ = on; }
-    void result(int64_t, size_t, bool, const char*, float) {}
+    void select(M12Function mode, int64_t) { identity_ = {}; mode_ = mode; }
+    void view(bool on, int64_t now) { select(on ? M12Function::detect : M12Function::standby, now); }
+    void result(int64_t now, size_t count, bool recognition, const char* name, float probability)
+    {
+        if (mode_ != M12Function::recognize || !recognition) return;
+        identity_ = {};
+        if (!count) return;
+        identity_.at_us = now;
+        identity_.known = m12_known_name(name, probability);
+        identity_.match_prob = probability;
+        if (identity_.known) std::snprintf(identity_.name, sizeof(identity_.name), "%s", name);
+    }
     void tick(int64_t) {}
-    M12Function function() const { return detecting_ ? M12Function::detect : M12Function::standby; }
-    M12Phase phase() const { return detecting_ ? M12Phase::watching : M12Phase::dozing; }
+    M12Function function() const { return mode_; }
+    M12Phase phase() const { return mode_ == M12Function::recognize ? M12Phase::identifying : mode_ == M12Function::detect ? M12Phase::watching : M12Phase::dozing; }
     const M12Identity& identity() const { return identity_; }
 
 private:
-    bool detecting_ = false;
+    M12Function mode_ = M12Function::standby;
     M12Identity identity_;
 };
 

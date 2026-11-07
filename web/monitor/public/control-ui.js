@@ -7,6 +7,7 @@ export class ControlPanel {
   }) {
     this.doc=doc;this.send=send;this.pending=false;this.dirty=false;this.boot='';
     this.actions={
+      'm12-recognize':()=>({action:'m12_mode',mode:'face_recognition'}),
       'm12-start':()=>({action:'m12',enabled:true}), 'm12-stop':()=>({action:'m12',enabled:false}),
       'motor-enable':()=>({action:'motor',enabled:true}), 'motor-disable':()=>({action:'motor',enabled:false}),
       'yaw-left':()=>({action:'yaw',delta_deg:-5}), 'yaw-right':()=>({action:'yaw',delta_deg:5}),
@@ -18,7 +19,7 @@ export class ControlPanel {
   el(id) {return this.doc.getElementById(id);}
   async dispatch(id,body) {
     if(this.pending || !this.ready || this.el(id).disabled) return;
-    const boot=this.state.boot, message=body.action==='m12'?'m12-command':'servo-command';
+    const boot=this.state.boot, message=body.action.startsWith('m12')?'m12-command':'servo-command';
     if(body.action==='pitch' && (!Number.isFinite(body.angle_deg) || body.angle_deg<5 || body.angle_deg>85 || Math.abs(body.angle_deg*10-Math.round(body.angle_deg*10))>1e-7)) {this.el(message).textContent='请输入 5–85°，步长 0.1°';return;}
     this.pending=true;this.el(message).textContent='正在发送…';this.render(this.state,this.fresh);
     try {const result=await this.send({...body,boot});this.el(message).textContent=this.state?.boot===boot?result.message:'机器人已重启，请核对新状态';}
@@ -35,7 +36,7 @@ export class ControlPanel {
     const pitchFresh=p.feedback_valid && t.timestamp_us>=p.feedback_timestamp_us && t.timestamp_us-p.feedback_timestamp_us<1000000;
     const yawReady=active && yawFresh && m.yaw_trajectory_complete && !['queued','moving'].includes(m.web_yaw?.state);
     const pitchReady=active && pitchFresh && !['queued','moving','waiting_feedback'].includes(p.state);
-    const availability={'m12-start':t.m12?.valid,'m12-stop':true,'motor-enable':!m.requested,'motor-disable':true,'yaw-left':yawReady,'yaw-right':yawReady,'pitch-apply':pitchReady};
+    const availability={'m12-recognize':t.m12?.valid && state?.capabilities?.m12_recognition==='supported','m12-start':t.m12?.valid,'m12-stop':true,'motor-enable':!m.requested,'motor-disable':true,'yaw-left':yawReady,'yaw-right':yawReady,'pitch-apply':pitchReady};
     for(const id of Object.keys(this.actions)) this.el(id).disabled=!this.ready || this.pending || !availability[id];
     this.el('pitch-input').disabled=!this.ready || this.pending;
     if(state?.boot !== this.boot) {this.boot=state?.boot;this.dirty=false;}

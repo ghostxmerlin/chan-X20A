@@ -50,15 +50,16 @@
           <p class="note">显示 M12 返回的位置与置信度；此处为检测坐标，暂不传输原始视频。</p>
         </div>
         <div class="m12-details">
-          <div class="control-block m12-controls"><div class="control-buttons"><button id="m12-start" disabled>开始人脸检测</button><button id="m12-stop" class="stop-button" disabled>退出待机</button></div><p id="m12-command" class="command-result" role="status">手动切换；ASR turn on / turn off 仍然有效。</p></div>
+          <div class="control-block m12-controls"><div class="control-buttons"><button id="m12-start" disabled>人脸检测</button><button id="m12-recognize" disabled>人脸识别（认人）</button><button id="m12-stop" class="stop-button" disabled>退出待机</button></div><p id="m12-command" class="command-result" role="status">手动切换；ASR turn on / turn off 仍然有效。</p></div>
           <div class="m12-readings">
             <div><span>芯片温度</span><strong id="m12-temperature">—</strong><small id="m12-temperature-note">等待 M12 网络数据</small></div>
-            <div><span>检测更新率</span><strong id="m12-fps">—</strong><small>结果 / 秒 · 5 秒窗口</small></div>
+            <div><span id="m12-rate-label">检测更新率</span><strong id="m12-fps">—</strong><small>结果 / 秒 · 5 秒窗口</small></div>
             <div><span>当前人脸</span><strong id="m12-count">—</strong><small id="m12-confidence">等待检测结果</small></div>
           </div>
-          <dl class="metrics"><div><dt>网络监控</dt><dd id="m12-network">等待连接</dd></div><div><dt>设备工作进程</dt><dd id="m12-process">—</dd></div><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近检测结果</dt><dd id="m12-result-age">—</dd></div><div><dt>累计检测 / 串口异常</dt><dd id="m12-counters">—</dd></div></dl>
+          <dl class="metrics"><div><dt>网络监控</dt><dd id="m12-network">等待连接</dd></div><div><dt>设备工作进程</dt><dd id="m12-process">—</dd></div><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近视觉结果</dt><dd id="m12-result-age">—</dd></div><div><dt>检测 / 识别 / 异常</dt><dd id="m12-counters">—</dd></div></dl>
+          <p id="m12-identity" class="command-result">认人使用 M12 已登记资料。</p>
           <div id="m12-face-details" class="face-details"></div>
-          <p class="note">检测更新率来自设备结果计数，不是网页或视频帧率。待机、切换或结果过期时清空检测框。</p>
+          <p class="note">更新率来自当前模式的设备结果计数，不是网页或视频帧率。待机、切换或结果过期时清空检测框。</p>
         </div>
       </div>
     </section>

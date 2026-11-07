@@ -705,7 +705,7 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["emotion"]["supported"] = false;
     doc["emotion"]["enabled"] = false;
     auto capabilities = doc["capabilities"].to<JsonObject>();
-    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature", "web_control"}) capabilities[name] = "supported";
+    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature", "web_control", "m12_recognition", "remote_pitch"}) capabilities[name] = "supported";
     capabilities["face_detection"] = "unsupported";
     capabilities["emotion_display"] = "unsupported";
     environment_json(doc, true);
@@ -969,7 +969,16 @@ esp_err_t web_control_handler(httpd_req_t* request)
         if (!doc["enabled"].is<bool>()) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK; }
         if (doc["enabled"].as<bool>() && !m12_snapshot().valid) return unavailable(request, "M12 serial unavailable");
         m12_set_view(doc["enabled"].as<bool>());
-        result["request_seq"] = m12_view_request() >> 1;
+        result["request_seq"] = m12_view_request() >> 2;
+    } else if (strcmp(request->uri, "/v1/m12/mode") == 0) {
+        const char* mode = doc["mode"] | "";
+        M12Function function = strcmp(mode, "face_detector") == 0 ? M12Function::detect :
+            strcmp(mode, "face_recognition") == 0 ? M12Function::recognize :
+            strcmp(mode, "standby") == 0 ? M12Function::standby : M12Function::none;
+        if (function == M12Function::none) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid M12 mode"); return ESP_OK; }
+        if (function != M12Function::standby && !m12_snapshot().valid) return unavailable(request, "M12 serial unavailable");
+        m12_set_mode(function);
+        result["request_seq"] = m12_view_request() >> 2;
     } else {
         if (!doc["delta_deg"].is<int>() || (doc["delta_deg"].as<int>() != -5 && doc["delta_deg"].as<int>() != 5)) {
             httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected delta_deg -5 or 5"); return ESP_OK;
@@ -1171,7 +1180,7 @@ void start_server(int port, int control_port, bool audio_only)
     config.ctrl_port = control_port;
     config.stack_size = 8192;
     config.max_open_sockets = audio_only ? kAudioHttpSessions : kMainHttpSessions;
-    config.max_uri_handlers = 11;
+    config.max_uri_handlers = 12;
     config.max_resp_headers = 10;
     config.recv_wait_timeout = 3;
     config.send_wait_timeout = 3;
@@ -1197,7 +1206,7 @@ void start_server(int port, int control_port, bool audio_only)
         httpd_uri_t pitch{};
         pitch.uri = "/v1/settings/pitch"; pitch.method = HTTP_POST; pitch.handler = pitch_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &pitch));
-        for (const char* uri : {"/v1/m12/view", "/v1/motion/yaw-step"}) {
+        for (const char* uri : {"/v1/m12/view", "/v1/m12/mode", "/v1/motion/yaw-step"}) {
             httpd_uri_t endpoint{}; endpoint.uri = uri; endpoint.method = HTTP_POST; endpoint.handler = web_control_handler;
             ESP_ERROR_CHECK(httpd_register_uri_handler(server, &endpoint));
         }
@@ -1314,7 +1323,7 @@ void update_screen(const std::string& ip)
             }
             const uint32_t requested_view = m12_view_request();
             if (requested_view != view_seen) {
-                view_seen = requested_view; face_view = (requested_view & 1) != 0;
+                view_seen = requested_view; face_view = m12_requested_view(requested_view);
                 screen_show_faces(face_view, tick_ms);
             }
             if (face_view && !screen_showing_faces()) {
@@ -1324,11 +1333,11 @@ void update_screen(const std::string& ip)
             if (face_view) {
                 static uint32_t shown_seq = 0, status_ms = 0;
                 const auto m12 = m12_snapshot();
-                if (m12.result_seq != shown_seq || tick_ms - status_ms >= 500) {
-                    shown_seq = m12.result_seq;
+                if (m12.frame_seq != shown_seq || tick_ms - status_ms >= 500) {
+                    shown_seq = m12.frame_seq;
                     status_ms = tick_ms;
-                    const bool answered = m12.requested_us > 0 && m12.last_result_us > m12.requested_us;
-                    const bool fresh = answered && now - m12.last_result_us < 1500000;
+                    const bool answered = m12.requested_us > 0 && m12.frame_us > m12.requested_us;
+                    const bool fresh = answered && now - m12.frame_us < 1500000;
                     ScreenFace boxes[kScreenMaxFaces];
                     size_t shown = 0;
                     for (size_t i = 0; fresh && i < m12.count && shown < kScreenMaxFaces; ++i) {
@@ -1344,6 +1353,7 @@ void update_screen(const std::string& ip)
                     else if (!answered) std::snprintf(status, sizeof(status), "starting M12... %lus", waited_s);
                     else if (!fresh) std::snprintf(status, sizeof(status), "M12 data stale");
                     else if (shown == 0) std::snprintf(status, sizeof(status), "no face");
+                    else if (m12.frame_recognition) std::snprintf(status, sizeof(status), "%s", m12.identity.known ? m12.identity.name : "unknown face");
                     else std::snprintf(status, sizeof(status), "faces %u", static_cast<unsigned>(shown));
                     screen_update_faces(boxes, shown, status);
                 }

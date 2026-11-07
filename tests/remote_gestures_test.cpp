@@ -109,6 +109,36 @@ static void center_display_events()
 
 int main()
 {
+    { // Live sender center is 471 (1960 ADC mapped from 310..3460), not 450.
+        collector::RemoteCommand c{1,0,471,600,false}; c.center_v1=true;
+        assert(collector::remote_pitch_target(c,100).pitch == 100);
+        c.pitch=900; assert(collector::remote_pitch_target(c,100).pitch == 850);
+        c.pitch=0; assert(collector::remote_pitch_target(c,100).pitch == 50);
+        c.pitch=471; assert(collector::remote_pitch_target(c,300).pitch == 300);
+        for(int neutral : {50,100,300,850}) {
+            int previous=0;
+            for(int raw=0;raw<=900;++raw) {
+                c.pitch=raw;const int target=collector::remote_pitch_target(c,neutral).pitch;
+                assert(target>=50 && target<=850 && target>=previous);previous=target;
+                if(raw>=466 && raw<=476) assert(target==neutral);
+            }
+        }
+    }
+    { // Heartbeats preserve saved pitch; fresh vertical movement owns only pitch.
+        collector::RemotePitchControl pitch;
+        collector::RemoteCommand c{1, 123, 450, 600, false}; c.center_v1 = true;
+        assert(!pitch.accept(c, true, 100, 0));
+        c.pitch = 460; assert(pitch.accept(c, true, 200, 0)); assert(pitch.active());
+        pitch.release(); // new web setting, without replaying held joystick
+        assert(!pitch.accept(c, true, 300, 250)); assert(!pitch.active());
+        c.pitch = 470; assert(!pitch.accept(c, true, 400, 450));
+        c.pitch = 480; assert(pitch.accept(c, true, 500, 450));
+        c.pitch = 490; assert(!pitch.accept(c, false, 600, 450)); assert(!pitch.active());
+        assert(!pitch.accept(c, true, 700, 450));
+        c.pitch = 500; assert(pitch.accept(c, true, 800, 450));
+        assert(collector::remote_pitch_target({1,0,-100,1200,false}).pitch == 50);
+        assert(collector::remote_pitch_target({1,0,1000,1200,false}).pitch == 850);
+    }
     center_display_events();
     RemoteGestureInput input;
     assert(input.accept(450) == RemoteReaction::None);
@@ -144,7 +174,7 @@ int main()
     assert(!stop_latch.consume());
     assert(startup.step(40000, requested, true, true) == collector::StartupPose::Action::None);
 
-    // Center protocol data remains intact but only yaw reaches the actuator.
+    // Center protocol data remains intact through independent yaw actuation.
     // Neither a new sender boot nor any center sequence can restart startup.
     struct YawAxis {
         int target = 0, speed = 0;
@@ -164,5 +194,5 @@ int main()
         }
     }
     std::cout << "PASS: direction hysteresis/held input, inter-sample stop/re-enable cancels startup and both axes, "
-                 "center display baseline/delta/wrap/reconnect, yaw-only actuation and no startup restart\n";
+                 "center display baseline/delta/wrap/reconnect, independent yaw/pitch arbitration and no startup restart\n";
 }

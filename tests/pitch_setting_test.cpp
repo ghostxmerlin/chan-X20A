@@ -3,6 +3,7 @@
 #include "../upstream/StackChan/firmware/main/collector/web_control.h"
 #include "../upstream/StackChan/firmware/main/collector/startup_pose.h"
 #include "../upstream/StackChan/firmware/main/collector/remote_stop.h"
+#include "../upstream/StackChan/firmware/main/collector/remote_actuation.h"
 #include "../upstream/StackChan/firmware/main/stackchan/motion/servo.h"
 #include <hal/hal.h>
 #include <algorithm>
@@ -201,6 +202,20 @@ static void passive_yaw_first_command()
 int main()
 {
     smooth_ui_toolkit::ui_hal::on_get_tick([] { return test_tick_ms; });
+    { // Restored physical pitch uses the real factory spring, limits and release.
+        Axis axis; axis.physical = 300; axis.passive();
+        collector::RemoteCommand input{1,0,350,100,false};
+        const auto target = collector::apply_remote_pitch(axis, input, true);
+        assert(target.pitch == 350 && target.speed == 100);
+        for (int i=0; i<1500; ++i) { test_tick_ms += 20; axis.update(); }
+        assert(axis.isTrajectoryComplete() && !axis.commands.empty());
+        assert(axis.commands.back() == 350 && !axis.torque);
+        input.center_v1=true; input.pitch=471; // release joystick back to saved 10 degrees
+        assert(collector::apply_remote_pitch(axis,input,false,100).pitch == 100);
+        for (int i=0; i<1500; ++i) { test_tick_ms += 20; axis.update(); }
+        assert(axis.isTrajectoryComplete() && axis.commands.back() == 100 && !axis.torque);
+        for (int angle : axis.commands) assert(angle >= 50 && angle <= 850);
+    }
     storage_and_request_generation(); feedback_boundary(); terminal_states(); passive_yaw_first_command();
     trajectory({20}, 150, true);
     trajectory({19, 21}, 130, true);

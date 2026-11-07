@@ -11,6 +11,15 @@ function fixture() {
   m.telemetryAt=Date.now();m.telemetry={timestamp_us:2000000,m12:{valid:true},remote:{motor:{enabled:true,requested:true,yaw:{valid:true,angle_deg:0},timestamp_us:2000000,yaw_trajectory_complete:true}},pitch_setting:{state:'complete'}};
   return {m,calls,c:new Controls(m)};
 }
+test('recognition requires new capability and an exact manual mode',async()=>{
+ const {m,c,calls}=fixture();
+ await assert.rejects(c.execute({action:'m12_mode',mode:'face_recognition',boot:'boot-a'}));
+ m.info.capabilities.m12_recognition='supported';
+ await c.execute({action:'m12_mode',mode:'face_recognition',boot:'boot-a'});
+ assert.equal(calls[0][0],'/v1/m12/mode');assert.deepEqual(calls[0][1],{mode:'face_recognition'});
+ await assert.rejects(c.execute({action:'m12_mode',mode:'train',boot:'boot-a'}));
+ assert.equal(calls.length,1);
+});
 test('controls whitelist schema, boot, freshness and permissions before writing',async()=>{
   const {m,c,calls}=fixture();
   for(const input of [{action:'shell',boot:'boot-a'}, {action:'yaw',delta_deg:40,boot:'boot-a'}, {action:'motor',enabled:'false',boot:'boot-a'}, {action:'pitch',angle_deg:10.01,boot:'boot-a'}, {action:'m12',enabled:true,extra:1,boot:'boot-a'}, {action:'m12',enabled:true,boot:'old'}]) await assert.rejects(c.execute(input));

@@ -484,3 +484,13 @@ USB配置命令可附`"priority":true`。首选SSID和密码作为单个`collect
 `observed_at_us` 使用相机/音频携带的机器人单调微秒，不能是Mac时钟或回包时刻。非 unknown 标签必须有来源与有效时间，拒绝未来时间、零时间或超过20秒的证据。Mac每2秒续租，8秒没有有效更新则显示未连接；重复心跳不延长原始证据20秒时效。不同session在旧租约有效时被拒绝。无效字段返回400，启动/顺序/时间/会话冲突返回409，成功返回 accepted 与当前情绪快照。
 
 标签仅覆盖首页左下角；明确显示“推测：开心”等，不确定与语音待唤醒/连接中/断开分别显示。熄屏时不刷新，恢复屏幕时重取当前快照。该接口与双音频消费者只完成编译及主机测试，实机容量、界面并发和故障恢复尚待部署后验证。
+
+## collector-0.4.23：显式 M12 识别与俯仰遥控
+
+- `m12_recognition`、`remote_pitch` 能力为 `supported`。M12 `/v1/m12/view` 兼容布尔检测/待机；新增 `/v1/m12/mode` 接受唯一 `mode` 字段（standby/face_detector/face_recognition），与现有网页控制相同鉴权/boot核对，202只代表入队。
+- M12 `frame_us`、`frame_recognition` 说明当前展示帧；`faces` 在识别帧增加 `known/name/match_prob`。`results/last_result_us` 继续表示检测，`recognitions/last_recognition_us` 表示识别。切换清展示帧；网页身份必须同时符合当前请求和新鲜度。
+- `remote.pitch_control_enabled=true`、`pitch_input_role=servo_pitch`；`motor.pitch_owner` 为 remote 或 setting，前者时 `pitch_target_deg` 才表示已交给 Servo 的遥控目标。保存设置被实体接管时状态为 superseded，保存值不变。旧文档的 yaw-only/home_reaction 描述仅适用于此前版本。
+
+- `last_recognition_report_us` 是识别程序报告时间；不计入 `recognitions`，不产生人脸/身份。识别收到本次启动报告后停止未应答重发，避免无脸静默导致不断重启。官方源码依据：[face_recognition.cpp](https://github.com/m5stack/UnitV2Framework/blob/main/main/face_recognition.cpp)。
+
+- 俯仰映射：`pitch_mapping=center_v1_saved_neutral_legacy_absolute`；`pitch_neutral_input_deg=47.1`，`pitch_neutral_target_deg` 为最新保存仰角。16字节协议没有模式位，回中映射覆盖其摇杆/IMU输入；8字节旧协议仍绝对角。记录包中的 pitch_deg 保持原始映射值，不能与 motor.pitch_target_deg 混淆。

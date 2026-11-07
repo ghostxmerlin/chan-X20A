@@ -18,3 +18,9 @@ test('stale data disables writes, invalid feedback blocks steps but allows stop,
  s.telemetry.remote.motor.yaw.valid=false;ui.render(s,true);assert.equal(el('yaw-left').disabled,true);assert.equal(el('motor-disable').disabled,false);
  ui.render(s,false);await el('m12-start').click();assert.equal(calls.length,0);assert.equal(el('pitch-apply').disabled,true);
 });
+test('recognition is disabled on old firmware and only an explicit click requests it',async()=>{
+ const {ui,s,calls,el}=harness();ui.render(s,true);
+ await el('m12-recognize').click();assert.equal(calls.length,0);
+ s.capabilities.m12_recognition='supported';ui.render(s,true);assert.equal(calls.length,0);
+ await el('m12-recognize').click();assert.deepEqual(calls,[{action:'m12_mode',mode:'face_recognition',boot:'a'}]);
+});

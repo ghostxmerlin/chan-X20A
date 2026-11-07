@@ -9,9 +9,8 @@ namespace collector {
 // RX GPIO18 (CoreS3 pin table). The log console runs on USB Serial/JTAG only, so
 // UART0 is free. The task and its UART interrupt live on core 1.
 //
-// M12Policy starts in standby (camera off). Only m12_set_view(true) requests
-// detection; false returns to standby. Other input and face results do not select
-// a function. Recognition data is retained for diagnostics only.
+// M12Policy starts in standby. ASR selects detection/standby; the web may
+// explicitly select recognition. Other inputs and face results never select modes.
 struct M12Snapshot {
     bool valid = false;           // UART driver and task running
     M12Phase phase = M12Phase::idle;
@@ -22,17 +21,22 @@ struct M12Snapshot {
     int64_t last_result_us = 0;
     uint32_t recognitions = 0;    // Face Recognition results since boot
     int64_t last_recognition_us = 0;
+    int64_t last_recognition_report_us = 0; // startup ACK, not a face or heartbeat
     uint32_t rx_bytes = 0;        // bytes received from the M12 since boot
+    uint32_t frame_seq = 0;
+    int64_t frame_us = 0;
+    bool frame_recognition = false;
     uint16_t num = 0;             // faces the M12 reported in the last detector result
     size_t count = 0;             // faces kept (at most kM12MaxFaces)
     M12Face faces[kM12MaxFaces];
-    M12Identity identity;         // reserved; basic controls do not identify anyone
+    M12Identity identity;         // most recent recognition (web also has per-face identities)
 };
 void m12_init();
 // Compatibility no-op: ordinary interaction must not start the camera.
 void m12_wake();
 // Explicit request: true selects Face Detector; false selects standby. Non-blocking.
 void m12_set_view(bool on);
+void m12_set_mode(M12Function mode);
 uint32_t m12_view_request();
 M12Snapshot m12_snapshot();
 const char* m12_phase_name(M12Phase phase);

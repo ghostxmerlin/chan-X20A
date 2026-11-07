@@ -35,7 +35,4 @@ int main() {
     assert(race.submit(-50, true, true, true, 50, 300, 300));
     assert(race.take(310, true)); race.finish(true); race.cancel();
     assert(!strcmp(race.state, "cancelled"));
-    assert(next_view_request(0, true) == 3);
-    assert(next_view_request(3, false) == 4);
-    assert(next_view_request(4, true) == 7); // quick off/on must remain a new request
 }

@@ -18,6 +18,36 @@ static std::vector<std::string> lines_of(const std::string& stream)
 
 int main()
 {
+    assert(next_m12_request(0, M12Function::detect) == 5);
+    assert(next_m12_request(5, M12Function::recognize) == 10);
+    assert(next_m12_request(10, M12Function::standby) == 12);
+    assert(m12_requested_view(10) && !m12_requested_view(12));
+    assert(m12_requested_function(10) == M12Function::recognize);
+    assert(m12_switch_required(M12Function::recognize, M12Function::recognize, true));
+    assert(!m12_switch_required(M12Function::recognize, M12Function::recognize));
+    { // Official recognition is silent without faces; startup report is an ACK.
+        const auto report = parse_m12_line(R"({"msg":"Running Face Recognition, Copyright 2021","running":"Face Recognition"})");
+        assert(m12_recognition_report(report));
+        assert(!m12_recognition_report(parse_m12_line(R"({"error":"failed","running":"Face Recognition"})")));
+        assert(!m12_recognition_unanswered(100, 0, 110));
+        assert(m12_recognition_unanswered(200, 0, 110)); // explicit retry needs its own ACK
+    }
+    { // Identity recognition is explicit, and late/empty results never retain a person.
+        M12Policy p; p.start(0); p.select(M12Function::recognize, 100);
+        assert(p.function() == M12Function::recognize);
+        p.result(200, 1, true, "papa", .83f);
+        assert(p.identity().known && std::strcmp(p.identity().name, "papa") == 0);
+        p.result(300, 0, true, nullptr, 0);
+        assert(!p.identity().known && p.identity().at_us == 0);
+        p.result(400, 1, true, "unknown", .9f);
+        assert(!p.identity().known);
+        p.result(500, 1, true, "papa", .4f);
+        assert(!p.identity().known);
+        p.view(false, 600); p.result(700, 1, true, "papa", .9f);
+        assert(p.function() == M12Function::standby && p.identity().at_us == 0);
+        p.select(M12Function::recognize, 800); p.view(true, 900);
+        assert(p.function() == M12Function::detect && p.identity().at_us == 0);
+    }
     // Commands end in CRLF and carry the display names the device expects.
     assert(std::strstr(kM12FaceDetectorCommand, "\"Face Detector\"") && std::strstr(kM12StandbyCommand, "\"Audio FFT\""));
     assert(std::strcmp(kM12FaceDetectorCommand + std::strlen(kM12FaceDetectorCommand) - 2, "\r\n") == 0);
@@ -156,5 +186,5 @@ int main()
         assert(commands == std::vector<M12Function>({M12Function::standby, M12Function::detect,
                                                     M12Function::standby, M12Function::detect}));
     }
-    std::cout << "PASS: M12 commands, face results, clipping, mirror mapping, replies/errors, line assembly, 3000 random streams, recognition fields, explicit standby/detector policy, quick off/on command selection\n";
+    std::cout << "PASS: M12 commands, face results, clipping, mirror mapping, replies/errors, line assembly, 3000 random streams, recognition fields, explicit standby/detector/recognition policy, quick mode changes and manual retry\n";
 }

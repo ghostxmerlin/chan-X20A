@@ -63,10 +63,11 @@ stackchan::motion::ServoDeadbandSnapshot yaw_deadband, pitch_deadband;
 int64_t diagnostics_timestamp = 0;
 bool yaw_trajectory_complete = false, pitch_trajectory_complete = false;
 bool yaw_command_started = false;
-int applied_yaw = 0, applied_speed = 0;
+int applied_yaw = 0, applied_speed = 0, applied_pitch = 0;
+bool physical_pitch_active = false;
 const char* motor_state = "starting";
 const char* startup_state = "waiting_feedback";
-RemoteGestureInput gesture_input;
+
 RemoteCenterInput center_input;
 RemoteReaction reaction = RemoteReaction::None;
 uint32_t reaction_seq = 0;
@@ -120,12 +121,6 @@ esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t
     packet.channel = rx->channel;
     memcpy(packet.source.data(), source, 6);
     history[sequence % kHistory] = packet;
-    const auto event = gesture_input.accept(command.pitch);
-    if (event != RemoteReaction::None) {
-        reaction = event;
-        reaction_seq = packet.seq;
-        reaction_timestamp = packet.timestamp;
-    }
     // Screen input is consumed here, independently of motor_task and feedback.
     center_input.accept(command, packet.source, packet.timestamp);
     return ESP_OK;
@@ -133,12 +128,14 @@ esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t
 
 void motor_task(void*)
 {
-    // Boot pitch is a one-shot pose, independent of yaw-only remote input.
+    // Boot pitch is one-shot; a new physical vertical input may supersede it.
     // The official remote works independently of the observer connection.
     bool was_enabled = false;
     int64_t last_feedback = 0;
     bool yaw_deadband_attempted = false, pitch_deadband_attempted = false;
     StartupPose startup;
+    RemotePitchControl pitch_control;
+    uint32_t pitch_seen_seq = 0;
     PitchSettingRequest pitch_request;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -200,6 +197,7 @@ void motor_task(void*)
             apply_remote_stop(startup, motion, now);
             was_enabled = false;
             yaw_command_started = false;
+            pitch_control.release();
         }
         if (latest_pitch.sequence != pitch_request.sequence) {
             // Only a successfully committed, explicit request replaces pitch.
@@ -208,19 +206,32 @@ void motor_task(void*)
             if (pitch_request.from_boot) {
                 std::lock_guard<std::mutex> lock(mutex); startup_state = "superseded";
             }
+            pitch_control.release();
             pitch_request = latest_pitch;
             startup = StartupPose{};
             { std::lock_guard<std::mutex> lock(mutex); pitch_has_command_start = false; }
         }
+        bool physical_pitch_command = false;
+        const bool pitch_was_active = pitch_control.active();
+        if (packet.seq != pitch_seen_seq) {
+            pitch_seen_seq = packet.seq;
+            physical_pitch_command = pitch_control.accept(packet.command, active && packet.seq > after,
+                                                           packet.timestamp, pitch_request.timestamp);
+        }
+        if (physical_pitch_command) {
+            // Only this task touches the servo; preserve NVS while cancelling the pose.
+            if (!pitch_was_active) motion.pitchServo().cancelMotion();
+            startup.step(now, false, false, true);
+        }
         const auto pitch_limits = motion.pitchServo().getAngleLimit();
-        if (active && !pitch_cancelled && strcmp(startup.state(), "target_unavailable") != 0 &&
+        if (active && !pitch_control.active() && !pitch_cancelled && strcmp(startup.state(), "target_unavailable") != 0 &&
             (pitch_request.target < pitch_limits.x || pitch_request.target > pitch_limits.y)) {
             motion.pitchServo().cancelMotion();
             startup.target_unavailable();
         }
         const bool valid_start = motion.pitchServo().canStartFromFeedback(
             startup_feedback, pitch_request.target, kPitchSettingLowerMargin);
-        auto pose_action = startup.step(now, active && !pitch_cancelled, valid_start,
+        auto pose_action = startup.step(now, active && !pitch_cancelled && !pitch_control.active(), valid_start,
                                        motion.pitchServo().isTrajectoryComplete());
         if (pose_action == StartupPose::Action::Start) {
             if (motion.pitchServo().moveFromFeedbackWithSpeed(startup_feedback, pitch_request.target,
@@ -245,8 +256,8 @@ void motor_task(void*)
         }
         {
             std::lock_guard<std::mutex> lock(mutex);
-            if (pitch_request.from_boot) startup_state = startup.state();
-            if (pitch_requests.current().sequence == pitch_request.sequence) pitch_state = startup.state();
+            if (pitch_request.from_boot) startup_state = pitch_control.active() ? "superseded" : startup.state();
+            if (pitch_requests.current().sequence == pitch_request.sequence) pitch_state = pitch_control.active() ? "superseded" : startup.state();
         }
         if (!active) {
             if (was_enabled) {
@@ -257,6 +268,11 @@ void motor_task(void*)
             { std::lock_guard<std::mutex> lock(mutex); motor_state = "disarmed"; }
         } else {
             enabled = true;
+            if (physical_pitch_command) {
+                const auto target = apply_remote_pitch(motion.pitchServo(), packet.command, !pitch_was_active, pitch_request.target);
+                std::lock_guard<std::mutex> lock(mutex);
+                applied_pitch = target.pitch;
+            }
             // Do not replay any packet received before the user enabled control.
             if (packet.seq > after && packet.seq != applied_seq) {
                 // Sync to the physical pose for a new control session, then retain the
@@ -296,9 +312,8 @@ void motor_task(void*)
                 motor_state = strcmp(startup.state(), "moving") == 0 ?
                     (pitch_request.from_boot ? "startup_pose" : "pitch_setting") : "waiting_for_input";
             }
-            // Vertical reactions and center display toggles are independent of motion.
-            // Pitch runs only for this boot or an explicit committed setting.
-            if (pose_action == StartupPose::Action::Start || pose_action == StartupPose::Action::Update)
+            // Retain spring updates and factory torque release for either owner.
+            if (pitch_control.active() || pose_action == StartupPose::Action::Start || pose_action == StartupPose::Action::Update)
                 motion.pitchServo().update();
         }
         // One read-only configuration probe per axis, after boot has settled and
@@ -327,6 +342,7 @@ void motor_task(void*)
             yaw_trajectory_complete = manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete());
             if (yaw_trajectory_complete) manual_yaw.complete();
             pitch_trajectory_complete = motion.pitchServo().isTrajectoryComplete();
+            physical_pitch_active = active && pitch_control.active();
             diagnostics_timestamp = esp_timer_get_time();
         }
         was_enabled = active;
@@ -631,7 +647,10 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     target["yaw_control_enabled"] = true;
     target["yaw_input_to_target_sign"] = -1;
     target["pitch_control_enabled"] = kRemotePitchControlEnabled;
-    target["pitch_input_role"] = "home_reaction";
+    target["pitch_input_role"] = "servo_pitch";
+    target["pitch_mapping"] = "center_v1_saved_neutral_legacy_absolute";
+    target["pitch_neutral_input_deg"] = kRemotePitchCenter / 10.0f;
+    target["pitch_neutral_target_deg"] = pitch_configured / 10.0f;
     target["auxiliary_input_role"] = "record_only";
     target["center_input_role"] = "display_toggle";
     target["nod_trigger"] = "none";
@@ -670,7 +689,9 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     motor["feedback_age_ms"] = feedback_timestamp ? (esp_timer_get_time() - feedback_timestamp) / 1000 : -1;
     motor["applied_seq"] = applied_seq;
     if (applied_seq) { motor["yaw_target_deg"] = applied_yaw / 10.0f; motor["applied_speed"] = applied_speed; }
-    motor["pitch_target_deg"] = nullptr; // No pitch target is applied from remote input.
+    if (physical_pitch_active) motor["pitch_target_deg"] = applied_pitch / 10.0f;
+    else motor["pitch_target_deg"] = nullptr;
+    motor["pitch_owner"] = physical_pitch_active ? "remote" : "setting";
     motor["speed_limit"] = kRemoteSpeedLimit;
     motor["startup_pitch_target_deg"] = boot_pitch_target / 10.0f;
     motor["startup_pose_state"] = startup_state;

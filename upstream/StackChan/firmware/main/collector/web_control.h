@@ -4,9 +4,6 @@
 namespace collector {
 // Passive initialization may leave AnimateValue.done() false without any requested motion.
 inline bool manual_yaw_idle(bool command_started, bool trajectory_complete) { return !command_started || trajectory_complete; }
-inline uint32_t next_view_request(uint32_t previous, bool on) {
-    return ((previous & ~uint32_t{1}) + 2) | (on ? 1u : 0u);
-}
 // Owned under the remote mutex. Only motor_task may consume a request.
 struct ManualYaw {
     uint32_t sequence = 0;

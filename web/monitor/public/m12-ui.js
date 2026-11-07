@@ -10,7 +10,8 @@ const age = seconds => seconds == null ? '尚无结果' : seconds < 60 ? `${seco
 export function renderM12(state, fresh, bridge = true) {
   const summary = fresh ? state?.m12 : null, m = fresh ? state?.telemetry?.m12 : null;
   const status = summary?.status || 'disconnected';
-  const labels = {disconnected:'数据未连接',serial_unavailable:'串口未就绪',standby:'已请求待机 · 曾收到待机报告',standby_pending:'已请求待机 · 等待 M12 回应',starting:'等待本次检测结果',stalled:'检测结果已过期',detecting:'检测中'};
+  const labels = {disconnected:'数据未连接',serial_unavailable:'串口未就绪',standby:'已请求待机 · 曾收到待机报告',standby_pending:'已请求待机 · 等待 M12 回应',starting:'等待本次视觉结果',stalled:'视觉结果已过期',detecting:'检测中',recognizing:'认人中',recognition_waiting:'识别程序已报告启动 · 等待人脸结果'};
+  if (summary?.recognition && status === 'stalled') labels.stalled='暂无新识别结果（无人脸时也会静默）';
   text('m12-state', labels[status]); text('m12-visual-state', labels[status]);
   $('m12-state').classList.toggle('warn', ['stalled','serial_unavailable','standby_pending'].includes(status));
   const hardware = bridge ? state?.m12?.system : null;
@@ -22,29 +23,34 @@ export function renderM12(state, fresh, bridge = true) {
   text('m12-network', hardware?.connected ? '已连接 · 独立 Wi-Fi 采集' : hardware?.error || '未连接');
   const processes = {audio_fft:'Audio FFT（待机）',face_detector:'Face Detector',face_recognition:'Face Recognition',none:'未发现视觉进程'};
   text('m12-process', hardware?.connected ? processes[hardware.mode] || hardware.mode : '—');
-  text('m12-fps', summary?.fps != null ? `${summary.fps.toFixed(1)}` : status === 'detecting' ? '计量中' : '—');
+  const showing = ['detecting','recognizing'].includes(status);
+  text('m12-rate-label', summary?.recognition ? '识别更新率' : '检测更新率');
+  text('m12-fps', summary?.fps != null ? `${summary.fps.toFixed(1)}` : showing ? '计量中' : '—');
   text('m12-count', summary?.count ?? '—');
   const faces = summary?.faces || [];
-  text('m12-confidence', faces.length ? `最高置信度 ${(Math.max(...faces.map(f => f.prob)) * 100).toFixed(1)}%` : status === 'detecting' ? '本次未检测到人脸' : '等待检测结果');
+  text('m12-confidence', faces.length ? `最高置信度 ${(Math.max(...faces.map(f => f.prob)) * 100).toFixed(1)}%` : showing ? '本次未检测到人脸' : '等待检测结果');
   const modes = {standby:'待机',face_detector:'人脸检测',face_recognition:'人脸识别'};
   text('m12-request', modes[m?.function] || m?.function);
   text('m12-running', m?.running || '尚无报告');
   const now = state?.telemetry?.timestamp_us || 0;
   text('m12-age', m?.last_rx_us > 0 ? age(Math.max(0,(now-m.last_rx_us)/1e6)) : '—');
   text('m12-result-age', fresh ? age(summary?.ageSeconds) : '—');
-  text('m12-counters', m ? `${m.results} / ${m.errors + m.invalid_lines + m.overflow_lines}` : '—');
+  text('m12-counters', m ? `${m.results} / ${m.recognitions ?? 0} / ${m.errors + m.invalid_lines + m.overflow_lines}` : '—');
+  const known = f => f.known === true && typeof f.name === 'string' && f.name.trim() && !/^unknown$/i.test(f.name) && Number.isFinite(f.match_prob) && f.match_prob >= .5 && f.match_prob <= 1;
+  const identity = f => known(f) ? f.name : '陌生人 / 未匹配';
+  text('m12-identity', status === 'recognizing' ? faces.length ? faces.map(f=>`${identity(f)}${Number.isFinite(f.match_prob) ? ` · 匹配度 ${(f.match_prob*100).toFixed(1)}%` : ''}`).join('；') : '本次没有人脸' : '认人使用 M12 已登记资料；未登记的人显示为未匹配。');
   const {context:c,width:w,height:h} = surface('m12-faces-canvas');
   c.strokeStyle = '#163621'; c.lineWidth = 1;
   for (let x = 0; x <= 4; x++) { c.beginPath();c.moveTo(w*x/4,0);c.lineTo(w*x/4,h);c.stroke(); }
   for (let y = 0; y <= 3; y++) { c.beginPath();c.moveTo(0,h*y/3);c.lineTo(w,h*y/3);c.stroke(); }
   c.font='14px monospace'; c.fillStyle='#72a980'; c.fillText('0,0',8,20); c.fillText('640,480',w-70,h-10);
-  if (!faces.length) { c.textAlign='center'; c.fillText(status === 'detecting' ? '本次未检测到人脸' : labels[status],w/2,h/2); c.textAlign='left'; }
+  if (!faces.length) { c.textAlign='center'; c.fillText(showing ? '本次未检测到人脸' : labels[status],w/2,h/2); c.textAlign='left'; }
   const details=$('m12-face-details');details.replaceChildren();
   faces.forEach((f,i)=>{
     const x=f.x/640*w,y=f.y/480*h,bw=f.w/640*w,bh=f.h/480*h;
     c.strokeStyle='#79ff97';c.lineWidth=2;c.strokeRect(x,y,bw,bh);
-    c.fillStyle='#79ff97';c.fillText(`#${i+1} ${(f.prob*100).toFixed(1)}%`,Math.max(4,Math.min(x,w-100)),Math.max(18,y-7));
-    const row=document.createElement('p');row.textContent=`#${i+1} 位置 ${Math.round(f.x)}, ${Math.round(f.y)} · 尺寸 ${Math.round(f.w)}×${Math.round(f.h)} · ${(f.prob*100).toFixed(1)}%`;details.append(row);
+    c.fillStyle='#79ff97';c.fillText(`#${i+1} ${summary.recognition ? identity(f) : `${(f.prob*100).toFixed(1)}%`}`,Math.max(4,Math.min(x,w-100)),Math.max(18,y-7));
+    const row=document.createElement('p');row.textContent=`#${i+1} ${summary.recognition ? identity(f) + ' · ' : ''}位置 ${Math.round(f.x)}, ${Math.round(f.y)} · 尺寸 ${Math.round(f.w)}×${Math.round(f.h)} · ${(f.prob*100).toFixed(1)}%`;details.append(row);
   });
 }
 export function renderThermal(thermal, history = [], nowUs = 0) {

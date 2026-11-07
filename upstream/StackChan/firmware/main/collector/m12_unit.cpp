@@ -48,6 +48,7 @@ const char* command_for(M12Function f)
 {
     switch (f) {
     case M12Function::detect: return kM12FaceDetectorCommand;
+    case M12Function::recognize: return kM12FaceRecognitionCommand;
     default: return kM12StandbyCommand;
     }
 }
@@ -110,9 +111,11 @@ void m12_task(void*)
     uint32_t stats_results = 0, results = 0;
     while (true) {
         const int64_t loop_us = esp_timer_get_time();
+        bool explicit_request = false;
         if (const uint32_t v = view_request.load(); v != seen_view) {
             seen_view = v;
-            policy.view((v & 1) != 0, loop_us);
+            explicit_request = true;
+            policy.select(m12_requested_function(v), loop_us);
         }
         policy.tick(loop_us);
         if (policy.phase() != logged_phase) {
@@ -120,16 +123,20 @@ void m12_task(void*)
             logged_phase = policy.phase();
         }
         const M12Function want = policy.function();
-        if (m12_switch_required(active, want)) {
+        if (m12_switch_required(active, want, explicit_request)) {
             requested_us = send(want);
             ESP_LOGI(kTag, "send %s", function_name(want));
             active = want;
+            { std::lock_guard<std::mutex> lock(state_mutex); state.count = 0; state.num = 0; state.frame_us = 0; }
             resends = 0;
             raw_logged = 0;
         } else if (active != M12Function::none &&
                    loop_us - requested_us >= (resends < kFastResends ? kResendUs : kSlowResendUs)) {
             bool unanswered = false;
             if (active == M12Function::detect) unanswered = last_detect_us < requested_us;
+            // The official recognizer emits no result when there are no faces.
+            // A startup ACK is enough to stop retries; silence is not a failed start.
+            else if (active == M12Function::recognize) unanswered = m12_recognition_unanswered(requested_us, last_recog_us, state.last_recognition_report_us);
             // Standby produces no periodic output, so silence alone is not an
             // acknowledgement (especially while the M12 is still booting).
             // Stop retrying after its switch reply unless face output resumes.
@@ -187,6 +194,7 @@ void m12_task(void*)
             }
             std::lock_guard<std::mutex> lock(state_mutex);
             ++lines;
+            if (m12_recognition_report(result)) state.last_recognition_report_us = now;
             if (result.running[0]) std::memcpy(last_running, result.running, sizeof(last_running));
             switch (result.kind) {
             case M12LineKind::faces:
@@ -197,6 +205,12 @@ void m12_task(void*)
                     ++state.results;
                     ++state.result_seq;
                     state.last_result_us = now;
+                }
+                if ((result.recognition && active == M12Function::recognize) || (!result.recognition && active == M12Function::detect)) {
+                    state.identity = policy.identity();
+                    ++state.frame_seq;
+                    state.frame_us = now;
+                    state.frame_recognition = result.recognition;
                     state.num = result.num;
                     state.count = result.count;
                     std::memcpy(state.faces, result.faces, sizeof(state.faces));
@@ -229,10 +243,11 @@ void m12_init()
 
 void m12_wake() {}
 
-void m12_set_view(bool on)
+void m12_set_view(bool on) { m12_set_mode(on ? M12Function::detect : M12Function::standby); }
+void m12_set_mode(M12Function mode)
 {
     auto previous = view_request.load();
-    while (!view_request.compare_exchange_weak(previous, next_view_request(previous, on))) {}
+    while (!view_request.compare_exchange_weak(previous, next_m12_request(previous, mode))) {}
 }
 
 uint32_t m12_view_request() { return view_request.load(); }
@@ -260,8 +275,8 @@ void m12_json(ArduinoJson::JsonObject out)
 {
     std::lock_guard<std::mutex> lock(state_mutex);
     const auto view = view_request.load();
-    out["view_enabled"] = (view & 1) != 0;
-    out["view_seq"] = view >> 1;
+    out["view_enabled"] = m12_requested_view(view);
+    out["view_seq"] = view >> 2;
     out["valid"] = state.valid;
     out["phase"] = m12_phase_name(state.phase);
     out["function"] = function_name(state.function);
@@ -273,7 +288,10 @@ void m12_json(ArduinoJson::JsonObject out)
     out["last_result_us"] = state.last_result_us;
     out["recognitions"] = state.recognitions;
     out["last_recognition_us"] = state.last_recognition_us;
+    out["last_recognition_report_us"] = state.last_recognition_report_us;
     out["num"] = state.num;
+    out["frame_us"] = state.frame_us;
+    out["frame_recognition"] = state.frame_recognition;
     auto faces = out["faces"].to<ArduinoJson::JsonArray>();
     for (size_t i = 0; i < state.count; ++i) {
         auto face = faces.add<ArduinoJson::JsonObject>();
@@ -282,6 +300,11 @@ void m12_json(ArduinoJson::JsonObject out)
         face["w"] = state.faces[i].w;
         face["h"] = state.faces[i].h;
         face["prob"] = state.faces[i].prob;
+        if (state.frame_recognition) {
+            face["known"] = m12_known_name(state.faces[i].name, state.faces[i].match_prob);
+            face["name"] = state.faces[i].name;
+            face["match_prob"] = state.faces[i].match_prob;
+        }
     }
     if (state.identity.at_us) {
         auto who = out["identity"].to<ArduinoJson::JsonObject>();
@@ -315,10 +338,12 @@ void m12_info_json(ArduinoJson::JsonObject out)
     policy["boot"] = "standby";
     policy["automatic_recognition"] = false;
     policy["automatic_wake"] = false;
+    policy["recognize"] = "explicit web request only";
     policy["detect"] = "ASR turn on opens the face page";
     policy["standby"] = "ASR turn off or leave the face page";
     auto commands = out["commands"].to<ArduinoJson::JsonObject>();
     commands["detect"] = "{\"function\":\"Face Detector\",\"args\":\"\"}";
+    commands["recognize"] = "{\"function\":\"Face Recognition\",\"args\":\"\"}";
     commands["standby"] = "{\"function\":\"Audio FFT\",\"args\":\"\"}";
 }
 } // namespace collector
