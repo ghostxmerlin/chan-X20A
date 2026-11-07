@@ -1,6 +1,8 @@
 # 会话交接记录
 
-## 2026-11-07：三款眼睛与ASR台词（0.4.27，待设备部署）
+## 2026-11-07：三款眼睛与ASR台词（0.4.27，代码已推送，待设备部署）
+
+代码已推送 `origin/codex/asr-voice-eyes`；功能与修正提交为 `b3583a8`、`bb09b61`、`523a82a`、`343af4f`。独立复核至343af4f无剩余Critical/Important，最后Python39通过/4跳过、Node38、720帧/三款LVGL与旧页面、固定IDF构建通过。应用5,046,736字节，SHA256 `0ee945ca7c171ad59ed3c4d2a077ce57ae49d54df4fa06023f32de8110cc5037`；本机候选在 `artifacts/collector-0.4.27-eyes/stack-chan.bin`，未部署。
 
 - 用户已授权实现 assets/immplement.md，并要求 ASR open 台词配近似表情、资源不拔卡传输。此前40台词/800ms代码736a31d已推送origin/codex/random-voice-yaw-only；本轮codex/asr-voice-eyes。
 - 已实现三款×30状态、固定PSRAM双资产/双帧、后台读卡校验解码、LVGL安全交接、手动网页控制、同boot/UUID去重，以及窄范围Wi-Fi资源安装。只ASR来源的成功首块台词PCM触发表情，结束只取消自身Voice任务。手动优先；切页/熄屏/心叉取消，返回idle。首次ASR可启用默认v05；网页恢复原首页后本次开机不再自动启用，除非用户重新启用款式。
