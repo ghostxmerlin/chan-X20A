@@ -368,6 +368,30 @@ int main(int argc, char** argv)
     lv_tick_inc(100); lv_timer_handler();
     lv_timer_delete(service_timer);
     puts("PASS: off has zero partial flushes, service timers keep running, all pages/latest owned status/log resume, rapid gates balance, touch waits for release, reactions drop, ring phase pauses");
+    // M12 face view: opens from home, draws boxes, ignores reactions, voice or tap returns home.
+    collector::screen_show_faces(true, 68500);
+    assert(collector::screen_showing_faces() && collector::screen_showing_status());
+    collector::ScreenFace faces[2];
+    faces[0].x = 40; faces[0].y = 50; faces[0].w = 60; faces[0].h = 70;
+    faces[1].x = 200; faces[1].y = 100; faces[1].w = 90; faces[1].h = 100;
+    collector::screen_update_faces(faces, 2, "faces 2   (turn off: home)");
+    const auto face_view = snapshot(output + "/faces.ppm");
+    auto pixel = [&](int x, int y) { return &face_view[(y * 320 + x) * 3]; };
+    assert(pixel(41, 85)[1] > 200 && pixel(41, 85)[0] < 0x90);   // green 3 px border of box 0
+    assert(pixel(70, 85)[0] == 0 && pixel(70, 85)[1] == 0);       // inside stays black
+    assert(pixel(201, 150)[1] > 200);                             // box 1
+    collector::screen_show_reaction(collector::ScreenReaction::Heart, 68600);
+    assert(snapshot() == face_view);                              // reactions are home-only
+    collector::screen_update_faces(nullptr, 0, "no face   (turn off: home)");
+    assert(snapshot() != face_view);
+    collector::screen_show_faces(false, 68700);
+    assert(!collector::screen_showing_faces() && !collector::screen_showing_status());
+    collector::screen_show_faces(true, 68800);
+    assert(collector::screen_showing_faces());
+    collector::screen_touch(false, 68900); // the earlier screen on/off waits for one release
+    tap(69000);
+    assert(!collector::screen_showing_faces() && !collector::screen_showing_status());
+    puts("PASS: M12 face view boxes, home-only reactions, voice and tap exits");
     // Every sample uses true black in all four corners.
     for (const auto* pixels : {&home, &heart, &reject})
         for (size_t pos : {size_t(0), size_t(319 * 3), size_t(239 * 320 * 3), size_t((240 * 320 - 1) * 3)})

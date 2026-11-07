@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "collector.h"
+#include "asr_unit.h"
+#include "m12_unit.h"
 #include "remote.h"
 #include "screen.h"
 #include "runtime_log.h"
@@ -29,6 +31,7 @@
 #include <esp_random.h>
 #include <esp_system.h>
 #include <esp_timer.h>
+#include <esp_intr_alloc.h>
 #include <esp_wifi.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
@@ -718,7 +721,7 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["emotion"]["lease_ms"] = EmotionState::kLeaseUs / 1000;
     doc["emotion"]["evidence_ttl_ms"] = EmotionState::kEvidenceUs / 1000;
     auto capabilities = doc["capabilities"].to<JsonObject>();
-    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "face_detection", "emotion_display"}) capabilities[name] = "supported";
+    for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "face_detection", "emotion_display", "asr_unit", "m12_serial"}) capabilities[name] = "supported";
     environment_json(doc, true);
     remote_pitch_setting_json(doc["pitch_setting"].to<JsonObject>());
     face_detection_json(doc["face_detection"].to<JsonObject>());
@@ -766,6 +769,8 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["remote"]["center_input_role"] = "display_toggle";
     doc["remote"]["nod_trigger"] = "none";
     doc["remote"]["center_press_supported"] = true;
+    asr_info_json(doc["asr"].to<JsonObject>());
+    m12_info_json(doc["m12"].to<JsonObject>());
     doc["display"]["toggle_trigger"] = "joystick_center_v1";
     doc["display"]["default_enabled"] = true;
     doc["display"]["persistent"] = false;
@@ -931,6 +936,8 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     if (speaker_reset < 0) health["speaker_hardware_reset_held"] = nullptr;
     else health["speaker_hardware_reset_held"] = speaker_reset != 0;
     playback_json(doc["playback"].to<JsonObject>());
+    asr_json(doc["asr"].to<JsonObject>());
+    m12_json(doc["m12"].to<JsonObject>());
     health["servo_commands_enabled"] = remote_enabled();
     wifi_ap_record_t ap{};
     health["wifi_profile_count"] = networks.size();
@@ -1319,6 +1326,58 @@ void update_screen(const std::string& ip)
                              static_cast<unsigned long>(esp_timer_get_time() - enqueue_started));
                 }
             }
+            // Unit ASR: "forward" shows the home heart, "backward" the reject X.
+            // Display only: the unit already speaks its own reply, and a second
+            // sound would also reach the microphone.
+            // "turn on" opens the M12 face view, "turn off" returns home (and puts
+            // the M12 in standby, camera off); a tap on the face view does the same.
+            static uint32_t asr_seen = 0;
+            static bool face_view = false;
+            const uint32_t asr = asr_latest();
+            const auto tick_ms = static_cast<uint32_t>(now / 1000);
+            if (asr != asr_seen) {
+                asr_seen = asr;
+                const uint8_t id = asr & 0xFF;
+                const auto spoken = asr_reaction(id);
+                if (spoken != AsrReaction::none)
+                    screen_show_reaction(spoken == AsrReaction::heart ? ScreenReaction::Heart : ScreenReaction::Reject, tick_ms);
+                const int face_switch = asr_face_switch(id);
+                if (face_switch != 0) {
+                    face_view = face_switch > 0;
+                    m12_request_faces(face_view);
+                    screen_show_faces(face_view, tick_ms);
+                }
+            }
+            if (face_view && !screen_showing_faces()) {
+                face_view = false;
+                m12_request_faces(false);
+            }
+            if (face_view) {
+                static uint32_t shown_seq = 0, status_ms = 0;
+                const auto m12 = m12_snapshot();
+                if (m12.result_seq != shown_seq || tick_ms - status_ms >= 500) {
+                    shown_seq = m12.result_seq;
+                    status_ms = tick_ms;
+                    const bool answered = m12.requested_us > 0 && m12.last_result_us > m12.requested_us;
+                    const bool fresh = answered && now - m12.last_result_us < 1500000;
+                    ScreenFace boxes[kScreenMaxFaces];
+                    size_t shown = 0;
+                    for (size_t i = 0; fresh && i < m12.count && shown < kScreenMaxFaces; ++i) {
+                        const auto b = m12_to_screen(m12.faces[i]);
+                        boxes[shown].x = b.x; boxes[shown].y = b.y; boxes[shown].w = b.w; boxes[shown].h = b.h;
+                        ++shown;
+                    }
+                    char status[64];
+                    const auto waited_s = static_cast<unsigned long>(m12.requested_us > 0 ? (now - m12.requested_us) / 1000000 : 0);
+                    if (!m12.valid) std::snprintf(status, sizeof(status), "M12 serial unavailable");
+                    else if (!answered && m12.rx_bytes == 0 && waited_s >= 10)
+                        std::snprintf(status, sizeof(status), "no data from M12 - check blue port");
+                    else if (!answered) std::snprintf(status, sizeof(status), "starting M12... %lus", waited_s);
+                    else if (!fresh || shown == 0) std::snprintf(status, sizeof(status), "no face   (turn off: home)");
+                    else std::snprintf(status, sizeof(status), "faces %u   (turn off: home)", static_cast<unsigned>(shown));
+                    screen_update_faces(boxes, shown, status);
+                }
+            }
             static uint32_t last_log_ms = 0;
             const auto now_ms = static_cast<uint32_t>(now / 1000);
             if (screen_showing_log() && now_ms - last_log_ms >= 200) {
@@ -1356,6 +1415,8 @@ void run()
     ESP_LOGI(kTag, "MIC/CAMERA CAPTURE ON; speaker held in reset; standalone remote receiver enabled");
     hal_bridge::xiaozhi_board_init(); // Hardware only; does not initialize Application.
     remote_init();
+    asr_init();
+    m12_init();
     update_screen({});
     ESP_ERROR_CHECK(xTaskCreate(sensor_task, "collector_sensors", 6144, nullptr, 3, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(environment_task, "collector_environment", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
@@ -1391,6 +1452,13 @@ void run()
         previous_ip = ip;
         update_screen(ip);
         const int64_t now = esp_timer_get_time();
+        // One interrupt allocation table per boot (USB log): core 0 must keep free
+        // inputs for interrupts that are allocated late, e.g. Wi-Fi's AES on first connect.
+        static bool interrupts_dumped = false;
+        if (!interrupts_dumped && now >= 8000000) {
+            interrupts_dumped = true;
+            esp_intr_dump(stdout);
+        }
         if (now - last_health_log >= 5000000) {
             last_health_log = now;
             const auto remote = remote_snapshot();

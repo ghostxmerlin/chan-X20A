@@ -20,7 +20,7 @@ cp config/collector-0.3.4.sdkconfig upstream/StackChan/firmware/sdkconfig
 ./scripts/idf.sh build
 ```
 
-`config/collector-0.3.4.sdkconfig` 同时用于 0.3.4 至 0.4.0，继续复用该配置，不含 Wi-Fi 密码或设备 token。`scripts/idf.sh` 仅在当前进程载入 `.tools/esp-idf-v5.5.4`，不修改系统 shell 配置。依赖补丁由官方 `fetch_repos.py` 应用。
+0.4.11 起该共享配置把日志控制台改为只走 USB Serial/JTAG（`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`、无第二控制台），UART0 留给顶部蓝色口的 M12；刷机和看日志仍用同一根 USB 线。`config/collector-0.3.4.sdkconfig` 同时用于 0.3.4 至 0.4.0，继续复用该配置，不含 Wi-Fi 密码或设备 token。`scripts/idf.sh` 仅在当前进程载入 `.tools/esp-idf-v5.5.4`，不修改系统 shell 配置。依赖补丁由官方 `fetch_repos.py` 应用。
 
 产物位于 `upstream/StackChan/firmware/build/`。构建完成不等于设备验收通过；本版本的已知舵机回传问题见 [验证记录](collector-validation.md)。
 

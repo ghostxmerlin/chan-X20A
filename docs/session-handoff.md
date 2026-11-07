@@ -1,5 +1,42 @@
 # 会话交接记录
 
+## 2026-11-07：0.4.13 Unit ASR + M12 人脸视图已部署（Claude Opus）
+
+用户先把另一台机器上未提交的 0.4.8/0.4.9 工作推到 `dev`，本机合并进 `main`（提交 `7dfadd4`），保留 main 当天的眼睛资源、M12、耳朵与 `server/ear` 提交；只有 README 冲突，两边内容都保留。
+
+**部署：**
+- 机器人运行 **collector-0.4.13**，4,630,112 字节，SHA256 `8aedeffa5035b1beb9540ca1fd295486c9027880862fe7bc8feb50ddd00c2467`，产物在 `artifacts/collector-0.4.13-m12-float/`。
+- 每次写入前都重新核对：芯片 ESP32-S3 QFN56 v0.2、16 MB Flash，otadata 的有效活动槽为 ota_1，ota_1 里的版本号。只写 `ota_1 / 0x510000`，并用 `verify_flash` 独立校验。没写 bootloader、分区表、otadata、assets，也没擦 NVS。
+- 第一次刷之前，原来的 0.4.8 已整块备份：`backups/ota_1-collector-0.4.8-20261107.bin`（SHA256 `3e553ed1…d4bd`，镜像自带的 SHA256 校验通过），可以原样刷回。
+- Android 没有改动，仍是 0.4.7/code17。
+
+**功能：**
+- **ASR：** Unit ASR 接黑口，UART2 只收 GPIO8。forward / backward 在首页显示爱心 / 叉号，用的是 0.4.8 那套 1 秒反应，不发声。
+- **M12：** 唤醒后说 turn on，M12 经蓝口 UART0（TX17/RX18）切到 Face Detector，屏幕进入人脸页：640×480 画面缩放并镜像，人脸画绿框。说 turn off 或轻触屏幕，回首页并让 M12 待机（Audio FFT）。
+- **日志：** 控制台改为只走 USB，以腾出 UART0。
+
+**版本经过：**
+
+| 版本 | 内容 | 结果 |
+| --- | --- | --- |
+| 0.4.10 | 只加 ASR | 未见程序日志 |
+| 0.4.11 | 加 M12 和人脸页 | 每次开机约 35 秒，WiFi 握手申请 AES 中断失败而 abort；坐标按整数读，人脸页永远显示 `no face` |
+| 0.4.12 | 串口驱动移到 1 号核，ASR 固定 GPIO8，开机打印中断表 | 不再崩溃 |
+| 0.4.13 | 坐标改按小数读 | 用户确认“可以用” |
+
+实测数据见验证记录。
+
+**本机环境：**
+- 这台 Mac 新装了 `.tools/esp-idf-v5.5.4`。系统 python3 是 3.14，对 IDF 5.5 太新，所以 `.tools/py313bin/` 放了一个指向 Homebrew python3.13 的 `python3` 链接，构建时放在 PATH 最前面：`PATH="$PWD/.tools/py313bin:$PATH" ./scripts/idf.sh build`。
+- esptool 在 `.tools/espressif/python_env/idf5.5_py3.13_env`。
+- 刷机过程中有一次 esptool 连不上芯片（No serial data received），用户拔插 USB 后恢复。
+
+**待办和限制：**
+- 0.4.9 的情绪角落和双音频随这几版第一次上机，没有单独验收。
+- `docs/current-state.json` 本轮没有更新，以本节为准。
+- 设备发现的挑战证明可以被转发，安全检查已报告这个问题，用户在调试阶段暂不处理。
+- 下一步候选：ASR 结果和 M12 人脸事件转发给服务器（见 `docs/soul-ear-interface.md`）；M12 不必在每次开机后保持原状态，可以默认待机。
+
 ## 2026-11-07：本机工作快照转入 dev 分支
 
 用户要求将本机尚未提交的工作保存到 `dev`，避免覆盖另一台机器的 `main`。已获取远端：本机基点为 `517c6c3`，`origin/main` 为 `a8d66cc`，其间新增3个提交（soul eyes资源、M12探索与观察面板、soul ear音频上行接口草案）。`dev` 从本机原基点分出，本次保存当前完整源码和文档，不合并或变基到新main。

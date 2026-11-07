@@ -1,5 +1,29 @@
 # Collector 验证记录
 
+## 2026-11-07：0.4.10–0.4.13 Unit ASR 与 M12 人脸视图（实机）
+
+**主机测试（0.4.13 源码）：**
+- Python 34 项通过（4 项跳过）；
+- `asr_protocol_test`、`m12_protocol_test`（含真机抓到的小数坐标行）、`remote_protocol_test` 通过；
+- LVGL 预览四组通过，含新加的人脸页：画框、首页限定反应、语音和轻触退出。文字环每帧仍刷新 12,872 像素、25 个矩形。
+- IDF 5.5.4 编译通过，人脸库 48 个私有 kernel 隔离检查通过。
+
+**实机（开发机，用户在场）：**
+- **0.4.10：** 只加了 ASR，刷入后 USB 收不到程序日志，原因未查。
+- **0.4.11：** 每次开机约 35 秒 abort。日志为 `No free interrupt inputs for AES interrupt`，回溯指向 WiFi WPA 握手里的 `aes_unwrap` → `esp_aes_init` → `esp_aes_intr_alloc`。另外人脸页一直显示 `no face`。
+- **0.4.12：** 串口驱动移到 1 号核，ASR 固定 GPIO8。60 秒录制中，WiFi 在 34.9 秒连上，没有崩溃。开机 8 秒时 0 号核剩 3 个、1 号核剩 13 个通用中断。原始行显示 M12 的坐标是小数。
+- **0.4.13（坐标按小数读）：** 用户确认“可以用”。日志显示全程同一次启动，没有重启：
+  - 唤醒后 `turn on` → `function switched to face_detector`，每 2 秒 13–15 条人脸结果（约 7.5 条/秒），每条 1 张脸，都被保留并画出；
+  - `turn off` → `function switched to audio_fft`，M12 进入待机。
+- **ASR：** 实测模块 TX 在 GPIO8。forward / backward 的爱心与叉号显示没有单独记录用户反馈。
+
+**限制：**
+- 方框是否准确对准人脸只有用户目测，没有量化。
+- M12 的结果先经串口、再经 LVGL 绘制，端到端延迟没有测。
+- 0.4.9 的情绪角落、双音频随这几版上机，但本轮没有验收。
+
+本机证据（不提交）：`logs/collector-v04{10,11,12,13}-*.log`、`artifacts/collector-0.4.1{0,1,2,3}-*/`。
+
 ## 2026-11-07：dev 分支快照提交检查
 
 本轮只整理Git分支和保存源码，没有修改功能逻辑或操作设备。使用 `.tools/emotion-venv/bin/python -B -m unittest discover -s tests -v` 重跑34项测试全部通过；`bash android/Collector/test-host` 的5组主机测试全部通过。`git diff --check` 通过，待提交文件未匹配已知本机API key、设备token及常见密钥格式，私有目录不纳入提交。检查全仓时命中的原上游示例私钥标记及日志均属于未改动的既有文件，不属于本次新增内容。

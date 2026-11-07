@@ -1,5 +1,7 @@
 # chan-X20A
 
+2026-11-07：固件 **collector-0.4.13** 已部署：顶部黑口的 Unit ASR 说 forward / backward 显示爱心 / 叉号，说 turn on 让蓝口的 M12 做人脸检测并在屏幕上画框，turn off 回首页、M12 待机。日志只走 USB，三个串口分给 M12、舵机和 ASR。实测和限制见[交接](docs/session-handoff.md)与[协议](docs/collector-protocol.md)。
+
 2026-11-01 晚：[Mac 情绪观察试验](emotion/README.md)接入机器人 Wi-Fi 音视频、AIHubMix 实时 STT 与本地 Qwen3-VL。先在 Mac 测试；机器人仍为 0.4.8，准备中的 0.4.9 首页角落显示尚未刷入。最新供电、CH6/ID1 与 10°保存姿态见[交接](docs/session-handoff.md)。
 
 2026-11-01：固件 **collector-0.4.8** 已将爱心/叉号延长至1秒，缓存图形并减少切换重绘；Android沿用0.4.7/code17。实机已记录多次切换，用户观感及USB中断后的测试录制收尾待完成，见[当前交接](docs/session-handoff.md)。

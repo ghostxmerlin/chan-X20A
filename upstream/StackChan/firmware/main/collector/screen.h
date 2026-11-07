@@ -54,6 +54,15 @@ void screen_touch(bool down, uint32_t now_ms, int x = -1, int y = -1);
 // Reactions are transient home-only feedback; a new event restarts its 1000 ms
 // at UI acceptance. Input freshness is checked separately by the caller.
 void screen_show_reaction(ScreenReaction reaction, uint32_t now_ms);
+// M12 face view: a full-screen page with one box per face (screen coordinates,
+// 320x240). Showing it leaves any other page; hiding it returns home. A tap on it
+// also returns home, which callers see as screen_showing_faces() == false.
+constexpr size_t kScreenMaxFaces = 6;
+struct ScreenFace { int16_t x = 0, y = 0, w = 0, h = 0; };
+void screen_show_faces(bool on, uint32_t now_ms);
+// Boxes beyond kScreenMaxFaces are ignored; status is one short line.
+void screen_update_faces(const ScreenFace* faces, size_t count, const char* status);
+bool screen_showing_faces();
 // Discard an interrupted/invalid touch sample without generating navigation.
 void screen_cancel_touch();
 bool screen_showing_status();

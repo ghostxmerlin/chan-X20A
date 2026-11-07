@@ -26,6 +26,7 @@ constexpr uint32_t kMuted = 0x72A980, kSignal = 0x79FF97;
 lv_obj_t *home, *summary, *terminal, *log_viewport, *log_body, *portrait, *reaction_overlay;
 lv_obj_t *summary_title, *summary_rows[10], *pairing, *pairing_body;
 lv_obj_t* emotion_label = nullptr;
+lv_obj_t *faces_page = nullptr, *faces_status = nullptr, *face_boxes[kScreenMaxFaces] = {};
 lv_obj_t* screen_root = nullptr;
 lv_display_t* screen_display = nullptr;
 bool enabled = true, status_pending = false;
@@ -34,7 +35,7 @@ char pending_version[64], pending_ip[64], pending_token[65], pending_motor[64];
 enum class IconKind { Wifi, Camera, Remote, Battery, Axes, Yaw, Pitch, Mic };
 struct Icon { lv_obj_t* obj = nullptr; IconKind kind; bool valid = false; int value = 0; };
 Icon icons[8];
-enum class Page { Home, Summary, Log, Pairing };
+enum class Page { Home, Summary, Log, Pairing, Faces };
 Page page = Page::Home;
 ScreenReaction reaction = ScreenReaction::None;
 uint32_t reaction_at = 0;
@@ -138,6 +139,7 @@ void show_page(Page target, uint32_t now_ms)
     lv_obj_update_flag(summary, LV_OBJ_FLAG_HIDDEN, page != Page::Summary);
     lv_obj_update_flag(terminal, LV_OBJ_FLAG_HIDDEN, page != Page::Log);
     lv_obj_update_flag(pairing, LV_OBJ_FLAG_HIDDEN, page != Page::Pairing);
+    lv_obj_update_flag(faces_page, LV_OBJ_FLAG_HIDDEN, page != Page::Faces);
     if (page != Page::Home) {
         reaction = ScreenReaction::None;
         cancel_transition();
@@ -473,6 +475,30 @@ void screen_create(lv_obj_t* parent)
     box(pairing, 12, 212, 296, 1, kRule);
     label(pairing, 12, 219, "Tap: summary", kMuted);
     lv_obj_add_flag(pairing, LV_OBJ_FLAG_HIDDEN);
+
+    // M12 face view: the M12's 640x480 frame scaled to the whole screen, boxes only.
+    faces_page = box(parent, 0, 0, 320, 240, kInk);
+    auto frame = lv_obj_create(faces_page);
+    lv_obj_remove_style_all(frame);
+    lv_obj_set_pos(frame, 0, 0);
+    lv_obj_set_size(frame, 320, 240);
+    lv_obj_set_style_border_color(frame, lv_color_hex(kRule), 0);
+    lv_obj_set_style_border_width(frame, 1, 0);
+    lv_obj_remove_flag(frame, LV_OBJ_FLAG_SCROLLABLE);
+    label(faces_page, 8, 4, "M12 face", kMuted);
+    for (auto& face : face_boxes) {
+        face = lv_obj_create(faces_page);
+        lv_obj_remove_style_all(face);
+        lv_obj_set_style_border_color(face, lv_color_hex(kSignal), 0);
+        lv_obj_set_style_border_width(face, 3, 0);
+        lv_obj_set_style_radius(face, 6, 0);
+        lv_obj_remove_flag(face, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(face, LV_OBJ_FLAG_HIDDEN);
+    }
+    faces_status = label(faces_page, 8, 219, "starting M12...", kSignal);
+    lv_obj_set_width(faces_status, 304);
+    lv_label_set_long_mode(faces_status, LV_LABEL_LONG_CLIP);
+    lv_obj_add_flag(faces_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(summary, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(terminal, LV_OBJ_FLAG_HIDDEN);
     page = Page::Home;
@@ -707,6 +733,31 @@ void screen_cancel_touch()
     touch_start_x = touch_start_y = touch_last_x = touch_last_y = -1;
     touch_max_dx = touch_max_dy = 0;
 }
+void screen_show_faces(bool on, uint32_t now_ms)
+{
+    if (!faces_page) return;
+    if (on) {
+        if (page != Page::Faces) {
+            screen_update_faces(nullptr, 0, "starting M12...");
+            show_page(Page::Faces, now_ms);
+        }
+    } else if (page == Page::Faces) show_page(Page::Home, now_ms);
+}
+void screen_update_faces(const ScreenFace* faces, size_t count, const char* status)
+{
+    if (!faces_page) return;
+    if (!faces) count = 0;
+    for (size_t i = 0; i < kScreenMaxFaces; ++i) {
+        const bool shown = i < count;
+        if (shown) {
+            lv_obj_set_pos(face_boxes[i], faces[i].x, faces[i].y);
+            lv_obj_set_size(face_boxes[i], std::max<int>(faces[i].w, 6), std::max<int>(faces[i].h, 6));
+        }
+        lv_obj_update_flag(face_boxes[i], LV_OBJ_FLAG_HIDDEN, !shown);
+    }
+    set_text(faces_status, status ? status : "");
+}
+bool screen_showing_faces() { return page == Page::Faces; }
 bool screen_showing_status() { return page != Page::Home; }
 bool screen_showing_log() { return page == Page::Log; }
 bool screen_showing_pairing() { return page == Page::Pairing; }
