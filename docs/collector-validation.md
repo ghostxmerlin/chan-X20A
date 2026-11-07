@@ -6,11 +6,11 @@
 - ASR仍等待800ms，首个媒体PCM成功提交后才触发；网页点播、等待、初始化失败、第一块失败后的收尾静音不触发。结束仅取消同job的Voice效果。40条映射为近似编配，未逐条听校。
 - 真实LVGL主机：720帧全部解码并验证CRC，三款idle/happy预览检查、心叉清屏/熄屏/返回idle通过，旧首页/导航回归通过。截图和submitted/rendered不等于实机色彩、撕裂、听感或并发性能验收。
 - Wi-Fi安装器先验证90份源SHA256；设备只接收内建style/state、精确大小/哈希，完整接收后.part回读验证并改名。不同旧文件保留.prev，不格式化。中断/重定向不自动重发测试通过；实际SD挂载与Wi-Fi写入待设备连接。
-- 固定IDF5.5.4最终构建0x4d0140字节，ota槽0x4f0000，余0x1fec0；未更换依赖或分区。LCD/SD共享SPI3，使用官方逐事务释放DC/MISO和DMA所有权，构建检查驱动哈希。
-- 独立审阅发现并修正：替换效果加载时不应闪回旧首页；严格JSON不能接受单引号/裸key/尾逗号；worker创建失败必须释放缓存并拒绝配置。三项均补了先失败后通过的回归，最终完整验证见logs/eyes-reviewed-*。
+- 固定IDF5.5.4最终构建0x4d01d0字节，ota槽0x4f0000，余0x1fe30；未更换依赖或分区。LCD/SD共享SPI3，使用官方逐事务释放DC/MISO和DMA所有权，构建检查驱动哈希。
+- 独立审阅发现并修正：替换效果加载时不应闪回旧首页；严格JSON不能接受单引号/裸key/尾逗号；worker创建失败必须释放缓存并拒绝配置。三项均补了先失败后通过的回归；追加离页取消→隐藏configure→返回未加载窗口，旧帧保留授权在取消时清除，回归RED→GREEN。最终Python39通过/4跳过、LVGL和IDF全过，见logs/eyes-final-reviewed-*。
 - 用户明确稍后接设备、先完成代码推送。最后网页离线、Mac无USB枚举；此轮没有刷写或实机安装，仍以旧0.4.26为上次部署版本。本机服务已重启并提供新版模块；浏览器宿主不可用，未做实际网页排版验收。
 
-证据：logs/eyes-host-all.log、eyes-node-all.log、eyes-display-final.log、eyes-final-build.log；artifacts/eyes-preview/。后续实机结果须独立补记。
+证据：logs/eyes-host-all.log、eyes-node-all.log、eyes-display-final.log、eyes-final-build.log；artifacts/eyes-preview/。最终应用SHA256 `0ee945ca7c171ad59ed3c4d2a077ce57ae49d54df4fa06023f32de8110cc5037`；后续实机结果须独立补记。
 
 ## 2026-11-07：40条与ASR 800ms（collector-0.4.26）
 

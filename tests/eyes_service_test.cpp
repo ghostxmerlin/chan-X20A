@@ -45,7 +45,10 @@ int main(int argc,char** argv) {
     step();assert(take_frame().pixels);rendered(true);
     display_gate(false,true,false);assert(query(manual.request_id).status==RequestStatus::Cancelled);
     assert(!show_bound_frame());host.time+=5000000;step();assert(!take_frame().pixels);
-    display_gate(true,true,false);step();assert(take_frame().pixels && snapshot().state==State::Idle);rendered(true);
+    auto hidden=make(61,Operation::Configure);hidden.enabled=true;
+    assert(submit(hidden,Source::Manual).accepted);
+    display_gate(true,true,false);assert(!show_bound_frame() && !snapshot().visible);
+    step();assert(take_frame().pixels && snapshot().state==State::Idle);rendered(true);
     config=make(3,Operation::Configure);config.enabled=true;config.style=Style::V14;host.corrupt=true;
     assert(submit(config,Source::Manual).accepted);step();assert(snapshot().selected_style==Style::V05);
     assert(query(config.request_id).status==RequestStatus::Failed);assert(snapshot().enabled);step();assert(take_frame().pixels);rendered(true);

@@ -14,16 +14,30 @@ struct Runtime {
     Backend& backend;std::mutex mutex;Player player;FramePool pool;Cache cache[2];
     uint16_t* pixels[2]{};uint8_t* scratch=nullptr;int idle_slot=0;
     Style frame_style[2]{Style::Invalid,Style::Invalid};State frame_state[2]{State::Idle,State::Idle};
+    int held_slot=-1;uint32_t held_generation=0;
     Stats stats{};
     explicit Runtime(Backend& b):backend(b) {}
-    void sync() { player.tick(backend.now_us());pool.cancel(player.snapshot().generation); }
+    void sync() {
+        player.tick(backend.now_us());const auto s=player.snapshot();pool.cancel(s.generation);
+        if(s.phase!=Phase::Loading)held_slot=-1;
+    }
     bool visible() const {
         const auto s=player.snapshot();const int bound=pool.bound();
         // An accepted replacement loads behind the previous complete image.
         // Cancel/page/off transitions do not get this exception, so they cannot
         // resurrect the previous expression when the page is shown again.
         return s.enabled && player.gate() && bound>=0 &&
-            (pool.slot(bound).generation==s.generation || s.phase==Phase::Loading);
+            (pool.slot(bound).generation==s.generation ||
+             (s.phase==Phase::Loading && bound==held_slot && pool.slot(bound).generation==held_generation));
+    }
+    SubmitResult apply(const Command& c,Source source,uint32_t job=0) {
+        const bool keep=visible();const int bound=pool.bound();
+        const auto result=player.submit(c,source,backend.now_us(),job);
+        if(result.accepted && !result.duplicate) {
+            held_slot=keep && player.snapshot().phase==Phase::Loading?bound:-1;
+            if(held_slot>=0)held_generation=pool.slot(held_slot).generation;
+        }
+        sync();return result;
     }
 };
 Runtime* runtime=nullptr;
@@ -65,7 +79,7 @@ SubmitResult submit(const Command& command,Source source) {
     auto& r=*runtime;
     std::lock_guard<std::mutex> lock(r.mutex);
     r.player.set_resources(r.backend.available(),r.scratch!=nullptr);
-    auto result=r.player.submit(command,source,r.backend.now_us());r.sync();return result;
+    return r.apply(command,source);
 }
 Snapshot snapshot() {
     if (!runtime) return {};
@@ -82,6 +96,7 @@ RequestResult query(const char* id) {
 void display_gate(bool home,bool display_on,bool reaction) {
     if (!runtime) return;
     auto& r=*runtime;std::lock_guard<std::mutex> lock(r.mutex);
+    if(!home || !display_on || reaction)r.held_slot=-1;
     r.player.set_gate(home&&display_on&&!reaction,reaction?Error::Reaction:!home||!display_on?Error::PageHidden:Error::None,r.backend.now_us());r.sync();
 }
 void voice_started(uint32_t job,int clip,uint32_t duration) {
@@ -90,7 +105,7 @@ void voice_started(uint32_t job,int clip,uint32_t duration) {
     std::snprintf(c.request_id,sizeof(c.request_id),"feedface-0000-4000-8000-%012lx",static_cast<unsigned long>(job));
     c.state=voice_state(clip);c.mode=Mode::Loop;c.loop_for_ms=std::clamp<uint32_t>(duration,1000,30000);
     std::lock_guard<std::mutex> lock(r.mutex);r.player.set_resources(r.backend.available(),r.scratch!=nullptr);
-    r.player.submit(c,Source::Voice,r.backend.now_us(),job);r.sync();
+    r.apply(c,Source::Voice,job);
 }
 void cancel_voice(uint32_t job) {
     if (!runtime) return;
