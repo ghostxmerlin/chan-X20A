@@ -5,6 +5,7 @@ namespace collector::eyes {
 class Backend;
 // Backend must outlive the service. Only one background caller may invoke step.
 bool initialize(Backend& backend);
+void startup_failed(); // Only before worker start: release caches and reject new work.
 void start(); // ESP-IDF board adapter starts the worker; no LVGL calls here.
 void step();
 SubmitResult submit(const Command& command,Source source);

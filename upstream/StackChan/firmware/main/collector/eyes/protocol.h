@@ -4,8 +4,43 @@
 #include <ArduinoJson.h>
 #include <cstring>
 namespace collector::eyes {
+// ArduinoJson accepts some JavaScript extensions. This API defines only flat
+// JSON strings, booleans and integers, with double-quoted keys and no trailing
+// comma. No defined identifier needs escape sequences.
+inline bool strict_command_json(const char* body,size_t size) {
+    size_t at=0;
+    auto whitespace=[&] {while(at<size && (body[at]==' '||body[at]=='\t'||body[at]=='\r'||body[at]=='\n'))++at;};
+    auto quoted=[&] {
+        if(at>=size||body[at++]!='"')return false;
+        while(at<size && body[at]!='"') {
+            if(static_cast<unsigned char>(body[at])<32 || body[at]=='\\')return false;
+            ++at;
+        }
+        if(at>=size)return false;
+        ++at;return true;
+    };
+    whitespace();if(at>=size||body[at++]!='{')return false;whitespace();
+    if(at<size && body[at]=='}') {++at;whitespace();return at==size;}
+    for(;;) {
+        if(!quoted())return false;
+        whitespace();if(at>=size||body[at++]!=':')return false;whitespace();if(at>=size)return false;
+        if(body[at]=='"') {if(!quoted())return false;}
+        else if(size-at>=4 && !std::memcmp(body+at,"true",4))at+=4;
+        else if(size-at>=5 && !std::memcmp(body+at,"false",5))at+=5;
+        else {
+            if(body[at]=='-')++at;
+            const size_t begin=at;
+            while(at<size && body[at]>='0' && body[at]<='9')++at;
+            if(at==begin || (body[begin]=='0' && at-begin>1))return false;
+        }
+        whitespace();if(at>=size)return false;
+        if(body[at]=='}') {++at;whitespace();return at==size;}
+        if(body[at++]!=',')return false;
+        whitespace();
+    }
+}
 inline bool parse_command(const char* body,size_t size,Command& out) {
-    if (!body || !size || size>384) return false;
+    if (!body || !size || size>384 || !strict_command_json(body,size)) return false;
     struct Reader {
         const char* data;size_t size,at=0;
         int read() {return at<size?static_cast<unsigned char>(data[at++]):-1;}

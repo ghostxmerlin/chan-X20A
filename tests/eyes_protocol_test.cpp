@@ -21,4 +21,7 @@ int main() {
     assert(!parse("{\"op\":\"stop\",\"op\":\"stop\","+id+"}"));
     assert(!parse("{\"op\":\"stop\",\"request_id\":\"invalid\"}"));
     assert(!parse(std::string(385,' ')));
+    assert(!parse("{'op':'stop','request_id':'12345678-1234-4234-8234-123456789abc'}"));
+    assert(!parse("{op:\"stop\","+id+"}"));
+    assert(!parse("{\"op\":\"stop\","+id+",}"));
 }

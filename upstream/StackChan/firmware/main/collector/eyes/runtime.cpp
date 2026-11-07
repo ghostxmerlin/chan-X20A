@@ -32,7 +32,9 @@ void worker(void*) { for (;;) {step();vTaskDelay(1);} }
 }
 void start() {
     if (!initialize(backend)) { ESP_LOGW("Eyes","Storage or PSRAM unavailable; retaining original home");return; }
-    if (xTaskCreatePinnedToCore(worker,"eyes",8192,nullptr,1,nullptr,0)!=pdPASS)
-        ESP_LOGE("Eyes","Worker unavailable; eye requests will expire");
+    if (xTaskCreatePinnedToCore(worker,"eyes",8192,nullptr,1,nullptr,0)!=pdPASS) {
+        startup_failed();
+        ESP_LOGE("Eyes","Worker unavailable; caches released, eye requests disabled");
+    }
 }
 }

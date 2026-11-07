@@ -24,13 +24,19 @@ struct Host : Backend {
     bool sha256(const uint8_t* b,size_t n,uint8_t digest[32]) override { return SHA256(b,n,digest)!=nullptr; }
 };
 int main(int argc,char** argv) {
-    assert(argc==2);Host host;host.root=argv[1];assert(initialize(host));
+    assert(argc==2 || argc==3);Host host;host.root=argv[1];assert(initialize(host));
+    if(argc==3) {
+        startup_failed();assert(!snapshot().memory_ready && snapshot().stats.allocated_bytes==0);
+        auto c=make(100,Operation::Configure);c.enabled=true;
+        assert(submit(c,Source::Manual).error==Error::NoMemory);
+        step();assert(!take_frame().pixels);return 0;
+    }
     assert(host.allocated==2*kAssetCapacity+4*kPixels+4096);
     display_gate(true,true,false);
     auto config=make(1,Operation::Configure);config.enabled=true;
     assert(submit(config,Source::Manual).accepted);step();auto frame=take_frame();assert(frame.pixels && frame.style==Style::V05);
     auto snapshot1=snapshot();assert(snapshot1.ready && snapshot1.enabled);rendered(true);
-    voice_started(7,40,3600);step();frame=take_frame();assert(frame.pixels && frame.state==State::Determined);
+    voice_started(7,40,3600);assert(show_bound_frame() && snapshot().visible);step();frame=take_frame();assert(frame.pixels && frame.state==State::Determined);
     assert(snapshot().source==Source::Voice && snapshot().phase==Phase::Playing);
     host.time+=500000;step();assert(!take_frame().pixels); // Both buffers still pinned until LVGL completion.
     rendered(true);step();assert(take_frame().pixels);rendered(true);

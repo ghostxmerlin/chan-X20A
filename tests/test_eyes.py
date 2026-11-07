@@ -43,3 +43,4 @@ class EyesTest(unittest.TestCase):
                             str(ROOT/'tests/eyes_service_test.cpp'),str(folder/'player.cpp'),str(folder/'eyes.cpp'),
                             *flags,'-o',str(binary)],check=True)
             subprocess.run([str(binary),str(ROOT/'assets/soul-eyes/v2-front/sdcard/soul')],check=True)
+            subprocess.run([str(binary),str(ROOT/'assets/soul-eyes/v2-front/sdcard/soul'),'--worker-failure'],check=True)

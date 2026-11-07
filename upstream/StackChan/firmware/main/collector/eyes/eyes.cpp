@@ -17,6 +17,14 @@ struct Runtime {
     Stats stats{};
     explicit Runtime(Backend& b):backend(b) {}
     void sync() { player.tick(backend.now_us());pool.cancel(player.snapshot().generation); }
+    bool visible() const {
+        const auto s=player.snapshot();const int bound=pool.bound();
+        // An accepted replacement loads behind the previous complete image.
+        // Cancel/page/off transitions do not get this exception, so they cannot
+        // resurrect the previous expression when the page is shown again.
+        return s.enabled && player.gate() && bound>=0 &&
+            (pool.slot(bound).generation==s.generation || s.phase==Phase::Loading);
+    }
 };
 Runtime* runtime=nullptr;
 Error load(Runtime& r,int slot,const Asset& a) {
@@ -40,6 +48,18 @@ bool initialize(Backend& backend) {
     } else r.stats.allocated_bytes=2*kAssetCapacity+4*kPixels+4096;
     r.player.set_resources(backend.available(),memory);return memory;
 }
+void startup_failed() {
+    if(!runtime)return;
+    auto& r=*runtime;std::lock_guard<std::mutex> lock(r.mutex);
+    // This hook is only called if the worker could not be created, before any
+    // step/display binding. It must never free buffers referenced by LVGL.
+    if(r.pool.submitted())return;
+    for(auto& c:r.cache) {r.backend.release(c.bytes);c.bytes=nullptr;c.metadata=nullptr;}
+    for(auto& p:r.pixels) {r.backend.release(p);p=nullptr;}
+    r.backend.release(r.scratch);r.scratch=nullptr;r.stats.allocated_bytes=0;
+    r.player.set_resources(r.backend.available(),false);
+    r.player.failed(r.player.snapshot().generation,Error::NoMemory,r.backend.now_us());r.player.idle_failed();r.sync();
+}
 SubmitResult submit(const Command& command,Source source) {
     if (!runtime) return {false,0,Error::NoMemory};
     auto& r=*runtime;
@@ -52,7 +72,7 @@ Snapshot snapshot() {
     auto& r=*runtime;std::lock_guard<std::mutex> lock(r.mutex);r.sync();
     auto s=r.player.snapshot();s.stats=r.stats;s.rendered_seq=r.pool.rendered_sequence();
     const int bound=r.pool.bound();s.active_style=s.enabled && bound>=0?r.frame_style[bound]:Style::Invalid;
-    s.visible=s.enabled && r.player.gate() && bound>=0 && r.pool.slot(bound).generation==s.generation;
+    s.visible=r.visible();
     s.storage_ready=r.backend.available();return s;
 }
 RequestResult query(const char* id) {
@@ -144,7 +164,6 @@ void rendered(bool showing) {
 bool show_bound_frame() {
     if (!runtime) return false;
     auto& r=*runtime;std::lock_guard<std::mutex> lock(r.mutex);
-    const int bound=r.pool.bound();const auto s=r.player.snapshot();
-    return s.enabled && r.player.gate() && bound>=0 && r.pool.slot(bound).generation==s.generation;
+    return r.visible();
 }
 }
