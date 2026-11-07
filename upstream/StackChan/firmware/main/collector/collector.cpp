@@ -7,6 +7,8 @@
 #include "screen.h"
 #include "runtime_log.h"
 #include "playback.h"
+#include "eyes/eyes.h"
+#include "eyes/http.h"
 #include "voice_library.h"
 #include "voice_policy.h"
 #include "wifi_profiles.h"
@@ -708,6 +710,8 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["emotion"]["supported"] = false;
     doc["emotion"]["enabled"] = false;
     auto capabilities = doc["capabilities"].to<JsonObject>();
+    capabilities["eyes"]="supported";
+    eyes::catalog_json(doc["eyes"].to<JsonObject>());
     for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature", "web_control", "m12_recognition", "voice_library"}) capabilities[name] = "supported";
     capabilities["face_detection"] = "unsupported";
     capabilities["remote_pitch"] = "unsupported";
@@ -925,6 +929,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     if (speaker_reset < 0) health["speaker_hardware_reset_held"] = nullptr;
     else health["speaker_hardware_reset_held"] = speaker_reset != 0;
     playback_json(doc["playback"].to<JsonObject>());
+    eyes::status_json(doc["eyes"].to<JsonObject>());
     asr_json(doc["asr"].to<JsonObject>());
     m12_json(doc["m12"].to<JsonObject>());
     health["servo_commands_enabled"] = remote_enabled();
@@ -1197,7 +1202,7 @@ void start_server(int port, int control_port, bool audio_only)
     config.ctrl_port = control_port;
     config.stack_size = 8192;
     config.max_open_sockets = audio_only ? kAudioHttpSessions : kMainHttpSessions;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     config.max_resp_headers = 10;
     config.recv_wait_timeout = 3;
     config.send_wait_timeout = 3;
@@ -1217,6 +1222,16 @@ void start_server(int port, int control_port, bool audio_only)
         register_get("/v1/info", info_handler);
         register_get("/v1/telemetry", telemetry_handler);
         register_get("/v1/frame", frame_handler);
+        register_get("/v1/eyes", [](httpd_req_t* r)->esp_err_t {if(!authorize(r))return ESP_FAIL;return eyes::catalog_handler(r);});
+        register_get("/v1/eyes/status", [](httpd_req_t* r)->esp_err_t {if(!authorize(r))return ESP_FAIL;return eyes::status_handler(r);});
+        for(const char* uri:{"/v1/eyes","/v1/eyes/assets"}) {
+            httpd_uri_t endpoint{};endpoint.uri=uri;endpoint.method=HTTP_POST;
+            endpoint.handler=[](httpd_req_t* r)->esp_err_t {
+                if(!authorize(r)||!control_boot_matches(r,true))return ESP_FAIL;
+                return !std::strcmp(r->uri,"/v1/eyes")?eyes::command_handler(r):eyes::install_handler(r);
+            };
+            ESP_ERROR_CHECK(httpd_register_uri_handler(server,&endpoint));
+        }
         httpd_uri_t control{};
         control.uri = "/v1/remote"; control.method = HTTP_POST; control.handler = remote_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &control));
@@ -1418,6 +1433,7 @@ void run()
     asr_init();
     m12_init();
     temperature_init();
+    eyes::start();
     update_screen({});
     ESP_ERROR_CHECK(xTaskCreate(sensor_task, "collector_sensors", 6144, nullptr, 3, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(environment_task, "collector_environment", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);

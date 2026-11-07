@@ -91,7 +91,7 @@ export class DeviceClient {
   async control(path, body, boot, check) {
     return this.serialRequest(async () => {
       check();
-      if (!this.verified || this.info?.boot_id !== boot || !['/v1/voice/play','/v1/m12/view','/v1/m12/mode','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch'].includes(path)) throw new Error('控制状态已变化');
+      if (!this.verified || this.info?.boot_id !== boot || !['/v1/eyes','/v1/voice/play','/v1/m12/view','/v1/m12/mode','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch'].includes(path)) throw new Error('控制状态已变化');
       return JSON.parse((await deviceRequest(this.binding.address+path, {token:this.binding.token, method:'POST', body, boot, maxBytes:16384})).body);
     });
   }
@@ -197,6 +197,7 @@ export class Monitor extends EventEmitter {
       capabilities: this.info?.capabilities || {}, firmware: this.info?.firmware || '', boot: this.info?.boot_id || '', address: this.client.binding?.address || '',
       receivedAt: this.telemetryAt, fresh, telemetry: this.telemetry,
       voiceLibrary: this.info?.voice_library || {clips:[]},
+      eyesCatalog: this.info?.eyes || {styles:[],states:[]},
       frame: this.frame ? { seq: this.frame.seq, at: this.frame.at, bytes: this.frame.bytes.length } : null,
       audio: { ...this.audio, error: this.audioError }, cameraError: this.cameraError,
       m12: { ...this.m12Tracker.snapshot(this.telemetry, this.online && fresh.telemetry),

@@ -1,6 +1,8 @@
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
 const fields = {voice:['clip_id'],m12_mode:['mode'],m12:['enabled'],motor:['enabled'],yaw:['delta_deg'],pitch:['angle_deg']};
 const routes = {voice:'/v1/voice/play',m12_mode:'/v1/m12/mode',m12:'/v1/m12/view',motor:'/v1/remote',yaw:'/v1/motion/yaw-step',pitch:'/v1/settings/pitch'};
+Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
+Object.assign(routes,{eyes_configure:'/v1/eyes',eyes_play:'/v1/eyes',eyes_stop:'/v1/eyes'});
 export class Controls {
   constructor(monitor) { this.monitor=monitor; this.busy=false; }
   validate(input) {
@@ -16,6 +18,14 @@ export class Controls {
     if (!m.running || !s.online || !s.fresh.telemetry || !m.client.verified) fail(409,'请恢复监控并等待新的机器人状态');
     if (typeof input.boot!=='string' || input.boot !== s.boot) fail(409,'机器人已重启，请根据新状态重新操作');
     if (m.info?.capabilities?.web_control!=='supported') fail(409,'当前固件尚未支持网页控制');
+    if(input.action.startsWith('eyes_')) {
+      if(m.info?.capabilities?.eyes!=='supported')fail(409,'当前固件尚未支持眼睛动画');
+      if(typeof input.request_id!=='string'|| !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.request_id))fail(400,'请求编号无效');
+      if(input.action==='eyes_configure' && (typeof input.enabled!=='boolean'||!m.info.eyes?.styles?.some(s=>s.id===input.style)))fail(400,'请选择有效款式');
+      if(input.action==='eyes_play' && !m.info.eyes?.states?.some(s=>s.id===input.state))fail(400,'请选择有效表情');
+      const body=Object.fromEntries(fields[input.action].map(k=>[k,input[k]]));
+      return {op:input.action.slice(5),...body,...(input.action==='eyes_play'?{mode:'once'}:{})};
+    }
     if (input.action==='m12_mode' && m.info?.capabilities?.m12_recognition!=='supported') fail(409,'当前固件尚未支持手动认人');
     const t=s.telemetry,motor=t.remote?.motor,pitch=t.pitch_setting;
     if (input.action==='voice' && (m.info?.capabilities?.voice_library!=='supported' || !t.health?.audio_ready || !t.playback || t.playback.busy)) fail(409,'等待语音就绪和当前播放结束');

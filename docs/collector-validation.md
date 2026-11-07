@@ -1,5 +1,16 @@
 # Collector 验证记录
 
+## 2026-11-07：三款眼睛与ASR台词（collector-0.4.27，待设备部署）
+
+- Python43项：39通过、4旧情绪依赖跳过；Node38通过。真实资产服务用ASan/UBSan验证双缓冲、迟到取消、去重、优先级、坏文件和取消中加载；切新款失败保留旧启用状态先复现再修正。
+- ASR仍等待800ms，首个媒体PCM成功提交后才触发；网页点播、等待、初始化失败、第一块失败后的收尾静音不触发。结束仅取消同job的Voice效果。40条映射为近似编配，未逐条听校。
+- 真实LVGL主机：720帧全部解码并验证CRC，三款idle/happy预览检查、心叉清屏/熄屏/返回idle通过，旧首页/导航回归通过。截图和submitted/rendered不等于实机色彩、撕裂、听感或并发性能验收。
+- Wi-Fi安装器先验证90份源SHA256；设备只接收内建style/state、精确大小/哈希，完整接收后.part回读验证并改名。不同旧文件保留.prev，不格式化。中断/重定向不自动重发测试通过；实际SD挂载与Wi-Fi写入待设备连接。
+- 固定IDF5.5.4最终构建0x4cfdf0字节，ota槽0x4f0000，余0x20210；未更换依赖或分区。LCD/SD共享SPI3，使用官方逐事务释放DC/MISO和DMA所有权，构建检查驱动哈希。
+- 设备最后网页离线、Mac无USB枚举，已询问接回本体USB；没有刷写或实机安装，仍以旧0.4.26为上次部署版本。
+
+证据：logs/eyes-host-all.log、eyes-node-all.log、eyes-display-final.log、eyes-final-build.log；artifacts/eyes-preview/。后续实机结果须独立补记。
+
 ## 2026-11-07：40条与ASR 800ms（collector-0.4.26）
 
 - Python34通过/4旧依赖跳过、Node34通过；40条源PCM哈希、C++实际解码/原地16→24kHz扩展与独立参考逐字节一致。独立2400组ASan/UBSan（短长/随机/最大帧/截断）通过，等待只在worker，UART不阻塞，等待期间gate占用且尚未初始化功放。IDF5.5.4最终构建通过，4965248字节/槽余212096字节；SHA256 `007550d68a61273d168d3ec4e9dd9dd580494682b3c1098e99d755addb9a029f`。

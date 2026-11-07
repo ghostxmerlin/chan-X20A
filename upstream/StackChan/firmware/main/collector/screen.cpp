@@ -2,6 +2,7 @@
 #include "screen.h"
 #include "laughing_man.h"
 #include "remote_gestures.h"
+#include "eyes/view.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -130,6 +131,12 @@ void render_log()
     lv_obj_scroll_to_y(log_viewport, LV_COORD_MAX, LV_ANIM_OFF);
     log_dirty = false;
 }
+bool update_eyes()
+{
+    const bool visible=eyes::view_tick(page==Page::Home,enabled,reaction!=ScreenReaction::None);
+    if (portrait) lv_obj_update_flag(portrait,LV_OBJ_FLAG_HIDDEN,visible);
+    return visible;
+}
 void show_page(Page target, uint32_t now_ms)
 {
     page = target;
@@ -143,6 +150,7 @@ void show_page(Page target, uint32_t now_ms)
         cancel_transition();
         lv_obj_add_flag(reaction_overlay, LV_OBJ_FLAG_HIDDEN);
     }
+    update_eyes();
     if (page == Page::Log) render_log();
     animation_last_ms = animation_render_ms = now_ms;
 }
@@ -406,6 +414,7 @@ void screen_create(lv_obj_t* parent)
 
     // Rasterize once, then copy an opaque image on show. Limit both transition
     // invalidations to the portrait; the outer black margins never change.
+    eyes::view_create(home);
     prepare_reactions();
     reaction_overlay = box(home, 30, 0, 260, 240, kInk);
     lv_obj_add_event_cb(reaction_overlay, reaction_draw, LV_EVENT_DRAW_POST, nullptr);
@@ -508,6 +517,7 @@ void screen_set_enabled(bool value, uint32_t now_ms)
 {
     if (!screen_display || enabled == value) return;
     enabled = value;
+    update_eyes();
     // Neither a pending tap nor a finger held across the transition may
     // navigate. A fresh release is required before accepting another touch.
     screen_cancel_touch();
@@ -545,6 +555,7 @@ void screen_tick(uint32_t now_ms)
         mark_transition("hide");
         lv_obj_add_flag(reaction_overlay, LV_OBJ_FLAG_HIDDEN);
     }
+    if (update_eyes()) {animation_last_ms=now_ms;return;}
     if (!portrait || !animation_pixels) return;
     if (!animation_clock_ready) {
         animation_last_ms = animation_render_ms = now_ms;
@@ -668,6 +679,7 @@ void screen_show_reaction(ScreenReaction value, uint32_t now_ms)
 {
     if (!enabled || !reaction_overlay || page != Page::Home) return;
     reaction = value;
+    update_eyes();
     reaction_at = now_ms;
     mark_transition(value == ScreenReaction::None ? "hide" : value == ScreenReaction::Heart ? "heart" : "reject");
     lv_obj_update_flag(reaction_overlay, LV_OBJ_FLAG_HIDDEN, value == ScreenReaction::None);

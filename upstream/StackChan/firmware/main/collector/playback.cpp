@@ -3,6 +3,8 @@
 #include "playback_session.h"
 #include "voice_library.h"
 #include "voice_policy.h"
+#include "eyes/eyes.h"
+#include "eyes/voice_cue.h"
 #include <board.h>
 #include <hal/board/cores3_audio_codec.h>
 #include <hal/board/hal_bridge.h>
@@ -83,14 +85,21 @@ struct Job {
     RemoteReaction reaction = RemoteReaction::None;
     const VoiceClip* voice = nullptr;
     int64_t not_before_us = 0;
+    bool from_asr = false;
 };
 
 struct Output {
     CoreS3AudioCodec* codec;
     int64_t write_deadline_us = 0;
+    const Job* job=nullptr;
+    eyes::VoiceCue cue{};
     int64_t now() { return esp_timer_get_time(); }
     void state(const char* value) { set_state(value); }
-    void submitted(size_t bytes) { std::lock_guard<std::mutex> lock(status_mutex); submitted_bytes = bytes; }
+    void submitted(size_t bytes) {
+        {std::lock_guard<std::mutex> lock(status_mutex);submitted_bytes=bytes;}
+        if(cue.submitted(bytes) && job && job->voice)
+            eyes::voice_started(job->id,job->voice->id,(job->voice->frames*1000u+23999u)/24000u);
+    }
     void pause() { vTaskDelay(1); }
     void drain() { vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(100))); }
     esp_err_t begin()
@@ -185,9 +194,11 @@ void playback_task(void* context)
         auto* codec = static_cast<CoreS3AudioCodec*>(Board::GetInstance().GetAudioCodec());
         output_codec = codec;
         Output output{codec};
+        output.job=job;output.cue.from_asr=job->from_asr;
         wait_voice_start(job->not_before_us,output);
         result = run_pcm_playback(job->pcm, upload, output);
     } else { result.error = failure; result.stage = failure_stage; }
+    if(job->from_asr)eyes::cancel_voice(job->id);
     ESP_LOGI(kTag, "job %lu %s: submitted %u/%u bytes, error %d (%s), cleanup %d",
              static_cast<unsigned long>(job->id), result.error ? "failed" : "completed",
              static_cast<unsigned>(result.submitted), static_cast<unsigned>(job->bytes),
@@ -320,6 +331,7 @@ esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id, int*
     auto* job=new (std::nothrow) Job;
     if (job) {
         job->voice=voice_clip(selected);
+        job->from_asr=from_asr;
         job->not_before_us=voice_not_before(from_asr,accepted_us);
         job->bytes=job->voice->frames*sizeof(int16_t);
         job->pcm=static_cast<int16_t*>(heap_caps_malloc(job->bytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));

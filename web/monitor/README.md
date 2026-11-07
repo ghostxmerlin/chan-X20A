@@ -6,6 +6,8 @@ Mac 与机器人连接同一 Wi-Fi 后，双击仓库里的 `scripts/open-stackc
 
 ## 启停
 
+collector-0.4.27 增加“眼睛表情”：启用三款之一、选择30种表情、播放一次、停止或恢复原首页。页面刷新/重连不发控制。ASR open 的本体台词起声后配近似表情，网页台词点播不自动配表情；手动表情优先。资源安装通过Wi-Fi，无须拔卡，见[眼睛使用与协议](../../docs/soul-eyes.md)。
+
 需要 macOS 系统 curl 和 Node.js 24；无 npm 依赖。
 
 ```sh

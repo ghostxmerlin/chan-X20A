@@ -42,6 +42,19 @@
         </section>
       </div>
     </div>
+    <section class="panel voice-panel" aria-labelledby="eyes-heading">
+      <div class="panel-head"><h2 id="eyes-heading">眼睛表情</h2><span id="eyes-status" class="muted">等待连接</span></div>
+      <div class="voice-layout">
+        <div class="voice-actions">
+          <label for="eyes-style">眼睛款式</label><select id="eyes-style" disabled></select>
+          <div class="control-buttons"><button id="eyes-enable" disabled>启用所选款式</button><button id="eyes-disable" class="stop-button" disabled>恢复原首页</button></div>
+          <label for="eyes-state">表情</label><select id="eyes-state" disabled></select>
+          <div class="control-buttons"><button id="eyes-play" disabled>播放一次</button><button id="eyes-stop" disabled>停止表情</button></div>
+          <p id="eyes-command" class="command-result" role="status">点击操作；刷新页面不会启用或重播。</p>
+        </div>
+        <div class="voice-now"><p id="eyes-current">—</p><p id="eyes-result" class="note">—</p><p class="note">说 open，等待 ASR 的 OK 后，台词配合近似表情；结束回到眼睛待机。手动表情优先。恢复原首页会关闭本次开机的自动表情。</p></div>
+      </div>
+    </section>
     <section class="panel voice-panel" aria-labelledby="voice-heading">
       <div class="panel-head"><h2 id="voice-heading">随机台词</h2><span id="voice-count" class="muted">等待台词库</span></div>
       <div class="voice-layout">

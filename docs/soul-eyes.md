@@ -1,6 +1,42 @@
 # Soul 三款正面眼睛：使用与接入说明
 
-资源位置：[`assets/soul-eyes/v2-front/`](../assets/soul-eyes/v2-front/README.md)。本次已导入资源和可移植解码器，**尚未修改 collector 首页或接入设备播放**。
+资源位置：[`assets/soul-eyes/v2-front/`](../assets/soul-eyes/v2-front/README.md)。collector-0.4.27 已实现后台解码、首页播放、网页控制和 ASR 台词配表情。实际设备部署和验收结果以[最新交接](session-handoff.md)为准。
+
+## 设备使用（0.4.27）
+
+- 在监视终端的“眼睛表情”选择款式，点“启用所选款式”；可以选择30种状态、播放一次、停止回待机或恢复原首页。
+- ASR `open` 仍等待800毫秒避开模组OK；成功提交首块台词PCM后才触发表情。台词结束回idle；网页点播台词不触发此自动表情。
+- 新开机保留原首页；首次ASR台词可自动启用v05。点“恢复原首页”会关闭本次开机的自动启用，重新启用款式后恢复联动。设置仅在RAM。
+- 页面/熄屏/旧爱心叉号优先，其次手动、ASR、idle。切页或熄屏取消台词表情，返回只播放idle，不自动切页或点亮屏幕。读卡失败不影响声音播放。
+- 40条实际PLAY台词使用 [`eyes-voice-map.json`](../assets/eyes-voice-map.json)；这是按台词语气做的近似编配，尚未逐条听校，不使用旧300条候选的编号。
+
+### 不拔卡安装
+
+固件启动时只尝试一次挂载现有FAT卡，不格式化。确认`storage_ready=true`后，在仓库根目录运行：
+
+```sh
+node scripts/install-eyes-assets.mjs
+```
+
+使用已有`.private/stackchan-monitor.json`身份绑定，经Wi-Fi逐个传输90个资源，共10,384,688字节；无须拔卡。先验本地SHA256，再验证设备身份；设备核对boot、白名单、大小和SHA256，并回读校验后改名。相同内容直接验证跳过；不同旧文件保存一次`.prev`，已有备份则拒绝覆盖。网络结果未知时停止，不自动重试；手动重跑会重新核对文件。该安装器不会启用眼睛或改变页面。不接受任意路径或格式化请求。
+
+若`storage_ready=false`，页面仍保留原首页，不能凭音频可播放推断存在SD卡：40条语音驻留应用Flash，眼睛存于SD。卡插入后需用户选择合适时机重新启动以挂载，本版不热插拔重挂载。
+
+### 协议与内存
+
+鉴权`GET /v1/eyes`返回目录；`GET /v1/eyes/status[?request_id=<UUID>]`返回与遥测`eyes`同源的快照。`POST /v1/eyes`强制当前`X-Boot-Id`，最多384字节：
+
+```json
+{"op":"configure","request_id":"12345678-1234-4234-8234-123456789abc","enabled":true,"style":"v05"}
+```
+
+Play使用`state`和`mode:"once"`，或`mode:"loop",loop_for_ms:1000..30000`；Stop只有`op`和新UUID。每次新意图使用新UUID；16条/60秒内相同ID/内容返回原结果，不重播，冲突409。202表示接收，`submitted_seq`/`rendered_seq`表示软件提交/渲染，不证明物理显示效果。
+
+安装入口`POST /v1/eyes/assets`同样鉴权和boot绑定；`X-Eyes-Style/State`只接受内建ID，正文为对应`.soul`原始字节，最多256KiB。使用独立有界后台接收/安装任务。
+
+播放器占用835,584字节PSRAM：两份256KiB资产缓存、两份RGB565帧和4KiB scratch。后台读卡/校验/解码，LVGL线程只绑定就绪帧；旧帧到REFR_READY后才能复用。按单调时钟跳过迟帧，不积压播放。LCD与SD共享SPI3，依赖固定IDF5.5.4逐事务释放DC/MISO和DMA串行化，构建检查驱动哈希。
+
+以下保留资源预览与移植说明；设备集成以本节和实现代码为准。
 
 ## 1. 先查看效果
 
@@ -56,7 +92,7 @@ soul/v18/comforting.soul
 
 全部动画为 **10,384,688 字节，约 9.90 MiB**。当前仓库的 `assets` Flash 分区仅有 4 MiB，因此不能将整套直接塞入现有分区；本次没有更改分区表。
 
-**当前 collector 尚无 SD 挂载和 `.soul` 播放入口。** 上面只是卡内文件布局，不代表固件已存在 `/sdcard` 挂载点，也不会在插卡后自动替换首页。
+collector-0.4.27 挂载点为 `/sdcard`；保持原有卡内容，不自动格式化或替换首页。优先采用本文开头的 Wi-Fi 安装方式。
 
 ## 4. 接入当前 ESP-IDF／LVGL 固件的方式
 
@@ -117,4 +153,4 @@ clang++ -std=c++11 -Wall -Wextra -Werror \
 
 已复制三款正面基准、90 段设备动画、720 张 PNG、90 个 GIF、对比视频、状态／语音映射和解码源码，并对复制结果与源文件逐项校验。来源、文件数和检查结果见资源目录内 `import.json`。
 
-**这是资源导入与主机验证，没有修改、构建或烧录当前 collector 固件，也未进行当前项目的实机动画播放测试。** 原始故事板、生成提示词和制作工具保留在 `~/soul_ui/animation-v2/`。
+以上为资源导入时的历史记录。当前 collector 集成、主机测试和设备部署边界见本文开头及最新交接。 原始故事板、生成提示词和制作工具保留在 `~/soul_ui/animation-v2/`。

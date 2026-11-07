@@ -16,12 +16,17 @@
 #include <cstring>
 #include <cerrno>
 #include <mutex>
+#include <atomic>
 #include <sys/stat.h>
 
 namespace shared_storage {
 namespace {
 std::mutex mutex;
-Status stats{};
+struct AtomicStatus {
+    std::atomic<bool> mounted{false}; std::atomic<int> mount_error{0};
+    std::atomic<uint32_t> reads{0}, installs{0}, failures{0};
+    std::atomic<uint64_t> read_us{0}, write_us{0};
+} stats;
 bool attempted=false;
 sdmmc_card_t* card=nullptr;
 constexpr char kRoot[]="/sdcard";
@@ -65,7 +70,7 @@ void init_task(void* p)
         mount.format_if_mount_failed=false; mount.max_files=4; mount.allocation_unit_size=16384;
         stats.mount_error=esp_vfs_fat_sdspi_mount(kRoot,&host,&slot,&mount,&card);
         stats.mounted=stats.mount_error==ESP_OK;
-        ESP_LOGI("SharedStorage","SD mount %s (0x%x); SPI3 remains available to LCD",stats.mounted?"ready":"unavailable",stats.mount_error);
+        ESP_LOGI("SharedStorage","SD mount %s (0x%x); SPI3 remains available to LCD",stats.mounted?"ready":"unavailable",stats.mount_error.load());
     } else stats.mount_error=init->result;
     xSemaphoreGive(init->done); vTaskDelete(nullptr);
 }
@@ -82,7 +87,8 @@ esp_err_t initialize()
     xSemaphoreTake(init.done,portMAX_DELAY); vSemaphoreDelete(init.done);
     return init.result;
 }
-Status status() { std::lock_guard<std::mutex> lock(mutex); return stats; }
+Status status() { return {stats.mounted.load(),stats.mount_error.load(),stats.reads.load(),stats.installs.load(),stats.failures.load(),stats.read_us.load(),stats.write_us.load()}; }
+bool available() { return stats.mounted.load(); }
 const char* read(const collector::eyes::Asset& a,uint8_t* destination,size_t capacity)
 {
     if (!known(a) || !destination || capacity<a.bytes) return "invalid_argument";

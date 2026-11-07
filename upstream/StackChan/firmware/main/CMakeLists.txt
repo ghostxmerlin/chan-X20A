@@ -35,6 +35,8 @@ list(APPEND STACK_CHAN_SOURCES collector/temperature.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/runtime_log.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/playback.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/voice_library.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/eyes/player.cpp collector/eyes/eyes.cpp collector/eyes/runtime.cpp collector/eyes/view.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/eyes/http.cpp)
 # Basic profile: retain the experimental detector source, but do not link or run it.
 list(APPEND STACK_CHAN_SOURCES collector/face_detection_disabled.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/screen.cpp collector/laughing_man.c collector/collector_mono_15.c)
@@ -349,6 +351,7 @@ idf_component_register(SRCS ${SOURCES}
                         smooth_ui_toolkit
                     )
 target_include_directories(${COMPONENT_LIB} PRIVATE "${VOICE_ASSET_DIR}")
+target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../../../assets/soul-eyes/v2-front/decoder")
 target_add_binary_data(${COMPONENT_LIB} "${VOICE_ASSET_DIR}/voice-library.bin" BINARY RENAME_TO voice_library)
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
