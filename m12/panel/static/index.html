@@ -1,0 +1,792 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>UnitV2 人脸面板</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --sunken: #f0efec;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10); --border-strong: rgba(11,11,11,0.20);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --wash: rgba(42,120,214,0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --sunken: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835;
+    --border: rgba(255,255,255,0.10); --border-strong: rgba(255,255,255,0.20);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --wash: rgba(57,135,229,0.14);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --sunken: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835;
+  --border: rgba(255,255,255,0.10); --border-strong: rgba(255,255,255,0.20);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --wash: rgba(57,135,229,0.14);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page); color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+  padding: 16px; max-width: 1240px; margin: 0 auto;
+}
+h1 { font-size: 20px; margin: 0; font-weight: 650; }
+h2 { font-size: 15px; margin: 0; font-weight: 600; }
+small, .muted { color: var(--ink-2); }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.top .sub { margin: 2px 0 0; color: var(--ink-2); font-size: 13px; }
+.pills { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; color: var(--ink); }
+.ico { font-size: 11px; line-height: 1; }
+.ico.good { color: var(--good); } .ico.warning { color: var(--warning); }
+.ico.serious { color: var(--serious); } .ico.critical { color: var(--critical); }
+
+#banners:empty { display: none; }
+.banner { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border); background: var(--surface); border-left: 4px solid var(--warning); }
+.banner.critical { border-left-color: var(--critical); }
+.banner.serious { border-left-color: var(--serious); }
+
+.grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 960px) { .grid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); } }
+.col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+.card > h2 { margin-bottom: 8px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+
+/* switches */
+.sw-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); cursor: pointer; position: relative; }
+.sw-row:first-of-type { border-top: 0; }
+.sw-text { display: flex; flex-direction: column; }
+.sw-text b { font-weight: 600; font-size: 15px; }
+.sw-row input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.sw { flex: none; width: 48px; height: 28px; border-radius: 14px; background: var(--axis); position: relative; transition: background .15s; }
+.sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.35); transition: transform .15s; }
+.sw-row input:checked + .sw { background: var(--s1); }
+.sw-row input:checked + .sw::after { transform: translateX(20px); }
+.sw-row input:disabled + .sw { opacity: .45; }
+.sw-row input:focus-visible + .sw { outline: 2px solid var(--s1); outline-offset: 2px; }
+.note { margin: 8px 0 0; font-size: 13px; }
+.msg { margin: 8px 0 0; font-size: 13px; min-height: 0; }
+.msg:empty { display: none; }
+.msg.bad::before { content: "✕ "; color: var(--critical); }
+.msg.ok::before { content: "✓ "; color: var(--good); }
+
+/* face canvas */
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.canvas-wrap { position: relative; }
+#faceCanvas { display: block; width: 100%; aspect-ratio: 4 / 3; border-radius: 8px; border: 1px solid var(--border); }
+.info { margin: 8px 0 0; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: 13px; }
+.legend:empty { display: none; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+details { margin-top: 10px; font-size: 13px; }
+summary { cursor: pointer; color: var(--ink-2); }
+pre { margin: 8px 0 0; padding: 10px; background: var(--sunken); border-radius: 8px; overflow: auto; max-height: 260px; font-size: 12px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.45; box-shadow: 0 4px 14px rgba(0,0,0,.12); white-space: nowrap; z-index: 2; font-variant-numeric: tabular-nums; }
+
+/* tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.tile { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.tile-label { font-size: 12px; color: var(--ink-2); }
+.tile-value { font-size: 24px; font-weight: 650; line-height: 1.25; margin-top: 2px; overflow-wrap: anywhere; }
+.tile-value .unit { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+.tile-value.sm { font-size: 17px; }
+.tile-sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); }
+.meter { height: 4px; border-radius: 2px; background: var(--grid); margin-top: 6px; overflow: hidden; }
+.meter > i { display: block; height: 100%; border-radius: 2px; background: var(--s1); }
+
+/* chart */
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--ink-2); padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.seg button.on { background: var(--wash); color: var(--ink); font-weight: 600; }
+.chart { position: relative; min-height: 200px; }
+.chart svg { display: block; }
+.chart .ax { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.chart .lbl { font-size: 11px; fill: var(--ink-2); }
+.chart .val { font-size: 12px; font-weight: 600; fill: var(--ink); }
+.empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; color: var(--muted); }
+.empty[hidden], .tip[hidden], .gate[hidden] { display: none; }
+
+/* JSON data stream */
+.logbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; font-size: 13px; }
+.logbar .grow { flex: 1; }
+.btn.sm { font-size: 12px; padding: 4px 10px; }
+.logwrap { position: relative; }
+.logbox { height: 320px; overflow: auto; background: var(--sunken); border: 1px solid var(--border); border-radius: 8px; padding: 6px 0;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overscroll-behavior: contain; }
+.lrow { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 8px; padding: 2px 10px; cursor: pointer; align-items: start; }
+.lk { height: 18px; }
+.lrow:hover { background: var(--wash); }
+.lt { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lk { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-2); white-space: nowrap; }
+.lj { color: var(--ink); white-space: pre-wrap; word-break: break-all; min-width: 0; }
+.lrow:not(.open) .lj { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.logbox.hide-result .k-result, .logbox.hide-stats .k-stats, .logbox.hide-event .k-event { display: none; }
+.logempty { color: var(--muted); padding: 8px 10px; }
+#logNewest { position: absolute; right: 12px; bottom: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+#logNewest[hidden] { display: none; }
+.logstat { font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+@media (max-width: 520px) {
+  .lrow { grid-template-columns: auto minmax(0, 1fr); }
+  .lj { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) { .sw, .sw::after { transition: none; } }
+table { border-collapse: collapse; margin-top: 8px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 3px 14px 3px 0; border-bottom: 1px solid var(--border); font-weight: normal; }
+th { color: var(--ink-2); }
+
+/* registration */
+#trainCard.disabled .train-body { opacity: .5; pointer-events: none; }
+.gate { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--sunken); font-size: 13px; color: var(--ink-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
+.fchip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border-strong); background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.fchip.sel { border-color: var(--s1); background: var(--wash); font-weight: 600; }
+.fchip:disabled { cursor: default; opacity: .6; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-2); margin-bottom: 12px; }
+.field input { font: inherit; font-size: 15px; color: var(--ink); background: var(--page); border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 10px; width: 100%; max-width: 320px; }
+.field input:focus { outline: 2px solid var(--s1); outline-offset: 0; border-color: transparent; }
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); cursor: pointer; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { background: var(--s1); border-color: var(--s1); color: #fff; }
+.btn.warn { background: var(--warning); border-color: var(--warning); color: #0b0b0b; }
+.btn.danger { color: var(--ink); }
+.btn.danger.armed { background: var(--critical); border-color: var(--critical); color: #fff; }
+.hint { margin: 10px 0 0; font-size: 13px; }
+.hint:empty { display: none; }
+.sep { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
+footer { margin: 20px 0 8px; font-size: 12px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>UnitV2 人脸面板</h1>
+    <p class="sub">不拉取视频，只显示识别结果和设备状态</p>
+  </div>
+  <div class="pills"><span class="pill" id="pillSsh"></span><span class="pill" id="pillRes"></span></div>
+</header>
+<div id="banners"></div>
+
+<main class="grid">
+  <section class="col">
+    <div class="card">
+      <h2>功能</h2>
+      <label class="sw-row">
+        <span class="sw-text"><b>人脸检测</b><small>找出人脸的位置和 5 个关键点</small></span>
+        <input type="checkbox" role="switch" id="swDet"><span class="sw" aria-hidden="true"></span>
+      </label>
+      <label class="sw-row">
+        <span class="sw-text"><b>人脸识别</b><small>认出已经登记过的人</small></span>
+        <input type="checkbox" role="switch" id="swRec"><span class="sw" aria-hidden="true"></span>
+      </label>
+      <p class="note" id="funcNow"></p>
+      <p class="note muted">同一时间只能运行一个功能。两个都关闭时进入待机：摄像头关闭，CPU 约 15%，发热最小。</p>
+      <p class="msg" id="funcMsg"></p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>人脸位置（示意）</h2>
+        <label class="check"><input type="checkbox" id="mirror"> 镜像显示</label>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="faceCanvas" aria-label="人脸位置示意图"></canvas>
+        <div class="tip" id="faceTip" hidden></div>
+      </div>
+      <p class="info" id="faceInfo">—</p>
+      <div class="legend" id="faceLegend"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>数据流（JSON）</h2></div>
+      <div class="logbar">
+        <label class="check"><input type="checkbox" id="lkResult" checked><i class="dot" style="background:var(--s1)"></i>识别结果</label>
+        <label class="check"><input type="checkbox" id="lkStats" checked><i class="dot" style="background:var(--s2)"></i>系统状态</label>
+        <label class="check"><input type="checkbox" id="lkEvent" checked><i class="dot" style="background:var(--s3)"></i>事件</label>
+        <span class="grow"></span>
+        <button class="btn sm" id="logPause">暂停</button>
+        <button class="btn sm" id="logClear">清空</button>
+      </div>
+      <div class="logwrap">
+        <div class="logbox" id="logBox" role="log" aria-live="off"><div class="logempty" id="logEmpty">等待数据…</div></div>
+        <button class="btn sm primary" id="logNewest" hidden>↓ 回到最新</button>
+      </div>
+      <p class="logstat" id="logStat">点一行可以展开成格式化的 JSON。想仔细看某一行，先点「暂停」。</p>
+    </div>
+  </section>
+
+  <section class="col">
+    <div class="card">
+      <h2>系统状态</h2>
+      <div class="tiles" id="tiles"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>芯片温度</h2>
+        <div class="seg" id="winSeg"><button data-w="600" class="on">10 分钟</button><button data-w="1800">30 分钟</button></div>
+      </div>
+      <div class="chart" id="chart"><p class="empty" id="chartEmpty">等待数据…</p><div class="tip" id="chartTip" hidden></div></div>
+      <details id="tblWrap"><summary>数据表（最近 20 条）</summary>
+        <table><thead><tr><th>时间</th><th>温度</th><th>CPU</th></tr></thead><tbody id="tbl"></tbody></table>
+      </details>
+    </div>
+
+    <div class="card" id="trainCard">
+      <h2>人脸登记</h2>
+      <p class="gate" id="trainGate">先打开左边的「人脸识别」，才能登记。</p>
+      <div class="train-body">
+        <div class="tile-label">已登记的人（点一下可以重新登记）</div>
+        <div class="chips" id="faceChips"></div>
+        <label class="field">名字（英文字母、数字、_ 或 -）
+          <input id="nameInput" maxlength="20" placeholder="例如 papa" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="btnrow">
+          <button class="btn primary" id="trainBtn">开始登记</button>
+          <button class="btn" id="saveBtn">保存到设备</button>
+        </div>
+        <p class="hint" id="trainHint"></p>
+        <p class="msg" id="trainMsg"></p>
+        <hr class="sep">
+        <div class="btnrow"><button class="btn danger" id="resetBtn">清空全部人脸</button></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  使用本面板时，请不要同时打开官方网页（http://10.254.239.1），否则识别结果会被分走一部分。
+  本面板不拉取视频，设备的负担和发热都会小一些。
+</footer>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const FN = { face_detector: "人脸检测", face_recognition: "人脸识别", camera_stream: "摄像头预览",
+  audio_fft: "待机（摄像头已关闭）" };
+const st = {
+  stats: null, history: [], result: null, conn: { ssh: false, result: false },
+  switching: null, faces: [], training: null, unsaved: false, live: false,
+  mirror: true, win: 600, selected: "new", resetArm: 0, hoverX: null,
+};
+try { const m = localStorage.getItem("uv2.mirror"); if (m !== null) st.mirror = m === "1"; } catch (e) {}
+try { const w = Number(localStorage.getItem("uv2.win")); if (w === 600 || w === 1800) st.win = w; } catch (e) {}
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pct = (v) => (typeof v === "number" ? Math.round(v * 100) + "%" : "");
+const pad = (n) => String(n).padStart(2, "0");
+const hhmm = (t) => { const d = new Date(t * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const hhmmss = (t) => { const d = new Date(t * 1000); return `${hhmm(t)}:${pad(d.getSeconds())}`; };
+const fmtDur = (s) => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h} 小时 ${m} 分` : `${m} 分 ${s % 60} 秒`; };
+
+/* ---------- colors from CSS tokens (re-read when theme flips) ---------- */
+let C = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ["surface", "sunken", "ink", "ink-2", "muted", "grid", "axis", "warning",
+                   "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"]) C[k] = cs.getPropertyValue("--" + k).trim();
+}
+readColors();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { readColors(); renderChart(); });
+
+/* ---------- server events ---------- */
+function connect() {
+  const es = new EventSource("/events");
+  es.addEventListener("init", (e) => {
+    const d = JSON.parse(e.data);
+    Object.assign(st, { stats: d.stats, history: d.history || [], result: d.result, conn: d.conn,
+      switching: d.switching, faces: d.faces || [], training: d.training, unsaved: d.unsaved, live: true });
+    renderAll();
+    logLine("event", { panel: "已连接面板服务", conn: d.conn, faces: d.faces });
+  });
+  es.addEventListener("stats", (e) => {
+    const d = JSON.parse(e.data);
+    const { t: _t, ...statsDoc } = d;
+    logLine("stats", statsDoc, d.t);
+    st.stats = d;
+    st.history.push([d.t, d.temp, d.cpu]);
+    const cut = d.t - 1800;
+    while (st.history.length && st.history[0][0] < cut) st.history.shift();
+    renderStats(); renderChart(); renderFunc(); renderTrain(); renderBanner();
+  });
+  es.addEventListener("result", (e) => { st.result = JSON.parse(e.data); logLine("result", st.result.doc, st.result.t); });
+  es.addEventListener("conn", (e) => {
+    st.conn = JSON.parse(e.data); logLine("event", { conn: st.conn });
+    renderConn(); renderBanner(); renderFunc();
+  });
+  es.addEventListener("switch", (e) => {
+    const d = JSON.parse(e.data);
+    logLine("event", { switch: d });
+    st.switching = d.switching;
+    if (d.error) flash("funcMsg", d.error, "bad");
+    else if (d.done && typeof d.seconds === "number")
+      flash("funcMsg", `已切换到「${d.done === "standby" ? "待机" : FN[d.done]}」，用时 ${d.seconds} 秒`, "ok");
+    renderFunc(); renderTrain();
+  });
+  es.addEventListener("train", (e) => {
+    const d = JSON.parse(e.data);
+    logLine("event", { train: d });
+    st.faces = d.faces || []; st.training = d.training; st.unsaved = d.unsaved;
+    if (st.selected !== "new" && st.selected >= st.faces.length) st.selected = "new";
+    renderTrain(); renderLegend();
+  });
+  es.onopen = () => { st.live = true; renderConn(); renderBanner(); };
+  es.onerror = () => { st.live = false; renderConn(); renderBanner(); renderFunc(); };
+}
+
+async function post(url, body) {
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return await r.json();
+  } catch (e) { return { ok: false, error: "本地面板服务没有响应" }; }
+}
+function flash(id, text, kind) {
+  const el = $(id); el.textContent = text; el.className = "msg " + (kind || "");
+  clearTimeout(el._t);
+  if (kind === "ok") el._t = setTimeout(() => { el.textContent = ""; }, 6000);
+}
+
+/* ---------- header / banners ---------- */
+function pillHtml(ok, label, okText, badText) {
+  return ok ? `<span class="ico good">●</span>${label}：${okText}` : `<span class="ico critical">✕</span>${label}：${badText}`;
+}
+function renderConn() {
+  $("pillSsh").innerHTML = pillHtml(st.live && st.conn.ssh, "设备状态", "在线", "离线");
+  $("pillRes").innerHTML = pillHtml(st.live && st.conn.result, "识别结果", "已连接", "未连接");
+}
+function renderBanner() {
+  let b = null;
+  if (!st.live) b = ["critical", "✕", "和本地面板服务断开了。请确认终端里的 server.py 还在运行。"];
+  else if (st.stats && st.stats.overheat) b = ["critical", "✕", "过热保护已触发：设备已降频，识别服务被系统停止，需要重启才能恢复。请拔掉 USB，冷却 15 分钟后再插上。"];
+  else if (!st.conn.ssh) b = ["serious", "▲", `读不到设备状态（SSH）：${esc(st.conn.ssh_err || "正在连接…")}。请检查 USB 线。`];
+  else if (!st.conn.result) b = ["warning", "▲", `识别结果流未连接：${esc(st.conn.result_err || "正在连接…")}`];
+  $("banners").innerHTML = b ? `<div class="banner ${b[0]}"><span class="ico ${b[0]}">${b[1]}</span><span>${b[2]}</span></div>` : "";
+}
+
+/* ---------- function switches ---------- */
+function curFunc() { return st.stats ? st.stats.func : null; }
+function renderFunc() {
+  const cur = curFunc(), sw = st.switching;
+  const want = sw ? (sw === "standby" ? null : sw) : cur;
+  $("swDet").checked = want === "face_detector";
+  $("swRec").checked = want === "face_recognition";
+  const dis = !!sw || !st.live || !st.conn.ssh || !!(st.stats && st.stats.overheat);
+  $("swDet").disabled = $("swRec").disabled = dis;
+  $("funcNow").innerHTML = sw
+    ? `<span class="ico warning">▲</span> 正在切换到「${sw === "standby" ? "待机" : FN[sw]}」…（大约 2 秒）`
+    : `当前：<b>${cur ? esc(FN[cur] || cur) : "无"}</b>`;
+}
+async function setFunc(name) {
+  flash("funcMsg", "");
+  const r = await post("/api/func", { name });
+  if (!r.ok) flash("funcMsg", r.error || "切换失败", "bad");
+  renderFunc();
+}
+$("swDet").addEventListener("change", (e) => setFunc(e.target.checked ? "face_detector" : "standby"));
+$("swRec").addEventListener("change", (e) => setFunc(e.target.checked ? "face_recognition" : "standby"));
+
+/* ---------- status tiles ---------- */
+function tempLevel(s) {
+  if (s.overheat) return ["critical", "✕", "过热保护已触发"];
+  if (s.temp >= 92) return ["serious", "▲", "接近保护阈值"];
+  if (s.temp >= 85) return ["warning", "▲", "偏高"];
+  return ["good", "●", "正常"];
+}
+function renderStats() {
+  const s = st.stats;
+  if (!s) { $("tiles").innerHTML = `<p class="muted">等待设备数据…</p>`; return; }
+  const lv = tempLevel(s);
+  const gov = s.governor === "performance" ? "全速" : s.governor === "powersave" ? "省电（已降频）" : s.governor;
+  const rate = st.result && Date.now() / 1000 - st.result.t < 2 ? st.result.rate : 0;
+  const memPct = s.mem_total_mb ? Math.round((s.mem_used_mb / s.mem_total_mb) * 100) : 0;
+  $("tiles").innerHTML = `
+    <div class="tile"><div class="tile-label">芯片温度</div>
+      <div class="tile-value">${s.temp}<span class="unit">°C</span></div>
+      <div class="chip"><span class="ico ${lv[0]}">${lv[1]}</span>${lv[2]}</div>
+      <div class="tile-sub">${s.overheat ? "需要断电重启" : `距过热保护（95°C）还有 ${95 - s.temp}°C`}</div></div>
+    <div class="tile"><div class="tile-label">CPU 占用</div>
+      <div class="tile-value">${s.cpu}<span class="unit">%</span></div>
+      <div class="meter"><i style="width:${s.cpu}%"></i></div>
+      <div class="tile-sub">${s.freq_mhz} MHz · ${esc(gov)}</div></div>
+    <div class="tile"><div class="tile-label">系统负载（1 分钟）</div>
+      <div class="tile-value">${s.load[0].toFixed(2)}</div>
+      <div class="tile-sub">5 分钟 ${s.load[1].toFixed(2)} · 15 分钟 ${s.load[2].toFixed(2)}</div></div>
+    <div class="tile"><div class="tile-label">内存</div>
+      <div class="tile-value sm">${s.mem_used_mb} / ${s.mem_total_mb}<span class="unit">MB</span></div>
+      <div class="meter"><i style="width:${memPct}%"></i></div></div>
+    <div class="tile"><div class="tile-label">当前功能</div>
+      <div class="tile-value sm">${s.func ? esc(FN[s.func] || s.func) : "无"}</div>
+      <div class="tile-sub">已开机 ${fmtDur(s.uptime)}</div></div>
+    <div class="tile"><div class="tile-label">识别结果</div>
+      <div class="tile-value">${rate}<span class="unit">次/秒</span></div>
+      <div class="tile-sub">${st.conn.result ? "结果流已连接" : "结果流未连接"}</div></div>`;
+}
+
+/* ---------- temperature chart ---------- */
+let CH = null;
+function renderChart() {
+  const wrap = $("chart");
+  const old = wrap.querySelector("svg"); if (old) old.remove();
+  const h = st.history;
+  if (!h.length) { $("chartEmpty").hidden = false; CH = null; renderTable(); return; }
+  $("chartEmpty").hidden = true;
+  const W = Math.max(280, wrap.clientWidth), H = 210, ml = 34, mr = 14, mt = 16, mb = 26;
+  const pw = W - ml - mr, ph = H - mt - mb;
+  const now = h[h.length - 1][0], t0 = now - st.win;
+  const pts = h.filter((p) => p[0] >= t0);
+  const mn = Math.min(...pts.map((p) => p[1]));
+  const lo = Math.min(60, Math.floor((mn - 5) / 10) * 10), hi = 100;
+  const x = (t) => ml + ((t - t0) / st.win) * pw;
+  const y = (v) => mt + ((hi - v) / (hi - lo)) * ph;
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="芯片温度曲线，最近 ${st.win / 60} 分钟">`;
+  for (let v = lo; v <= hi; v += 10) {
+    s += `<line x1="${ml}" x2="${W - mr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>`;
+    s += `<text x="${ml - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v}</text>`;
+  }
+  s += `<line x1="${ml}" x2="${W - mr}" y1="${mt + ph}" y2="${mt + ph}" stroke="var(--axis)" stroke-width="1"/>`;
+  const step = st.win / 5;
+  for (let k = 0; k <= 5; k++) {
+    const t = t0 + k * step;
+    s += `<text x="${x(t)}" y="${H - 7}" text-anchor="${k === 0 ? "start" : k === 5 ? "end" : "middle"}" class="ax">${hhmm(t)}</text>`;
+  }
+  s += `<line x1="${ml}" x2="${W - mr}" y1="${y(95)}" y2="${y(95)}" stroke="var(--critical)" stroke-width="1.5" stroke-dasharray="5 4"/>`;
+  s += `<text x="${ml + 6}" y="${y(95) - 5}" class="lbl">过热保护 95°C</text>`;
+  let d = "", prev = null;
+  for (const p of pts) {
+    d += `${!prev || p[0] - prev[0] > 12 ? "M" : "L"}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`;
+    prev = p;
+  }
+  s += `<path d="${d}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const last = pts[pts.length - 1];
+  s += `<circle cx="${x(last[0])}" cy="${y(last[1])}" r="4" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/>`;
+  s += `<text x="${x(last[0]) - 8}" y="${y(last[1]) + 18}" text-anchor="end" class="val">${last[1]}°C</text>`;
+  s += `<line id="xh" y1="${mt}" y2="${mt + ph}" stroke="var(--axis)" stroke-width="1" visibility="hidden"/>`;
+  s += `<circle id="xhDot" r="5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2" visibility="hidden"/>`;
+  s += `<rect x="${ml}" y="${mt}" width="${pw}" height="${ph + mb}" fill="transparent"/>`;
+  s += `</svg>`;
+  wrap.insertAdjacentHTML("afterbegin", s);
+  CH = { pts, x, y, ml, pw, t0 };
+  if (st.hoverX !== null) showChartHover(st.hoverX);
+  renderTable();
+}
+function showChartHover(px) {
+  const svg = $("chart").querySelector("svg");
+  if (!CH || !svg) return;
+  const t = CH.t0 + ((px - CH.ml) / CH.pw) * st.win;
+  let best = null, bd = Infinity;
+  for (const p of CH.pts) { const dd = Math.abs(p[0] - t); if (dd < bd) { bd = dd; best = p; } }
+  if (!best) return;
+  const cx = CH.x(best[0]), cy = CH.y(best[1]);
+  const xh = svg.querySelector("#xh"), dot = svg.querySelector("#xhDot");
+  xh.setAttribute("x1", cx); xh.setAttribute("x2", cx); xh.setAttribute("visibility", "visible");
+  dot.setAttribute("cx", cx); dot.setAttribute("cy", cy); dot.setAttribute("visibility", "visible");
+  const tip = $("chartTip");
+  tip.innerHTML = `${hhmmss(best[0])}<br><b>${best[1]}°C</b>${best[2] != null ? ` · CPU ${best[2]}%` : ""}`;
+  tip.hidden = false;
+  const tw = tip.offsetWidth, W = $("chart").clientWidth;
+  tip.style.left = Math.min(Math.max(0, cx + 12), W - tw) + "px";
+  tip.style.top = Math.max(0, cy - 48) + "px";
+}
+$("chart").addEventListener("pointermove", (e) => {
+  const svg = $("chart").querySelector("svg"); if (!svg || !CH) return;
+  const px = e.clientX - svg.getBoundingClientRect().left;
+  if (px < CH.ml || px > CH.ml + CH.pw) return;
+  st.hoverX = px; showChartHover(px);
+});
+$("chart").addEventListener("pointerleave", () => {
+  st.hoverX = null; $("chartTip").hidden = true;
+  const svg = $("chart").querySelector("svg");
+  if (svg) { svg.querySelector("#xh").setAttribute("visibility", "hidden"); svg.querySelector("#xhDot").setAttribute("visibility", "hidden"); }
+});
+$("winSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  st.win = Number(b.dataset.w);
+  try { localStorage.setItem("uv2.win", String(st.win)); } catch (err) {}
+  for (const x of $("winSeg").querySelectorAll("button")) x.classList.toggle("on", x === b);
+  renderChart();
+});
+function renderTable() {
+  if (!$("tblWrap").open) return;
+  $("tbl").innerHTML = st.history.slice(-20).reverse()
+    .map((p) => `<tr><td>${hhmmss(p[0])}</td><td>${p[1]}°C</td><td>${p[2] != null ? p[2] + "%" : "—"}</td></tr>`).join("");
+}
+$("tblWrap").addEventListener("toggle", renderTable);
+new ResizeObserver(() => renderChart()).observe($("chart"));
+
+/* ---------- face canvas ---------- */
+const cv = $("faceCanvas"), ctx = cv.getContext("2d");
+let hits = [];
+$("mirror").checked = st.mirror;
+$("mirror").addEventListener("change", (e) => {
+  st.mirror = e.target.checked;
+  try { localStorage.setItem("uv2.mirror", st.mirror ? "1" : "0"); } catch (err) {}
+});
+function slotColor(i) { return C["s" + ((i % 8) + 1)]; }
+function faceStyle(f, running) {
+  if (st.training) return { col: C.warning, txt: "#0b0b0b", label: `登记中 · ${st.training.name}` };
+  if (running === "Face Recognition") {
+    const n = String(f.name || "").trim();
+    if (n && !/^unknown$/i.test(n)) {
+      const i = Math.max(0, st.faces.indexOf(n));
+      return { col: slotColor(i), txt: i % 8 === 3 ? "#0b0b0b" : "#ffffff", label: `${n} ${pct(f.match_prob)}`.trim() };
+    }
+    return { col: C.muted, txt: "#ffffff", label: "未知的人" };
+  }
+  return { col: C.s1, txt: "#ffffff", label: `人脸 ${pct(f.prob)}`.trim() };
+}
+function staleReason() {
+  if (!st.live) return "本地面板服务未连接";
+  if (st.stats && st.stats.overheat) return "过热保护已触发，识别已停止";
+  if (st.switching) return "正在切换功能…";
+  if (!st.stats) return "正在连接设备…";
+  const f = curFunc();
+  if (f !== "face_detector" && f !== "face_recognition") return "待机中：打开左上方的开关开始识别";
+  if (!st.conn.result) return "识别结果流未连接，正在重连…";
+  return "等待识别结果…";
+}
+function rrect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = cv.clientWidth, ch = cv.clientHeight;
+  const bw = Math.round(cw * dpr), bh = Math.round(ch * dpr);
+  if (bw && (cv.width !== bw || cv.height !== bh)) { cv.width = bw; cv.height = bh; }
+  const k = cv.width / 640, u = dpr / k;          // u = one CSS pixel in 640x480 units
+  ctx.setTransform(k, 0, 0, cv.height / 480, 0, 0);
+  ctx.fillStyle = C.sunken; ctx.fillRect(0, 0, 640, 480);
+  ctx.strokeStyle = C.grid; ctx.lineWidth = u;
+  ctx.beginPath();
+  for (let gx = 80; gx < 640; gx += 80) { ctx.moveTo(gx, 0); ctx.lineTo(gx, 480); }
+  for (let gy = 80; gy < 480; gy += 80) { ctx.moveTo(0, gy); ctx.lineTo(640, gy); }
+  ctx.stroke();
+  ctx.strokeStyle = C.axis; ctx.setLineDash([4 * u, 4 * u]);
+  ctx.beginPath(); ctx.moveTo(320, 0); ctx.lineTo(320, 480); ctx.moveTo(0, 240); ctx.lineTo(640, 240); ctx.stroke();
+  ctx.setLineDash([]);
+
+  hits = [];
+  const r = st.result, now = Date.now() / 1000;
+  const fresh = r && now - r.t < 1.5 && !st.switching;
+  if (fresh) {
+    const faces = Array.isArray(r.doc.face) ? r.doc.face : [];
+    for (const f of faces) {
+      if (typeof f.x !== "number") continue;
+      const s = faceStyle(f, r.doc.running);
+      const bx = st.mirror ? 640 - f.x - f.w : f.x;
+      ctx.globalAlpha = 0.10; ctx.fillStyle = s.col; rrect(bx, f.y, f.w, f.h, 8 * u); ctx.fill();
+      ctx.globalAlpha = 1; ctx.strokeStyle = s.col; ctx.lineWidth = 2.5 * u; rrect(bx, f.y, f.w, f.h, 8 * u); ctx.stroke();
+      for (const m of (Array.isArray(f.mark) ? f.mark : [])) {
+        const mx = st.mirror ? 640 - m.x : m.x;
+        ctx.beginPath(); ctx.arc(mx, m.y, 4 * u, 0, Math.PI * 2);
+        ctx.fillStyle = s.col; ctx.fill(); ctx.lineWidth = 1.5 * u; ctx.strokeStyle = C.surface; ctx.stroke();
+      }
+      ctx.font = `600 ${13 * u}px system-ui, -apple-system, "PingFang SC", sans-serif`;
+      const tw = ctx.measureText(s.label).width, px = 7 * u, lh = 22 * u;
+      let ly = f.y - lh - 4 * u; if (ly < 2 * u) ly = f.y + 4 * u;
+      const lx = Math.min(Math.max(bx, 2 * u), 640 - tw - 2 * px - 2 * u);
+      ctx.fillStyle = s.col; rrect(lx, ly, tw + 2 * px, lh, 6 * u); ctx.fill();
+      ctx.fillStyle = s.txt; ctx.textBaseline = "middle"; ctx.fillText(s.label, lx + px, ly + lh / 2);
+      hits.push({ x: bx, y: f.y, w: f.w, h: f.h, f });
+    }
+    if (!faces.length) centerText("画面里没有人脸");
+  } else {
+    centerText(staleReason());
+  }
+  requestAnimationFrame(draw);
+}
+function centerText(t) {
+  const k = cv.width / 640, u = (window.devicePixelRatio || 1) / k;
+  ctx.font = `${15 * u}px system-ui, -apple-system, "PingFang SC", sans-serif`;
+  ctx.fillStyle = C.muted; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(t, 320, 240 + 28 * u); ctx.textAlign = "start";
+}
+cv.addEventListener("pointermove", (e) => {
+  const rect = cv.getBoundingClientRect();
+  const px = ((e.clientX - rect.left) / rect.width) * 640, py = ((e.clientY - rect.top) / rect.height) * 480;
+  const hit = hits.find((h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h);
+  const tip = $("faceTip");
+  if (!hit) { tip.hidden = true; return; }
+  const f = hit.f, R = Math.round;
+  tip.innerHTML = `${f.name ? `<b>${esc(f.name)}</b><br>` : ""}中心 (${R(f.x + f.w / 2)}, ${R(f.y + f.h / 2)}) · 大小 ${R(f.w)}×${R(f.h)}` +
+    `<br>人脸置信度 ${pct(f.prob)}${typeof f.match_prob === "number" ? ` · 匹配度 ${pct(f.match_prob)}` : ""}` +
+    `<br><span class="muted">坐标是摄像头原始坐标（640×480）</span>`;
+  tip.hidden = false;
+  const wrapW = cv.clientWidth, tw = tip.offsetWidth;
+  tip.style.left = Math.min(Math.max(0, e.clientX - rect.left + 14), wrapW - tw) + "px";
+  tip.style.top = Math.max(0, e.clientY - rect.top - 70) + "px";
+});
+cv.addEventListener("pointerleave", () => { $("faceTip").hidden = true; });
+
+setInterval(() => {
+  const r = st.result, now = Date.now() / 1000;
+  if (r && now - r.t < 1.5) {
+    const n = Array.isArray(r.doc.face) ? r.doc.face.length : (r.doc.num || 0);
+    const ago = now - r.t;
+    $("faceInfo").textContent = `画面里有 ${n} 张脸 · ${r.rate} 次/秒 · ${ago < 1 ? "刚刚更新" : ago.toFixed(1) + " 秒前"}`;
+  } else {
+    $("faceInfo").textContent = "—";
+  }
+}, 250);
+
+/* ---------- JSON data stream ---------- */
+const LOG_MAX = 300;
+const KNAME = { result: "结果", stats: "状态", event: "事件" };
+const KCOL = { result: "s1", stats: "s2", event: "s3" };
+const LG = { paused: false, follow: true, buf: [] };
+const msStamp = (t) => `${hhmmss(t)}.${String(Math.floor((t % 1) * 1000)).padStart(3, "0")}`;
+function logLine(kind, obj, t) {
+  t = t || Date.now() / 1000;
+  if (LG.paused) {
+    LG.buf.push([kind, obj, t]);
+    if (LG.buf.length > LOG_MAX) LG.buf.shift();
+    $("logPause").textContent = `继续（${LG.buf.length} 条新数据）`;
+    return;
+  }
+  appendRow(kind, obj, t);
+}
+function appendRow(kind, obj, t) {
+  const box = $("logBox");
+  const empty = $("logEmpty"); if (empty) empty.remove();
+  const row = document.createElement("div");
+  row.className = "lrow k-" + kind;
+  row.innerHTML = `<span class="lt">${msStamp(t)}</span><span class="lk"><i class="dot" style="background:var(--${KCOL[kind]})"></i>${KNAME[kind]}</span><span class="lj"></span>`;
+  row.lastChild.textContent = JSON.stringify(obj);
+  row._obj = obj;
+  box.appendChild(row);
+  while (box.childElementCount > LOG_MAX) {
+    const first = box.firstElementChild, h = first.offsetHeight;
+    first.remove();
+    if (!LG.follow) box.scrollTop -= h;   // keep the reader's place when not following
+  }
+  if (LG.follow) box.scrollTop = box.scrollHeight;
+}
+$("logBox").addEventListener("scroll", () => {
+  const box = $("logBox");
+  LG.follow = box.scrollTop + box.clientHeight >= box.scrollHeight - 12;
+  $("logNewest").hidden = LG.follow;
+});
+$("logNewest").addEventListener("click", () => {
+  LG.follow = true; $("logNewest").hidden = true;
+  const box = $("logBox"); box.scrollTop = box.scrollHeight;
+});
+$("logBox").addEventListener("click", (e) => {
+  const row = e.target.closest(".lrow"); if (!row) return;
+  const open = row.classList.toggle("open");
+  row.lastChild.textContent = open ? JSON.stringify(row._obj, null, 2) : JSON.stringify(row._obj);
+});
+$("logPause").addEventListener("click", () => {
+  LG.paused = !LG.paused;
+  if (!LG.paused) {
+    const pending = LG.buf; LG.buf = [];
+    for (const [k, o, t] of pending) appendRow(k, o, t);
+  }
+  $("logPause").textContent = LG.paused ? "继续" : "暂停";
+  $("logPause").classList.toggle("primary", LG.paused);
+});
+$("logClear").addEventListener("click", () => {
+  $("logBox").innerHTML = `<div class="logempty" id="logEmpty">已清空，等待新数据…</div>`;
+  LG.buf = []; if (LG.paused) $("logPause").textContent = "继续";
+});
+for (const [id, kind] of [["lkResult", "result"], ["lkStats", "stats"], ["lkEvent", "event"]]) {
+  $(id).addEventListener("change", (e) => {
+    $("logBox").classList.toggle("hide-" + kind, !e.target.checked);
+    if (LG.follow) $("logBox").scrollTop = $("logBox").scrollHeight;
+  });
+}
+setInterval(renderStats, 1000);
+
+/* ---------- registration ---------- */
+function renderLegend() {
+  const el = $("faceLegend");
+  if (curFunc() !== "face_recognition") { el.innerHTML = ""; return; }
+  el.innerHTML = st.faces.map((n, i) => `<span><i class="dot" style="background:var(--s${(i % 8) + 1})"></i>${esc(n)}</span>`).join("") +
+    `<span><i class="dot" style="background:var(--muted)"></i>未知的人</span>` +
+    (st.training ? `<span><i class="dot" style="background:var(--warning)"></i>登记中</span>` : "");
+}
+function renderTrain() {
+  const on = !!(st.live && st.stats && st.stats.func === "face_recognition" && !st.switching && !st.stats.overheat);
+  $("trainCard").classList.toggle("disabled", !on);
+  $("trainGate").hidden = on;
+  const tr = st.training;
+  $("faceChips").innerHTML = st.faces.map((n, i) =>
+    `<button class="fchip ${st.selected === i ? "sel" : ""}" data-i="${i}" ${tr ? "disabled" : ""}><i class="dot" style="background:var(--s${(i % 8) + 1})"></i>${esc(n)}</button>`).join("") +
+    `<button class="fchip ${st.selected === "new" ? "sel" : ""}" data-i="new" ${tr || st.faces.length >= 10 ? "disabled" : ""}>＋ 新的人</button>`;
+  const full = st.selected === "new" && st.faces.length >= 10;
+  const tb = $("trainBtn");
+  tb.textContent = tr ? "■ 停止登记" : "● 开始登记";
+  tb.className = "btn " + (tr ? "warn" : "primary");
+  tb.disabled = !on || (!tr && full);
+  $("saveBtn").disabled = !on || !st.unsaved || !!tr;
+  $("resetBtn").disabled = !on || !!tr || !st.faces.length;
+  $("nameInput").disabled = !on || !!tr;
+  let hint = "";
+  if (tr) hint = `<span class="ico warning">▲</span> 正在登记「${esc(tr.name)}」：看着摄像头，慢慢左右、上下转头，采集不同角度。大约 10～20 秒后点「停止登记」。`;
+  else if (st.unsaved) hint = `<span class="ico warning">▲</span> 有还没保存的改动，断电后会丢失。点「保存到设备」保存。`;
+  else if (full) hint = "最多只能登记 10 个人。";
+  $("trainHint").innerHTML = hint;
+  renderLegend();
+}
+$("faceChips").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b || b.disabled) return;
+  if (b.dataset.i === "new") { st.selected = "new"; $("nameInput").value = ""; }
+  else { st.selected = Number(b.dataset.i); $("nameInput").value = st.faces[st.selected] || ""; }
+  renderTrain();
+});
+$("trainBtn").addEventListener("click", async () => {
+  if (st.training) {
+    const r = await post("/api/train", { op: "stoptrain" });
+    if (r.ok) flash("trainMsg", "已停止登记。现在可以试试能不能认出来，满意的话点「保存到设备」。", "ok");
+    else flash("trainMsg", r.error, "bad");
+    return;
+  }
+  const name = $("nameInput").value.trim();
+  if (!/^[A-Za-z0-9_-]{1,20}$/.test(name)) { flash("trainMsg", "名字只能用英文字母、数字、_ 或 -，最多 20 个字符。", "bad"); return; }
+  if (st.selected === "new" && st.faces.includes(name)) { flash("trainMsg", "这个名字已经登记过了。要重新登记，请先在上面点选它。", "bad"); return; }
+  const face_id = st.selected === "new" ? st.faces.length : st.selected;
+  const r = await post("/api/train", { op: "train", face_id, name });
+  if (r.ok) { st.selected = face_id; flash("trainMsg", ""); }
+  else flash("trainMsg", r.error, "bad");
+});
+$("saveBtn").addEventListener("click", async () => {
+  const r = await post("/api/train", { op: "saverun" });
+  r.ok ? flash("trainMsg", "已保存到设备，断电后也会保留。", "ok") : flash("trainMsg", r.error, "bad");
+});
+$("resetBtn").addEventListener("click", async () => {
+  const b = $("resetBtn");
+  if (Date.now() - st.resetArm > 4000) {
+    st.resetArm = Date.now(); b.textContent = "再点一次，确认清空"; b.classList.add("armed");
+    setTimeout(() => { b.textContent = "清空全部人脸"; b.classList.remove("armed"); }, 4000);
+    return;
+  }
+  st.resetArm = 0; b.textContent = "清空全部人脸"; b.classList.remove("armed");
+  const r = await post("/api/train", { op: "reset" });
+  if (r.ok) { st.selected = "new"; flash("trainMsg", "已清空。点「保存到设备」后，设备上的数据才会真正清掉。", "ok"); }
+  else flash("trainMsg", r.error, "bad");
+});
+
+function renderAll() { renderConn(); renderBanner(); renderFunc(); renderStats(); renderChart(); renderTrain(); }
+renderAll();
+connect();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
