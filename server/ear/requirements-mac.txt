@@ -1,0 +1,5 @@
+# Mac test client (mic_client.py). Opus also needs the system library: brew install opus
+numpy
+websockets>=13
+sounddevice
+opuslib_next>=1.3.1

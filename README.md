@@ -29,6 +29,7 @@
 | `upstream/StackChan/app/`、`server/` | 上游手机端与服务端参考源码，不是当前采集入口 |
 | `android/Collector/` | 独立 Android 观察台，原生 Java |
 | `m12/panel/` | M12（UnitV2 M12）摄像头的 Mac 监控面板，只用 Python 标准库，不拉视频 |
+| `server/ear/` | soul 的耳朵服务端（sherpa-onnx：人声检测、识别、声纹、声音分类）和 Mac 测试客户端；真实服务器配置放根目录 `.env`，不提交 |
 | `config/` | 当前版本 ESP-IDF 构建配置 |
 | `assets/soul-eyes/v2-front/` | 三款正面眼睛资源，90 段动画；尚未接入 collector 首页 |
 | `scripts/`、`tests/` | 构建入口、主机协议验证与联调工具 |
@@ -50,6 +51,8 @@ python3 -B -m unittest discover -s tests -v
 设备连接、记录和数据导出见 [使用说明](docs/collector-guide.md)，通信格式见 [协议](docs/collector-protocol.md)。部署前需核对设备与活动分区；项目内的开发设备偏移不能直接用于其他机器。
 
 三款正面眼睛的预览、状态清单、SD 文件布局和 ESP-IDF／LVGL 接入约束见 [眼睛资源使用说明](docs/soul-eyes.md)。
+
+soul（宠物型陪伴机器人）的整体进展、分工和后续计划见 [soul 进展与规划](docs/soul-roadmap.md)。耳朵服务端的用法、配置和部署见 [server/ear](server/ear/README.md)；服务器地址、端口和令牌只放在本机 `.env`（格式见 `.env.example`）。
 
 M12 摄像头通过 Grove 接 StackChan（由 StackChan 供电，串口 115200）。它的连接方式、设备接口、散热限制、官方源码分析和后续规划见 [M12 探索记录](docs/m12-unitv2.md)；Mac 监控面板的用法见 [m12/panel](m12/panel/README.md)。
 

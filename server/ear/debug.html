@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>耳朵调试</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e3e1dc;
+  --accent: #2f6fd6; --ok: #2e8b57; --warn: #c98a16; --bad: #c8463b; --speech: #2f6fd6;
+  --sound: #8a5cc7; --level: #9aa3ad; --floor: #c8463b; --sel: #eef3fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141416; --panel: #1d1d20; --ink: #ececee; --muted: #9a9aa2; --line: #2e2e33;
+    --accent: #6ea2ff; --ok: #4cc38a; --warn: #e3b341; --bad: #ff6b5f; --speech: #6ea2ff;
+    --sound: #b48cf2; --level: #6c7480; --floor: #ff6b5f; --sel: #23293a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 12px; }
+h1 { font-size: 18px; margin: 0; }
+.meta { color: var(--muted); font-size: 12px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-right: 6px; }
+.dot.on { background: var(--ok); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.card .k { color: var(--muted); font-size: 12px; }
+.card .v { font-size: 18px; font-variant-numeric: tabular-nums; }
+.card .s { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
+.tl { padding: 8px 10px 4px; }
+canvas { width: 100%; height: 230px; display: block; }
+.legend { color: var(--muted); font-size: 12px; padding: 0 2px 6px; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 10px; }
+.controls input[type=text] { width: 7em; }
+.controls input[type=number] { width: 4em; }
+input, button { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 8px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+#enrollmsg { color: var(--muted); }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; color: var(--muted); font-weight: normal; font-size: 12px;
+  border-bottom: 1px solid var(--line); padding: 6px 10px; }
+td { padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr.row { cursor: pointer; }
+tr.row:hover, tr.row.open { background: var(--sel); }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.who { font-weight: 600; white-space: nowrap; }
+.who.known { color: var(--ok); } .who.unsure { color: var(--warn); } .who.unknown { color: var(--bad); }
+.who.none, .pending { color: var(--muted); }
+.tagsound { color: var(--sound); font-weight: 600; white-space: nowrap; }
+.hint { color: var(--muted); font-size: 12px; }
+tr.detail td { background: var(--sel); font-size: 13px; }
+.dl { display: grid; grid-template-columns: 4em 1fr; gap: 2px 10px; }
+.dl b { color: var(--muted); font-weight: normal; }
+pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+.play { border: none; background: none; color: var(--accent); padding: 0; }
+@media (max-width: 640px) { .hide-sm { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><span id="conn" class="dot"></span>耳朵调试</h1>
+    <span class="meta" id="server"></span>
+    <span class="meta" id="speakers"></span>
+    <span class="meta" id="session"></span>
+  </header>
+
+  <section class="cards">
+    <div class="card"><div class="k">心跳</div><div class="v" id="hb">–</div><div class="s" id="hbs"></div></div>
+    <div class="card"><div class="k">回执延迟</div><div class="v" id="lag">–</div><div class="s" id="lags"></div></div>
+    <div class="card"><div class="k">RTT</div><div class="v" id="rtt">–</div><div class="s" id="rtts"></div></div>
+    <div class="card"><div class="k">音量 / 底噪</div><div class="v" id="lvl">–</div><div class="s" id="lvls"></div></div>
+    <div class="card"><div class="k">状态</div><div class="v" id="state">–</div><div class="s" id="states"></div></div>
+    <div class="card"><div class="k">上行</div><div class="v" id="up">–</div><div class="s" id="ups"></div></div>
+  </section>
+
+  <section class="panel tl">
+    <canvas id="tl"></canvas>
+    <div class="legend">最近 30 秒。音量：灰色为音量，红虚线为底噪，蓝底为说话。心跳：每条竖线是一次心跳，颜色按回执延迟（绿 &lt;200、黄 &lt;400、红更慢），红块是心跳中断。回执延迟：服务器回执的最新音频距离录下它过了多久，约等于往返网络 + 等心跳。</div>
+  </section>
+
+  <section class="panel controls">
+    <span>登记</span>
+    <input type="text" id="ename" value="主人" aria-label="名字">
+    <input type="number" id="ecount" value="5" min="1" max="10" aria-label="句数">
+    <span class="hint">句</span>
+    <button id="enroll">开始登记</button>
+    <span id="enrollmsg">同名会覆盖旧声纹。每句至少 1 秒。</span>
+    <label style="margin-left:auto"><input type="checkbox" id="showsound" checked> 显示声音事件</label>
+    <label><input type="checkbox" id="shownovoice"> 显示不像人声的片段</label>
+  </section>
+
+  <section class="panel">
+    <table>
+      <thead><tr><th style="width:5.5em">时间</th><th style="width:7em">是谁</th><th>内容</th><th style="width:4.5em">时长</th><th style="width:4em">情绪</th></tr></thead>
+      <tbody id="log"></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+const EMO = {happy:"开心", sad:"难过", angry:"生气", neutral:"平静", fearful:"害怕", disgusted:"厌恶", surprised:"惊讶", unknown:"未知"};
+const st = { ticks: [], rtts: [], hello: {}, rows: new Map(), starts: new Map(), gaps: 0, ws: null };
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const hms = ms => new Date(ms).toLocaleTimeString("zh-CN", { hour12: false });
+const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+const pct = (a, p) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function who(sp, voice) {
+  if (voice && voice.band === "none") return ["不像人声", "none"];
+  if (!sp || sp.band === "none") return ["未登记", "none"];
+  if (sp.band === "known") return [sp.name, "known"];
+  if (sp.band === "unsure") return [sp.name + "?", "unsure"];
+  return ["陌生人", "unknown"];
+}
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/live`);
+  st.ws = ws;
+  ws.onopen = () => $("conn").classList.add("on");
+  ws.onclose = () => { $("conn").classList.remove("on"); setTimeout(connect, 2000); };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.k === "init") {
+      st.ticks = m.ticks; st.rtts = m.rtts; st.hello = m.hello || {};
+      $("log").innerHTML = ""; st.rows.clear(); st.starts.clear();
+      $("server").textContent = m.server; $("session").textContent = "本地记录：" + m.session;
+      st.gaps = m.ticks.filter(t => t.interval_ms > 300).length;
+      m.events.forEach(onEvent); showSpeakers();
+    } else if (m.k === "tick") {
+      st.ticks.push(m.tick); if (st.ticks.length > 600) st.ticks.shift();
+      if (m.tick.interval_ms > 300) st.gaps++;
+    } else if (m.k === "event") onEvent(m.event);
+    else if (m.k === "rtt") { st.rtts.push(m.rtt); if (st.rtts.length > 100) st.rtts.shift(); }
+  };
+}
+
+function showSpeakers() {
+  const s = st.hello.speakers || [];
+  $("speakers").textContent = "已登记：" + (s.length ? s.join("、") : "无");
+}
+
+function onEvent(ev) {
+  if (ev.type === "hello") { st.hello = ev; showSpeakers(); return; }
+  if (ev.type === "audio") { st.codec = ev.format; return; }
+  if (ev.type === "enroll") {
+    const t = { started: `登记 ${ev.name}：请说 ${ev.count} 句话…`, progress: `已收到 ${ev.n}/${ev.count} 句`,
+                done: `已保存。现在登记了：${(ev.speakers || []).join("、")}` }[ev.phase];
+    $("enrollmsg").textContent = t;
+    if (ev.phase === "done") { st.hello.speakers = ev.speakers; showSpeakers(); }
+    return;
+  }
+  if (ev.type === "speech" || ev.type === "sound") upsertRow(ev);
+}
+
+function upsertRow(ev) {
+  let r = st.rows.get(ev.id);
+  if (!r) {
+    const tr = document.createElement("tr");
+    tr.className = "row " + ev.type;
+    const det = document.createElement("tr");
+    det.className = "detail"; det.hidden = true;
+    det.innerHTML = '<td colspan="5"></td>';
+    tr.onclick = () => { det.hidden = !det.hidden; tr.classList.toggle("open", !det.hidden); if (!det.hidden) renderDetail(r); };
+    const tb = $("log");
+    tb.insertBefore(det, tb.firstChild); tb.insertBefore(tr, det);
+    r = { tr, det, start: null, end: null, type: ev.type };
+    st.rows.set(ev.id, r);
+    det.hidden = true;
+  }
+  if (ev.phase === "start") r.start = ev; else r.end = ev;
+  applyVisibility(r);
+  renderRow(r);
+  if (!r.det.hidden) renderDetail(r);
+}
+
+// A speech row whose latest verdict is "not a voice" is hidden unless the user asks to see those.
+// Until the end arrives the start verdict counts, so a click never shows up as "陌生人 ……还在说".
+function applyVisibility(r) {
+  const voice = (r.end || r.start)?.voice;
+  const hide = r.type === "sound" ? !$("showsound").checked
+                                  : voice?.band === "none" && !$("shownovoice").checked;
+  if (hide) { r.tr.hidden = true; r.det.hidden = true; r.tr.classList.remove("open"); }
+  else r.tr.hidden = false;
+}
+
+function renderRow(r) {
+  const ev = r.end || r.start;
+  if (r.type === "speech") {
+    const [w, cls] = who(ev.speaker, ev.voice);
+    const text = r.end ? (r.end.text || "<span class='hint'>（无文字）</span>") : "<span class='pending'>……还在说</span>";
+    let look = "";
+    const k = r.end?.tags?.kinds?.[0];
+    if (k && ev.voice?.band !== "voice") look = ` <span class="hint">像${esc(k[2])}</span>`;
+    if (ev.voice?.band === "unclear") look += ` <span class="hint">人声?</span>`;
+    r.tr.innerHTML = `<td class="num">${hms(ev.t)}</td><td class="who ${cls}">${esc(w)}</td>
+      <td>${r.end ? esc(r.end.text) || text : text}${look}</td>
+      <td class="num">${r.end ? r.end.dur.toFixed(1) + " s" : ""}</td>
+      <td>${r.end ? esc(EMO[r.end.emotion] || r.end.emotion) : ""}</td>`;
+  } else {
+    r.tr.innerHTML = `<td class="num">${hms(ev.t)}</td><td class="tagsound">声音</td>
+      <td>${esc(ev.label)}${r.end ? "" : " <span class='pending'>持续中</span>"}</td>
+      <td class="num">${r.end ? r.end.dur.toFixed(1) + " s" : ""}</td><td></td>`;
+  }
+}
+
+function playBtn(pos) {
+  if (!pos || pos[0] == null || pos[1] == null) return "";
+  return `<button class="play" data-a="${Math.max(0, pos[0] - 4000)}" data-b="${pos[1] + 1600}">▶ 播放本段录音</button>`;
+}
+
+function renderDetail(r) {
+  const td = r.det.firstElementChild;
+  const s = r.start, e = r.end, ev = e || s;
+  let rows = [];
+  if (r.type === "speech") {
+    const sp = ev.speaker || {};
+    const ru = sp.runner_up ? `（第二像 ${esc(sp.runner_up.name)} ${sp.runner_up.score}）` : "";
+    const early = s ? `；开口后 ${s._since_onset_ms ?? "?"} ms 初判：${esc(who(s.speaker)[0])} ${s.speaker.score ?? ""}` : "";
+    rows.push(["是谁", `${esc(who(sp)[0])} · 相似度 ${sp.score ?? "–"}${ru}${early}`]);
+    const vv = ev.voice || {}, sv = s?.voice;
+    const VB = { voice: "像", unclear: "说不清", none: "不像" };
+    rows.push(["人声", `${VB[vv.band] ?? "–"}（${vv.p ?? "–"}，≥${st.hello.voice_hi ?? 0.4} 算像，<${st.hello.voice_lo ?? 0.2} 算不像；声纹认出某人也算像）${sv ? `；开口时 ${VB[sv.band] ?? "–"} ${sv.p}` : ""}`]);
+    if (e) {
+      rows.push(["内容", `${esc(e.text) || "（无文字）"} <span class="hint">${esc(e.lang)}</span>`]);
+      const v = e.voice || {};
+      const kinds = (e.tags?.kinds || []).map(k => `${esc(k[2])} ${k[1]}`).join("、");
+      rows.push(["声音", `高出底噪 ${v.loud_db ?? "–"} dB · 语速 ${v.rate ?? "–"} 字/秒 · 情绪 ${esc(EMO[e.emotion] || e.emotion)}（不可靠）· 本段分类：说话 ${e.tags?.speech_p ?? "–"}${kinds ? "、" + kinds : ""}`]);
+      const l = e._lat || {}, d = e.debug || {};
+      rows.push(["延迟", `说完到结果 <b>${l.e2e ?? "–"} ms</b> = 等静音 ${l.vad_wait ?? "–"} + 服务器 ${l.server ?? "–"}（声纹 ${d.spk_ms} · 识别 ${d.asr_ms} · 分类 ${d.tag_ms} · 排队 ${d.queue_ms}）+ 等心跳 ${l.tick_wait ?? "–"} + 网络 ${l.net ?? "–"}`]);
+      rows.push(["自身", `发声 ${e.self?.sounding ? "是" : "否"} · 在动 ${e.self?.moving ? "是" : "否"}`]);
+    }
+  } else {
+    const raw = (ev.raw || []).map(x => `${esc(x[0])} ${x[1]}`).join("、");
+    rows.push(["种类", `${esc(ev.label)}（${raw}）`]);
+    if (e) rows.push(["强度", `最强 ${e.peak} · 高出底噪 ${e.loud_db ?? "–"} dB`]);
+  }
+  const pos = (e || s).pos;
+  rows.push(["位置", `采样 ${pos[0]}–${pos[1] ?? "…"} ${playBtn(pos)}`]);
+  td.innerHTML = `<div class="dl">${rows.map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join("")}</div>
+    <details><summary class="hint">原始消息</summary><pre>${esc(JSON.stringify(e ? (s ? [s, e] : e) : s, null, 1))}</pre></details>`;
+  td.querySelectorAll(".play").forEach(b => b.onclick = async ev2 => {
+    ev2.stopPropagation();
+    const res = await fetch(`/audio?a=${b.dataset.a}&b=${b.dataset.b}`);
+    const url = URL.createObjectURL(await res.blob());
+    new Audio(url).play();
+  });
+}
+
+$("enroll").onclick = () => {
+  if (st.ws?.readyState === 1) st.ws.send(JSON.stringify({ cmd: "enroll", name: $("ename").value.trim() || "主人", count: +$("ecount").value || 5 }));
+};
+$("showsound").onchange = $("shownovoice").onchange = () => st.rows.forEach(applyVisibility);
+
+function stats() {
+  const now = Date.now(), t = st.ticks;
+  const last10 = t.filter(x => x.recv > now - 10000), last30 = t.filter(x => x.recv > now - 30000);
+  const ivs = last30.map(x => x.interval_ms).filter(Boolean);
+  const lags = last30.map(x => x.lag_ms).filter(x => x != null);
+  const lt = t[t.length - 1];
+  $("hb").textContent = last10.length ? (last10.length / 10).toFixed(1) + " 次/秒" : "–";
+  $("hbs").textContent = ivs.length ? `间隔中位 ${median(ivs)} ms · 95% ${pct(ivs, .95)} ms · 中断 ${st.gaps} 次` : "";
+  $("lag").textContent = lt?.lag_ms != null ? lt.lag_ms + " ms" : "–";
+  $("lags").textContent = lags.length ? `30 秒中位 ${median(lags)} · 最大 ${Math.max(...lags)}` : "";
+  const r = st.rtts;
+  $("rtt").textContent = r.length ? r[r.length - 1] + " ms" : "–";
+  $("rtts").textContent = r.length ? `中位 ${median(r)} ms · ${r.length} 次` : "";
+  $("lvl").textContent = lt?.level_db != null ? `${lt.level_db} dB` : "–";
+  $("lvls").textContent = lt?.noise_db != null ? `底噪 ${lt.noise_db} dB（满刻度为 0）` : "";
+  const stale = lt ? now - lt.recv : Infinity;
+  $("state").textContent = stale > 1000 ? "没有心跳" : lt.speaking ? "有人在说话" : "安静";
+  $("states").textContent = lt ? `上次心跳 ${stale > 1000 ? (stale / 1000).toFixed(1) + " 秒前" : stale + " ms 前"} · seq ${lt.seq}` : "";
+  // uplink bitrate over the last 10 s, from the bytes the server says it has received
+  const w = st.ticks.filter(t => t.recv > now - 10000 && t.rx_bytes != null);
+  const kbps = w.length > 1 ? (w.at(-1).rx_bytes - w[0].rx_bytes) * 8 / (w.at(-1).recv - w[0].recv) : null;
+  $("up").textContent = kbps != null ? `${kbps.toFixed(1)} kbps` : "–";
+  $("ups").textContent = `${st.codec === "opus" ? "Opus 60 ms 一帧" : "原始 PCM"} · 原始音频 256 kbps` +
+    (lt?.rx_bytes != null ? ` · 累计 ${(lt.rx_bytes / 1e6).toFixed(2)} MB` : "");
+}
+
+function draw() {
+  const cv = $("tl"), dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const now = Date.now(), span = 30000, L = 64, X = ms => L + (W - L) * (1 - (now - ms) / span);
+  const lanes = [["音量", 0, 70], ["心跳", 76, 24], ["回执延迟", 106, 56], ["事件", 168, 56]];
+  g.font = "12px -apple-system, sans-serif"; g.textBaseline = "middle";
+  for (const [name, y, h] of lanes) {
+    g.fillStyle = css("--muted"); g.fillText(name, 0, y + h / 2);
+    g.strokeStyle = css("--line"); g.beginPath(); g.moveTo(L, y + h + 2.5); g.lineTo(W, y + h + 2.5); g.stroke();
+  }
+  const ticks = st.ticks.filter(t => t.recv > now - span - 1000);
+  // speaking shading from speech rows
+  const segs = [];
+  st.rows.forEach(r => { const ev = r.end || r.start; if (!ev?._cap_start || r.tr.hidden) return;   // timeline follows the log's filters
+    segs.push({ r, a: ev._cap_start, b: r.end?._cap_end ?? now, ev }); });
+  g.fillStyle = css("--sel");
+  for (const s of segs.filter(s => s.r.type === "speech")) g.fillRect(X(s.a), 0, X(s.b) - X(s.a), 70);
+  // level
+  const yDb = d => 70 - 70 * (Math.max(-90, Math.min(0, d)) + 90) / 90;
+  g.fillStyle = css("--level"); g.globalAlpha = 0.55; g.beginPath(); let first = true;
+  for (const t of ticks) { if (t.level_db == null) continue; const x = X(t.recv - (t.lag_ms || 0));
+    if (first) { g.moveTo(x, 70); first = false; } g.lineTo(x, yDb(t.level_db)); }
+  if (!first) { g.lineTo(X(ticks[ticks.length - 1].recv - (ticks[ticks.length - 1].lag_ms || 0)), 70); g.fill(); }
+  g.globalAlpha = 1;
+  g.strokeStyle = css("--floor"); g.setLineDash([4, 3]); g.beginPath(); first = true;
+  for (const t of ticks) { if (t.noise_db == null) continue; const x = X(t.recv - (t.lag_ms || 0));
+    first ? g.moveTo(x, yDb(t.noise_db)) : g.lineTo(x, yDb(t.noise_db)); first = false; }
+  g.stroke(); g.setLineDash([]);
+  // heartbeat
+  let prev = null;
+  for (const t of ticks) {
+    if (prev && t.interval_ms > 250) { g.fillStyle = css("--bad"); g.globalAlpha = .35; g.fillRect(X(prev.recv), 76, X(t.recv) - X(prev.recv), 24); g.globalAlpha = 1; }
+    const lag = t.lag_ms ?? 0;
+    g.strokeStyle = lag < 200 ? css("--ok") : lag < 400 ? css("--warn") : css("--bad");
+    const x = Math.round(X(t.recv)) + .5; g.beginPath(); g.moveTo(x, 78); g.lineTo(x, 98); g.stroke();
+    prev = t;
+  }
+  // lag line
+  const yLag = v => 162 - 56 * Math.min(v, 1000) / 1000;
+  g.strokeStyle = css("--line"); g.setLineDash([2, 3]); g.beginPath(); g.moveTo(L, yLag(200)); g.lineTo(W, yLag(200)); g.stroke(); g.setLineDash([]);
+  g.fillStyle = css("--muted"); g.fillText("200", L - 26, yLag(200)); g.fillText("1000", L - 30, yLag(1000) + 6);
+  g.strokeStyle = css("--accent"); g.beginPath(); first = true;
+  for (const t of ticks) { if (t.lag_ms == null) continue; const x = X(t.recv), y = yLag(t.lag_ms); first ? g.moveTo(x, y) : g.lineTo(x, y); first = false; }
+  g.stroke();
+  // events
+  for (const s of segs) {
+    const sp = s.r.type === "speech", y = sp ? 172 : 200, x0 = Math.max(L, X(s.a)), x1 = Math.max(x0 + 2, X(s.b));
+    if (x1 < L) continue;
+    g.fillStyle = sp ? css("--speech") : css("--sound"); g.globalAlpha = s.r.end ? .85 : .45;
+    g.fillRect(x0, y, x1 - x0, 20); g.globalAlpha = 1;
+    const label = sp ? who(s.ev.speaker, s.ev.voice)[0] : s.ev.label;
+    g.save(); g.beginPath(); g.rect(x0, y, x1 - x0, 20); g.clip();
+    g.fillStyle = "#fff"; g.fillText(label, x0 + 4, y + 10); g.restore();
+  }
+}
+
+setInterval(() => { stats(); draw(); }, 100);
+connect();
+</script>
+</body>
+</html>
