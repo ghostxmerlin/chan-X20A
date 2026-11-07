@@ -109,3 +109,7 @@ CONFIG_PIX_CVT_YUV_TO_YUV_SUPPORT=n
 # M12 on the top blue port (Port C). UART1 = servos, UART2 = Unit ASR.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Soul eye assets retain their original state names on the shared microSD.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=64

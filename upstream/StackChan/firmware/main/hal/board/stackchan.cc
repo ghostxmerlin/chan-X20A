@@ -2,6 +2,7 @@
 #include "cores3_audio_codec.h"
 #include "display/lcd_display.h"
 #include "stackchan_display.h"
+#include "shared_storage.h"
 #include "application.h"
 #include "config.h"
 #include "power_save_timer.h"
@@ -611,14 +612,9 @@ private:
 
     void InitializeSpi()
     {
-        spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num      = GPIO_NUM_37;
-        buscfg.miso_io_num      = GPIO_NUM_NC;
-        buscfg.sclk_io_num      = GPIO_NUM_36;
-        buscfg.quadwp_io_num    = GPIO_NUM_NC;
-        buscfg.quadhd_io_num    = GPIO_NUM_NC;
-        buscfg.max_transfer_sz  = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
-        ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
+        // Shared SPI3/DC-MISO arbitration is provided by the pinned IDF driver.
+        // SD probing finishes before any LCD transaction; no-card keeps LCD alive.
+        ESP_ERROR_CHECK(shared_storage::initialize());
     }
 
     void InitializeIli9342Display()

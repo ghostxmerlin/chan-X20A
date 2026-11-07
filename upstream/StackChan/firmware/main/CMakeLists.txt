@@ -1,3 +1,11 @@
+# GPIO35 is LCD DC and SD MISO. The pinned driver releases DC after each
+# transaction and both devices use the same host's DMA-aware ownership chain.
+execute_process(COMMAND "${PYTHON}" "${CMAKE_CURRENT_LIST_DIR}/../../../../scripts/check-shared-spi.py" "${IDF_PATH}"
+                RESULT_VARIABLE SHARED_SPI_CHECK)
+if(NOT SHARED_SPI_CHECK EQUAL 0)
+    message(FATAL_ERROR "Shared LCD/SD driver contract was not verified")
+endif()
+
 # Define xiaozhi source directory
 set(XIAOZHI_MAIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../xiaozhi-esp32/main")
 
@@ -321,6 +329,8 @@ idf_component_register(SRCS ${SOURCES}
                         esp_driver_gpio
                         esp_driver_uart
                         esp_driver_spi
+                        esp_driver_sdspi
+                        sdmmc
                         esp_driver_i2c
                         esp_driver_i2s
                         esp_driver_jpeg
