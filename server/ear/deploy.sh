@@ -8,7 +8,7 @@ set -eu
 . "$(dirname "$0")/_env.sh"
 need SOUL_SERVER_SSH SOUL_SERVER_DIR SOUL_SERVER_UNIT
 cd "$HERE"
-FILES="ear_server.py recorder.py sound_kinds.py"
+FILES="ear_server.py recorder.py sound_kinds.py hearing_protocol.py"
 
 if [ "${1:-}" = "--dry-run" ]; then
   # shellcheck disable=SC2086

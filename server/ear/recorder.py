@@ -137,7 +137,7 @@ class Recorder:
         """The client's {"type":"audio",...}: format and source of what follows."""
         self._open(msg.get("source"))
         if self.audio is None:
-            self.meta["audio"] = {k: msg.get(k) for k in ("format", "sample_rate", "channels", "frame_ms", "source")}
+            self.meta["audio"] = {k: msg.get(k) for k in ("format", "sample_rate", "channels", "frame_ms", "source", "framing", "device")}
             self._write_meta()
 
     def audio_in(self, raw, pcm16, is_opus):
@@ -146,6 +146,7 @@ class Recorder:
         if self.audio is None:
             if is_opus:
                 self.audio = OggOpusWriter(os.path.join(self.dir, "audio.opus"),
+                                           input_rate=(self.meta.get("audio") or {}).get("sample_rate", SR),
                                            comments=[f"SOURCE={self.meta['source']}", f"START={self.meta['start']}"])
                 self.kind = "opus"
             else:

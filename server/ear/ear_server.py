@@ -37,6 +37,7 @@ from websockets.asyncio.server import serve
 
 import recorder
 import sound_kinds
+import hearing_protocol as hp
 
 SR = 16000
 TICK = 0.1
@@ -162,10 +163,8 @@ class Models:
             del out["animal"]                       # "Animal" is just the parent label of the specific one
         return out, speech
 
-    def save_speaker(self, name, embs):
-        e = np.mean(embs, axis=0)
-        self.speakers[name] = e / (np.linalg.norm(e) + 1e-9)
-        np.savez(self.db_path, **self.speakers)
+    def save_speaker(self, name, embs, replace=False):
+        self.speakers = hp.save_speaker(self.db_path, self.speakers, name, embs, replace)
 
 
 class Ring:
@@ -225,9 +224,16 @@ class Ear:
         self.aid = 0
         self.sounds = {}           # kind -> state
         self.pending = {}          # kind -> candidate that must last (SUSTAIN) before it becomes an event
-        self.enroll = None
+        self.enroll = hp.Enrollment()
+        self.closed = False
+        self.tasks = set()
+        self.self_history = hp.SelfHistory()
+        self.framing = 'raw'
+        self.wire_seq = self.wire_us = None
+        self.vad_origin = 0
+        self.stream_generation = 0
         self.rec = None            # recorder.Recorder, set by the connection handler
-        self.hello = {"type": "hello", "sr": SR, "tick_ms": ms(TICK), "speakers": sorted(m.speakers),
+        self.hello = {"type": "hello", "sr": SR, "tick_ms": ms(TICK), "speakers": sorted(m.speakers)[:64],
                       "speaker_hi": self.hi, "speaker_lo": self.lo, "sound_min_db": self.sound_min_db,
                       "voice_hi": self.voice_hi, "voice_lo": self.voice_lo,
                       "models": {"asr": "sense-voice int8 2024-07-17", "spk": "3dspeaker campplus zh",
@@ -236,9 +242,45 @@ class Ear:
 
     # ---------- helpers ----------
     def post(self, ev):
+        if self.closed:
+            return
+        if len(self.outbox) >= 24:
+            self.outbox.pop(0)
         ev.setdefault("v", 1)
         ev["_ready"] = time.monotonic()
         self.outbox.append(ev)
+
+    def spawn(self, coroutine):
+        if self.closed or len(self.tasks) >= 8:
+            coroutine.close()
+            self.post({"type":"overload", "error":"inference queue full; audio event dropped"})
+            return
+        task = asyncio.create_task(coroutine)
+        self.tasks.add(task)
+        def done(future):
+            self.tasks.discard(future)
+            if not future.cancelled() and future.exception():
+                self.post({"type":"error", "error":"inference failed"})
+        task.add_done_callback(done)
+
+    def segment_context(self, cur, start, end):
+        return {**cur, "self":self.self_history.overlap(start, end)}
+
+    def reset_segment(self):
+        self.vad.reset()
+        self.vad_origin = self.ring.end
+        self.stream_generation += 1
+        self.cur, self.speaking = None, False
+        self.carry = np.zeros(0, dtype=np.float32)
+        self.sounds.clear()
+        self.pending.clear()
+        self.next_tag = self.ring.end + TAG_WIN
+
+    async def close(self):
+        self.closed = True
+        self.enroll.cancel()
+        for task in list(self.tasks): task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
 
     def arrival(self, sample):
         """(mono, epoch ms) when the chunk holding `sample` arrived."""
@@ -287,18 +329,42 @@ class Ear:
             self.tick_gap = max(self.tick_gap, now - self.last_rx)
         self.last_rx = now
         self.rx_bytes += len(data)
-        raw = data
+        try:
+            raw, seq, capture_us = hp.parse_audio_packet(data, self.framing)
+            if seq is not None:
+                if self.wire_seq is not None:
+                    gap = (seq - self.wire_seq - 1) & 0xffffffff
+                    if gap > 1000 or capture_us <= self.wire_us:
+                        raise ValueError('out of order SEA1 packet')
+                    if gap or abs(capture_us - self.wire_us - 60000) > 30000:
+                        self.reset_segment()
+                        self.post({'type':'audio_gap','missing_packets':gap,'seq':seq,'capture_us':capture_us})
+                elif seq != 0:
+                    raise ValueError('SEA1 must begin at sequence zero')
+                self.wire_seq, self.wire_us = seq, capture_us
+            data = raw
+        except ValueError as error:
+            self.bad_packets += 1
+            self.reset_segment()
+            self.post({'type':'error','error':str(error)})
+            return
         if self.opus is not None:
             try:
                 data = self.opus.decode(data, OPUS_MAX_FRAME)
             except Exception as e:                       # one bad packet must not kill the stream
                 self.bad_packets += 1
+                self.reset_segment()
                 if self.bad_packets == 1:
-                    self.post({"type": "error", "error": f"opus decode failed: {e}"})
+                    self.post({"type": "error", "error": "opus decode failed"})
                 return
+        if len(data) % 2:
+            self.bad_packets += 1
+            self.reset_segment()
+            return
         if self.rec:
             self.rec.audio_in(raw, data, self.opus is not None)
         x = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+        self.self_history.add(self.ring.end, self.ring.end + len(x), self.self_flags)
         self.ring.write(x)
         self.arr_end.append(self.ring.end)
         self.arr_mono.append(now)
@@ -319,19 +385,19 @@ class Ear:
         while self.ring.end >= self.next_tag:
             b = self.next_tag
             self.next_tag += TAG_HOP
-            asyncio.get_running_loop().create_task(self.tag_window(b - TAG_WIN, b))
+            self.spawn(self.tag_window(b - TAG_WIN, b))
 
     def track_speech(self):
         detected = self.vad.is_speech_detected()
         if detected and not self.speaking:
             self.speaking = True
-            self.open_utterance(int(self.vad.current_segment.start))
+            self.open_utterance(self.vad_origin + int(self.vad.current_segment.start))
         if self.speaking and self.cur and not self.cur["early"] and self.ring.end - self.cur["onset"] >= EARLY_SPK:
             self.cur["early"] = True
-            asyncio.get_running_loop().create_task(self.early_speaker(dict(self.cur)))
+            self.spawn(self.early_speaker(self.segment_context(self.cur, self.cur['onset'] - PRE_ROLL, self.ring.end)))
         while not self.vad.empty():
             seg = self.vad.front
-            start = int(seg.start)
+            start = self.vad_origin + int(seg.start)
             end = start + len(seg.samples)
             self.vad.pop()
             t_pop = time.monotonic()
@@ -339,15 +405,16 @@ class Ear:
             if cur is None:
                 cur = self.new_utterance(start)
             audio = self.ring.read(start - PRE_ROLL, end)          # original audio, not the VAD's dithered copy
-            asyncio.get_running_loop().create_task(self.end_speech(cur, audio, start, end, t_pop))
+            self.spawn(self.end_speech(self.segment_context(cur, start - PRE_ROLL, end), audio, start, end, t_pop))
             self.cur = None
             self.speaking = self.vad.is_speech_detected()
             if self.speaking:                                   # max_speech_duration split: keeps going
-                self.open_utterance(int(self.vad.current_segment.start))
+                self.open_utterance(self.vad_origin + int(self.vad.current_segment.start))
 
     def new_utterance(self, onset):
         self.sid += 1
-        return {"id": f"s-{self.sid}", "onset": onset, "t": self.arrival(onset)[1], "early": False}
+        return {"id": f"s-{self.sid}", "onset": onset, "t": self.arrival(onset)[1], "early": False,
+                "enroll_epoch": self.enroll.epoch, "generation": self.stream_generation}
 
     def open_utterance(self, onset):
         self.cur = self.new_utterance(onset)
@@ -359,7 +426,7 @@ class Ear:
         e, tags = await self.run(lambda: (self.m.embed(audio), self.m.tags(audio)))
         sp = self.speaker(e)
         self.post({"type": "speech", "phase": "start", "id": cur["id"], "pos": [cur["onset"], None],
-                   "t": cur["t"], "speaker": sp, "voice": self.voice(tags, sp), "self": dict(self.self_flags),
+                   "t": cur["t"], "speaker": sp, "voice": self.voice(tags, sp), "self": cur["self"],
                    "debug": {"spk_tag_ms": ms(time.monotonic() - t0), "audio_s": round(len(audio) / SR, 2)}})
 
     async def end_speech(self, cur, audio, start, end, t_pop):
@@ -377,9 +444,11 @@ class Ear:
             return e, r, tags, (t0, t1, t2, t3)
 
         e, r, tags, (t0, t1, t2, t3) = await self.run(work)
+        if self.closed or cur["generation"] != self.stream_generation:
+            return
         kinds, speech_p = self.m.kinds(tags)
         dur = (end - start) / SR
-        text = r.text.strip()
+        text = r.text.strip()[:512]
         units = len(CJK.findall(text)) + len(WORD.findall(CJK.sub(" ", text)))
         sp = self.speaker(e)
         ev = {"type": "speech", "phase": "end", "id": cur["id"], "pos": [start, end], "t": cur["t"],
@@ -391,20 +460,26 @@ class Ear:
               "tags": {"speech_p": round(speech_p, 2),
                        "kinds": sorted(([k, round(p, 2), sound_kinds.LABEL_ZH.get(k, k)]
                                         for k, (p, _) in kinds.items()), key=lambda t: -t[1])[:3]},
-              "self": dict(self.self_flags),
+              "self": cur["self"],
               "debug": {"vad_wait_ms": ms(t_pop - arr_mono), "queue_ms": ms(t0 - t_q), "spk_ms": ms(t1 - t0),
                         "asr_ms": ms(t2 - t1), "tag_ms": ms(t3 - t2), "server_ms": ms(time.monotonic() - t_pop)}}
         self.post(ev)
-        if self.enroll and dur >= 1.0:
-            name, count, embs = self.enroll
-            embs.append(e)
-            self.post({"type": "enroll", "phase": "progress", "name": name, "n": len(embs), "count": count})
-            if len(embs) >= count:
-                await self.run(lambda: self.m.save_speaker(name, embs))
-                self.enroll = None
-                self.post({"type": "enroll", "phase": "done", "name": name, "speakers": sorted(self.m.speakers)})
+        ready = self.enroll.accept(cur["enroll_epoch"], e, dur,
+                                   ev["voice"]["band"] == "voice" and ev["event"] == "speech" and bool(text),
+                                   cur["self"]["sounding"], time.monotonic())
+        if self.enroll.active and cur["enroll_epoch"] == self.enroll.epoch:
+            self.post({**self.enroll.progress(), "phase":"progress"})
+        if ready:
+            result = self.enroll.progress()
+            try:
+                # Same event loop: no await between cancellation check and atomic commit.
+                self.m.save_speaker(self.enroll.name, self.enroll.embs, self.enroll.replace)
+                self.post({**result, "phase":"done", "speakers":sorted(self.m.speakers)[:64]})
+            except (OSError, ValueError):
+                self.post({**result, "phase":"error", "error":"voiceprint save failed"})
+            self.enroll.cancel()
 
-    # ---------- sounds ----------
+    # ---------- sound ----------
     async def tag_window(self, a, b):
         x = self.ring.read(a, b)
         f = self.floor()
@@ -460,47 +535,56 @@ class Ear:
     # ---------- control ----------
     async def on_text(self, text):
         try:
+            if len(text) > 4096:
+                raise ValueError("control too large")
             msg = json.loads(text)
-        except json.JSONDecodeError:
-            self.post({"type": "error", "error": "bad json"})
-            return
-        k = msg.get("type")
-        if self.rec and isinstance(msg, dict):
-            self.rec.client_msg(msg)
-        if k == "ping":
-            self.post({"type": "pong", "id": msg.get("id"), "_held_from": time.monotonic()})
-        elif k == "enroll":
-            self.enroll = (str(msg.get("name") or "unknown"), max(1, int(msg.get("count", 5))), [])
-            self.post({"type": "enroll", "phase": "started", "name": self.enroll[0], "count": self.enroll[1]})
-        elif k == "audio":
-            fmt = msg.get("format", "pcm16")
-            if fmt == "opus":
-                if int(msg.get("sample_rate", SR)) != SR or int(msg.get("channels", 1)) != 1:
-                    self.post({"type": "error", "error": "opus must be 16 kHz mono"})
-                    return
-                import opuslib_next
-                self.opus = opuslib_next.Decoder(SR, 1)
-            elif fmt == "pcm16":
-                self.opus = None
-            else:
-                self.post({"type": "error", "error": f"unknown audio format {fmt!r}"})
-                return
+            if not isinstance(msg, dict):
+                raise ValueError("expected JSON object")
+            k = msg.get("type")
             if self.rec:
-                self.rec.declare(msg)
-            self.post({"type": "audio", "format": fmt, "sample_rate": SR, "frame_ms": msg.get("frame_ms"),
-                       "recording": self.rec.dir if self.rec else None})
-        elif k == "config":
-            self.hi = float(msg.get("speaker_hi", self.hi))
-            self.lo = float(msg.get("speaker_lo", self.lo))
-            self.sound_min_db = float(msg.get("sound_min_db", self.sound_min_db))
-            self.voice_hi = float(msg.get("voice_hi", self.voice_hi))
-            self.voice_lo = float(msg.get("voice_lo", self.voice_lo))
-            self.post({"type": "config", "speaker_hi": self.hi, "speaker_lo": self.lo,
-                       "sound_min_db": self.sound_min_db, "voice_hi": self.voice_hi, "voice_lo": self.voice_lo})
-        elif k == "self":
-            self.self_flags = {"sounding": bool(msg.get("sounding")), "moving": bool(msg.get("moving"))}
-        else:
-            self.post({"type": "error", "error": f"unknown type {k!r}"})
+                self.rec.client_msg(msg)
+            if k == "ping":
+                self.post({"type":"pong", "id":msg.get("id"), "_held_from":time.monotonic()})
+            elif k == "enroll":
+                self.enroll.start(msg, self.m.speakers, time.monotonic())
+                # Discard an utterance already in progress before this explicit enrollment.
+                self.reset_segment()
+                self.post({**self.enroll.progress(), "phase":"started"})
+            elif k == "enroll_cancel":
+                result = self.enroll.progress() if self.enroll.active else {"type":"enroll"}
+                self.enroll.cancel()
+                self.post({**result, "phase":"cancelled"})
+            elif k == "audio":
+                if self.ring.end:
+                    raise ValueError("audio format cannot change during a stream")
+                fmt, rate, framing = hp.audio_format(msg)
+                if fmt == "opus":
+                    import opuslib_next
+                    self.opus = opuslib_next.Decoder(SR, 1)
+                else:
+                    self.opus = None
+                self.framing = framing
+                if self.rec:
+                    self.rec.declare(msg)
+                self.post({"type":"audio", "format":fmt, "sample_rate":SR,
+                           "input_sample_rate":rate, "framing":framing, "frame_ms":msg.get("frame_ms")})
+            elif k == "config":
+                hi, lo = float(msg.get("speaker_hi", self.hi)), float(msg.get("speaker_lo", self.lo))
+                vh, vl = float(msg.get("voice_hi", self.voice_hi)), float(msg.get("voice_lo", self.voice_lo))
+                noise = float(msg.get("sound_min_db", self.sound_min_db))
+                if not (0 <= lo <= hi <= 1 and 0 <= vl <= vh <= 1 and 0 <= noise <= 80):
+                    raise ValueError("invalid thresholds")
+                self.hi, self.lo, self.voice_hi, self.voice_lo, self.sound_min_db = hi, lo, vh, vl, noise
+                self.post({"type":"config", "speaker_hi":hi, "speaker_lo":lo,
+                           "voice_hi":vh, "voice_lo":vl, "sound_min_db":noise})
+            elif k == "self":
+                if any(type(msg.get(key, False)) is not bool for key in ("sounding", "moving")):
+                    raise ValueError("self flags must be boolean")
+                self.self_flags = {key:msg.get(key, False) for key in ("sounding", "moving")}
+            else:
+                raise ValueError("unknown control type")
+        except (ValueError, TypeError, OverflowError) as error:
+            self.post({"type":"error", "error":str(error)[:160]})
 
     # ---------- output: one frame per 100 ms ----------
     async def ticker(self):
@@ -513,17 +597,29 @@ class Ear:
             now = time.monotonic()
             if now - target > TICK:                      # fell behind (GC, CPU): skip, don't burst
                 seq = int((now - t0) / TICK)
+            if self.enroll.expired(now):
+                self.post({**self.enroll.progress(), 'phase':'error', 'error':'enrollment timed out'})
+                self.enroll.cancel()
             level = db(math.sqrt(self.tick_sq / self.tick_n)) if self.tick_n else None
             if level is not None:
                 self.levels.append(level)
             f = self.floor()
             events = []
+            budget = 0
+            remaining = []
             for ev in self.outbox:
+                size = len(json.dumps(ev, ensure_ascii=False).encode()) + 100
+                if size > 6000:
+                    continue
+                if budget + size > 7000:
+                    remaining.append(ev)
+                    continue
+                budget += size
                 ev.setdefault("debug", {})["tick_wait_ms"] = ms(now - ev.pop("_ready"))
                 if "_held_from" in ev:
                     ev["held_ms"] = ms(now - ev.pop("_held_from"))
                 events.append(ev)
-            self.outbox = []
+            self.outbox = remaining
             tick = {"v": 1, "type": "tick", "seq": seq, "t": int(time.time() * 1000), "rx": self.ring.end,
                     "rx_idle_ms": ms(now - self.last_rx) if self.last_rx else None,
                     "rx_gap_ms": ms(self.tick_gap), "rx_bytes": self.rx_bytes, "level_db": level,
@@ -559,11 +655,18 @@ def main():
     print(f"models loaded in {time.monotonic() - t0:.1f}s; speakers: {sorted(models.speakers)}", flush=True)
     ex = ThreadPoolExecutor(max_workers=1)
 
+    active = set()
+
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
-        if token_value and f"token={token_value}" not in path:
+        header = ws.request.headers.get("Authorization", "") if getattr(ws, "request", None) else ""
+        if not hp.authenticate(path, header, token_value):
             await ws.close(code=4401, reason="bad token")
             return
+        if len(active) >= 4:
+            await ws.close(code=1013, reason="server busy")
+            return
+        active.add(ws)
         peer = ws.remote_address
         conn_no[0] += 1
         print(f"+ {peer} c{conn_no[0]}", flush=True)
@@ -578,11 +681,14 @@ def main():
                     await ear.on_text(data)
         finally:
             ticker.cancel()
+            await ear.close()
+            await asyncio.gather(ticker, return_exceptions=True)
             ear.rec.close()
+            active.discard(ws)
             print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
 
     async def serve_forever():
-        async with serve(handler, a.host, a.port, max_size=2 ** 20):
+        async with serve(handler, a.host, a.port, max_size=65536):
             print(f"listening on {a.host}:{a.port}", flush=True)
             await asyncio.Future()
 
