@@ -9,6 +9,7 @@
 #include "driver/i2c_master.h"
 #include "esp_err.h"
 #include "BMI270_SensorAPI/bmi270.h"
+#include "../environment/bmm150_data.h"
 
 struct BMI270_Data {
     float accel_x;
@@ -33,6 +34,10 @@ public:
      * @return false if failed
      */
     bool begin(uint8_t accelRangeG = 2);
+    // Optional CoreS3 BMM150 on BMI270's private AUX bus. Call once, before
+    // update(); runtime consumes AUX bytes already read with accel/gyro.
+    bool beginMagnetometer();
+    const environment::MagneticSample& getMagnetometer() const { return _magnetic; }
 
     /**
      * @brief Read sensor data
@@ -47,12 +52,15 @@ public:
     const BMI270_Data& getData();
 
 private:
-    i2c_master_dev_handle_t _i2c_dev;
-    struct bmi2_dev _bmi;
+    i2c_master_dev_handle_t _i2c_dev = nullptr;
+    struct bmi2_dev _bmi{};
     uint8_t _addr;
     bool _initialized;
     uint8_t _accel_range_g = 2;
-    BMI270_Data _data;
+    BMI270_Data _data{};
+    int _io_timeout_ms = 1000;
+    environment::Bmm150Trim _mag_trim;
+    environment::MagneticSample _magnetic;
 
     static BMI2_INTF_RETURN_TYPE bmi2_i2c_read(uint8_t reg_addr, uint8_t* reg_data, uint32_t len, void* intf_ptr);
     static BMI2_INTF_RETURN_TYPE bmi2_i2c_write(uint8_t reg_addr, const uint8_t* reg_data, uint32_t len,

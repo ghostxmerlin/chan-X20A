@@ -43,6 +43,9 @@ TouchPoint_t get_touch_point();
 void set_collector_mode(bool enabled);
 bool is_collector_mode();
 bool board_get_power_snapshot(int& level, bool& charging, int64_t& timestamp_us);
+// Collector playback only. State is -1 when the last hardware check failed.
+esp_err_t board_set_speaker_reset(bool held);
+int board_speaker_reset_state();
 
 bool is_xiaozhi_mode();
 void set_xiaozhi_mode(bool mode);
@@ -65,6 +68,8 @@ int board_get_battery_level();
 bool board_is_battery_charging();
 void board_set_backlight_brightness(uint8_t brightness, bool permanent = false);
 uint8_t board_get_backlight_brightness();
+// Display-only, RAM-only gate; retain the normal backlight brightness target.
+void board_set_display_backlight_enabled(bool enabled);
 void board_set_speaker_volume(uint8_t volume, bool permanent = false);
 uint8_t board_get_speaker_volume();
 

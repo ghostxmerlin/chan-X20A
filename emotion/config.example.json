@@ -1,0 +1,11 @@
+{
+  "token_file": "~/.config/chan/collector-token",
+  "device_id": "YOUR_BOUND_ROBOT_DEVICE_ID",
+  "address_file": "~/.config/chan/robot-address",
+  "state_dir": "~/.config/chan/emotion-state",
+  "stt_provider": "aihubmix",
+  "aihubmix_key_file": "~/.config/chan/aihubmix-key",
+  "model_path": ".tools/emotion-model-qwen3",
+  "face_model_path": ".tools/emotion-models/face_detection_yunet_2023mar.onnx",
+  "mac_preview": true
+}

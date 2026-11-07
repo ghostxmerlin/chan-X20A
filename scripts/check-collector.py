@@ -98,6 +98,56 @@ def validate_info(value):
             "camera": {k: camera[k] for k in ("width", "height", "format")}}
 
 
+def validate_environment_sensors(value):
+    """Additive 0.4.3 fields; older recordings legitimately omit these sensors."""
+    for name, unit in (("magnetometer", "uT"), ("light", "lx"), ("proximity", "count")):
+        if name not in value:
+            continue
+        sensor = object_value(value[name], name)
+        for flag in ("available", "valid"):
+            require(type(sensor.get(flag)) is bool, "invalid " + name + "." + flag)
+        require(not sensor["valid"] or sensor["available"], "valid unavailable " + name)
+        integer(sensor.get("seq"), name + ".seq", 0, 0xffffffff)
+        integer(sensor.get("timestamp_us"), name + ".timestamp_us")
+        string(sensor.get("error"), name + ".error")
+        require(sensor.get("unit") == unit, "unexpected " + name + ".unit")
+        if sensor["valid"]:
+            require(sensor["seq"] > 0 and sensor["timestamp_us"] > 0, "valid unsampled " + name)
+        if name == "magnetometer":
+            if sensor["valid"]:
+                finite_vector(sensor.get("field_ut"), "magnetometer.field_ut")
+            else:
+                require(sensor.get("field_ut") is None, "invalid magnetic field must be null")
+            raw = sensor.get("raw")
+            if raw is not None:
+                require(isinstance(raw, list) and len(raw) == 3, "invalid magnetometer.raw")
+                for axis in raw:
+                    integer(axis, "magnetometer.raw axis", -32768, 32767)
+            if sensor.get("rhall") is not None:
+                integer(sensor["rhall"], "magnetometer.rhall", 0, 16383)
+            require(type(sensor.get("overflow")) is bool, "invalid magnetometer.overflow")
+        elif name == "light":
+            lux = sensor.get("lux")
+            if sensor["valid"]:
+                require(type(lux) in (int, float) and math.isfinite(lux) and lux >= 0, "invalid light.lux")
+            else:
+                require(lux is None, "invalid light.lux must be null")
+            for channel in ("raw_ch0", "raw_ch1"):
+                if sensor.get(channel) is not None:
+                    integer(sensor[channel], "light." + channel, 0, 65535)
+            if sensor.get("gain") is not None:
+                require(sensor["gain"] in (1, 2, 4, 8, 48, 96) and type(sensor["gain"]) is int,
+                        "invalid light.gain")
+            integer(sensor.get("integration_ms"), "light.integration_ms", 1, 1000)
+            require(type(sensor.get("saturated")) is bool, "invalid light.saturated")
+        else:
+            if sensor["valid"]:
+                require(sensor.get("raw") is not None, "valid proximity requires raw sample")
+            if sensor.get("raw") is not None:
+                integer(sensor["raw"], "proximity.raw", 0, 2047)
+            require(type(sensor.get("saturated")) is bool, "invalid proximity.saturated")
+
+
 def validate_telemetry(value, boot_id):
     value = object_value(value, "telemetry")
     require(value.get("boot_id") == boot_id, "telemetry boot_id changed")
@@ -125,6 +175,7 @@ def validate_telemetry(value, boot_id):
     health = object_value(value.get("health"), "health")
     for field in ("heap_free", "psram_free"):
         integer(health.get(field), field, 0, 1 << 32)
+    validate_environment_sensors(value)
     return value
 
 

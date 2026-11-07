@@ -4,8 +4,27 @@
  * SPDX-License-Identifier: MIT
  */
 #include "joystick_handle.h"
+#include "center_button.h"
+#include "center_packet.h"
+#include "mapped_target.h"
+#include "freertos/semphr.h"
+#include "esp_random.h"
 
 i2c_bus_device_handle_t i2c_device1;  // i2c device handle
+static SemaphoreHandle_t joystick_mutex;
+static center_button_filter_t center_button;
+static uint32_t mode_generation;
+
+void joystick_set_mode(joystick_data_t *data, uint8_t mode)
+{
+    xSemaphoreTake(joystick_mutex, portMAX_DELAY);
+    if (data->screen_mode != mode) {
+        center_button_reset(&center_button);
+        ++mode_generation;
+        data->screen_mode = mode;
+    }
+    xSemaphoreGive(joystick_mutex);
+}
 
 /**
  * @brief Initialize joystick via I2C interface
@@ -42,6 +61,8 @@ static void joystick_i2c_init()
     }
 
     i2c_device1 = i2c_bus_device_create(i2c0_bus, 0x54, 0);
+    joystick_mutex = xSemaphoreCreateMutex();
+    configASSERT(joystick_mutex);
 }
 
 /**
@@ -59,6 +80,7 @@ static void joystick_i2c_init()
  */
 static void joystick_read_xy(uint16_t *joyX, uint16_t *joyY)
 {
+    xSemaphoreTake(joystick_mutex, portMAX_DELAY);
     uint8_t data[4];
     esp_err_t ret = i2c_bus_read_bytes(i2c_device1, 0x00, 2, data);
     vTaskDelay(20 / portTICK_PERIOD_MS);
@@ -69,6 +91,36 @@ static void joystick_read_xy(uint16_t *joyX, uint16_t *joyY)
     } else {
         // ESP_LOGE("I2C Joystick", "Failed to read joystick data");
     }
+    xSemaphoreGive(joystick_mutex);
+}
+
+static bool joystick_read_center(joystick_data_t *data, uint8_t expected_mode, uint32_t *generation)
+{
+    // Official Mini JoyC library uses a STOP between register selection and
+    // read. Its STM32 prepares 0x30 in the write-completion callback; allow it
+    // one tick and keep the X/Y readers from changing the selected register.
+    // https://github.com/m5stack/M5Hat-Mini-JoyC/blob/main/src/M5HatMiniJoyC.cpp
+    const uint8_t reg = 0x30;
+    uint8_t value = 0xff;
+    xSemaphoreTake(joystick_mutex, portMAX_DELAY);
+    if (data->screen_mode != expected_mode) {
+        xSemaphoreGive(joystick_mutex);
+        return false;
+    }
+    *generation = mode_generation;
+    esp_err_t ret = i2c_bus_write_bytes(i2c_device1, NULL_I2C_MEM_ADDR, 1, &reg);
+    if (ret == ESP_OK) {
+        vTaskDelay(1);
+        ret = i2c_bus_read_bytes(i2c_device1, NULL_I2C_MEM_ADDR, 1, &value);
+    }
+    if (center_button_sample(&center_button, ret == ESP_OK, value)) {
+        if (++data->center_press_seq == 0) {
+            // Sequence wrap starts a fresh baseline instead of replaying.
+            do { data->sender_boot_nonce = esp_random(); } while (!data->sender_boot_nonce);
+        }
+    }
+    xSemaphoreGive(joystick_mutex);
+    return true;
 }
 
 /**
@@ -101,6 +153,8 @@ joystick_data_t joystick_init()
     tmp.screen_mode = MODE_SETUP;
     tmp.select_mode = CHANNEL_SELECT;
     tmp.btnB_status = false;
+    do { tmp.sender_boot_nonce = esp_random(); } while (!tmp.sender_boot_nonce);
+    tmp.center_press_seq = 0;
     return tmp;
 }
 
@@ -145,17 +199,30 @@ void handle_running_screen(void *pvParam)
 {
     joystick_data_t *joystick_data = (joystick_data_t *)pvParam;
     // communicate packet
-    uint8_t pkt[8];
+    uint8_t pkt[16] = {0};
     pkt[0]              = joystick_data->id;  // id: 0 for broadcast
     int16_t yaw_angle   = 0;
     int16_t pitch_angle = 0;
-    int16_t last_yaw    = 0;
-    int16_t last_pitch  = 0;
+    mapped_target_filter_t accepted = {0};
     int16_t speed_val   = 600;
+    bool sent_packet = false;
+    uint32_t last_center_seq = 0;
+    TickType_t last_packet_tick = 0;
+    uint32_t observed_mode_generation = UINT32_MAX;
 
     while (1) {
         // update screen and send packet when in running mode
         if (joystick_data->screen_mode == MODE_RUNNING) {
+            uint32_t generation;
+            if (!joystick_read_center(joystick_data, MODE_RUNNING, &generation)) {
+                vTaskDelay(1);
+                continue;
+            }
+            if (generation != observed_mode_generation) {
+                observed_mode_generation = generation;
+                sent_packet = false;
+                accepted.initialized = false;
+            }
             joystick_read_xy(&joystick_data->joyX, &joystick_data->joyY);
 
             if (running_screen != NULL && lv_obj_is_valid(running_screen)) {
@@ -174,32 +241,35 @@ void handle_running_screen(void *pvParam)
             yaw_angle   = (int16_t)map(joystick_data->joyX, X_MIN, X_MAX, 1280, -1280);
             pitch_angle = (int16_t)map(joystick_data->joyY, Y_MIN, Y_MAX, 0, 900);
 
-            // send pitch_angle and yaw_angle only when changes exceed threshold
-            if (abs(yaw_angle - last_yaw) < 5 && abs(pitch_angle - last_pitch) < 5) {
-                if (pkt[7] != joystick_data->btnB_status) {
-                    pkt[7] = joystick_data->btnB_status;
-                    espnow_send_data(pkt, sizeof(pkt));
-                }
+            // Heartbeats and button events retain the last accepted angle pair.
+            const bool target_changed = mapped_target_accept(&accepted, yaw_angle, pitch_angle, 5);
+            if (sent_packet && !target_changed &&
+                pkt[7] == joystick_data->btnB_status && pkt[0] == joystick_data->id &&
+                last_center_seq == joystick_data->center_press_seq &&
+                xTaskGetTickCount() - last_packet_tick < pdMS_TO_TICKS(200)) {
                 vTaskDelay(30 / portTICK_PERIOD_MS);
                 continue;
             }
 
             pkt[0] = joystick_data->id;
-            memcpy(&pkt[1], &yaw_angle, sizeof(int16_t));
-            memcpy(&pkt[3], &pitch_angle, sizeof(int16_t));
+            memcpy(&pkt[1], &accepted.yaw, sizeof(int16_t));
+            memcpy(&pkt[3], &accepted.pitch, sizeof(int16_t));
             memcpy(&pkt[5], &speed_val, sizeof(int16_t));
             pkt[7] = joystick_data->btnB_status;
+            center_packet_extension(pkt, joystick_data->sender_boot_nonce, joystick_data->center_press_seq);
 
 #if 0 
             ESP_LOGI("handle_running_screen", "Yaw: %d, Pitch: %d, Speed: %d, id: %u, Button: %u", 
                         yaw_angle, pitch_angle, speed_val, joystick_data->id, joystick_data->btnB_status);
 #endif
 
-            last_yaw   = yaw_angle;
-            last_pitch = pitch_angle;
             espnow_send_data(pkt, sizeof(pkt));
+            sent_packet = true;
+            last_center_seq = joystick_data->center_press_seq;
+            last_packet_tick = xTaskGetTickCount();
             vTaskDelay(30 / portTICK_PERIOD_MS);
         } else {
+            sent_packet = false;
             vTaskDelay(200 / portTICK_PERIOD_MS);
         }
     }
@@ -234,17 +304,30 @@ void handle_imu_screen(void *pvParam)
     static IMU_Angle_t last_imu_angle = {0.0f, 0.0f};
 
     // communicate packet
-    uint8_t pkt[8];
+    uint8_t pkt[16] = {0};
     pkt[0]              = joystick_data->id;  // id: 0 for broadcast
     int16_t yaw_angle   = 0;
     int16_t pitch_angle = 0;
-    int16_t last_yaw    = 0;
-    int16_t last_pitch  = 0;
+    mapped_target_filter_t accepted = {0};
     int16_t speed_val   = 600;
+    bool sent_packet = false;
+    uint32_t last_center_seq = 0;
+    TickType_t last_packet_tick = 0;
+    uint32_t observed_mode_generation = UINT32_MAX;
 
     while (1) {
         // update screen and send packet when in running mode
         if (joystick_data->screen_mode == MODE_IMU) {
+            uint32_t generation;
+            if (!joystick_read_center(joystick_data, MODE_IMU, &generation)) {
+                vTaskDelay(1);
+                continue;
+            }
+            if (generation != observed_mode_generation) {
+                observed_mode_generation = generation;
+                sent_packet = false;
+                accepted.initialized = false;
+            }
             IMU_Angle_t imu_angle =
                 update_imu_screen(joystick_data->accel_x, joystick_data->accel_y, joystick_data->accel_z,
                                   joystick_data->bat, joystick_data->id, joystick_data->channel);
@@ -257,19 +340,24 @@ void handle_imu_screen(void *pvParam)
             yaw_angle   = (int16_t)map(limited_roll, -1.5, 1.5, -1280, 1280);
             pitch_angle = (int16_t)map(limited_pitch, 0, 1.5, 900, 0);
 
-            if (abs(yaw_angle - last_yaw) < 10 && abs(last_pitch - pitch_angle) < 10) {
+            const bool target_changed = mapped_target_accept(&accepted, yaw_angle, pitch_angle, 10);
+            if (sent_packet && !target_changed &&
+                pkt[7] == joystick_data->btnB_status && pkt[0] == joystick_data->id &&
+                last_center_seq == joystick_data->center_press_seq &&
+                xTaskGetTickCount() - last_packet_tick < pdMS_TO_TICKS(200)) {
                 vTaskDelay(30 / portTICK_PERIOD_MS);
                 continue;
             }
-            last_yaw   = yaw_angle;
-            last_pitch = pitch_angle;
-
             pkt[0] = joystick_data->id;
-            memcpy(&pkt[1], &yaw_angle, sizeof(int16_t));
-            memcpy(&pkt[3], &pitch_angle, sizeof(int16_t));
+            memcpy(&pkt[1], &accepted.yaw, sizeof(int16_t));
+            memcpy(&pkt[3], &accepted.pitch, sizeof(int16_t));
             memcpy(&pkt[5], &speed_val, sizeof(int16_t));
             pkt[7] = joystick_data->btnB_status;
+            center_packet_extension(pkt, joystick_data->sender_boot_nonce, joystick_data->center_press_seq);
             espnow_send_data(pkt, sizeof(pkt));
+            sent_packet = true;
+            last_center_seq = joystick_data->center_press_seq;
+            last_packet_tick = xTaskGetTickCount();
 
 #if 0 
             // ESP_LOGI("handle_imu_screen", "yaw_angle: %.2f, pitch_angle:%.2f, yaw: %d, pitch: %d\n", 
@@ -278,6 +366,7 @@ void handle_imu_screen(void *pvParam)
 
             vTaskDelay(30 / portTICK_PERIOD_MS);
         } else {
+            sent_packet = false;
             vTaskDelay(200 / portTICK_PERIOD_MS);
         }
     }

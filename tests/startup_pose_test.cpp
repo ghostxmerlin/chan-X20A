@@ -23,7 +23,7 @@ int main()
     for(int pitch=-32768;pitch<=32767;++pitch){
         collector::RemoteCommand command{1,123,static_cast<int16_t>(pitch),600,false};
         auto target=collector::apply_remote_yaw(yaw,command,pitch==-32768);
-        assert(yaw.angle==123&&yaw.speed==600&&target.yaw==123);
+        assert(yaw.angle==-123&&yaw.speed==600&&target.yaw==-123);
         assert(command.pitch==pitch);
         assert(yaw.sync==(pitch==-32768));
     }
@@ -44,8 +44,8 @@ int main()
     assert(std::strcmp(unavailable.state(),"feedback_unavailable")==0);
     assert(unavailable.step(14100000,true,true,true)==Action::None);
     auto target=collector::apply_remote_yaw(yaw,{1,32767,-32768,1000,false},true);
-    assert(target.yaw==1280&&target.speed==1000);
+    assert(target.yaw==-1280&&target.speed==1000);
     target=collector::apply_remote_yaw(yaw,{1,-32768,32767,0,false},false);
-    assert(target.yaw==-1280&&target.speed==0);
+    assert(target.yaw==1280&&target.speed==0);
     std::cout<<"PASS: yaw-only actuator routing across all 65536 pitch inputs, raw preservation, limits, independent boot pitch, stop/re-enable and deadline\n";
 }

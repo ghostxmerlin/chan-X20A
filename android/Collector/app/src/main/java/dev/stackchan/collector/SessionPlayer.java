@@ -40,15 +40,17 @@ final class SessionPlayer {
     private String recordStatus="";
     SessionPlayer(Activity activity,File folder){this.activity=activity;this.folder=folder;}
     void show(){
-        LinearLayout content=new LinearLayout(activity);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(dp(16),dp(10),dp(16),dp(10));
-        ScrollView scroll=new ScrollView(activity);scroll.addView(content);
+        LinearLayout content=new LinearLayout(activity);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(dp(16),dp(10),dp(16),dp(10));content.setBackgroundColor(HudTheme.BG);
+        ScrollView scroll=new ScrollView(activity);scroll.setBackgroundColor(HudTheme.BG);scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);scroll.addView(content);
         summary=text("正在读取本地记录…",13);content.addView(summary);
-        image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.FIT_CENTER);image.setBackgroundColor(0xff102737);content.addView(image,new LinearLayout.LayoutParams(-1,dp(215)));
-        meta=text("",12);content.addView(meta);seek=new SeekBar(activity);seek.setMax(10000);content.addView(seek);
-        LinearLayout actions=new LinearLayout(activity);play=new Button(activity);play.setText("播放画面");sound=new Button(activity);sound.setText("声音：关闭");actions.addView(play,new LinearLayout.LayoutParams(0,-2,1));actions.addView(sound,new LinearLayout.LayoutParams(0,-2,1));content.addView(actions);
+        image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.FIT_CENTER);image.setBackgroundColor(HudTheme.BG);content.addView(image,new LinearLayout.LayoutParams(-1,dp(215)));
+        meta=text("",12);meta.setTextColor(HudTheme.MUTED);content.addView(meta);seek=new SeekBar(activity);seek.setMax(10000);HudTheme.styleSeekBar(seek);content.addView(seek);
+        LinearLayout actions=new LinearLayout(activity);play=new Button(activity);play.setText("播放画面");sound=new Button(activity);sound.setText("声音：关闭");HudTheme.styleButton(play);HudTheme.styleButton(sound);
+        LinearLayout.LayoutParams playLayout=new LinearLayout.LayoutParams(0,dp(44),1);playLayout.rightMargin=dp(8);actions.addView(play,playLayout);actions.addView(sound,new LinearLayout.LayoutParams(0,dp(44),1));content.addView(actions);
         sensor=text("",13);content.addView(sensor);
-        AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("回放 · "+folder.getName()).setView(scroll).setPositiveButton("关闭",null).create();
-        dialog.setOnDismissListener(d->{dismissed=true;ui.removeCallbacks(tick);releaseAudio();io.shutdownNow();});dialog.show();
+        TextView title=text("回放 · "+folder.getName(),15);title.setTypeface(HudTheme.MEDIUM);title.setPadding(dp(16),dp(16),dp(16),dp(6));
+        AlertDialog dialog=new AlertDialog.Builder(activity).setCustomTitle(title).setView(scroll).setPositiveButton("关闭",null).create();
+        dialog.setOnDismissListener(d->{dismissed=true;ui.removeCallbacks(tick);releaseAudio();io.shutdownNow();});dialog.show();HudTheme.applyDialog(dialog);
         play.setEnabled(false);sound.setEnabled(false);
         play.setOnClickListener(v->{playing=!playing;play.setText(playing?"暂停":"播放画面");if(playing){if(position>=duration)position=0;playAnchor=android.os.SystemClock.elapsedRealtime()-position/1000;ui.post(tick);}else releaseAudio();});
         sound.setOnClickListener(v->{audible=!audible;sound.setText(audible?"声音：开启":"声音：关闭");if(!audible)releaseAudio();});
@@ -72,7 +74,7 @@ final class SessionPlayer {
         if(found>=0){Frame f=frames.get(found);meta.setText(clock+"\n第 "+f.seq+" 帧 · 设备 "+String.format(Locale.ROOT,"%.3f s",f.timestamp/1000000.0)+"\n启动 "+f.boot+(time-f.time>2500000?" · 此处为采集中断间隙":""));
             if(found!=shownFrame){shownFrame=found;final int request=++decodeGeneration;io.execute(()->{Bitmap bitmap=BitmapFactory.decodeFile(f.file.getAbsolutePath());ui.post(()->{if(!dismissed&&request==decodeGeneration)image.setImageBitmap(bitmap);else if(bitmap!=null)bitmap.recycle();});});}
         }else meta.setText(clock+"\n此时还没有图像");
-        Sample latest=null;for(Sample s:sensors){if(s.time>time)break;latest=s;}sensor.setText(latest==null?"此时还没有传感器数据":MainActivity.formatTelemetry(latest.value));
+        Sample latest=null;for(Sample s:sensors){if(s.time>time)break;latest=s;}sensor.setText(latest==null?"此时还没有传感器数据":MainActivity.formatTelemetry(latest.value,Math.max(0,time-latest.time)));
     }
     private void syncAudio(){long time=origin+position;Track found=null;for(Track t:tracks){if(t.time>time)break;if(time<t.end)found=t;}
         if(found==null){releaseAudio();return;}if(found==activeTrack)return;releaseAudio();final Track track=found;
@@ -81,7 +83,7 @@ final class SessionPlayer {
     private void releaseAudio(){if(media!=null){media.release();media=null;}activeTrack=null;}
     private interface Row{void accept(JSONObject o)throws Exception;}
     private void readLines(File file,Row row)throws Exception{if(!file.exists())return;try(BufferedReader r=new BufferedReader(new InputStreamReader(new FileInputStream(file),"UTF-8"))){String line;while((line=r.readLine())!=null){if(dismissed)return;try{row.accept(new JSONObject(line));}catch(org.json.JSONException e){/* interrupted final line remains visible through manifest status */}}}}
-    private TextView text(String s,int size){TextView t=new TextView(activity);t.setText(s);t.setTextColor(0xff15324a);t.setTextSize(size);t.setPadding(0,dp(8),0,dp(8));return t;}
+    private TextView text(String s,int size){TextView t=new TextView(activity);t.setText(s);t.setTextColor(HudTheme.TEXT);t.setTextSize(size);t.setTypeface(HudTheme.REGULAR);t.setBackgroundColor(HudTheme.BG);t.setPadding(0,dp(8),0,dp(8));return t;}
     private int dp(int n){return(int)(n*activity.getResources().getDisplayMetrics().density+.5f);}
     private static class Frame{File file;long time,timestamp,seq;String boot;}
     private static class Sample{long time;JSONObject value;}

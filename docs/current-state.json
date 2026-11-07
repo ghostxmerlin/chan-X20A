@@ -1,16 +1,270 @@
 {
-  "date": "2026-10-31",
-  "firmware": "collector-0.3.6",
+  "date": "2026-11-01",
+  "firmware": "collector-0.4.8",
   "android": {
-    "version": "0.3.6",
-    "version_code": 7
+    "version": "0.4.7",
+    "version_code": 17,
+    "deployment": "identified vivo V2337A; installed bytes verified; emulator production remains stopped"
   },
   "upstream_commit": "f901cc2969189f3f0e96af1442c0f96e77e1e2c1",
   "esp_idf": "5.5.4",
-  "status": "black_animated_home_yaw_only_deployed_audio_busy_wait_fixed_feedback_root_cause_unresolved",
-  "deployed_firmware_sha256": "dcef4393489f05a88d27648f40662810724d073553cbad487f473d2d65e41a94",
-  "deployed_apk_sha256": "ca0bf57a914c104e80e2142889131bc232e89b0e1b201c4723548882652f5e8d",
+  "status": "mac_emotion_preview_running_firmware_0_4_9_built_unflashed_user_defers_live_test",
+  "deployed_firmware_sha256": "f1144c5eb61810fe134d26e456b53bd78bd8a2f55f702deda8df63d8712ae411",
+  "deployed_apk_sha256": "8a58d664dea2439a5f8a7126d7c503f57409541cf7a056c7ae71f2184913f774",
   "validation": {
+    "diagnostic_scope": "cannot power on and remote unresponsive; no new firmware or APK deployed",
+    "identity": "current HTTP random challenge PASS; boot unchanged from evening diagnostics",
+    "remote": {
+      "robot_channel_before": 6,
+      "remote_channel_before": 11,
+      "receiver_id": 1,
+      "mode": "joystick",
+      "cause": "remote fixed CH11 while robot connected fallback Wi-Fi CH6",
+      "action": "user changed remote to CH6 / ID1",
+      "user_acceptance": "可以",
+      "observation": {
+        "samples": 569,
+        "probe_errors": 0,
+        "observed_span_s": 179.860537,
+        "rx_first": 25,
+        "rx_last": 842,
+        "applied_first": 25,
+        "applied_last": 842,
+        "rejected_last": 0,
+        "other_target_last": 0,
+        "all_remote_valid": true,
+        "all_following": true,
+        "single_boot": true,
+        "all_saved_pitch_10": true,
+        "yaw_valid_samples": 568,
+        "pitch_valid_samples": 569
+      },
+      "preferred_connection_failure_reason": "unknown; disconnect reason not recorded"
+    },
+    "power_on": {
+      "usb_supplied_runtime_observed": true,
+      "initial_uptime_s": 2211.675721,
+      "initial_battery_percent": 98,
+      "initial_charging": true,
+      "standalone_cold_boot": "not validated; symptom clarification pending",
+      "collector_idle_power_save": "disabled in existing source; initialization thresholds not proof of shutdown",
+      "reported_failure_condition": "USB removed; user short-pressed correct side power button",
+      "usb_to_battery_test": "PASS once; USB node absent, charging false, same boot, user still operating",
+      "battery_power_button_off_on_test": "PASS once; user home screen, new boot, identity reverified, telemetry and remote recovered",
+      "result": {
+        "samples": 794,
+        "probe_errors": 25,
+        "boot_count": 2,
+        "segments": [
+          {
+            "boot_index": 0,
+            "samples": 320,
+            "first_uptime_s": 2579.532961,
+            "last_uptime_s": 2681.51537,
+            "observed_duration_s": 101.982409,
+            "usb_absent_samples": 241,
+            "usb_absent_span_s": 76.779651,
+            "battery_first": 100,
+            "battery_last": 99,
+            "charging_last": false,
+            "display_enabled_all": true,
+            "control_enabled_all": true,
+            "remote_rx_first": 1516,
+            "remote_rx_last": 1943,
+            "remote_applied_first": 1516,
+            "remote_applied_last": 1943,
+            "remote_valid_all": true,
+            "channels": [
+              6
+            ],
+            "saved_pitch_values": [
+              10
+            ],
+            "pitch_request_seq_last": 0,
+            "pitch_source_last": "boot",
+            "camera_seq_delta": 1020,
+            "audio_seq_delta": 5099,
+            "health_error_deltas": {
+              "camera_errors": 0,
+              "audio_errors": 0,
+              "audio_skipped_blocks": 0
+            }
+          },
+          {
+            "boot_index": 1,
+            "samples": 474,
+            "first_uptime_s": 37.325846,
+            "last_uptime_s": 186.305559,
+            "observed_duration_s": 148.979713,
+            "usb_absent_samples": 474,
+            "usb_absent_span_s": 148.979713,
+            "battery_first": 98,
+            "battery_last": 95,
+            "charging_last": false,
+            "display_enabled_all": true,
+            "control_enabled_all": true,
+            "remote_rx_first": 33,
+            "remote_rx_last": 675,
+            "remote_applied_first": 33,
+            "remote_applied_last": 675,
+            "remote_valid_all": true,
+            "channels": [
+              6
+            ],
+            "saved_pitch_values": [
+              10
+            ],
+            "pitch_request_seq_last": 0,
+            "pitch_source_last": "boot",
+            "camera_seq_delta": 1464,
+            "audio_seq_delta": 7449,
+            "health_error_deltas": {
+              "camera_errors": 0,
+              "audio_errors": 0,
+              "audio_skipped_blocks": 0
+            }
+          }
+        ],
+        "network_gaps": [
+          {
+            "receive_gap_s": 48.73372721672058,
+            "boot_changed": true
+          }
+        ],
+        "user_unplug_observation": "仍正常运行",
+        "user_battery_cold_start_observation": "正常亮屏进入首页",
+        "test_count": {
+          "usb_to_battery": 1,
+          "battery_power_button_off_on": 1
+        },
+        "changes": {
+          "firmware_flash": false,
+          "software_reset": false,
+          "settings_write": false
+        },
+        "limits": [
+          "Original failure not reproduced and root cause unknown",
+          "Battery percentage is a PMIC estimate, not load voltage or capacity measurement",
+          "One successful cold start does not prove intermittent failure resolved"
+        ]
+      },
+      "original_failure_root_cause": "unknown; not reproduced; not declared repaired"
+    },
+    "final_state": {
+      "phone_usb": "not detected by ADB",
+      "robot_usb": "disconnected; battery powered",
+      "network": "fallback Wi-Fi",
+      "wifi_channel": 6,
+      "remote_channel": 6,
+      "remote_id": 1,
+      "remote_mode": "joystick",
+      "recording": "previous vivo capture status still unverified",
+      "monitor": "previous vivo monitor state unverified",
+      "face_detection": false,
+      "display": true,
+      "servo_control": true,
+      "saved_pitch_deg": 10,
+      "pitch_source": "boot",
+      "pitch_request_seq": 0,
+      "phone_bridge": "previous jar cleanup unverified",
+      "battery_percent": 95,
+      "charging": false
+    },
+    "this_continuation_actions": {
+      "flash": false,
+      "restart": true,
+      "pitch_change": false,
+      "code_change": false,
+      "restart_method": "user physically held power key off and short-pressed on, USB absent",
+      "software_reset": false,
+      "physical_power_cycles": 1
+    },
+    "known_limits": [
+      "One battery transfer and one battery power-button boot succeeded; original intermittent power-on failure not reproduced, root cause unknown",
+      "why preferred hotspot was unavailable not known",
+      "prior recording and phone cleanup still unverified",
+      "old servo feedback/centering issues not declared fixed"
+    ],
+    "emotion_mac": {
+      "stage": "Mac first; user deferred live speech/face test",
+      "stt_provider": "aihubmix",
+      "stt_model": "gpt-live-transcribe",
+      "inference_model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+      "model_revision": "2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b",
+      "camera_inference": "local only; YuNet face-count gate; conservative unknown",
+      "mac_preview": true,
+      "firmware_flashed": false,
+      "tests_passed": 34,
+      "synthetic_stt_first_text_s": 2.128,
+      "synthetic_stt_audio_s": 7.8522083333333335,
+      "real_no_text_timeout_s": 600.071,
+      "socket_close_after_timeout_s": 2.009,
+      "sound_wake": "fake-network automated test passed; live test deferred",
+      "observed_audio_sequence_discontinuities": 44,
+      "audio_gap_cloud_restarts": 4,
+      "new_firmware_artifact_sha256": "8ae1077ac168073d3dafa23eb23862e457a1ca5391fbb4ded5b8805632858096",
+      "new_firmware_bytes": 4618144,
+      "known_limits": [
+        "Live face/speech fusion and wake not validated",
+        "Audio gap source unknown",
+        "Neutral self-report sample returned unknown",
+        "Old firmware supports one audio subscriber",
+        "New display and two subscribers untested on hardware"
+      ]
+    }
+  },
+  "scope": "Source and public configuration snapshot; hashes refer to privately retained deployed binaries, not publicly hosted downloads.",
+  "excluded": [
+    "device credentials",
+    "signing private keys",
+    "original flash backup",
+    "raw serial logs",
+    "camera and microphone recordings",
+    "local build artifacts",
+    "toolchains"
+  ],
+  "publication_checks": {
+    "python_protocol_tests": "23 PASS;final playback queue/louder regression PASS",
+    "android_host_tests": "0.4.6 PASS",
+    "android_native_runtime_tests": "0.4.6 all PASS;final hud/ui PASS",
+    "android_recorded_session_verification": "0.4.6 PASS;87.145s,263 JPEG decoded,4346audio/4345IMU continuous;6 timing intervals over150ms",
+    "lvgl_render_and_touch_test": "0.4.6 PASS",
+    "fixed_sdkconfig": "socket budget increased10 to16 in defaults/shared/runtime config; toolchain and dependency locks retained",
+    "private_credentials_in_staged_files": "922 tracked/nonignored files scanned; current credentials/address/phone serial zero matches; no upload",
+    "diff_check": "passed"
+  },
+  "previous_validation_0_3_4": {
+    "firmware_build_and_app_flash_verification": "passed",
+    "apk_build_and_install": "passed",
+    "startup_requested_and_enabled_samples": "117/117",
+    "ui_reenable_requested_and_enabled_samples": "122/122 during 30 seconds",
+    "startup_both_axis_position_valid_samples": "19/117",
+    "ui_reenable_invalid_feedback_samples": "119/122",
+    "physical_remote_motion_for_0_3_4": "not verified",
+    "servo_position_transport": "unresolved"
+  },
+  "previous_validation_0_3_5": {
+    "firmware_build_and_app_flash_verification": "passed",
+    "lvgl_actual_render_and_touch_state_tests": "passed",
+    "startup_pose_host_tests": "passed",
+    "startup_target_pitch_deg": 13,
+    "startup_measured_pitch_deg": 12.8,
+    "startup_valid_feedback_samples": "117/117 both axes",
+    "startup_requested_and_enabled_samples": "117/117",
+    "physical_remote_motion_for_0_3_5": "full joystick/posture regression not repeated",
+    "screen_physical_tap_acceptance": "passed; user confirmed display and both page transitions",
+    "servo_position_transport": "previous corruption root cause unresolved; this boot valid",
+    "after_audio_monitor_restored": {
+      "samples": 80,
+      "both_valid": 78,
+      "enabled_all": true,
+      "pitch_angles": [
+        12.8
+      ]
+    },
+    "android_audio_monitor": "restored and UI confirmed ON"
+  },
+  "previous_validation_0_3_6": {
     "firmware_build_and_app_flash_verification": "passed",
     "apk_build_and_install": "passed",
     "screen_physical_acceptance": "user confirmed pure black, rotating lettering and both page transitions",
@@ -52,55 +306,1604 @@
     "android_audio_monitor": "restored and UI confirmed ON",
     "recording": "validation session complete; recorder stopped"
   },
-  "scope": "Source and public configuration snapshot; hashes refer to privately retained deployed binaries, not publicly hosted downloads.",
-  "excluded": [
-    "device credentials",
-    "signing private keys",
-    "original flash backup",
-    "raw serial logs",
-    "camera and microphone recordings",
-    "local build artifacts",
-    "toolchains"
-  ],
-  "publication_checks": {
-    "python_protocol_tests": "15 passed",
-    "remote_protocol_test": "passed including 100000 random payloads",
-    "yaw_only_and_startup_pose_test": "passed including all 65536 int16 pitch inputs",
-    "lvgl_render_and_touch_test": "passed; 120 frames; pure black; 12872-pixel partial redraw",
-    "android_native_runtime_tests": "passed",
-    "android_recorded_session_verification": "passed; all JPEGs decoded; audio/WAV sequence/offset checks passed",
-    "fixed_sdkconfig": "unchanged",
-    "private_credentials_in_staged_files": "none detected"
-  },
-  "previous_validation_0_3_4": {
-    "firmware_build_and_app_flash_verification": "passed",
-    "apk_build_and_install": "passed",
-    "startup_requested_and_enabled_samples": "117/117",
-    "ui_reenable_requested_and_enabled_samples": "122/122 during 30 seconds",
-    "startup_both_axis_position_valid_samples": "19/117",
-    "ui_reenable_invalid_feedback_samples": "119/122",
-    "physical_remote_motion_for_0_3_4": "not verified",
-    "servo_position_transport": "unresolved"
-  },
-  "previous_validation_0_3_5": {
-    "firmware_build_and_app_flash_verification": "passed",
-    "lvgl_actual_render_and_touch_state_tests": "passed",
-    "startup_pose_host_tests": "passed",
+  "previous_validation_0_3_7": {
+    "firmware_build_and_app_flash_verification": "passed; identified robot; ota_1 only; independently verified",
+    "apk_build_and_install": "passed; 0.3.7/code8",
+    "screen_physical_acceptance": "user confirmed solid borderless heart/thumb, graphical summary, syslog navigation and return home normal without stutter",
+    "home_background": "#000000",
+    "home_asset_size": [
+      260,
+      240
+    ],
+    "lettering_rotation_seconds": 12,
+    "reaction_duration_ms": 500,
+    "summary": "Wi-Fi, camera, remote recent input, battery/charging, microphone, XYZ accelerometer/gyro, valid servo angles",
+    "summary_camera_fps": "successfully published JPEG frames only",
+    "syslog": "local bounded ESP log tail; not persistent or complete boot log",
+    "remote_pitch_control_enabled": false,
+    "remote_pitch_input_role": "home_reaction",
+    "remote_pitch_target_deg": null,
     "startup_target_pitch_deg": 13,
-    "startup_measured_pitch_deg": 12.8,
-    "startup_valid_feedback_samples": "117/117 both axes",
-    "startup_requested_and_enabled_samples": "117/117",
-    "physical_remote_motion_for_0_3_5": "full joystick/posture regression not repeated",
-    "screen_physical_tap_acceptance": "passed; user confirmed display and both page transitions",
-    "servo_position_transport": "previous corruption root cause unresolved; this boot valid",
-    "after_audio_monitor_restored": {
-      "samples": 80,
-      "both_valid": 78,
-      "enabled_all": true,
-      "pitch_angles": [
-        12.8
+    "startup_requested_and_enabled_samples": "107/107",
+    "startup_both_axis_valid_samples": "107/107",
+    "servo_position_transport": "root cause unresolved; center-idle boot 107/107 both-axis valid is only this window",
+    "center_nod": {
+      "receiver_implemented": false,
+      "remote_sender_build": "passed; fixed ESP-IDF 5.5.4; ESP32 candidate",
+      "remote_usb_identified": true,
+      "remote_backed_up": true,
+      "remote_flashed": true,
+      "physical_acceptance": "effect abandoned by user after fast candidate: too slow and amplitude too small",
+      "legacy_b_button_triggers_nod": false,
+      "remote_chip": "ESP32-PICO-D4",
+      "remote_flash_bytes": 4194304,
+      "remote_backup_independent_verification": "passed",
+      "remote_app_offset": "0x10000; determined from remote partition table",
+      "remote_app_sha256": "efbb6b582a3ebfa1e7fe25ded9f1dafc6c7cf911857393187811ceea2dbf0c8d",
+      "non_app_flash_verification": "unchanged before first boot; runtime NVS calibration may write normally",
+      "remote_nvs_init_failure": "stop without erase",
+      "first_candidate": "speed250/leg700: physical two nods but trajectory timeout; later valid 3.7..4 deg feedback rejected by strict start check",
+      "idle_baseline": "physical center protocol received without idle nod; prior sequence on receiver reboot establishes baseline only",
+      "nod_trigger": "none",
+      "center_input_role": "record_only",
+      "current_state": "disabled",
+      "current_parameters": null,
+      "historical_fast_candidate": "450/400: 4 computed trajectories completed, 2 busy press events ignored; user rejected effect; implementation and special lower-edge recovery removed"
+    },
+    "stop_rearm": "persistent stop latch cancels old yaw/startup/nod even between motor task iterations; host verified",
+    "concurrent_capture": {
+      "duration_s": 64.129,
+      "frames": 543,
+      "fps_receive": 8.536089207108974,
+      "all_jpeg_decoded": true,
+      "audio_blocks": 3186,
+      "audio_seq_gaps": 0,
+      "imu_samples": 3186,
+      "imu_hz": 50.01368584863466,
+      "imu_invalid": 0,
+      "imu_history_lost_max": 0,
+      "remote_records": 79,
+      "queue_drops": 0,
+      "reaction_events": {
+        "heart": 10,
+        "thumbs_up": 7
+      },
+      "both_axes_valid_samples": "452/609",
+      "control_requested_and_enabled_samples": "609/609",
+      "audio_monitor_entire_session": true,
+      "capture_error_deltas": 0,
+      "firmware_variant": "collector-0.3.7-solid; earlier UI acceptance, not nod-fast recording"
+    },
+    "android_audio_monitor": "restoring after APK update",
+    "recording": "all gesture validation sessions sealed; recorder stopped",
+    "audio_idle_wait": "minimum 1 FreeRTOS tick retained",
+    "startup_pose_this_boot": "feedback_unavailable; actual valid pitch near4 deg below strict start limit"
+  },
+  "previous_validation_0_3_8": {
+    "firmware_build_and_app_flash_verification": "passed; identified robot; ota_1 only; independently verified",
+    "apk_build_and_install": "passed; 0.3.7/code8",
+    "screen_physical_acceptance": "user confirmed solid borderless heart/thumb, graphical summary, syslog navigation and return home normal without stutter",
+    "home_background": "#000000",
+    "home_asset_size": [
+      260,
+      240
+    ],
+    "lettering_rotation_seconds": 12,
+    "reaction_duration_ms": 500,
+    "summary": "Wi-Fi, camera, remote recent input, battery/charging, microphone, XYZ accelerometer/gyro, valid servo angles",
+    "summary_camera_fps": "successfully published JPEG frames only",
+    "syslog": "local bounded ESP log tail; not persistent or complete boot log",
+    "remote_pitch_control_enabled": false,
+    "remote_pitch_input_role": "home_reaction",
+    "remote_pitch_target_deg": null,
+    "startup_target_pitch_deg": 13,
+    "startup_requested_and_enabled_samples": "104/104",
+    "startup_both_axis_valid_samples": "98/104",
+    "servo_position_transport": "unresolved; boot98/104 valid, audition10/147 bothvalid with invalid feedback already before playback",
+    "center_nod": {
+      "receiver_implemented": false,
+      "remote_sender_build": "passed; fixed ESP-IDF 5.5.4; ESP32 candidate",
+      "remote_usb_identified": true,
+      "remote_backed_up": true,
+      "remote_flashed": true,
+      "physical_acceptance": "effect abandoned by user after fast candidate: too slow and amplitude too small",
+      "legacy_b_button_triggers_nod": false,
+      "remote_chip": "ESP32-PICO-D4",
+      "remote_flash_bytes": 4194304,
+      "remote_backup_independent_verification": "passed",
+      "remote_app_offset": "0x10000; determined from remote partition table",
+      "remote_app_sha256": "efbb6b582a3ebfa1e7fe25ded9f1dafc6c7cf911857393187811ceea2dbf0c8d",
+      "non_app_flash_verification": "unchanged before first boot; runtime NVS calibration may write normally",
+      "remote_nvs_init_failure": "stop without erase",
+      "first_candidate": "speed250/leg700: physical two nods but trajectory timeout; later valid 3.7..4 deg feedback rejected by strict start check",
+      "idle_baseline": "physical center protocol received without idle nod; prior sequence on receiver reboot establishes baseline only",
+      "nod_trigger": "none",
+      "center_input_role": "record_only",
+      "current_state": "disabled",
+      "current_parameters": null,
+      "historical_fast_candidate": "450/400: 4 computed trajectories completed, 2 busy press events ignored; user rejected effect; implementation and special lower-edge recovery removed"
+    },
+    "stop_rearm": "persistent stop latch cancels old yaw/startup/nod even between motor task iterations; host verified",
+    "concurrent_capture": {
+      "firmware_variant": "collector-0.3.8-playback",
+      "duration_s": 21.357,
+      "frames": 160,
+      "fps_receive": 7.57739234002838,
+      "all_jpeg_decoded": true,
+      "audio_blocks": 1051,
+      "audio_seq_gaps": 0,
+      "audio_timestamp_outliers_over_5ms": 8,
+      "imu_samples": 1050,
+      "imu_hz": 50.013471216675185,
+      "imu_invalid": 0,
+      "imu_history_lost_max": 0,
+      "remote_records": 88,
+      "queue_drops": 0,
+      "both_axes_valid_samples": "10/147",
+      "control_requested_and_enabled_samples": "147/147",
+      "audio_monitor_entire_session": false,
+      "capture_error_deltas": 0,
+      "output_enabled_observation_window": {
+        "duration_s": 4.058732,
+        "frames": 33,
+        "audio_blocks": 203,
+        "imu_samples": 203,
+        "audio_and_imu_sequence_gaps": 0
+      }
+    },
+    "android_audio_monitor": "restored ON after speaker audition; verified by fresh screenshot",
+    "recording": "audition complete and sealed; recorder stopped",
+    "audio_idle_wait": "minimum 1 FreeRTOS tick retained",
+    "startup_pose_this_boot": "feedback_unavailable; actual valid pitch near4 deg below strict start limit",
+    "playback": {
+      "endpoint": "authenticated POST /v1/playback",
+      "format": "s16le 24000 Hz mono; max8 seconds",
+      "volume": 20,
+      "persistent": false,
+      "automatic": false,
+      "max_concurrent_jobs": 1,
+      "sample": "4s official Lycoris Recoil Chisato character voice excerpt; kept locally only",
+      "sample_bytes": 192000,
+      "job_id": 1,
+      "state": "completed",
+      "submitted_bytes": 192000,
+      "error": 0,
+      "cleanup_error": 0,
+      "final_hardware_reset_held": true,
+      "final_output_enabled": false,
+      "same_boot_after_playback": true,
+      "auditory_confirmation": "pending",
+      "capture_validation": "passed limited21.357s recording; sequence continuity does not prove audible quality",
+      "rejection_checks": "unauthenticated401, odd/empty body400; unchangedjob and reset held"
+    }
+  },
+  "previous_validation_0_3_9": {
+    "firmware_build_and_app_flash_verification": "passed; identified robot; ota_1 only; independently verified",
+    "apk_build_and_install": "passed;0.3.9/code9",
+    "screen_physical_acceptance": "user confirmed solid borderless heart/thumb, graphical summary, syslog navigation and return home normal without stutter",
+    "home_background": "#000000",
+    "home_asset_size": [
+      260,
+      240
+    ],
+    "lettering_rotation_seconds": 12,
+    "reaction_duration_ms": 500,
+    "summary": "Wi-Fi, camera, remote recent input, battery/charging, microphone, XYZ accelerometer/gyro, valid servo angles",
+    "summary_camera_fps": "successfully published JPEG frames only",
+    "syslog": "local bounded ESP log tail; not persistent or complete boot log",
+    "remote_pitch_control_enabled": false,
+    "remote_pitch_input_role": "home_reaction",
+    "remote_pitch_target_deg": null,
+    "startup_target_pitch_deg": 13,
+    "startup_requested_and_enabled_samples": "92/92",
+    "startup_both_axis_valid_samples": "41/92",
+    "servo_position_transport": "unresolved; boot41/92 and display test73/240 both-axis valid; no root-cause claim",
+    "center_nod": {
+      "receiver_implemented": false,
+      "remote_sender_build": "passed; fixed ESP-IDF 5.5.4; ESP32 candidate",
+      "remote_usb_identified": true,
+      "remote_backed_up": true,
+      "remote_flashed": true,
+      "physical_acceptance": "effect abandoned by user after fast candidate: too slow and amplitude too small",
+      "legacy_b_button_triggers_nod": false,
+      "remote_chip": "ESP32-PICO-D4",
+      "remote_flash_bytes": 4194304,
+      "remote_backup_independent_verification": "passed",
+      "remote_app_offset": "0x10000; determined from remote partition table",
+      "remote_app_sha256": "efbb6b582a3ebfa1e7fe25ded9f1dafc6c7cf911857393187811ceea2dbf0c8d",
+      "non_app_flash_verification": "unchanged before first boot; runtime NVS calibration may write normally",
+      "remote_nvs_init_failure": "stop without erase",
+      "first_candidate": "speed250/leg700: physical two nods but trajectory timeout; later valid 3.7..4 deg feedback rejected by strict start check",
+      "idle_baseline": "physical center protocol received without idle nod; prior sequence on receiver reboot establishes baseline only",
+      "nod_trigger": "none",
+      "center_input_role": "display_toggle",
+      "current_state": "disabled",
+      "current_parameters": null,
+      "historical_fast_candidate": "450/400: 4 computed trajectories completed, 2 busy press events ignored; user rejected effect; implementation and special lower-edge recovery removed"
+    },
+    "stop_rearm": "persistent stop latch cancels old yaw/startup/nod even between motor task iterations; host verified",
+    "concurrent_capture": {
+      "firmware_variant": "collector-0.3.9-display-toggle",
+      "duration_s": 37.193,
+      "frames": 260,
+      "fps_receive": 7.119740762266935,
+      "all_jpeg_decoded": true,
+      "audio_blocks": 1835,
+      "audio_seq_gaps": 0,
+      "audio_timestamp_outliers_over_5ms": 4,
+      "imu_samples": 1826,
+      "imu_hz": 49.99843703516008,
+      "imu_invalid": 0,
+      "imu_history_lost_max": 0,
+      "remote_records": 155,
+      "queue_drops": 0,
+      "both_axes_valid_samples": "73/240",
+      "control_requested_and_enabled_samples": "240/240",
+      "audio_monitor_entire_session": true,
+      "capture_error_deltas": 0,
+      "screen_off_observation_window": {
+        "duration_s": 1.782418,
+        "frames": 12,
+        "audio_blocks": 89,
+        "imu_samples": 89,
+        "remote_packets": 9,
+        "audio_and_imu_sequence_gaps": 0,
+        "control_requested_and_enabled_samples": "11/11"
+      }
+    },
+    "android_audio_monitor": "ON throughout display test and retained after; fresh screenshot checked",
+    "recording": "37.193s session sealed and verified; recorder stopped",
+    "audio_idle_wait": "minimum 1 FreeRTOS tick retained",
+    "startup_pose_this_boot": "feedback_unavailable; valid pitch4 deg appears below strict limit",
+    "playback": {
+      "endpoint": "authenticated POST /v1/playback",
+      "format": "s16le 24000 Hz mono; max8 seconds",
+      "volume": 20,
+      "persistent": false,
+      "automatic": false,
+      "max_concurrent_jobs": 1,
+      "sample": "4s official Lycoris Recoil Chisato character voice excerpt; kept locally only",
+      "sample_bytes": 192000,
+      "job_id": 1,
+      "state": "completed",
+      "submitted_bytes": 192000,
+      "error": 0,
+      "cleanup_error": 0,
+      "final_hardware_reset_held": true,
+      "final_output_enabled": false,
+      "same_boot_after_playback": true,
+      "auditory_confirmation": "pending",
+      "capture_validation": "passed limited21.357s recording; sequence continuity does not prove audible quality",
+      "rejection_checks": "unauthenticated401, odd/empty body400; unchangedjob and reset held",
+      "evidence_firmware": "collector-0.3.8; no sound replay in0.3.9 display validation"
+    },
+    "display_toggle": {
+      "physical_acceptance": "user: 开关正常，页面正常",
+      "source": "joystick center_v1; default on; RAM only",
+      "observed_cycles": 1,
+      "observed_center_event_seq": [
+        0,
+        1,
+        2
+      ],
+      "software_off_duration_s": 1.978926,
+      "final_enabled": true,
+      "off_screen_touch": "ignored; no wake/navigation",
+      "page_restore": "previous page with latest state; physical normal per user",
+      "long_hold_and_rapid_multiple_cycles": "host verified; not separately established by this physical recording",
+      "software_state_not_luminance_measurement": true,
+      "independent_from_motor_gate": true
+    },
+    "android_anr": "one HWUI synchronization timeout before validation; app restarted and test completed; root cause unresolved, logs retained"
+  },
+  "previous_validation_0_4_0": {
+    "firmware_build_and_app_flash_verification": "passed; robot identity/partition checked; ota_1 only; independent verify; fixed IDF5.5.4",
+    "apk_build_and_install": "passed;0.4.0/code10; existing binding migrated privately; no embedded real token",
+    "auto_connect": {
+      "plain_launch": true,
+      "foreground_resume": true,
+      "robot_reboot": true,
+      "repeat_code_entry_required": false,
+      "first_new_phone_binding": "not anonymous; not tested",
+      "android_real_phone_ip_migration": "not tested; emulator uses fixed host relay",
+      "host_lan_udp_unicast_and_broadcast": "passed; latest both first attempt",
+      "http_challenge": "passed; invalid proofs/nonce/ID and redirects cannot send Bearer in Android native tests"
+    },
+    "socket_budget": {
+      "lwip_max_sockets": 16,
+      "required_minimum": 12,
+      "additional_host_requests": 64,
+      "additional_host_request_errors": 0,
+      "superseded_socket10_issue": "additional connections reset when App filled remaining sockets; HTTP session LRU not invoked before global exhaustion",
+      "single_udp_timeout": "cause not determined; subsequent labeled unicast/broadcast passed"
+    },
+    "pitch_setting": {
+      "range_deg": [
+        5,
+        85
+      ],
+      "step_deg": 0.1,
+      "saved_current_deg": 13,
+      "persisted": true,
+      "default_deg": 13,
+      "apply": "explicit App Apply stores before queuing one attempt",
+      "reboot_source": "boot",
+      "reboot_request_seq": 0,
+      "reboot_samples": 51,
+      "reboot_both_valid": 51,
+      "reboot_measured_deg": 13.4,
+      "first_15_test_measured_deg": [
+        11.8,
+        12.1,
+        13.4
+      ],
+      "final_13_test_measured_deg": [
+        13.4,
+        13.4
+      ],
+      "mechanical_exact_target_arrival_confirmed": false,
+      "state_semantics": "trajectory state not measured arrival",
+      "existing_yaw_and_screen_roles_preserved": true
+    },
+    "concurrent_capture": {
+      "firmware_variant": "collector-0.4.0-auto-pitch-net-socket16",
+      "duration_s": 32.896,
+      "frames": 174,
+      "fps_receive": 5.372218173046476,
+      "all_jpeg_decoded": true,
+      "audio_blocks": 1617,
+      "audio_seq_gaps": 0,
+      "audio_timestamp_outliers_over_5ms": 4,
+      "imu_samples": 1627,
+      "imu_hz": 50.0648086793042,
+      "imu_invalid": 0,
+      "imu_history_lost_max": 0,
+      "imu_max_interval_ms": 102.325,
+      "remote_records": 137,
+      "queue_drops": 0,
+      "both_axes_valid_samples": "25/142",
+      "pitch_valid_samples": "50/142",
+      "control_requested_and_enabled_samples": "142/142",
+      "audio_monitor_entire_session": true,
+      "capture_error_deltas": 0
+    },
+    "servo_position_transport": "unresolved; final recording25/142 both-axis valid despite final boot51/51; no root-cause claim",
+    "remote_pitch_control_enabled": false,
+    "remote_pitch_input_role": "home_reaction",
+    "remote_pitch_target_deg": null,
+    "center_input_role": "display_toggle",
+    "nod_trigger": "none",
+    "nod_state": "disabled",
+    "remote_flashed_this_round": false,
+    "current_display": "on",
+    "android_audio_monitor": "OFF during sound diagnosis/reconnect to exclude monitor echo; audio capture client connected",
+    "recording": "final32.896s sealed and verified; stopped",
+    "playback": "not replayed this round; output idle",
+    "prior_screen_acceptance": "0.3.9 user confirmed on/off and page restore; 0.3.7 graphical summary/reactions normal without stutter; not re-tested this round",
+    "android_runtime_limit": "prior HWUI ANR cause unresolved; initial startup slowness/cache missing observed before final recording; no historical data loss inside final recording",
+    "background_recording": false,
+    "sd_offline_backfill": false,
+    "latest_reconnect": {
+      "date": "2026-11-01",
+      "target": "existing Android emulator; no physical phone on ADB",
+      "network": "AndroidWifi restored after full emulator restart and explicit connect; mobile data disabled",
+      "app": "auto-connected with existing binding; video/IMU update; audio_client true",
+      "robot_boot_changed": false,
+      "firmware_changed": false,
+      "recording": "not started",
+      "system_ui": "ANR and data-limit popup observed; cause unresolved; recovered usable UI; startup motion-history gaps observed"
+    },
+    "sound_comparison": {
+      "user_description": "base/joint faint buzzing/squeaking",
+      "speaker_output_enabled": false,
+      "speaker_hardware_reset_held": true,
+      "temporary_remote_stop": "accepted; cancelMotion sends torque-disable; hardware torque acknowledgement unavailable",
+      "user_result": "明显变轻，但还有",
+      "remote_control_restored": true,
+      "conclusion": "part related to servo powered state; remaining sound and root cause unconfirmed"
+    }
+  },
+  "previous_validation_0_4_1": {
+    "firmware_build_and_app_flash_verification": "passed; robot identity/partition checked; ota_1 only; independent verify; fixed IDF5.5.4",
+    "apk_build_and_install": "passed;0.4.1/code11;78301 bytes;existing development emulator only;robot/remote not flashed or rebooted",
+    "auto_connect": {
+      "plain_launch": true,
+      "foreground_resume": true,
+      "robot_reboot": true,
+      "repeat_code_entry_required": false,
+      "first_new_phone_binding": "not anonymous; not tested",
+      "android_real_phone_ip_migration": "not tested; emulator uses fixed host relay",
+      "host_lan_udp_unicast_and_broadcast": "passed; latest both first attempt",
+      "http_challenge": "passed; invalid proofs/nonce/ID and redirects cannot send Bearer in Android native tests"
+    },
+    "socket_budget": {
+      "lwip_max_sockets": 16,
+      "required_minimum": 12,
+      "additional_host_requests": 64,
+      "additional_host_request_errors": 0,
+      "superseded_socket10_issue": "additional connections reset when App filled remaining sockets; HTTP session LRU not invoked before global exhaustion",
+      "single_udp_timeout": "cause not determined; subsequent labeled unicast/broadcast passed"
+    },
+    "pitch_setting": {
+      "range_deg": [
+        5,
+        85
+      ],
+      "step_deg": 0.1,
+      "saved_current_deg": 24.5,
+      "persisted": true,
+      "default_deg": 13,
+      "apply": "explicit App Apply stores before queuing one attempt",
+      "reboot_source": "boot",
+      "reboot_request_seq": 0,
+      "reboot_samples": 51,
+      "reboot_both_valid": 51,
+      "reboot_measured_deg": 13.4,
+      "first_15_test_measured_deg": [
+        11.8,
+        12.1,
+        13.4
+      ],
+      "final_13_test_measured_deg": [
+        13.4,
+        13.4
+      ],
+      "mechanical_exact_target_arrival_confirmed": false,
+      "state_semantics": "trajectory state not measured arrival",
+      "existing_yaw_and_screen_roles_preserved": true,
+      "latest_observation": "UI validation before/during/after persisted24.5deg and requestseq1 unchanged; no Apply sent; prior13deg reboot validation retained in previous_validation_0_4_0"
+    },
+    "concurrent_capture": {
+      "firmware_variant": "collector-0.4.0 unchanged, Android0.4.1 HUD",
+      "duration_s": 54.868,
+      "frames": 131,
+      "fps_receive": 2.4370024554861818,
+      "all_jpeg_decoded": true,
+      "max_frame_receive_interval_ms": 2033.257,
+      "audio_blocks": 2687,
+      "audio_seq_gaps": 0,
+      "audio_timestamp_outliers_over_5ms": 0,
+      "imu_samples": 2657,
+      "imu_hz": 50.01053780025599,
+      "imu_invalid": 0,
+      "imu_history_lost_max": 0,
+      "imu_max_interval_ms": 56.653,
+      "remote_records": 215,
+      "queue_drops": 0,
+      "both_axes_valid_samples": "2/157",
+      "pitch_valid_samples": "18/157",
+      "control_requested_and_enabled_samples": "157/157",
+      "audio_monitor_entire_session": false,
+      "capture_error_deltas": 0,
+      "menus_opened_during_recording": true,
+      "smooth_video_acceptance": false,
+      "screenshot_and_menu_operations_in_capture_window": true
+    },
+    "servo_position_transport": "unresolved; latest HUD capture2/157 both-axis valid; no new mechanical motion acceptance",
+    "remote_pitch_control_enabled": false,
+    "remote_pitch_input_role": "home_reaction",
+    "remote_pitch_target_deg": null,
+    "center_input_role": "display_toggle",
+    "nod_trigger": "none",
+    "nod_state": "disabled",
+    "remote_flashed_this_round": false,
+    "current_display": "on",
+    "android_audio_monitor": "OFF;capture connected;not auto-enabled",
+    "recording": "54.868s HUD menu/capture session sealed and verified;stopped",
+    "playback": "not replayed this round; output idle",
+    "prior_screen_acceptance": "0.3.9 user confirmed on/off and page restore; 0.3.7 graphical summary/reactions normal without stutter; not re-tested this round",
+    "android_runtime_limit": "layout/navigation/data continuity passed; emulator launch/render jank and startup gaps remain; video2.437fps, max2.033s receive interval; no realphone/glasses acceptance",
+    "background_recording": false,
+    "sd_offline_backfill": false,
+    "latest_reconnect": {
+      "date": "2026-11-01",
+      "target": "existing Android emulator; no physical phone on ADB",
+      "network": "AndroidWifi restored after full emulator restart and explicit connect; mobile data disabled",
+      "app": "auto-connected with existing binding; video/IMU update; audio_client true",
+      "robot_boot_changed": false,
+      "firmware_changed": false,
+      "recording": "not started",
+      "system_ui": "ANR and data-limit popup observed; cause unresolved; recovered usable UI; startup motion-history gaps observed"
+    },
+    "sound_comparison": {
+      "user_description": "base/joint faint buzzing/squeaking",
+      "speaker_output_enabled": false,
+      "speaker_hardware_reset_held": true,
+      "temporary_remote_stop": "accepted; cancelMotion sends torque-disable; hardware torque acknowledgement unavailable",
+      "user_result": "明显变轻，但还有",
+      "remote_control_restored": true,
+      "conclusion": "part related to servo powered state; remaining sound and root cause unconfirmed"
+    },
+    "android_hud": {
+      "background": "#000000",
+      "text": "#70ff8e",
+      "lines": "#36ef72",
+      "camera": "left ~70%, complete source frame FIT_CENTER, no central overlays",
+      "side_signals": "right ~30%, real first mic channel PCM 2s fixed +/-1FS, accel/gyro XYZ 8s",
+      "menu": "overflow -> records / robot settings / audio monitor",
+      "homepage_scroll_or_history": false,
+      "app_dialog_navigation_preserves_recording": true,
+      "layout_tests_dp": [
+        [
+          800,
+          450
+        ],
+        [
+          640,
+          360
+        ],
+        [
+          640,
+          480
+        ]
+      ],
+      "verification": "host tests, native chart/audio/pitch rendering and isolated HUD/navigation passed; final resource build passed; live menu/capture checked",
+      "future_targets": [
+        "vivo X Fold3",
+        "Epson 1080p wired glasses"
+      ],
+      "actual_phone_or_glasses_tested": false,
+      "dedicated_external_display_transport_implemented": false,
+      "startup_theme": "Android12+ black splash and black/green icon resources compiled; final splash not captured in screenshot timing",
+      "emulator_performance": "jank remains; observed cold launch10.738s, final process525 frames/478 janky/p50 450ms includes launch and menu work; not comparable isolated performance benchmark"
+    }
+  },
+  "previous_validation_0_4_2": {
+    "firmware_build_and_app_flash_verification": "unchanged collector-0.4.0; prior fixed-IDF build and independent ota_1 verify retained; no firmware operation this round",
+    "apk_build_and_install": "passed;0.4.2/code12;82397 bytes;existing development emulator;robot/remote not flashed or rebooted",
+    "auto_connect": {
+      "plain_launch": true,
+      "foreground_resume": true,
+      "robot_reboot": true,
+      "repeat_code_entry_required": false,
+      "first_new_phone_binding": "not anonymous; not tested",
+      "android_real_phone_ip_migration": "not tested; emulator uses fixed host relay",
+      "host_lan_udp_unicast_and_broadcast": "passed; latest both first attempt",
+      "http_challenge": "passed; invalid proofs/nonce/ID and redirects cannot send Bearer in Android native tests"
+    },
+    "socket_budget": {
+      "lwip_max_sockets": 16,
+      "required_minimum": 12,
+      "additional_host_requests": 64,
+      "additional_host_request_errors": 0,
+      "superseded_socket10_issue": "additional connections reset when App filled remaining sockets; HTTP session LRU not invoked before global exhaustion",
+      "single_udp_timeout": "cause not determined; subsequent labeled unicast/broadcast passed"
+    },
+    "pitch_setting": {
+      "range_deg": [
+        5,
+        85
+      ],
+      "step_deg": 0.1,
+      "saved_current_deg": 24.5,
+      "persisted": true,
+      "default_deg": 13,
+      "apply": "explicit App Apply stores before queuing one attempt",
+      "reboot_source": "boot",
+      "reboot_request_seq": 0,
+      "reboot_samples": 51,
+      "reboot_both_valid": 51,
+      "reboot_measured_deg": 13.4,
+      "first_15_test_measured_deg": [
+        11.8,
+        12.1,
+        13.4
+      ],
+      "final_13_test_measured_deg": [
+        13.4,
+        13.4
+      ],
+      "mechanical_exact_target_arrival_confirmed": false,
+      "state_semantics": "trajectory state not measured arrival",
+      "existing_yaw_and_screen_roles_preserved": true,
+      "latest_observation": "0.4.2 UI before/during/after same boot,persisted24.5deg,requestseq1 unchanged; no setting request sent"
+    },
+    "concurrent_capture": {
+      "firmware_variant": "collector-0.4.0 unchanged, Android0.4.2",
+      "duration_s": 33.142,
+      "frames": 119,
+      "fps_receive": 3.6629729619823763,
+      "all_jpeg_decoded": true,
+      "max_frame_receive_interval_ms": 546.025,
+      "audio_blocks": 1644,
+      "audio_seq_gaps": 0,
+      "audio_timestamp_outliers_over_5ms": 3,
+      "audio_max_receive_interval_ms": 172.938,
+      "audio_receive_gaps_over_1s": 0,
+      "imu_samples": 1644,
+      "imu_hz": 50.00285013202365,
+      "imu_invalid": 0,
+      "imu_history_lost_max": 0,
+      "imu_max_interval_ms": 79.775,
+      "imu_recorded_span_s": 32.858,
+      "imu_samples_earlier_than_display_window": 1443,
+      "remote_records": 133,
+      "queue_drops": 0,
+      "both_axes_valid_samples": "12/314",
+      "pitch_motor_valid_samples": "53/314",
+      "control_requested_and_enabled_samples": "314/314",
+      "audio_monitor_on_at_start": true,
+      "audio_monitor_switch_events": 0,
+      "capture_error_deltas": 0,
+      "menus_opened_during_recording": true,
+      "smooth_video_acceptance": false,
+      "screenshot_and_menu_operations_in_capture_window": true
+    },
+    "servo_position_transport": "unresolved; latest0.4.2 capture12/314 both-axis valid; no new mechanical test",
+    "remote_pitch_control_enabled": false,
+    "remote_pitch_input_role": "home_reaction",
+    "remote_pitch_target_deg": null,
+    "center_input_role": "display_toggle",
+    "nod_trigger": "none",
+    "nod_state": "disabled",
+    "remote_flashed_this_round": false,
+    "current_display": "on",
+    "android_audio_monitor": "ON;AudioTrack started,24kHz mono,unmuted;emulator CoreAudio;audible quality not accepted",
+    "recording": "33.142s session sealed and verified;stopped",
+    "playback": "not replayed this round; output idle",
+    "prior_screen_acceptance": "0.3.9 user confirmed on/off and page restore; 0.3.7 graphical summary/reactions normal without stutter; not re-tested this round",
+    "android_runtime_limit": "host/ui/hud and recording continuity passed; intermittent missing glyphs in live screenshots, cause undetermined; prior HWUI/system jank unresolved; no realphone/glasses acceptance",
+    "background_recording": false,
+    "sd_offline_backfill": false,
+    "latest_reconnect": {
+      "date": "2026-11-01",
+      "target": "existing Android emulator; no physical phone on ADB",
+      "network": "AndroidWifi restored after full emulator restart and explicit connect; mobile data disabled",
+      "app": "auto-connected with existing binding; video/IMU update; audio_client true",
+      "robot_boot_changed": false,
+      "firmware_changed": false,
+      "recording": "not started",
+      "system_ui": "ANR and data-limit popup observed; cause unresolved; recovered usable UI; startup motion-history gaps observed"
+    },
+    "sound_comparison": {
+      "user_description": "base/joint faint buzzing/squeaking",
+      "speaker_output_enabled": false,
+      "speaker_hardware_reset_held": true,
+      "temporary_remote_stop": "accepted; cancelMotion sends torque-disable; hardware torque acknowledgement unavailable",
+      "user_result": "明显变轻，但还有",
+      "remote_control_restored": true,
+      "conclusion": "part related to servo powered state; remaining sound and root cause unconfirmed"
+    },
+    "android_hud": {
+      "background": "#000000",
+      "text": "#70ff8e",
+      "lines": "#36ef72",
+      "camera": "left ~70%, complete source frame FIT_CENTER, no central overlays",
+      "side_signals": "right ~30%, first mic channel PCM2s fixed +/-1FS; acceleration/gyro combined frame,two lanes,shared4s time axis,independent units/scales",
+      "menu": "bottom overflow -> records / robot settings / audio monitor",
+      "homepage_scroll_or_history": false,
+      "app_dialog_navigation_preserves_recording": true,
+      "layout_tests_dp": [
+        [
+          800,
+          450
+        ],
+        [
+          640,
+          360
+        ],
+        [
+          640,
+          480
+        ]
+      ],
+      "verification": "0.4.2 host,native ui+hud passed; final APK installed;33.142s live capture verified",
+      "future_targets": [
+        "vivo X Fold3",
+        "Epson 1080p wired glasses"
+      ],
+      "actual_phone_or_glasses_tested": false,
+      "dedicated_external_display_transport_implemented": false,
+      "startup_theme": "Android12+ black splash and black/green icon resources compiled; final splash not captured in screenshot timing",
+      "emulator_performance": "3.663fps live video; intermittent missing glyphs in screenshots; oldHWUI/system jank unresolved; no controlled comparative benchmark",
+      "title_removed": true
+    },
+    "audio_freshness": {
+      "clock": "SystemClock.elapsedRealtime for receive and actual draw; snapshot before draw clock",
+      "real_stale_ms": 1000,
+      "negative_age_is_stale": false,
+      "central_duplicate_overlay_removed": true,
+      "host_regressions": "old tick/new receive ordering,1000ms boundary,duplicate/backward packet freshness",
+      "native_regressions": "delayed draw,stop and recovery,default monotonic clock",
+      "live_samples": "8/24s screenshot receiving;16s and final partial glyph loss;no claim of all-screen-state history"
+    },
+    "sensor_inventory": {
+      "integrated": [
+        "camera",
+        "microphone",
+        "BMI270 accel+gyro",
+        "head three-zone capacitive touch",
+        "screen touch",
+        "battery/charging",
+        "servo position with validity"
+      ],
+      "hardware_present_not_streamed": [
+        "BMM150 magnetometer",
+        "LTR553 ambient light/proximity",
+        "INA226 base voltage/current",
+        "NFC",
+        "infrared"
+      ],
+      "servo_load_current_sampled": false,
+      "original_3_5mm_headphone_jack": false
+    }
+  },
+  "previous_validation_0_4_3": {
+    "firmware_build_and_app_flash_verification": {
+      "result": "PASS",
+      "bytes": 3522640,
+      "partition": "ota_1",
+      "offset": "0x510000",
+      "device_identity_partition_otadata_rechecked": true,
+      "app_only_independently_verified": true,
+      "esp_idf": "5.5.4",
+      "remote_flashed_this_round": false
+    },
+    "apk_build_and_install": {
+      "result": "PASS",
+      "bytes": 82397,
+      "target": "existing_development_emulator",
+      "physical_vivo_epson_tested": false
+    },
+    "tests": {
+      "python_protocol_host": {
+        "result": "PASS",
+        "tests": 22
+      },
+      "android_host": "PASS",
+      "android_full_native_runtime": "PASS",
+      "android_isolated_hud": "PASS",
+      "sensor_ubsan": "PASS",
+      "sensor_asan": "NOT_COMPLETED_runtime_hang_before_main",
+      "saved_telemetry_schema": {
+        "result": "PASS",
+        "samples": 255
+      }
+    },
+    "auto_connect": {
+      "historical_validation_reference": "previous_validation_0_4_0.auto_connect",
+      "current_reconnected_without_manual_credentials": true,
+      "physical_phone_ip_migration_tested": false
+    },
+    "pitch_setting": {
+      "configured_deg": 24.5,
+      "persisted": true,
+      "request_source": "boot",
+      "request_seq": 0,
+      "startup_target_deg": 24.5,
+      "new_angle_request_this_round": false,
+      "valid_measured_pitch_deg_in_final_capture": 24.0,
+      "precise_arrival_proven": false
+    },
+    "environment": {
+      "available": [
+        "BMM150_magnetometer",
+        "LTR553_light",
+        "LTR553_proximity"
+      ],
+      "final_capture_valid_snapshots_each": 255,
+      "total_snapshots": 255,
+      "estimated_sequence_advance_hz": {
+        "magnetometer": 10.029,
+        "light": 9.15,
+        "proximity": 8.701
+      },
+      "light_lux_range": [
+        7.34,
+        15.897
+      ],
+      "proximity_raw_range": [
+        0,
+        9
+      ],
+      "ltr_runtime_transactions_delta": 1737,
+      "ltr_runtime_errors_delta": 0,
+      "ltr_runtime_errors_boot_total": 1,
+      "ltr_runtime_transaction_timeout_ms": 50,
+      "startup_error": {
+        "code": 263,
+        "register": 141,
+        "operation": "read",
+        "recovered": true
+      },
+      "light_proximity_user_stimulus_test": "confirmed_response_on_second_candidate_not_repeated_on_final",
+      "robot_magnetic_calibration": false,
+      "heading_supported": false,
+      "distance_supported": false,
+      "invalid_value_policy": "null_converted_fields_explicit_validity_stale_after_1s",
+      "recording_scope": "full_telemetry_snapshots_not_every_10Hz_sample"
+    },
+    "concurrent_capture": {
+      "duration_s": 63.597,
+      "segments": 1,
+      "boots": 1,
+      "verify_session": "PASS",
+      "jpeg": {
+        "count": 296,
+        "all_pixels_decoded": true,
+        "receive_fps": 4.705502,
+        "max_receive_gap_ms": 733.389,
+        "producer_frames_not_saved_by_latest_frame_poll": 255
+      },
+      "audio": {
+        "blocks": 3144,
+        "missing_sequences": 0,
+        "max_receive_gap_ms": 597.821,
+        "timestamp_deviations_over_5ms": 0,
+        "wav_seconds": 62.88,
+        "sample_rate": 24000,
+        "channels": 2,
+        "bits": 16
+      },
+      "imu": {
+        "samples": 3134,
+        "valid_samples": 3134,
+        "missing_sequences": 0,
+        "device_hz": 50.023934,
+        "max_batch_receive_gap_ms": 1005.036
+      },
+      "telemetry_samples": 255,
+      "remote_packets": 251,
+      "dropped_queue_items": 0,
+      "camera_errors_delta": 0,
+      "audio_errors_delta": 0,
+      "audio_skipped_blocks_delta": 0,
+      "connection_gap_events": 0,
+      "listen_on_before_after": true,
+      "auditory_quality_accepted": false
+    },
+    "servo_position_transport": {
+      "status": "UNRESOLVED",
+      "torque_register_read_width_fixed_bytes": 1,
+      "one_time_read_only_deadbands_raw": {
+        "yaw": [
+          1,
+          1
+        ],
+        "pitch": [
+          1,
+          1
+        ]
+      },
+      "final_capture": {
+        "yaw_valid": 37,
+        "pitch_valid": 46,
+        "both_valid": 9,
+        "total": 255,
+        "yaw_valid_deg": -3.1,
+        "pitch_valid_deg": 24.0,
+        "fresh_physical_motion_test": false
+      },
+      "user_left_return_on_second_candidate": {
+        "zero_target_write_ack_success": true,
+        "pre_disable_deg": -2.8,
+        "post_disable_deg": -3.1,
+        "residual_exists_before_release": true
+      },
+      "uart_frame_error_interrupt_enabled": true,
+      "startup_frame_error_delta": 1234,
+      "startup_frame_error_last": 1329,
+      "startup_end_to_post_capture_window_s": 299.824,
+      "startup_end_to_post_capture_frame_error_delta": 11078,
+      "post_capture_frame_error_total": 12407,
+      "event_counts_complete": false,
+      "electrical_or_timing_root_cause_identified": false,
+      "latest_pitch_disable_before_capture": "no_reply",
+      "eeprom_or_calibration_modified": false,
+      "extra_hold_experiment_implemented": false
+    },
+    "remote_pitch_control_enabled": false,
+    "remote_pitch_input_role": "home_reaction",
+    "remote_pitch_target_deg": null,
+    "center_input_role": "display_toggle",
+    "nod_trigger": "none",
+    "nod_state": "disabled",
+    "remote_flashed_this_round": false,
+    "control_requested_enabled_final_capture": {
+      "samples": 255,
+      "total": 255
+    },
+    "current_display": "enabled",
+    "android_audio_monitor": "enabled_confirmed_menu_after_capture",
+    "recording": "stopped_sealed",
+    "playback": "not_tested_this_round",
+    "android_hud": {
+      "background": "black",
+      "text_lines": "bright_green",
+      "camera": "full_frame_primary",
+      "title": "removed",
+      "microphone_seconds": 2,
+      "combined_accel_gyro_seconds": 4,
+      "environment_home": "light_lux_and_proximity_raw",
+      "magnetic_xyz": "secondary_robot_settings",
+      "record_list": "secondary_menu",
+      "physical_vivo_x_fold3_epson_1080p_verified": false
+    },
+    "android_runtime_limit": "Existing emulator HWUI/system stalls and missing glyphs remain unresolved; active AudioTrack proves playback path, not glitch-free listening.",
+    "background_recording": false,
+    "sd_offline_backfill": false,
+    "sensor_inventory": {
+      "published": [
+        "camera",
+        "microphone",
+        "BMI270_accel_gyro",
+        "BMM150_magnetic_xyz",
+        "LTR553_light_proximity",
+        "head_touch",
+        "screen_touch",
+        "battery_charging",
+        "remote_input",
+        "servo_position_validity"
+      ],
+      "not_published": [
+        "INA226_base_voltage_current",
+        "NFC",
+        "infrared"
       ]
     },
-    "android_audio_monitor": "restored and UI confirmed ON"
+    "historical_validation_reference": "previous_validation_0_4_2 preserves previous current validation; older hardware/UI tests are not new 0.4.3 acceptance.",
+    "local_source_checks": {
+      "nonignored_files_scanned": 914,
+      "current_device_identity_matches": 0,
+      "active_token_matches": 0,
+      "diff_check": "PASS",
+      "dependency_lock_and_repos_changes": false,
+      "private_artifacts_logs_ignored": true
+    }
+  },
+  "previous_validation_0_4_4": {
+    "firmware_build_and_app_flash_verification": "unchanged collector-0.4.3; no robot or remote flash/reboot this Android-only round; historical fixed IDF 5.5.4 build and independent ota_1 verification retained",
+    "apk_build_and_install": "passed;0.4.4/code14;90589 bytes;development emulator only;initial validated candidate restored after ineffective software-layer trial",
+    "tests": {
+      "android_host": "passed",
+      "android_build": "passed",
+      "android_native_ui": "passed after test-only pulse-location fixture correction; runner now requires explicit PASS",
+      "android_native_hud": "passed;800x450,640x360,640x480dp",
+      "firmware_protocol": "not rerun;22 tests passed in historical0.4.3",
+      "complete_android_control_recorder_suite": "not rerun;historical0.4.3 passed"
+    },
+    "android_hud": {
+      "background": "black",
+      "foreground": "bright green",
+      "title": false,
+      "audio": "56dp left instantaneous latest-block first-channel RMS, fixed -60..0dBFS, clears at1s stale",
+      "camera": "central FIT_CENTER complete viewport",
+      "motion": "right upper side-by-side acceleration/gyro;4s common time range;independent units and scales",
+      "magnetic": "right below motion;XYZ uT plus sensor-coordinate XY projection;always marked heading uncalibrated",
+      "environment_font_sp": 16,
+      "history": "secondary overflow menu"
+    },
+    "concurrent_capture": {
+      "duration_s": 45.653,
+      "segments": 1,
+      "boot_count": 1,
+      "verification": "PASS",
+      "jpeg_frames": 318,
+      "all_jpeg_decoded": true,
+      "video_receive_fps": 6.988174729763756,
+      "video_max_receive_interval_ms": 362.073,
+      "audio_blocks": 2270,
+      "audio_sequence_missing": 0,
+      "wav_duration_s": 45.4,
+      "audio_timestamp_outliers_over_5ms": 3,
+      "imu_samples": 2270,
+      "imu_hz": 50.014,
+      "imu_sequence_missing": 0,
+      "telemetry_samples": 433,
+      "telemetry_schema": "433/433 PASS",
+      "queue_drops": 0,
+      "camera_audio_skipped_error_deltas": 0,
+      "monitor_on_at_start": true,
+      "audio_hearing": "not accepted"
+    },
+    "environment": {
+      "magnetic_light_proximity_valid": "433/433 each",
+      "producer_sequence_hz": {
+        "magnetic": 10.031,
+        "light": 8.786,
+        "proximity": 8.076
+      },
+      "observed_unique_hz": {
+        "magnetic": 8.706,
+        "light": 7.903,
+        "proximity": 7.567
+      },
+      "ltr_new_transactions": 1216,
+      "ltr_errors_before": 3,
+      "ltr_errors_after": 3,
+      "ltr_new_errors": 0,
+      "lux_range": [
+        6.491901,
+        12.7252
+      ],
+      "proximity_raw_range": [
+        0,
+        32
+      ],
+      "magnetic_heading_calibrated": false,
+      "new_physical_stimulus_test": false
+    },
+    "pitch_setting": {
+      "saved_current_deg": 24.5,
+      "persisted": true,
+      "source": "boot",
+      "request_seq": 0,
+      "request_timestamp_us": 0,
+      "new_request_submitted": false
+    },
+    "servo_position_transport": {
+      "status": "unresolved",
+      "final_capture_yaw_valid": "77/433",
+      "final_capture_pitch_valid": "68/433",
+      "final_capture_both_valid": "14/433",
+      "yaw_valid_deg": [
+        -4.3
+      ],
+      "pitch_valid_deg": [
+        23.7,
+        24.0
+      ],
+      "new_remote_action_test": false,
+      "note": "Do not attribute changed residual to UI; before snapshot precedes recording by281.120504s"
+    },
+    "remote_pitch_control_enabled": false,
+    "remote_pitch_input_role": "home_reaction",
+    "remote_pitch_target_deg": null,
+    "center_input_role": "display_toggle",
+    "nod_trigger": "none",
+    "nod_state": "disabled",
+    "remote_flashed_this_round": false,
+    "control_requested_enabled_final_capture": "433/433",
+    "current_display": "ON",
+    "android_audio_monitor": "ON;restored after candidate reinstall;menu screenshot verified",
+    "recording": "stopped and complete;home restored",
+    "android_runtime_limit": "Intermittent static glyph loss reproduced during real capture despite offscreen/layout tests passing. Emulator-only root software layer did not fix it and was removed; no root-cause or whole-run rendering acceptance.",
+    "physical_phone_glasses": "vivo X Fold3 and Epson1080p wired glasses not installed/tested this round;dedicated external-display transport unimplemented",
+    "background_recording": false,
+    "sd_offline_backfill": false,
+    "historical_validation_reference": "previous_validation_0_4_3 contains previous firmware/control/sensor deployment evidence;do not count as rerun",
+    "auto_connect": {
+      "historical_validation_reference": "previous_validation_0_4_0.auto_connect",
+      "current_reconnected_without_manual_credentials": true,
+      "physical_phone_ip_migration_tested": false
+    },
+    "playback": "not_tested_this_round",
+    "sensor_inventory": {
+      "published": [
+        "camera",
+        "microphone",
+        "BMI270_accel_gyro",
+        "BMM150_magnetic_xyz",
+        "LTR553_light_proximity",
+        "head_touch",
+        "screen_touch",
+        "battery_charging",
+        "remote_input",
+        "servo_position_validity"
+      ],
+      "not_published": [
+        "INA226_base_voltage_current",
+        "NFC",
+        "infrared"
+      ]
+    },
+    "local_source_checks": {
+      "nonignored_files_scanned": 917,
+      "local_identity_credential_matches": 0,
+      "installed_apk_matches_retained_artifact": true,
+      "production_test_source_matches_retained_archive": true,
+      "dependency_lock_changes": false,
+      "git_diff_check": "passed"
+    }
+  },
+  "previous_validation_0_4_5": {
+    "apk_build_and_install": "PASS;0.4.5/code15 emulator and identified vivo;phone APK bytes match artifact",
+    "tests": {
+      "android_native_hud": "PASS800x450,640x360,640x480dp;real emulator screenshot reviewed",
+      "other_tests": "not rerun for font-only change"
+    },
+    "android_hud": {
+      "basic_parameters_sp": 16,
+      "connection_record_sp": 14,
+      "frame_meta_sp": 12,
+      "footer_dp": 72,
+      "basic_parameter_lines": 3
+    },
+    "robot_remote_modified": false,
+    "current_display": "ON per UI",
+    "android_audio_monitor": "ON on vivo;emulator collector stopped for single robot audio stream",
+    "recording": "stopped;no new session",
+    "vivo_installation": {
+      "installed": true,
+      "model": "V2337A",
+      "market_name": "vivo X Fold3 Pro",
+      "android": 16,
+      "direct_lan": true,
+      "binding_via_stdin_private_storage": true,
+      "normal_launch_auto_connected": true,
+      "display_pixels": [
+        2748,
+        1172
+      ],
+      "physical_fold_transition_tested": false,
+      "glasses_tested": false
+    },
+    "historical_capture_reference": "previous_validation_0_4_4;do not count as0.4.5 retest",
+    "known_limits": "One phone ADB capture also showed transient static glyph loss then recovered;cause unknown. Uncalibrated magnetic heading and servo feedback/residual unresolved;glasses/fold transitions/long capture/hearing untested.",
+    "local_source_checks": {
+      "files_scanned": 917,
+      "credential_address_phone_serial_matches": 0,
+      "installed_apk_matches_retained_artifact": true,
+      "git_diff_check": "passed"
+    }
+  },
+  "previous_validation_0_4_6": {
+    "firmware_build_and_app_flash_verification": "PASS; ESP-IDF5.5.4; matched identity/table/active ota_1; only0x510000 written and independently verified",
+    "apk_build_and_install": "PASS; identified vivo V2337A; installed/retained/current APK bytes match",
+    "tests": {
+      "firmware_protocol": "23 PASS; final louder/pending-cue playback test rerun PASS",
+      "android_host": "PASS",
+      "android_native_runtime": "all PASS; final layout and compact chart changes followed by HUD/ui PASS",
+      "lvgl": "120-frame, solid glyph/no outer ring,500ms,summary/log,display-off tests PASS"
+    },
+    "wifi": {
+      "preferred_configured": true,
+      "preferred_connected": true,
+      "fallback_retained": true,
+      "fallback_when_preferred_absent": "observed on earlier misspelled profiles",
+      "channel": 11,
+      "phone_hotspot_24ghz": true,
+      "app_address_migration": "automatic verified binding; no code/extras/private preference rewrite",
+      "credentials": "private USB provisioning only; no public SSID or password"
+    },
+    "remote": {
+      "yaw_input_to_target_sign": -1,
+      "old_network_yaw_comparisons": 1453,
+      "old_network_yaw_mismatches": 0,
+      "new_network_yaw_comparisons_at_summary": 1120,
+      "new_network_yaw_mismatches": 0,
+      "pitch_axis_actuation": false,
+      "up": "solid heart500ms + rising cue",
+      "down": "solid reject500ms + louder descending cue",
+      "volume": 80,
+      "pending_cues": 3,
+      "dropped_cues": 0,
+      "jobs_observed": 11,
+      "playback_error": 0,
+      "cleanup_error": 0,
+      "hardware_reset_held_at_rest": true,
+      "hearing_acceptance": "User: rejection too quiet in first build; final louder version accepted as appropriate",
+      "physical_left_right_acceptance": "user exercised requested gestures; mapping verified in telemetry; no separate explicit directional acceptance"
+    },
+    "pitch": {
+      "saved_final_deg": 14.5,
+      "persisted": true,
+      "home_steps_deg": [
+        14.5,
+        19.5,
+        14.5
+      ],
+      "home_requests": [
+        3,
+        4
+      ],
+      "trajectory_states": [
+        "trajectory_complete",
+        "trajectory_complete"
+      ],
+      "guardrails": "5..85,5-degree steps clamped at boundaries,no hold repeat,pending/moving/stopped/offline/stale disabled; retained firmware feedback/start/stop/timeout protection"
+    },
+    "concurrent_capture": {
+      "duration_s": 87.145,
+      "status": "complete",
+      "frames": 263,
+      "all_jpeg_decoded": true,
+      "received_video_fps": 3.0241547201878336,
+      "max_frame_receive_interval_ms": 1332.192,
+      "audio_blocks": 4346,
+      "audio_missing_seq": 0,
+      "imu_samples": 4345,
+      "imu_missing_seq": 0,
+      "imu_max_interval_ms": 253.997,
+      "imu_intervals_over_150ms": 6,
+      "telemetry_samples": 768,
+      "queue_drops": 0,
+      "health_error_deltas": {
+        "camera_errors": 0,
+        "audio_errors": 0,
+        "audio_skipped_blocks": 0
+      },
+      "environment_valid_samples": {
+        "magnetometer": 768,
+        "light": 768,
+        "proximity": 768
+      },
+      "pitch_final": {
+        "configured_deg": 14.5,
+        "persisted": true,
+        "request_seq": 4,
+        "request_source": "user",
+        "requested_deg": 14.5,
+        "request_timestamp_us": 208380586,
+        "state": "trajectory_complete",
+        "feedback_valid": false,
+        "feedback_timestamp_us": 288176094,
+        "measured_deg": null,
+        "command_start_deg": 18.1,
+        "storage_error": 0,
+        "speed": 250,
+        "min_deg": 5,
+        "max_deg": 85,
+        "state_semantics": "trajectory_state_not_measured_arrival"
+      },
+      "all_hotspot_preferred": true,
+      "audio_streaming_all": true,
+      "servo_valid_samples": {
+        "yaw": 135,
+        "pitch": 128
+      }
+    },
+    "android_hud": {
+      "monitor": "home",
+      "pitch": "home between parameters and environment;44dp targets",
+      "footer_wide_dp": 92,
+      "footer_narrow_dp": 116,
+      "tested_sizes_dp": [
+        "960x450",
+        "800x450",
+        "640x360",
+        "640x480"
+      ],
+      "physical_phone": "vivo X Fold3 Pro external landscape2748x1172",
+      "fold_transition_tested": false,
+      "glasses_tested": false
+    },
+    "android_audio_monitor": "ON on vivo",
+    "recording": "stopped and complete;home restored",
+    "current_display": "ON",
+    "known_limits": "Existing intermittent static glyph loss remains visible in real phone captures; cause unknown. No claim of smooth video (3.02fps), sensor timing (six IMU intervals over150ms), or restored servo feedback reliability. Magnetic heading uncalibrated. No glasses/external-display or fold-transition acceptance.",
+    "local_source_checks": {
+      "files_scanned": 922,
+      "credential_address_phone_serial_matches": 0,
+      "installed_apk_matches_retained_artifact": true,
+      "git_diff_check": "PASS"
+    }
+  },
+  "previous_validation_0_4_7": {
+    "firmware_build_and_flash": "PASS; IDF5.5.4; identity/partition/ota_1 verified; only0x510000 written; independent verification",
+    "apk_build_and_install": "PASS; vivo V2337A; APK bytes match artifact",
+    "tests": {
+      "protocol_host": "24 PASS final",
+      "android_host": "PASS",
+      "android_native": "control/recorder/ui PASS; HUD960/800/640/4:3 PASS; final text-only rebuild"
+    },
+    "face_detection": {
+      "model": "MSR/MNP S8 V1",
+      "target_fps": 4,
+      "default_enabled": false,
+      "persistent": false,
+      "max_boxes": 4,
+      "same_frame": true,
+      "user_acceptance_2fps": "可以了; concerned about2fps",
+      "four_fps_hardware_validation": "true-positive JPEG metadata and physical UI; no new explicit user acceptance of faster version",
+      "kernel_isolation": "48 duplicated ESP-DL low-level symbols renamed; original ESP-SR unchanged; collision guard PASS"
+    },
+    "concurrent_capture": {
+      "duration_s": 159.992,
+      "segments": 1,
+      "frames": 682,
+      "all_jpeg_decoded": true,
+      "telemetry_schema_pass": 1367,
+      "audio_blocks": 7987,
+      "audio_missing": 0,
+      "audio_timestamp_outliers_over_5ms": 24,
+      "imu_samples": 7992,
+      "imu_missing": 0,
+      "imu_gaps_over_150ms": 7,
+      "imu_max_gap_ms": 380.667,
+      "queue_drops": 0,
+      "health_deltas": {
+        "camera_errors": 0,
+        "audio_errors": 0,
+        "audio_skipped_blocks": 0
+      },
+      "face_events": 246,
+      "face_events_by_epoch": {
+        "1": 147,
+        "3": 99
+      },
+      "positive_events_by_epoch": {
+        "1": 37,
+        "3": 42
+      },
+      "all_face_events_bound_to_recorded_jpeg": true,
+      "inference_median_ms": 141.65,
+      "inference_max_ms": 719.071,
+      "phases": [
+        {
+          "enabled": false,
+          "epoch": 0,
+          "duration_s": 23.689,
+          "frames": 187,
+          "receive_fps": 7.914,
+          "max_frame_interval_ms": 323.829,
+          "heap_min_free": 63783
+        },
+        {
+          "enabled": true,
+          "epoch": 1,
+          "duration_s": 47.585,
+          "frames": 137,
+          "receive_fps": 2.864,
+          "max_frame_interval_ms": 1283.061,
+          "heap_min_free": 35151
+        },
+        {
+          "enabled": false,
+          "epoch": 2,
+          "duration_s": 14.15,
+          "frames": 103,
+          "receive_fps": 7.27,
+          "max_frame_interval_ms": 418.755,
+          "heap_min_free": 53371
+        },
+        {
+          "enabled": true,
+          "epoch": 3,
+          "duration_s": 27.454,
+          "frames": 89,
+          "receive_fps": 3.238,
+          "max_frame_interval_ms": 982.178,
+          "heap_min_free": 33231
+        },
+        {
+          "enabled": false,
+          "epoch": 4,
+          "duration_s": 31.62,
+          "frames": 86,
+          "receive_fps": 2.726,
+          "max_frame_interval_ms": 702.128,
+          "heap_min_free": 57067
+        }
+      ],
+      "environment_valid": {
+        "magnetometer": 1367,
+        "light": 1352,
+        "proximity": 1353
+      },
+      "remote_control_enabled_all": true,
+      "final_face": {
+        "supported": true,
+        "enabled": false,
+        "ready": false,
+        "epoch": 4,
+        "frames": 256,
+        "errors": 0,
+        "frame_seq": 0,
+        "timestamp_us": 0,
+        "count": 0,
+        "inference_us": 145006,
+        "error": "none",
+        "target_hz": 4,
+        "max_boxes": 4,
+        "model": "msr_mnp_s8_v1",
+        "persistent": false
+      },
+      "final_pitch_setting": {
+        "configured_deg": 14.5,
+        "persisted": true,
+        "request_seq": 0,
+        "request_source": "boot",
+        "requested_deg": 14.5,
+        "request_timestamp_us": 0,
+        "state": "trajectory_complete",
+        "feedback_valid": false,
+        "feedback_timestamp_us": 190157064,
+        "measured_deg": null,
+        "command_start_deg": 14.3,
+        "storage_error": 0,
+        "speed": 250,
+        "min_deg": 5,
+        "max_deg": 85,
+        "state_semantics": "trajectory_state_not_measured_arrival"
+      }
+    },
+    "final_state": {
+      "page": "home",
+      "recording": "stopped and sealed",
+      "face_detection": false,
+      "monitor": "OFF in final screenshot; ON at capture start",
+      "display": true,
+      "servo_control": true,
+      "saved_pitch_deg": 14.5,
+      "diagnostic_phone_bridge": "removed"
+    },
+    "known_limits": [
+      "human face only; no pedestrian, identity or tracking",
+      "camera on2.864/3.238fps; last off window2.726fps despite earlier7.9/7.3; target not guarantee",
+      "audio/IMU timestamp jitter, transient stale sensors/static glyph loss persist",
+      "servo feedback/centering unresolved; heading uncalibrated; glasses/fold untested"
+    ],
+    "dependencies": "only new face components; original versions+hashes preserved; IDF5.5.4"
+  },
+  "previous_validation_0_4_8": {
+    "firmware_build_and_flash": "PASS cached candidate; verified identity/ota_1; only0x510000 written; independent verify",
+    "android": "unchanged0.4.7/code17; no rebuild/install",
+    "tests": {
+      "protocol_host": "24PASS",
+      "lvgl": "120frames;1000ms;solid glyphs;pages;display off;partial-flush budget PASS"
+    },
+    "reactions": {
+      "duration_ms": 1000,
+      "cache_bytes": 103488,
+      "input_freshness_ms": 500,
+      "audio_duration_ms": 360,
+      "volume_percent": 80,
+      "host_comparison": {
+        "baseline": {
+          "heart": {
+            "median_host_us": 1026.5,
+            "max_host_us": 4725,
+            "pixels": [
+              76800
+            ]
+          },
+          "reject": {
+            "median_host_us": 1406.5,
+            "max_host_us": 5233,
+            "pixels": [
+              76800
+            ]
+          },
+          "hide": {
+            "median_host_us": 66.5,
+            "max_host_us": 342,
+            "pixels": [
+              76800
+            ]
+          }
+        },
+        "cached": {
+          "heart": {
+            "median_host_us": 40.0,
+            "max_host_us": 42,
+            "pixels": [
+              62400
+            ]
+          },
+          "reject": {
+            "median_host_us": 39.0,
+            "max_host_us": 42,
+            "pixels": [
+              62400
+            ]
+          },
+          "hide": {
+            "median_host_us": 47.5,
+            "max_host_us": 48,
+            "pixels": [
+              62400
+            ]
+          }
+        }
+      }
+    },
+    "hardware": {
+      "physical_acceptance": "pending user feedback",
+      "diagnostic_format_limit": "first candidate %lld rendered as ld with newlib nano; intervals use 10ms log prefixes only",
+      "show_submit_intervals_ms": [
+        60,
+        90,
+        40,
+        60,
+        90
+      ],
+      "submitted_hold_intervals_ms": [
+        1000,
+        1000,
+        1040,
+        990,
+        970
+      ],
+      "screen_events": [
+        {
+          "log_ms": 246481,
+          "detail": "input seq=972 age_us=ld sound_enqueue_us=ld"
+        },
+        {
+          "log_ms": 246541,
+          "detail": "heart cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 247541,
+          "detail": "hide cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 389241,
+          "detail": "input seq=1552 age_us=ld sound_enqueue_us=ld"
+        },
+        {
+          "log_ms": 389331,
+          "detail": "heart cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 390331,
+          "detail": "hide cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 390931,
+          "detail": "input seq=1561 age_us=ld sound_enqueue_us=ld"
+        },
+        {
+          "log_ms": 390971,
+          "detail": "reject cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 392011,
+          "detail": "hide cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 392321,
+          "detail": "input seq=1568 age_us=ld sound_enqueue_us=ld"
+        },
+        {
+          "log_ms": 392381,
+          "detail": "heart cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 393371,
+          "detail": "hide cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 393771,
+          "detail": "input seq=1576 age_us=ld sound_enqueue_us=ld"
+        },
+        {
+          "log_ms": 393861,
+          "detail": "reject cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        },
+        {
+          "log_ms": 394831,
+          "detail": "hide cached=1 refresh_us=ld submit_us=ld hold_us=ld"
+        }
+      ],
+      "telemetry_samples": 343,
+      "telemetry_schema": "PASS",
+      "telemetry_probe_errors": 0,
+      "probe_duration_s": 119.710752,
+      "face_enabled_all": true,
+      "face_errors_end": 0,
+      "health_deltas": {
+        "camera_errors": 0,
+        "audio_errors": 0,
+        "audio_skipped_blocks": 0
+      },
+      "pitch_preserved_all": true,
+      "control_enabled_all": true,
+      "app_capture": "started on vivo; USB disconnected before stop/pull; sealing and final monitor state unverified",
+      "final_update": "diagnostic-format-only build not flashed; robot USB disconnected before preflash read; no flash write for this attempt"
+    },
+    "unflashed_diagnostic_update": {
+      "sha256": "ea50ea5ea959784eca225099cdf25a78e050e147a261f3af60a108cdf46ace5a",
+      "reason": "robot USB disconnected before preflash read; zero write",
+      "artifact": "artifacts/collector-0.4.8-reactions-timing-unflashed/"
+    },
+    "final_state": {
+      "phone_usb": "disconnected",
+      "robot_usb": "disconnected",
+      "recording": "started; stopped/sealed state UNVERIFIED; reconnect and finish",
+      "monitor": "last confirmed ON; restore prior OFF after capture",
+      "face_detection": "last confirmed ON; restore prior OFF after capture",
+      "display": "last confirmed ON",
+      "servo_control": "last confirmed ON",
+      "saved_pitch_deg": 14.5,
+      "phone_bridge": "ten-minute helper; jar cleanup pending reconnect"
+    },
+    "known_limits": [
+      "physical stutter acceptance pending; logs only measure refresh submission",
+      "App recording files not retrieved; cannot claim sample continuity",
+      "old servo feedback/heading/glasses limits unchanged"
+    ],
+    "dependencies": "IDF5.5.4; dependencies.lock/repos.json unchanged; face isolation guard PASS"
   }
 }

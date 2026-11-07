@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.stackchan.collector.tests" android:versionCode="1" android:versionName="1">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="Collector headless tests" android:debuggable="true" android:allowBackup="false" android:usesCleartextTraffic="true" />
+    <application android:label="Collector isolated tests" android:theme="@android:style/Theme.Material.NoActionBar" android:debuggable="true" android:allowBackup="false" android:usesCleartextTraffic="true">
+        <activity android:name="dev.stackchan.collector.MainActivity" android:exported="false" android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+    </application>
     <instrumentation android:name="dev.stackchan.collector.AndroidRuntimeSuite" android:targetPackage="dev.stackchan.collector.tests" />
 </manifest>

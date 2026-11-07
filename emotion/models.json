@@ -1,0 +1,13 @@
+{
+  "vision_language": {
+    "repo_id": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+    "revision": "2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b",
+    "local_dir": ".tools/emotion-model-qwen3",
+    "upstream": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct"
+  },
+  "face_detector": {
+    "url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "local_file": ".tools/emotion-models/face_detection_yunet_2023mar.onnx"
+  }
+}

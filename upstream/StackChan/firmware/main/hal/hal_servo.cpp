@@ -9,6 +9,7 @@
 #include <smooth_ui_toolkit.hpp>
 #include <mooncake_log.h>
 #include <settings.h>
+#include <esp_timer.h>
 
 using namespace smooth_ui_toolkit;
 using namespace stackchan::motion;
@@ -122,6 +123,13 @@ public:
             result.angle = raw_pos_to_angle(result.position_raw);
         }
         return result;
+    }
+
+    ServoDiagnostics diagnostics() const override { return _scs_bus.getDiagnostics(_config.id); }
+
+    ServoDeadbandSnapshot readDeadbandSnapshot() override
+    {
+        return readServoDeadbandSnapshot(_scs_bus, static_cast<uint8_t>(_config.id), esp_timer_get_time());
     }
 
     bool is_moving_impl() override
@@ -354,6 +362,7 @@ void Hal::servo_init(bool persistDefaults)
 {
     mclog::tagInfo("HAL-Servo", "init");
 
+    _scs_bus.enableDiagnostics(1, 2);
     _scs_bus.begin(UART_NUM_1, 1000000, 6, 7);
 
     ServoConfig_t yaw_servo_config;

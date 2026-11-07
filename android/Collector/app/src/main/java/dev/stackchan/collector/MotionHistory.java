@@ -1,8 +1,9 @@
 package dev.stackchan.collector;
 
-/** Bounded raw samples in device time. No smoothing, fabricated interpolation or gravity removal. */
+/** Display-only raw samples in device time; recording keeps its independent full stream. */
 public final class MotionHistory {
-    private static final int CAPACITY=600;
+    public static final long WINDOW_US=4000000L;
+    private static final int CAPACITY=300;
     private final double[][] values=new double[CAPACITY][6];
     private final long[] times=new long[CAPACITY];
     private final boolean[] valid=new boolean[CAPACITY];
@@ -31,9 +32,9 @@ public final class MotionHistory {
     }
     public synchronized Snapshot snapshot(){
         long end=count==0?0:times[(next+CAPACITY-1)%CAPACITY];int size=0;
-        for(int n=0;n<count;n++){int i=(next-count+n+CAPACITY)%CAPACITY;if(times[i]>=end-8000000)size++;}
+        for(int n=0;n<count;n++){int i=(next-count+n+CAPACITY)%CAPACITY;if(times[i]>=end-WINDOW_US)size++;}
         Snapshot result=new Snapshot(size);int out=0;
-        for(int n=0;n<count;n++){int i=(next-count+n+CAPACITY)%CAPACITY;if(times[i]<end-8000000)continue;
+        for(int n=0;n<count;n++){int i=(next-count+n+CAPACITY)%CAPACITY;if(times[i]<end-WINDOW_US)continue;
             result.times[out]=times[i];result.valid[out]=valid[i];System.arraycopy(values[i],0,result.values[out],0,6);out++;}
         return result;
     }

@@ -54,6 +54,36 @@ def jpeg():
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_optional_environment_sensor_units_validity_and_raw_boundaries(self):
+        # Missing fields remain valid for older firmware and recordings.
+        collector.validate_telemetry(telemetry(), "synthetic-boot")
+        value = telemetry()
+        base = dict(available=True, valid=True, seq=1, timestamp_us=1050000, error="none")
+        value["magnetometer"] = dict(base, unit="uT", field_ut=[12.5, -30.25, 48],
+                                     raw=[100, -200, 300], rhall=12000, overflow=False)
+        value["light"] = dict(base, unit="lx", lux=125.5, raw_ch0=220, raw_ch1=30,
+                              gain=1, integration_ms=100, saturated=False)
+        value["proximity"] = dict(base, unit="count", raw=2047, saturated=False)
+        collector.validate_telemetry(value, "synthetic-boot")
+        for name, field, bad in (("magnetometer", "field_ut", [1, float("nan"), 3]),
+                                  ("magnetometer", "available", False),
+                                  ("light", "lux", -1), ("light", "unit", "raw"),
+                                  ("proximity", "raw", 2048), ("proximity", "raw", True),
+                                  ("proximity", "timestamp_us", 0)):
+            changed = json.loads(json.dumps(value))
+            changed[name][field] = bad
+            with self.subTest(sensor=name, field=field), self.assertRaises(collector.ProtocolError):
+                collector.validate_telemetry(changed, "synthetic-boot")
+        # Failed/stale converted values are null, while raw evidence is retained.
+        for name in ("magnetometer", "light", "proximity"):
+            value[name].update(valid=False, error="stale")
+        value["magnetometer"]["field_ut"] = None
+        value["light"]["lux"] = None
+        collector.validate_telemetry(value, "synthetic-boot")
+        value["light"]["lux"] = 125.5
+        with self.assertRaises(collector.ProtocolError):
+            collector.validate_telemetry(value, "synthetic-boot")
+
     def test_info_shape_format_and_channel_roles(self):
         self.assertEqual(collector.validate_info(info())["audio"]["channel_roles"], ["mic", "reference"])
         for field, bad in (("protocol_version", True), ("boot_id", ""), ("audio_port", 0)):

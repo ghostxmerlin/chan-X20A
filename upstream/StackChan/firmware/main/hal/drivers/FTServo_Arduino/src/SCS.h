@@ -48,6 +48,17 @@ public:
 	u16 syncReadRxBuffMax;
 	u32 syncTimeOut;
 protected:
+	// Optional passive instrumentation; the protocol and return values are unchanged.
+	virtual void onTransactionStart(u8, u8, u8, u8, const u8*) {}
+	virtual void onTransactionEnd() {}
+	virtual void onReadData(const u8*, u8) {}
+	struct TransactionScope {
+		SCS& bus;
+		TransactionScope(SCS& bus, u8 id, u8 address, u8 instruction, u8 bytes, const u8* data = nullptr):bus(bus) {
+			bus.onTransactionStart(id, address, instruction, bytes, data);
+		}
+		~TransactionScope() { bus.onTransactionEnd(); }
+	};
 	virtual int writeSCS(unsigned char *nDat, int nLen) = 0;
 	virtual int readSCS(unsigned char *nDat, int nLen) = 0;
 	virtual int readSCS(unsigned char *nDat, int nLen, unsigned long TimeOut) = 0;

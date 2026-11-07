@@ -92,6 +92,7 @@ void SCS::writeBuf(u8 ID, u8 MemAddr, u8 *nDat, u8 nLen, u8 Fun)
 //舵机ID，MemAddr内存表地址，写入数据，写入长度
 int SCS::genWrite(u8 ID, u8 MemAddr, u8 *nDat, u8 nLen)
 {
+	TransactionScope transaction(*this, ID, MemAddr, INST_WRITE, nLen, nDat);
 	rFlushSCS();
 	writeBuf(ID, MemAddr, nDat, nLen, INST_WRITE);
 	wFlushSCS();
@@ -102,6 +103,7 @@ int SCS::genWrite(u8 ID, u8 MemAddr, u8 *nDat, u8 nLen)
 //舵机ID，MemAddr内存表地址，写入数据，写入长度
 int SCS::regWrite(u8 ID, u8 MemAddr, u8 *nDat, u8 nLen)
 {
+	TransactionScope transaction(*this, ID, MemAddr, INST_REG_WRITE, nLen, nDat);
 	rFlushSCS();
 	writeBuf(ID, MemAddr, nDat, nLen, INST_REG_WRITE);
 	wFlushSCS();
@@ -112,6 +114,7 @@ int SCS::regWrite(u8 ID, u8 MemAddr, u8 *nDat, u8 nLen)
 //舵机ID
 int SCS::RegWriteAction(u8 ID)
 {
+	TransactionScope transaction(*this, ID, 0, INST_REG_ACTION, 0);
 	rFlushSCS();
 	writeBuf(ID, 0, NULL, 0, INST_REG_ACTION);
 	wFlushSCS();
@@ -151,6 +154,7 @@ void SCS::syncWrite(u8 ID[], u8 IDN, u8 MemAddr, u8 *nDat, u8 nLen)
 
 int SCS::writeByte(u8 ID, u8 MemAddr, u8 bDat)
 {
+	TransactionScope transaction(*this, ID, MemAddr, INST_WRITE, 1, &bDat);
 	rFlushSCS();
 	writeBuf(ID, MemAddr, &bDat, 1, INST_WRITE);
 	wFlushSCS();
@@ -161,6 +165,7 @@ int SCS::writeWord(u8 ID, u8 MemAddr, u16 wDat)
 {
 	u8 bBuf[2];
 	Host2SCS(bBuf+0, bBuf+1, wDat);
+	TransactionScope transaction(*this, ID, MemAddr, INST_WRITE, 2, bBuf);
 	rFlushSCS();
 	writeBuf(ID, MemAddr, bBuf, 2, INST_WRITE);
 	wFlushSCS();
@@ -171,6 +176,7 @@ int SCS::writeWord(u8 ID, u8 MemAddr, u16 wDat)
 //舵机ID，MemAddr内存表地址，返回数据nData，数据长度nLen
 int SCS::Read(u8 ID, u8 MemAddr, u8 *nData, u8 nLen)
 {
+	TransactionScope transaction(*this, ID, MemAddr, INST_READ, nLen);
 	rFlushSCS();
 	writeBuf(ID, MemAddr, &nLen, 1, INST_READ);
 	wFlushSCS();
@@ -213,6 +219,7 @@ int SCS::Read(u8 ID, u8 MemAddr, u8 *nData, u8 nLen)
 		return 0;
 	}
 	u8Status = bBuf[2];
+	onReadData(nData, nLen);
 	return Size;
 }
 
@@ -244,6 +251,7 @@ int SCS::readWord(u8 ID, u8 MemAddr)
 //Ping指令，返回舵机ID，超时返回-1
 int	SCS::Ping(u8 ID)
 {
+	TransactionScope transaction(*this, ID, 0, INST_PING, 0);
 	rFlushSCS();
 	writeBuf(ID, 0, NULL, 0, INST_PING);
 	wFlushSCS();
@@ -435,6 +443,7 @@ int SCS::syncReadRxPacketToWrod(u8 negBit)
 
 int SCS::Reset(u8 ID)
 {
+	TransactionScope transaction(*this, ID, 0, INST_RESET, 0);
 	rFlushSCS();
 	writeBuf(ID, 0, NULL, 0, INST_RESET);
 	wFlushSCS();
@@ -443,6 +452,7 @@ int SCS::Reset(u8 ID)
 
 int SCS::Recal(u8 ID)
 {
+	TransactionScope transaction(*this, ID, 0, INST_CAL, 0);
 	rFlushSCS();
 	writeBuf(ID, 0, NULL, 0, INST_CAL);
 	wFlushSCS();

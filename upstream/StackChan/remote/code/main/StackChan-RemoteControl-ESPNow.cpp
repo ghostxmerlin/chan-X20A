@@ -42,16 +42,16 @@ void handle_button_press()
 
         if (screen_mode == MODE_SETUP) {
             // in setup mode, press A to enter running mode
-            joystick_data.screen_mode = MODE_SETUP;
+            joystick_set_mode(&joystick_data, MODE_SETUP);
             switch_screen(joystick_data.screen_mode);
         } else if (screen_mode == MODE_RUNNING) {
             // in running mode, press A to enter IMU mode
             wifi_espnow_reinit(joystick_data.channel);
-            joystick_data.screen_mode = MODE_RUNNING;
+            joystick_set_mode(&joystick_data, MODE_RUNNING);
             switch_screen(joystick_data.screen_mode);
         } else if (screen_mode == MODE_IMU) {
             // in IMU mode, press A to return to setup mode
-            joystick_data.screen_mode = MODE_IMU;
+            joystick_set_mode(&joystick_data, MODE_IMU);
             switch_screen(joystick_data.screen_mode);
         }
     }
@@ -70,9 +70,11 @@ void app_main(void)
 
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+    if (ret != ESP_OK) {
+        // An app-only trial must not erase the original NVS on format/full
+        // errors. Keep it available for diagnosis and restoring the old app.
+        ESP_LOGE("remote_init", "NVS init failed (%s); preserving storage and stopping startup", esp_err_to_name(ret));
+        return;
     }
 
     M5.begin();
