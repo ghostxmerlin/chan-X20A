@@ -32,6 +32,6 @@ export class VoicePanel {
     this.el('voice-count').textContent=supported?`${clips.length} 条 · 本体播放`:'等待新固件';
     this.el('voice-status').textContent=!fresh?'连接或状态已过期':!supported?'当前固件未安装台词库':stages[p.state]||'等待播放';
     this.el('voice-current').textContent=!fresh?'—':p.voice_text?`${p.voice_text} · ${p.voice_title||''}`:p.busy?'其他音频':'尚未播放台词';
-    this.el('voice-progress').textContent=fresh && p.voice_clip_id?`${p.source==='asr_open'?'ASR open':'网页'} · ${(Number(p.submitted_bytes||0)/48000).toFixed(1)} / ${(Number(p.expected_bytes||0)/48000).toFixed(1)} 秒${p.error?' · 播放失败，请重试':''}`:'网页点播或说 open，每次播放一条';
+    this.el('voice-progress').textContent=fresh && p.voice_clip_id?`${p.source==='asr_open'?'ASR open':p.source==='hearing_emotion'?'听觉情绪':'网页'} · ${(Number(p.submitted_bytes||0)/48000).toFixed(1)} / ${(Number(p.expected_bytes||0)/48000).toFixed(1)} 秒${p.error?' · 播放失败，请重试':''}`:'网页点播或说 open，每次播放一条';
   }
 }

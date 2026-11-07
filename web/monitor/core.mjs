@@ -15,13 +15,15 @@ export function validateBinding(value) {
 
 function launchCurl(url, token, streaming = false, {method = "GET", body, boot} = {}) {
   // -q must be first: never inherit redirects or credential traces from .curlrc.
-  const extra = method === 'POST' ? ['--request','POST','--data-binary',JSON.stringify(body)] : [];
+  const extra = method === 'POST' ? ['--request','POST','--data-binary','@/dev/fd/3'] : [];
   const child = spawn('/usr/bin/curl', ['-q', '--noproxy', '*', '--proto', '=http', '--connect-timeout', '3',
     '--max-time', streaming ? '0' : '5', '--speed-limit', '1', '--speed-time', '5',
-    '--silent', '--show-error', '--include', '--no-buffer', '--header', '@-', ...extra, url], { stdio: ['pipe', 'pipe', 'pipe'] });
+    '--silent', '--show-error', '--include', '--no-buffer', '--header', '@-', ...extra, url], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
   // Credentials travel through stdin, never process arguments or the browser.
   child.stdin.on('error', () => {});
   child.stdin.end((token ? `Authorization: Bearer ${token}\n` : '') + (method === 'POST' ? `Content-Type: application/json\nX-Boot-Id: ${boot}\n` : '') + 'Connection: close\n');
+  child.stdio[3].on('error', () => {});
+  child.stdio[3].end(method === 'POST' ? JSON.stringify(body) : '');
   child.stderr.resume();
   return child;
 }
@@ -91,7 +93,7 @@ export class DeviceClient {
   async control(path, body, boot, check) {
     return this.serialRequest(async () => {
       check();
-      if (!this.verified || this.info?.boot_id !== boot || !['/v1/eyes','/v1/voice/play','/v1/m12/view','/v1/m12/mode','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch'].includes(path)) throw new Error('控制状态已变化');
+      if (!this.verified || this.info?.boot_id !== boot || !['/v1/hearing','/v1/eyes','/v1/voice/play','/v1/m12/view','/v1/m12/mode','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch'].includes(path)) throw new Error('控制状态已变化');
       return JSON.parse((await deviceRequest(this.binding.address+path, {token:this.binding.token, method:'POST', body, boot, maxBytes:16384})).body);
     });
   }

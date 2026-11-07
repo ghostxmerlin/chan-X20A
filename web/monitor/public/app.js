@@ -1,6 +1,7 @@
 import { ControlPanel } from '/control-ui.js';
 import { VoicePanel } from '/voice-ui.js';
 import { EyesPanel } from '/eyes-ui.js';
+import { HearingPanel } from '/hearing-ui.js';
 import { renderM12, renderThermal } from '/m12-ui.js';
 const $ = id => document.getElementById(id);
 const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) el.textContent = next; };
@@ -11,6 +12,7 @@ const age = (t, stamp) => stamp > 0 && t >= stamp ? `${duration((t - stamp) / 1e
 const controls = new ControlPanel(document);
 const voices = new VoicePanel(document);
 const eyes = new EyesPanel(document);
+const hearing = new HearingPanel(document);
 let source, state, received = 0, paused = false, generation = 0, frameSeq = null, frameURL = null, framePending = false;
 let lastBoot = '', lastEvent = -1, listening = false, audioContext, audioAbort, audioGeneration = 0;
 
@@ -123,6 +125,7 @@ function render() {
   controls.render(state, fresh && !document.hidden);
   voices.render(state, fresh && !document.hidden);
   eyes.render(state, fresh && !document.hidden);
+  hearing.render(state, fresh && !document.hidden);
   renderM12(state, fresh, bridge);
   renderThermal(t.temperature, fresh ? state.thermalHistory : [], t.timestamp_us);
   const asrList = $('asr-events'); asrList.replaceChildren();

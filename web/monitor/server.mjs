@@ -4,13 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DeviceClient, Monitor } from './core.mjs';
 import { Controls } from './control.mjs';
+import { existingHearingConfig } from './hearing.mjs';
 import { M12System } from './m12-system.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export const root = path.resolve(directory, '../..');
-export function createMonitorServer(monitor, controls = new Controls(monitor)) {
+export function createMonitorServer(monitor, controls = new Controls(monitor,{loadHearingConfig:()=>existingHearingConfig(path.join(root,'.env'))})) {
   const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']],
-    ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
+    ['/hearing-ui.js', ['hearing-ui.js','text/javascript; charset=utf-8']], ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -31,7 +32,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor)) {
       req.on('close',()=>clearTimeout(timer));
       req.on('data',chunk=>{
         size+=chunk.length;
-        if(size>512) {ended=true;clearTimeout(timer);respond(413,'控制参数过长');req.destroy();} else body+=chunk;
+        if(size>1024) {ended=true;clearTimeout(timer);respond(413,'控制参数过长');req.destroy();} else body+=chunk;
       });
       req.on('end',async()=>{
         clearTimeout(timer);if(ended)return;ended=true;

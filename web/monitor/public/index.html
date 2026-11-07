@@ -42,6 +42,35 @@
         </section>
       </div>
     </div>
+    <section class="panel hearing-panel" aria-labelledby="hearing-heading">
+      <div class="panel-head"><h2 id="hearing-heading">语音后端 · 配置与声纹</h2><span id="hearing-status" class="muted">等待连接</span></div>
+      <div class="voice-layout">
+        <div class="voice-actions">
+          <label for="hearing-url">后端 WebSocket 地址</label>
+          <input id="hearing-url" type="url" maxlength="256" placeholder="ws://主机:端口/" autocomplete="off" disabled>
+          <label for="hearing-token">连接密钥</label>
+          <input id="hearing-token" type="password" maxlength="192" autocomplete="new-password" placeholder="留空保留已保存密钥" disabled>
+          <p id="hearing-secret-status" class="note">尚未配置</p>
+          <div class="control-buttons"><button id="hearing-save" disabled>保存配置</button><button id="hearing-import" disabled>使用本机现有后端</button></div>
+          <p class="note">保存后待机。说 start 开始连续监听，说 stop 停止；也可用下方按钮。</p>
+          <div class="control-buttons"><button id="hearing-start" disabled>开始连续监听</button><button id="hearing-stop" class="stop-button" disabled>停止监听</button></div>
+          <label for="hearing-name">声纹姓名</label>
+          <input id="hearing-name" maxlength="48" placeholder="例如 papa" autocomplete="off" disabled>
+          <label class="hearing-check"><input id="hearing-replace" type="checkbox" disabled>重新录入同名身份（先备份原资料）</label>
+          <div class="control-buttons"><button id="hearing-enroll" disabled>录入五句话</button><button id="hearing-cancel" disabled>取消录入</button></div>
+          <p id="hearing-command" class="command-result" role="status">仅点击或收到 ASR 指令后操作；刷新页面不会开始监听。</p>
+        </div>
+        <div class="voice-now">
+          <p id="hearing-identity">身份：—</p><p id="hearing-emotion">情绪标签：—</p>
+          <p id="hearing-text" class="hearing-transcript">等待语音</p>
+          <p id="hearing-progress" role="status">尚未录入 · 0 / 5 句</p>
+          <p id="hearing-speakers" class="note">已登记：—</p><p id="hearing-error" class="note"></p>
+          <p class="note">录入时请对着 StackChan 麦克风，自然说五句话，每句 1–12 秒，句间稍作停顿。录入期间暂停情绪回应，完成后恢复原监听状态；120 秒未完成会取消。</p>
+          <p class="note">回应所有人，声纹只显示身份。后端的情绪标签选择相近台词与眼睛表情；平静或未确定时不回应。自己的播放声音不参与触发，回应至少间隔 10 秒。</p>
+          <p class="note">连续监听由 StackChan 直接连接后端。关闭网页仍会继续，开机默认关闭。后端沿用现有录音保存设置。</p>
+        </div>
+      </div>
+    </section>
     <section class="panel voice-panel" aria-labelledby="eyes-heading">
       <div class="panel-head"><h2 id="eyes-heading">眼睛表情</h2><span id="eyes-status" class="muted">等待连接</span></div>
       <div class="voice-layout">

@@ -1,10 +1,13 @@
+import {hearingBody} from './hearing.mjs';
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
 const fields = {voice:['clip_id'],m12_mode:['mode'],m12:['enabled'],motor:['enabled'],yaw:['delta_deg'],pitch:['angle_deg']};
 const routes = {voice:'/v1/voice/play',m12_mode:'/v1/m12/mode',m12:'/v1/m12/view',motor:'/v1/remote',yaw:'/v1/motion/yaw-step',pitch:'/v1/settings/pitch'};
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
 Object.assign(routes,{eyes_configure:'/v1/eyes',eyes_play:'/v1/eyes',eyes_stop:'/v1/eyes'});
+Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[]});
+for(const action of Object.keys(fields).filter(x=>x.startsWith('hearing_')))routes[action]='/v1/hearing';
 export class Controls {
-  constructor(monitor) { this.monitor=monitor; this.busy=false; }
+  constructor(monitor,{loadHearingConfig=()=>{throw new Error('not configured');}}={}) { this.monitor=monitor; this.busy=false; this.loadHearingConfig=loadHearingConfig; }
   validate(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(fields,input.action)) fail(400,'未知控制操作');
     const keys=['action','boot',...fields[input.action]];
@@ -18,6 +21,10 @@ export class Controls {
     if (!m.running || !s.online || !s.fresh.telemetry || !m.client.verified) fail(409,'请恢复监控并等待新的机器人状态');
     if (typeof input.boot!=='string' || input.boot !== s.boot) fail(409,'机器人已重启，请根据新状态重新操作');
     if (m.info?.capabilities?.web_control!=='supported') fail(409,'当前固件尚未支持网页控制');
+    if(input.action.startsWith('hearing_')) {
+      if(m.info?.capabilities?.hearing!=='supported')fail(409,'当前固件尚未支持连续听觉');
+      return hearingBody(input,this.loadHearingConfig);
+    }
     if(input.action.startsWith('eyes_')) {
       if(m.info?.capabilities?.eyes!=='supported')fail(409,'当前固件尚未支持眼睛动画');
       if(typeof input.request_id!=='string'|| !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.request_id))fail(400,'请求编号无效');
