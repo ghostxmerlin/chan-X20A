@@ -8,8 +8,8 @@ COLLECTOR_SUITE="${2:-all}"
 cd "$COLLECTOR_ROOT"
 mkdir -p build/runtime-test/classes build/runtime-test/dex
 "$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -classpath "$COLLECTOR_SDK/platforms/android-35/android.jar" -d build/runtime-test/classes \
- app/src/main/java/dev/stackchan/collector/AudioBlock.java app/src/main/java/dev/stackchan/collector/SessionRecorder.java \
- app/src/main/java/dev/stackchan/collector/MotionHistory.java app/src/main/java/dev/stackchan/collector/MotionChart.java app/src/main/java/dev/stackchan/collector/RemoteView.java app/src/main/java/dev/stackchan/collector/CollectorClient.java tests/CollectorControlTest.java tests/RecorderIntegrationTest.java tests/ChartRenderTest.java tests/AndroidRuntimeSuite.java
+ app/src/main/java/dev/stackchan/collector/*.java \
+ tests/FaceDetectionTest.java tests/CollectorControlTest.java tests/RecorderIntegrationTest.java tests/ChartRenderTest.java tests/PitchSettingRenderTest.java tests/HudLayoutTest.java tests/AudioWaveformRenderTest.java tests/TelemetryDisplayTest.java tests/MagneticFieldRenderTest.java tests/AndroidRuntimeSuite.java
 "$COLLECTOR_JAVA/bin/jar" cf build/runtime-test/input.jar -C build/runtime-test/classes .
 JAVA_HOME="$COLLECTOR_JAVA" "$COLLECTOR_SDK/build-tools/35.0.0/d8" --min-api 26 --lib "$COLLECTOR_SDK/platforms/android-35/android.jar" --output build/runtime-test/dex build/runtime-test/input.jar
 "$COLLECTOR_SDK/build-tools/35.0.0/aapt2" link -o build/runtime-test/base.apk --manifest tests/RuntimeManifest.xml -I "$COLLECTOR_SDK/platforms/android-35/android.jar"
@@ -20,8 +20,31 @@ with zipfile.ZipFile('build/runtime-test/unsigned.apk','a',zipfile.ZIP_DEFLATED)
 PY
 "$COLLECTOR_SDK/build-tools/35.0.0/zipalign" -f 4 build/runtime-test/unsigned.apk build/runtime-test/aligned.apk
 JAVA_HOME="$COLLECTOR_JAVA" "$COLLECTOR_SDK/build-tools/35.0.0/apksigner" sign --ks .private/debug.jks --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out build/runtime-test/tests.apk build/runtime-test/aligned.apk
+if [[ "${COLLECTOR_BUILD_ONLY:-0}" == 1 ]]; then
+    printf 'Runtime test APK: %s/build/runtime-test/tests.apk\n' "$COLLECTOR_ROOT"
+    exit 0
+fi
 "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" install -r build/runtime-test/tests.apk
-"$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" shell am instrument -w -e suite "$COLLECTOR_SUITE" dev.stackchan.collector.tests/dev.stackchan.collector.AndroidRuntimeSuite
-if [[ "$COLLECTOR_SUITE" != control ]]; then
+"$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" shell am instrument -w -e suite "$COLLECTOR_SUITE" dev.stackchan.collector.tests/dev.stackchan.collector.AndroidRuntimeSuite | tee build/runtime-test/instrumentation-result.txt
+python3 - <<'PY_RESULT'
+from pathlib import Path
+lines = Path('build/runtime-test/instrumentation-result.txt').read_text().splitlines()
+if any(line.startswith('FAIL:') for line in lines) or not any(line.startswith('PASS:') for line in lines):
+    raise SystemExit('Android instrumentation did not report PASS')
+PY_RESULT
+if [[ "$COLLECTOR_SUITE" == hud ]]; then
+    for width in 800 640 fold; do
+        "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat "files/hud-layout-$width.png" > "build/runtime-test/hud-layout-$width.png"
+    done
+elif [[ "$COLLECTOR_SUITE" != control ]]; then
     "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat files/chart-render.png > build/runtime-test/chart-render.png
+    "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat files/pitch-setting.png > build/runtime-test/pitch-setting.png
+    "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat files/audio-waveform.png > build/runtime-test/audio-waveform.png
+    for image in audio-level audio-level-compact magnetic-field magnetic-field-compact; do
+        "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat "files/$image.png" > "build/runtime-test/$image.png"
+    done
+    "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat files/chart-compact.png > build/runtime-test/chart-compact.png
+    "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat files/chart-combined.png > build/runtime-test/chart-combined.png
+    "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat files/chart-combined-compact.png > build/runtime-test/chart-combined-compact.png
+    "$COLLECTOR_SDK/platform-tools/adb" -s "$COLLECTOR_SERIAL" exec-out run-as dev.stackchan.collector.tests cat files/chart-combined-home.png > build/runtime-test/chart-combined-home.png
 fi

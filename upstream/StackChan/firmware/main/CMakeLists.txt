@@ -21,7 +21,10 @@ set(STACK_CHAN_INCLUDE_DIRS
 list(APPEND STACK_CHAN_SOURCES main.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/collector.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/remote.cpp)
-list(APPEND STACK_CHAN_SOURCES collector/screen.cpp collector/laughing_man.c collector/collector_mono_15.c)
+list(APPEND STACK_CHAN_SOURCES collector/runtime_log.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/playback.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/face_detection.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/screen.cpp collector/laughing_man.c collector/collector_mono_15.c collector/collector_emotion_14.c)
 
 # Define source files
 set(SOURCES "audio/audio_codec.cc"

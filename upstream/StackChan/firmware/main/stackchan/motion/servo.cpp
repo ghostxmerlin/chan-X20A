@@ -95,9 +95,18 @@ void Servo::moveWithSpeed(int angle, int speed)
     moveWithSpringParams(angle, spring_options.stiffness, spring_options.damping);
 }
 
-bool Servo::moveFromFeedbackWithSpeed(const ServoFeedback& feedback, int angle, int speed)
+bool Servo::canStartFromFeedback(const ServoFeedback& feedback, int angle, int lower_margin) const
 {
-    if (!feedback.valid || feedback.angle < _angle_limit.x || feedback.angle > _angle_limit.y) return false;
+    if (lower_margin < 0 || lower_margin > 20 || !feedback.valid || feedback.angle > _angle_limit.y) return false;
+    // Preserve the original default helper: the target is clamped by move().
+    if (!lower_margin) return feedback.angle >= _angle_limit.x;
+    // Recovery is explicit and inward only; it cannot bypass a dynamic limit.
+    return angle >= _angle_limit.x && angle <= _angle_limit.y && feedback.angle >= _angle_limit.x - lower_margin;
+}
+
+bool Servo::moveFromFeedbackWithSpeed(const ServoFeedback& feedback, int angle, int speed, int lower_margin)
+{
+    if (!canStartFromFeedback(feedback, angle, lower_margin)) return false;
     stop_motion_at_angle(feedback.angle);
     const bool previous_sync = _auto_angle_sync_enabled;
     _auto_angle_sync_enabled = false;

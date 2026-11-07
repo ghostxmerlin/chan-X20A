@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>chan 情绪观察</title>
+<style>
+:root{color-scheme:dark;--ink:#000;--signal:#79ff97;--muted:#72a980;--rule:#244c32;--soft:#0c1c12;--warn:#d7b66d}
+*{box-sizing:border-box}body{margin:0;background:var(--ink);color:var(--signal);font-family:"PingFang SC","Noto Sans CJK SC",sans-serif;font-size:16px;line-height:1.6}
+main{max-width:1180px;margin:auto;padding:28px 32px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:26px}h1{font-size:22px;letter-spacing:.04em;font-weight:500;margin:0}header p{margin:3px 0 0;color:var(--muted);font-size:13px}
+button,input{font:inherit}button{color:var(--signal);background:var(--soft);border:1px solid var(--rule);padding:9px 16px;cursor:pointer;min-height:44px}button:hover{border-color:var(--signal)}button:disabled{opacity:.5;cursor:wait}button:focus-visible,input:focus-visible{outline:2px solid var(--signal);outline-offset:3px}
+.workspace{display:grid;grid-template-columns:minmax(320px,1.2fr) minmax(300px,1fr);gap:32px}.camera{position:relative;aspect-ratio:4/3;background:var(--soft);overflow:hidden}.camera img{width:100%;height:100%;object-fit:contain;image-rendering:auto}.camera img.hidden{visibility:hidden}.waiting{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted)}.caption{position:absolute;bottom:12px;left:12px;padding:3px 9px;background:#000e;font-size:22px}.small{font-size:13px;color:var(--muted)}.signal{display:flex;gap:16px;align-items:center;margin-top:12px}.meter{flex:1;height:4px;background:var(--rule)}.meter i{display:block;background:var(--signal);height:100%;width:0}
+.reading{display:flex;flex-direction:column;justify-content:space-between}h2{font-size:16px;font-weight:500;margin:0 0 18px}.transcript{min-height:150px;font-size:25px;line-height:1.7;overflow-wrap:anywhere}.empty{color:var(--muted);font-size:18px}.status{padding-top:20px;border-top:1px solid var(--rule);margin-top:24px}.status p{margin:6px 0}.warn{color:var(--warn)}.stats{display:flex;justify-content:space-between;gap:12px;margin:22px 0 0;color:var(--muted);font-size:13px}
+details{margin-top:32px;border-top:1px solid var(--rule);padding-top:18px}summary{cursor:pointer;color:var(--muted)}form{display:flex;gap:12px;margin-top:16px}input{background:var(--ink);color:var(--signal);border:1px solid var(--rule);padding:12px;flex:1;min-width:0}#demoResult{min-height:28px;margin-top:12px;color:var(--muted)}footer{margin-top:32px;color:var(--muted);font-size:12px}
+@media(max-width:760px){main{padding:20px}.workspace{grid-template-columns:1fr;gap:24px}header{align-items:flex-start}h1{font-size:20px}.transcript{min-height:90px;font-size:22px}form{flex-wrap:wrap}form input{flex-basis:100%}}
+</style>
+<main>
+<header><div><h1>chan 情绪观察</h1><p>Mac 本地测试 · 机器人 Wi-Fi 采集</p></div><button id="pause">暂停分析</button></header>
+<div class="workspace">
+<section><div class="camera"><span class="waiting" id="waiting">等待机器人画面</span><img id="camera" class="hidden" alt="机器人实时画面"><span class="caption" id="caption">情绪：不确定</span></div>
+<div class="signal"><span class="small" id="audioState">等待声音</span><span class="meter" role="meter" aria-label="声音电平"><i id="meter"></i></span></div></section>
+<section class="reading"><div><h2>实时转写</h2><div class="transcript empty" id="transcript">模型正在加载。就绪后，可以对机器人说一句话。</div><p class="small" id="speechAge"></p></div>
+<div class="status"><p id="state">正在准备</p><p class="small" id="idle">10 分钟无转写后断开云连接，有声音后恢复。</p><p class="small" id="evidence">线索不足时显示“不确定”。</p></div></section>
+</div>
+<div class="stats"><span id="counter">尚无判断</span><span id="connection">等待连接</span></div>
+<details><summary>文本样例测试（不影响现场判断）</summary><form id="demoForm"><input id="demoText" maxlength="500" aria-label="输入测试话语" placeholder="例如：我今天终于解决了问题，特别开心。" required><button id="demoButton">判断这句话</button></form><div id="demoResult" aria-live="polite"></div></details>
+<footer>情绪是基于话语与表情的推测。画面和情绪推理留在 Mac，语音送往 AIHubMix 转写；本页不保存录音或转写记录。</footer>
+</main>
+<script>
+const $=id=>document.getElementById(id), states={offline:'分析已暂停',connecting:'正在连接实时转写',listening:'正在听',sleeping:'云连接已断开，等待声音唤醒',error:'语音暂未连接，正在重试'};
+let running=true;
+async function poll(){try{const r=await fetch('/state'),s=await r.json();
+ $('caption').textContent=s.paused?'分析已暂停':(s.caption==='不确定'?'情绪：不确定':'推测：'+s.caption);
+ $('state').textContent=!s.ready?'正在加载本地模型':!s.connected?'等待机器人 Wi-Fi 连接':states[s.stt]||s.stt;
+ $('state').className=s.stt==='error'?'warn':'';
+ $('transcript').textContent=s.transcript||(!s.ready?'模型正在加载。就绪后，可以对机器人说一句话。':'还没有新的转写。可以对机器人说一句话。');
+ $('transcript').className='transcript'+(s.transcript?'':' empty');
+ $('speechAge').textContent=s.transcript&&s.transcript_age!==null?'距这次转写 '+s.transcript_age+' 秒':'';
+ $('idle').textContent=s.paused?(s.stt==='offline'?'云转写已停止，点击“恢复分析”后继续。':'正在停止云转写…'):s.stt==='sleeping'?'听到新的声音后会自动恢复。':'若无新转写，'+Math.floor(s.remaining/60)+' 分 '+s.remaining%60+' 秒后断开云连接。';
+ $('evidence').textContent=({none:'线索不足时显示“不确定”。',text:'当前线索：话语',vision:'当前线索：可见表情',both:'当前线索：话语与可见表情'})[s.evidence];
+ $('pause').textContent=s.paused?'恢复分析':'暂停分析';
+ $('audioState').textContent=s.audio_fresh?'声音已接入':'等待声音流';
+ $('meter').style.width=Math.max(0,Math.min(100,(20*Math.log10(Math.max(.001,s.rms))+60)/60*100))+'%';
+ $('counter').textContent=s.inferences+' 次判断 · '+s.stt_outputs+' 次转写更新';
+ $('connection').textContent=s.connected?'机器人已连接'+(s.audio_gaps?' · 音频间断 '+s.audio_gaps+' 次':''):'机器人未连接';
+ $('waiting').style.display=s.camera_fresh?'none':'grid';$('camera').classList.toggle('hidden',!s.camera_fresh);
+ if(s.camera_fresh)$('camera').src='/frame?t='+Date.now();
+}catch{$('state').textContent='Mac 测试服务未连接';}finally{if(running)setTimeout(poll,1000)}}
+$('pause').onclick=async()=>{await fetch('/pause',{method:'POST'});};
+$('demoForm').onsubmit=async e=>{e.preventDefault();$('demoButton').disabled=true;$('demoResult').textContent='正在判断样例…';try{const r=await fetch('/demo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('demoText').value})});if(!r.ok)throw new Error(await r.text());const d=await r.json();$('demoResult').textContent='样例结果：'+(d.caption==='不确定'?'不确定':'推测 '+d.caption);}catch(e){$('demoResult').textContent=e.message;}finally{$('demoButton').disabled=false}};
+poll();
+</script></html>

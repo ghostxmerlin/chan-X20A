@@ -11,6 +11,14 @@ add_subdirectory("${FIRMWARE}/managed_components/lvgl__lvgl" lvgl)
 add_executable(display_preview display_preview.cpp
     "${FIRMWARE}/main/collector/screen.cpp"
     "${FIRMWARE}/main/collector/laughing_man.c"
-    "${FIRMWARE}/main/collector/collector_mono_15.c")
+    "${FIRMWARE}/main/collector/collector_mono_15.c"
+    "${FIRMWARE}/main/collector/collector_emotion_14.c")
 target_include_directories(display_preview PRIVATE "${FIRMWARE}/main")
 target_link_libraries(display_preview PRIVATE lvgl)
+add_executable(reaction_benchmark reaction_benchmark.cpp
+    "${FIRMWARE}/main/collector/screen.cpp"
+    "${FIRMWARE}/main/collector/laughing_man.c"
+    "${FIRMWARE}/main/collector/collector_mono_15.c"
+    "${FIRMWARE}/main/collector/collector_emotion_14.c")
+target_include_directories(reaction_benchmark PRIVATE "${FIRMWARE}/main")
+target_link_libraries(reaction_benchmark PRIVATE lvgl)

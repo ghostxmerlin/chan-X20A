@@ -22,6 +22,8 @@ extern "C" {
 #include "joystick_basic.h"
 
 joystick_data_t joystick_init();
+// Reset center-button qualification atomically with each actual mode change.
+void joystick_set_mode(joystick_data_t *data, uint8_t mode);
 void handle_setup_screen(void *pvParam);
 void handle_running_screen(void *pvParam);
 void handle_imu_screen(void *pvParam);

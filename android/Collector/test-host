@@ -8,3 +8,10 @@ mkdir -p build/test-classes
 "$COLLECTOR_JAVA/bin/java" -cp build/test-classes dev.stackchan.collector.AudioBlockTest
 "$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -d build/test-classes app/src/main/java/dev/stackchan/collector/MotionHistory.java tests/MotionHistoryTest.java
 "$COLLECTOR_JAVA/bin/java" -cp build/test-classes dev.stackchan.collector.MotionHistoryTest
+"$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -d build/test-classes app/src/main/java/dev/stackchan/collector/DeviceBinding.java tests/DeviceBindingTest.java
+"$COLLECTOR_JAVA/bin/java" -cp build/test-classes dev.stackchan.collector.DeviceBindingTest
+"$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -d build/test-classes app/src/main/java/dev/stackchan/collector/DiscoveryProof.java tests/DiscoveryProofTest.java
+"$COLLECTOR_JAVA/bin/java" -cp build/test-classes dev.stackchan.collector.DiscoveryProofTest
+
+"$COLLECTOR_JAVA/bin/javac" --release 8 -encoding UTF-8 -d build/test-classes app/src/main/java/dev/stackchan/collector/AudioBlock.java app/src/main/java/dev/stackchan/collector/AudioWaveformHistory.java tests/AudioWaveformHistoryTest.java
+"$COLLECTOR_JAVA/bin/java" -cp build/test-classes dev.stackchan.collector.AudioWaveformHistoryTest

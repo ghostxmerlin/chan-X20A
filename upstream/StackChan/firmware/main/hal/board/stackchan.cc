@@ -17,6 +17,7 @@
 #include <esp_lcd_ili9341.h>
 #include <esp_timer.h>
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include "stackchan_camera.h"
 #include "hal_bridge.h"
@@ -27,6 +28,7 @@
 #define XPOWERS_AXP2101_ICC_CHG_SET (0x62)
 
 namespace {
+std::atomic<int> speaker_reset_state{-1};
 
 struct LcdInitCommand {
     uint8_t command;
@@ -207,12 +209,29 @@ public:
 
     void SetBrightnessImpl(uint8_t brightness) override
     {
-        pmic_->SetBrightness(target_brightness_);
+        std::lock_guard<std::mutex> lock(display_mutex_);
+        display_brightness_ = target_brightness_;
+        pmic_->SetBrightness(display_enabled_ ? display_brightness_ : 0);
         brightness_ = target_brightness_;
+    }
+
+    void SetDisplayEnabled(bool enabled)
+    {
+        std::lock_guard<std::mutex> lock(display_mutex_);
+        if (display_enabled_ == enabled) return;
+        display_enabled_ = enabled;
+        // Gate DLDO1 directly. Do not use the base's asynchronous SetBrightness
+        // path: a quick off/on can compare against its old brightness and
+        // leave an already queued zero target in effect. The base target and
+        // NVS remain untouched; late transition callbacks also obey this gate.
+        pmic_->SetBrightness(display_enabled_ ? display_brightness_ : 0);
     }
 
 private:
     Pmic* pmic_;
+    std::mutex display_mutex_;
+    bool display_enabled_ = true;
+    uint8_t display_brightness_ = 0;
 };
 
 class Aw9523 : public I2cDevice {
@@ -221,7 +240,7 @@ public:
     Aw9523(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr)
     {
         // P0.2 is AW88298 RESET_N (see ResetAw88298 below). Observation
-        // firmware keeps the amplifier in hardware reset for the entire boot.
+        // firmware starts with the amplifier in hardware reset.
         WriteReg(0x02, hal_bridge::is_collector_mode() ? 0b00000011 : 0b00000111);
         WriteReg(0x03, 0b10001111);  // P1
         WriteReg(0x04, 0b00011000);  // CONFIG_P0
@@ -231,8 +250,24 @@ public:
         WriteReg(0x13, 0b11111111);  // LEDMODE_P1
         if (hal_bridge::is_collector_mode()) {
             ESP_ERROR_CHECK((ReadReg(0x02) & 0x04) == 0 ? ESP_OK : ESP_FAIL);
+            speaker_reset_state = 1;
             ESP_LOGI(TAG, "Collector: speaker AW88298 RESET_N held LOW; output codec disabled");
         }
+    }
+
+    esp_err_t SetSpeakerReset(bool held)
+    {
+        speaker_reset_state = -1;
+        uint8_t value = 0;
+        esp_err_t err = TryReadRegs(0x02, &value, 1);
+        if (err != ESP_OK) return err;
+        const uint8_t data[2] = {0x02, static_cast<uint8_t>(held ? value & ~0x04 : value | 0x04)};
+        err = i2c_master_transmit(i2c_device_, data, sizeof(data), 100);
+        if (err != ESP_OK) return err;
+        err = TryReadRegs(0x02, &value, 1);
+        if (err != ESP_OK) return err;
+        speaker_reset_state = (value & 0x04) ? 0 : 1;
+        return speaker_reset_state.load() == (held ? 1 : 0) ? ESP_OK : ESP_FAIL;
     }
 
     void ResetAw88298()
@@ -761,6 +796,12 @@ public:
         return i2c_bus_;
     }
 
+    esp_err_t SetSpeakerReset(bool held)
+    {
+        if (!hal_bridge::is_collector_mode() || !aw9523_) return ESP_ERR_INVALID_STATE;
+        return aw9523_->SetSpeakerReset(held);
+    }
+
     bool GetPowerSnapshot(int& level, bool& charging, int64_t& timestamp_us)
     {
         std::lock_guard<std::mutex> lock(power_state_mutex_);
@@ -773,6 +814,16 @@ public:
 };
 
 DECLARE_BOARD(M5StackCoreS3Board);
+
+esp_err_t hal_bridge::board_set_speaker_reset(bool held)
+{
+    return static_cast<M5StackCoreS3Board&>(Board::GetInstance()).SetSpeakerReset(held);
+}
+
+int hal_bridge::board_speaker_reset_state()
+{
+    return speaker_reset_state.load();
+}
 
 bool hal_bridge::board_get_power_snapshot(int& level, bool& charging, int64_t& timestamp_us)
 {
@@ -840,6 +891,13 @@ uint8_t hal_bridge::board_get_backlight_brightness()
     } else {
         return 0;
     }
+}
+
+void hal_bridge::board_set_display_backlight_enabled(bool enabled)
+{
+    // This board's GetBacklight() always returns its CustomBacklight instance.
+    auto* backlight = static_cast<CustomBacklight*>(Board::GetInstance().GetBacklight());
+    if (backlight) backlight->SetDisplayEnabled(enabled);
 }
 
 void hal_bridge::board_set_speaker_volume(uint8_t volume, bool permanent)

@@ -19,6 +19,8 @@ typedef struct {
     uint8_t screen_mode;
     uint8_t select_mode;
     bool btnB_status;
+    uint32_t sender_boot_nonce;
+    uint32_t center_press_seq;
     float accel_x;
     float accel_y;
     float accel_z;

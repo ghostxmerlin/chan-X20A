@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "bmi270.h"
+#include "../environment/bmi270_aux.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,7 +28,7 @@ BMI270::BMI270(i2c_master_bus_handle_t i2c_bus_handle, uint8_t addr) : _addr(add
     _bmi.delay_us        = bmi2_delay_us;
     _bmi.read_write_len  = 32;         // Max read/write length
     _bmi.config_file_ptr = NULL;       // Use default config
-    _bmi.intf_ptr        = &_i2c_dev;  // Pass the device handle as interface pointer
+    _bmi.intf_ptr        = this;
 }
 
 BMI270::~BMI270()
@@ -39,14 +40,14 @@ BMI270::~BMI270()
 
 BMI2_INTF_RETURN_TYPE BMI270::bmi2_i2c_read(uint8_t reg_addr, uint8_t* reg_data, uint32_t len, void* intf_ptr)
 {
-    i2c_master_dev_handle_t dev = *(i2c_master_dev_handle_t*)intf_ptr;
-    esp_err_t err               = i2c_master_transmit_receive(dev, &reg_addr, 1, reg_data, len, 1000);
+    auto* self = static_cast<BMI270*>(intf_ptr);
+    esp_err_t err = i2c_master_transmit_receive(self->_i2c_dev, &reg_addr, 1, reg_data, len, self->_io_timeout_ms);
     return (err == ESP_OK) ? BMI2_OK : BMI2_E_COM_FAIL;
 }
 
 BMI2_INTF_RETURN_TYPE BMI270::bmi2_i2c_write(uint8_t reg_addr, const uint8_t* reg_data, uint32_t len, void* intf_ptr)
 {
-    i2c_master_dev_handle_t dev = *(i2c_master_dev_handle_t*)intf_ptr;
+    auto* self = static_cast<BMI270*>(intf_ptr);
 
     uint8_t* buf = (uint8_t*)malloc(len + 1);
     if (!buf) return BMI2_E_COM_FAIL;
@@ -54,7 +55,7 @@ BMI2_INTF_RETURN_TYPE BMI270::bmi2_i2c_write(uint8_t reg_addr, const uint8_t* re
     buf[0] = reg_addr;
     memcpy(buf + 1, reg_data, len);
 
-    esp_err_t err = i2c_master_transmit(dev, buf, len + 1, 1000);
+    esp_err_t err = i2c_master_transmit(self->_i2c_dev, buf, len + 1, self->_io_timeout_ms);
     free(buf);
 
     return (err == ESP_OK) ? BMI2_OK : BMI2_E_COM_FAIL;
@@ -135,6 +136,76 @@ bool BMI270::begin(uint8_t accelRangeG)
     return true;
 }
 
+bool BMI270::beginMagnetometer()
+{
+    using environment::Error;
+    if (!_initialized) { environment::fail(_magnetic, Error::NotInitialized); return false; }
+    const uint8_t saved_aps = _bmi.aps_status;
+    const uint8_t aux_sensor = BMI2_AUX;
+    // Optional init failures must not spend the original driver's 1 s timeout
+    // per transaction, and must never reset/reconfigure the working accel/gyro.
+    _io_timeout_ms = 20;
+    auto failed = [&](Error error) {
+        environment::fail(_magnetic, error);
+        _magnetic.available = false;
+        bmi2_sensor_disable(&aux_sensor, 1, &_bmi);
+        bmi2_set_adv_power_save(saved_aps, &_bmi);
+        _io_timeout_ms = 1000;
+        return false;
+    };
+    if (bmi2_set_adv_power_save(BMI2_DISABLE, &_bmi) != BMI2_OK ||
+        bmi2_sensor_disable(&aux_sensor, 1, &_bmi) != BMI2_OK) return failed(Error::I2c);
+    bmi2_sens_config config{};
+    config.type = BMI2_AUX;
+    config.cfg.aux.aux_en = BMI2_ENABLE;
+    config.cfg.aux.manual_en = BMI2_ENABLE;
+    config.cfg.aux.man_rd_burst = 3; // register encoding: 8 bytes
+    config.cfg.aux.aux_rd_burst = 3;
+    config.cfg.aux.odr = BMI2_AUX_ODR_25HZ;
+    config.cfg.aux.i2c_device_addr = 0x10;
+    config.cfg.aux.read_addr = 0x42;
+    if (bmi2_set_sensor_config(&config, 1, &_bmi) != BMI2_OK) return failed(Error::Config);
+    auto read = [&](uint8_t reg, uint8_t* value, uint16_t length) {
+        return environment::bmi270_read_aux(reg, value, length,
+            [&](uint8_t address, uint8_t* data, size_t size) {
+                return bmi2_get_regs(address, data, size, &_bmi) == BMI2_OK;
+            },
+            [&](uint8_t address, uint8_t data) {
+                return bmi2_set_regs(address, &data, 1, &_bmi) == BMI2_OK;
+            },
+            []() { vTaskDelay(1); });
+    };
+    auto write_checked = [&](uint8_t reg, uint8_t value) {
+        uint8_t actual = 0;
+        return bmi2_write_aux_man_mode(reg, &value, 1, &_bmi) == BMI2_OK &&
+               read(reg, &actual, 1) && actual == value;
+    };
+    uint8_t power = 1;
+    if (bmi2_write_aux_man_mode(0x4b, &power, 1, &_bmi) != BMI2_OK) return failed(Error::I2c);
+    vTaskDelay(pdMS_TO_TICKS(10) > 0 ? pdMS_TO_TICKS(10) : 1);
+    uint8_t id = 0;
+    if (!read(0x40, &id, 1)) return failed(Error::I2c);
+    _magnetic.chip_id = id;
+    if (id != 0x32) return failed(Error::ChipId);
+    uint8_t trim_a[2]{}, trim_b[4]{}, trim_c[10]{};
+    if (!read(0x5d, trim_a, 2) || !read(0x62, trim_b, 4) || !read(0x68, trim_c, 10)) return failed(Error::I2c);
+    _mag_trim = environment::bmm150_trim(trim_a, trim_b, trim_c);
+    if (!_mag_trim.valid()) return failed(Error::Trim);
+    // Bosch regular preset: 10 Hz, XY repetition=4, Z repetition=7.
+    // Configure in sleep, then enter normal mode; never force a new conversion
+    // from the 50 Hz IMU loop.
+    if (!write_checked(0x4c, 6) || !write_checked(0x51, 4) ||
+        !write_checked(0x52, 7) || !write_checked(0x4c, 0)) return failed(Error::Config);
+    config.cfg.aux.manual_en = BMI2_DISABLE;
+    if (bmi2_set_sensor_config(&config, 1, &_bmi) != BMI2_OK ||
+        bmi2_sensor_enable(&aux_sensor, 1, &_bmi) != BMI2_OK) return failed(Error::Config);
+    // Auto AUX needs APS off. Accel/gyro ODR/ranges and enable bits are retained.
+    _io_timeout_ms = 1000;
+    _magnetic.available = true;
+    _magnetic.error = Error::NotInitialized; // available hardware, no sample yet
+    return true;
+}
+
 bool BMI270::update()
 {
     if (!_initialized) return false;
@@ -143,6 +214,8 @@ bool BMI270::update()
     int8_t rslt                     = bmi2_get_sensor_data(&sens_data, &_bmi);
 
     if (rslt == BMI2_OK) {
+        environment::bmm150_consume(_magnetic, _mag_trim, sens_data.status,
+                                    sens_data.aux_data, esp_timer_get_time());
         // Convert Accel
         _data.accel_x = lsb_to_mps2(sens_data.acc.x, _accel_range_g, 16);
         _data.accel_y = lsb_to_mps2(sens_data.acc.y, _accel_range_g, 16);
@@ -156,6 +229,7 @@ bool BMI270::update()
 
         return true;
     }
+    if (_magnetic.available) environment::fail(_magnetic, environment::Error::I2c);
     return false;
 }
 

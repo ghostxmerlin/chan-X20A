@@ -2,8 +2,11 @@
 #include "hal_bridge.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
+#include <algorithm>
+#include <array>
 
 #define TAG "CoreS3AudioCodec"
 
@@ -16,6 +19,8 @@ CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rat
     input_sample_rate_ = input_sample_rate;
     output_sample_rate_ = output_sample_rate;
     input_gain_ = 60;
+    collector_i2c_bus_ = i2c_master_handle;
+    collector_aw88298_addr_ = aw88298_addr;
 
     CreateDuplexChannels(mclk, bclk, ws, dout, din);
 
@@ -35,7 +40,7 @@ CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rat
         .bus_handle = i2c_master_handle,
     };
     // aw88298_codec_new() powers/unmutes the amplifier during construction.
-    // Collector must never call it: the Board holds RESET_N low instead.
+    // Collector creates it only during an explicitly requested playback.
     if (!hal_bridge::is_collector_mode()) {
         out_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
         assert(out_ctrl_if_ != NULL);
@@ -254,4 +259,119 @@ int CoreS3AudioCodec::Write(const int16_t* data, int samples) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
     }
     return samples;
+}
+
+namespace {
+esp_err_t output_result(int result, const char* operation)
+{
+    if (result == ESP_CODEC_DEV_OK) return ESP_OK;
+    ESP_LOGE(TAG, "Collector output %s failed: %d", operation, result);
+    return ESP_FAIL;
+}
+}
+
+esp_err_t CoreS3AudioCodec::PrepareCollectorOutput()
+{
+    if (!hal_bridge::is_collector_mode() || !input_enabled_ || collector_output_active_ ||
+        hal_bridge::board_speaker_reset_state() != 1) return ESP_ERR_INVALID_STATE;
+    i2s_chan_info_t info{};
+    esp_err_t err = i2s_channel_get_info(tx_handle_, &info);
+    if (err != ESP_OK) return err;
+    if (!info.is_enabled || info.mode != I2S_COMM_MODE_STD || !info.mode_cfg || !info.total_dma_buf_size)
+        return ESP_ERR_INVALID_STATE;
+    const auto& config = *static_cast<const i2s_std_config_t*>(info.mode_cfg);
+    if (config.clk_cfg.sample_rate_hz != 24000 || config.slot_cfg.data_bit_width != I2S_DATA_BIT_WIDTH_16BIT ||
+        config.slot_cfg.slot_mode != I2S_SLOT_MODE_STEREO || config.slot_cfg.slot_mask != I2S_STD_SLOT_BOTH ||
+        (config.slot_cfg.slot_bit_width != I2S_SLOT_BIT_WIDTH_AUTO &&
+         config.slot_cfg.slot_bit_width != I2S_SLOT_BIT_WIDTH_16BIT)) return ESP_ERR_NOT_SUPPORTED;
+    // Leave the shared clock/slots untouched. Overwrite a complete DMA ring
+    // with zeros before releasing amplifier reset, including after a failure.
+    static const std::array<int16_t, 960> silence{};
+    const int64_t deadline = esp_timer_get_time() + 2000000;
+    for (size_t offset = 0; offset < info.total_dma_buf_size;) {
+        if (esp_timer_get_time() >= deadline) return ESP_ERR_TIMEOUT;
+        const size_t count = std::min(sizeof(silence), size_t(info.total_dma_buf_size) - offset);
+        size_t written = 0;
+        err = i2s_channel_write(tx_handle_, silence.data(), count, &written, 100);
+        vTaskDelay(1);
+        if (err != ESP_OK) return err;
+        if (written != count) return ESP_FAIL;
+        offset += written;
+    }
+    return esp_timer_get_time() < deadline ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+esp_err_t CoreS3AudioCodec::BeginCollectorOutput(int volume)
+{
+    if (volume < 1 || volume > 100) return ESP_ERR_INVALID_ARG;
+    if (!hal_bridge::is_collector_mode() || !input_enabled_ || output_dev_ || out_codec_if_ ||
+        out_ctrl_if_ || gpio_if_ || output_sample_rate_ != 24000) return ESP_ERR_INVALID_STATE;
+    audio_codec_i2c_cfg_t control{};
+    control.port = I2C_NUM_1;
+    control.addr = collector_aw88298_addr_;
+    control.bus_handle = collector_i2c_bus_;
+    out_ctrl_if_ = audio_codec_new_i2c_ctrl(&control);
+    if (!out_ctrl_if_) return ESP_ERR_NO_MEM;
+    gpio_if_ = audio_codec_new_gpio();
+    if (!gpio_if_) return ESP_ERR_NO_MEM;
+    aw88298_codec_cfg_t config{};
+    config.ctrl_if = out_ctrl_if_;
+    config.gpio_if = gpio_if_;
+    config.reset_pin = GPIO_NUM_NC;
+    config.hw_gain.pa_voltage = 5.0;
+    config.hw_gain.codec_dac_voltage = 3.3;
+    config.hw_gain.pa_gain = 1;
+    out_codec_if_ = aw88298_codec_new(&config);
+    if (!out_codec_if_) return ESP_FAIL;
+    // The upstream constructor briefly unmutes. TX contains only silence here:
+    // no input payload is written until every setup step has succeeded.
+    esp_err_t err = output_result(out_codec_if_->mute(out_codec_if_, true), "mute");
+    if (err != ESP_OK) return err;
+    esp_codec_dev_sample_info_t format{};
+    format.bits_per_sample = 16;
+    format.channel = 1;
+    format.sample_rate = 24000;
+    err = output_result(out_codec_if_->set_fs(out_codec_if_, &format), "format");
+    if (err != ESP_OK) return err;
+    err = output_result(out_codec_if_->enable(out_codec_if_, true), "enable");
+    if (err != ESP_OK) return err;
+    // Match the locked component's default 0..100 -> -50..0 dB curve.
+    // Calling the codec interface directly checks I2C errors and avoids NVS.
+    err = output_result(out_codec_if_->set_vol(out_codec_if_, -50.0f + volume * 0.5f), "volume");
+    if (err != ESP_OK) return err;
+    err = output_result(out_codec_if_->mute(out_codec_if_, false), "unmute");
+    if (err == ESP_OK) collector_output_active_ = true;
+    return err;
+}
+
+esp_err_t CoreS3AudioCodec::WriteCollectorOutput(const int16_t* samples, size_t count)
+{
+    if (!collector_output_active_ || !samples || count == 0 || count > 480) return ESP_ERR_INVALID_STATE;
+    // Existing microphone setup keeps TX at 24 kHz, 16-bit stereo. Duplicate
+    // mono samples into its slots instead of reconfiguring the shared bus.
+    std::array<int16_t, 960> stereo;
+    for (size_t i = 0; i < count; ++i) stereo[i * 2] = stereo[i * 2 + 1] = samples[i];
+    const size_t bytes = count * 2 * sizeof(int16_t);
+    size_t written = 0;
+    const auto err = i2s_channel_write(tx_handle_, stereo.data(), bytes, &written, 100);
+    return err != ESP_OK ? err : (written == bytes ? ESP_OK : ESP_FAIL);
+}
+
+esp_err_t CoreS3AudioCodec::EndCollectorOutput()
+{
+    if (!hal_bridge::is_collector_mode()) return ESP_ERR_INVALID_STATE;
+    esp_err_t result = ESP_OK;
+    auto check = [&result](int status, const char* operation) {
+        const esp_err_t err = output_result(status, operation);
+        if (result == ESP_OK) result = err;
+    };
+    if (out_codec_if_) {
+        check(out_codec_if_->mute(out_codec_if_, true), "cleanup mute");
+        check(out_codec_if_->enable(out_codec_if_, false), "cleanup disable");
+    }
+    if (out_codec_if_) { audio_codec_delete_codec_if(out_codec_if_); out_codec_if_ = nullptr; }
+    if (out_ctrl_if_) { audio_codec_delete_ctrl_if(out_ctrl_if_); out_ctrl_if_ = nullptr; }
+    if (gpio_if_) { audio_codec_delete_gpio_if(gpio_if_); gpio_if_ = nullptr; }
+    collector_output_active_ = false;
+    return result;
 }

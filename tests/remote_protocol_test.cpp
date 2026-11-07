@@ -1,4 +1,5 @@
 #include "../upstream/StackChan/firmware/main/collector/remote_protocol.h"
+#include "../upstream/StackChan/remote/code/main/joystick/center_packet.h"
 #include <array>
 #include <cassert>
 #include <iostream>
@@ -10,6 +11,7 @@ int main() {
     RemoteCommand command;
     assert(decode_remote(packet.data(),packet.size(),command));
     assert(command.yaw==-1280&&command.pitch==450&&command.speed==600&&command.auxiliary);
+    assert(!command.center_v1);
     assert(remote_for_receiver(command,1));
     for(size_t size=0;size<8;++size)assert(!decode_remote(packet.data(),size,command));
     assert(!decode_remote(packet.data(),9,command));
@@ -27,11 +29,28 @@ int main() {
     packet={1,0,0x80,0xff,0x7f,0,0,0};assert(decode_remote(packet.data(),8,command));
     limited=limit_remote_motion(command);assert(limited.yaw==-1280&&limited.pitch==850);
     packet={1,0,0,0,0,0xff,0xff,0};assert(!decode_remote(packet.data(),8,command)); // negative speed
+    std::array<uint8_t,16> center_packet{1,0,0,0xc2,1,0x58,2,1};
+    center_packet_extension(center_packet.data(),0x12345678,0x89abcdef);
+    assert(decode_remote(center_packet.data(),center_packet.size(),command));
+    assert(command.center_v1 && command.sender_boot_nonce==0x12345678 && command.center_press_seq==0x89abcdef);
+    assert(command.yaw==0 && command.pitch==450 && command.speed==600 && command.auxiliary);
+    for(size_t size=9;size<16;++size)assert(!decode_remote(center_packet.data(),size,command));
+    center_packet_extension(center_packet.data(),0,0);
+    assert(!decode_remote(center_packet.data(),16,command));
+    center_packet_extension(center_packet.data(),1,0);
+    assert(decode_remote(center_packet.data(),16,command) && command.center_press_seq==0);
+    assert(decode_remote(center_packet.data(),8,command) && !command.center_v1 && command.sender_boot_nonce==0);
     std::mt19937 random(11223);
     for(int i=0;i<100000;++i){for(auto& b:packet)b=random();if(decode_remote(packet.data(),8,command)){
         assert(command.speed>=0&&command.speed<=1000);
         auto safe=limit_remote_motion(command);
         assert(safe.yaw>=-1280&&safe.yaw<=1280);assert(safe.pitch>=50&&safe.pitch<=850);assert(safe.speed==command.speed);
     }}
-    std::cout<<"PASS: official packet fixtures, extrapolated angles, actuator limits, truncation, ID filtering and 100000 random payloads\n";
+    for(int i=0;i<100000;++i){for(auto& b:center_packet)b=random();if(decode_remote(center_packet.data(),16,command)){
+        assert(command.center_v1 && command.sender_boot_nonce!=0 && command.speed>=0 && command.speed<=1000);
+        auto safe=limit_remote_motion(command);
+        assert(safe.yaw>=-1280&&safe.yaw<=1280&&safe.pitch>=50&&safe.pitch<=850);
+        assert(safe.sender_boot_nonce==command.sender_boot_nonce&&safe.center_press_seq==command.center_press_seq);
+    }}
+    std::cout<<"PASS: official and center-v1 packet fixtures, sender encoder roundtrip, limits, truncation, ID filtering and 200000 random payloads\n";
 }

@@ -54,7 +54,8 @@ public final class SessionRecorder {
         manifest.put("time_basis","device monotonic microseconds per boot_id; receive_elapsed_us is Android elapsedRealtimeNanos/1000; received_wall_ms is host wall time");
         manifest.put("audio_note","PCM16LE WAV; channel roles from device_info.audio.channel_roles; gaps are never filled with fabricated samples");
         manifest.put("motion_note","Raw head-mounted sensor axes; acceleration includes gravity. Mounting to shoulder/body is not calibrated. No absolute heading, GPS or gravity-free acceleration is inferred.");
-        manifest.put("remote_note","Official mapped yaw/pitch/speed/auxiliary payload; no raw stick, remote IMU, sender sequence or heartbeat. Servo feedback is a separate measured signal; invalid values remain empty in CSV.");
+        manifest.put("remote_csv_schema_version",2);
+        manifest.put("remote_note","Mapped yaw/pitch/speed/auxiliary payload; auxiliary is a toggle state and never a center press. Legacy 8-byte packets have no center events or heartbeat. joystick_center_v1 adds sender_boot_nonce and center_press_seq as observed input; action binding is declared separately by remote.center_input_role (display_toggle or record_only); legacy nod binding is remote.nod_trigger and may be none. Center protocol support or a counter change does not imply an assigned or executed action. Display telemetry is software state, not measured backlight luminance. Receiver capability alone does not confirm an upgraded sender. Center values remain empty in CSV for legacy packets. No raw stick, remote IMU or general sender packet sequence. Servo feedback is separate; invalid values remain empty in CSV.");
         writeManifest();
         }catch(Exception e){try{events.close();}catch(Exception ignored){}events=null;throw e;}
         new Thread(()->{
@@ -94,7 +95,9 @@ public final class SessionRecorder {
         JSONObject remote=value.optJSONObject("remote");if(remote==null)return;JSONArray packets=remote.optJSONArray("packets");
         if(packets!=null)for(int i=0;i<packets.length();i++){
             JSONObject p=packets.optJSONObject(i);if(p==null||p.optLong("seq",-1)<=lastRemoteSeq)continue;lastRemoteSeq=p.optLong("seq");
-            remoteCsv.write(lastRemoteSeq+","+p.optLong("timestamp_us")+","+received+","+p.optInt("target_id")+","+csvNumber(p.opt("yaw_deg"))+","+csvNumber(p.opt("pitch_deg"))+","+p.optInt("speed")+","+p.optBoolean("auxiliary")+","+p.optInt("rssi_dbm")+","+p.optInt("channel")+","+p.optString("source_mac"));remoteCsv.newLine();remotePackets++;
+            boolean centerSupported="joystick_center_v1".equals(p.optString("center_protocol"));
+            String centerProtocol=centerSupported?"joystick_center_v1":"none";
+            remoteCsv.write(lastRemoteSeq+","+p.optLong("timestamp_us")+","+received+","+p.optInt("target_id")+","+csvNumber(p.opt("yaw_deg"))+","+csvNumber(p.opt("pitch_deg"))+","+p.optInt("speed")+","+p.optBoolean("auxiliary")+","+p.optInt("rssi_dbm")+","+p.optInt("channel")+","+p.optString("source_mac")+","+centerSupported+","+centerProtocol+","+(centerSupported?csvNumber(p.opt("sender_boot_nonce")):"")+","+(centerSupported?csvNumber(p.opt("center_press_seq")):""));remoteCsv.newLine();remotePackets++;
         }
         JSONObject m=remote.optJSONObject("motor");if(m!=null){
             StringBuilder line=new StringBuilder();line.append(m.optLong("timestamp_us")).append(',').append(received).append(',').append(m.optBoolean("enabled")).append(',').append(m.optLong("applied_seq")).append(',').append(csvNumber(m.opt("yaw_target_deg"))).append(',').append(csvNumber(m.opt("pitch_target_deg"))).append(',').append(csvNumber(m.opt("applied_speed")));
@@ -133,7 +136,7 @@ public final class SessionRecorder {
         if(!new File(segmentFolder,"frames").mkdirs())throw new IOException("无法创建分段目录");
         frames=writer(new File(segmentFolder,"frames.jsonl"));telemetry=writer(new File(segmentFolder,"telemetry.jsonl"));audioIndex=writer(new File(segmentFolder,"audio.jsonl"));audioNo=0;lastWrittenAudioSeq=-1;
         motionCsv=writer(new File(segmentFolder,"motion.csv"));motionCsv.write("seq,timestamp_us,receive_elapsed_us,valid,ax_mps2,ay_mps2,az_mps2,gx_dps,gy_dps,gz_dps\n");
-        remoteCsv=writer(new File(segmentFolder,"remote.csv"));remoteCsv.write("seq,timestamp_us,receive_elapsed_us,target_id,yaw_deg,pitch_deg,speed,auxiliary,rssi_dbm,channel,source_mac\n");
+        remoteCsv=writer(new File(segmentFolder,"remote.csv"));remoteCsv.write("seq,timestamp_us,receive_elapsed_us,target_id,yaw_deg,pitch_deg,speed,auxiliary,rssi_dbm,channel,source_mac,center_supported,center_protocol,sender_boot_nonce,center_press_seq\n");
         servoCsv=writer(new File(segmentFolder,"servos.csv"));servoCsv.write("timestamp_us,receive_elapsed_us,enabled,applied_seq,yaw_target_deg,pitch_target_deg,applied_speed,yaw_valid,yaw_deg,yaw_position_raw,yaw_load_raw,yaw_current_raw,pitch_valid,pitch_deg,pitch_position_raw,pitch_load_raw,pitch_current_raw\n");lastImuSeq=lastRemoteSeq=-1;
         JSONObject s=new JSONObject();s.put("directory",name);s.put("boot_id",boot);s.put("started_wall_ms",System.currentTimeMillis());segments.put(s);writeManifest();eventNow("segment_started",name+" boot="+boot,System.currentTimeMillis(),android.os.SystemClock.elapsedRealtimeNanos()/1000);
     }

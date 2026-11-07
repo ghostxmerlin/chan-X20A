@@ -5,6 +5,7 @@
 
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
+#include <atomic>
 
 class CoreS3AudioCodec : public AudioCodec {
 private:
@@ -17,6 +18,9 @@ private:
 
     esp_codec_dev_handle_t output_dev_ = nullptr;
     esp_codec_dev_handle_t input_dev_ = nullptr;
+    void* collector_i2c_bus_ = nullptr;
+    uint8_t collector_aw88298_addr_ = 0;
+    std::atomic_bool collector_output_active_{false};
 
     void CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din);
 
@@ -32,6 +36,13 @@ public:
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+
+    // Explicit, transient collector output; never writes volume settings/NVS.
+    esp_err_t PrepareCollectorOutput();
+    esp_err_t BeginCollectorOutput(int volume);
+    esp_err_t WriteCollectorOutput(const int16_t* samples, size_t count);
+    esp_err_t EndCollectorOutput();
+    bool CollectorOutputEnabled() const { return collector_output_active_.load(); }
 };
 
 #endif // _BOX_AUDIO_CODEC_H

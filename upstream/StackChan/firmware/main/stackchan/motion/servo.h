@@ -7,8 +7,11 @@
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
 #include <cstdint>
+#include "../../hal/drivers/FTServo_Arduino/src/SCSDiagnostics.h"
 
 namespace stackchan::motion {
+
+using ServoDiagnostics = SCSDiagnostics;
 
 struct ServoFeedback {
     bool valid = false;
@@ -16,6 +19,34 @@ struct ServoFeedback {
     int angle = 0, position_raw = -1, load_raw = 0, current_raw = 0;
     int transport_error = 0, servo_status = 0;
 };
+
+struct ServoDeadbandSnapshot {
+    bool supported = false, attempted = false, valid = false;
+    int64_t timestamp_us = 0; // Monotonic transaction start, not a motion timestamp.
+    int transport_error = 0, servo_status = 0;
+    int cw_raw = -1, ccw_raw = -1; // Independent register bytes; unknown until valid.
+};
+
+// Read-only SCSCL registers 26 and 27. The caller owns the bus and schedules
+// this once; no retry, unlock, write, or change to the existing bus timeout.
+template<class Bus>
+ServoDeadbandSnapshot readServoDeadbandSnapshot(Bus& bus, uint8_t id, int64_t timestamp_us)
+{
+    ServoDeadbandSnapshot result;
+    result.supported = true;
+    result.attempted = true;
+    result.timestamp_us = timestamp_us;
+    uint8_t values[2]{};
+    const int received = bus.Read(id, 26, values, sizeof(values));
+    result.transport_error = bus.getLastError();
+    result.servo_status = bus.getState();
+    result.valid = received == 2 && result.transport_error == 0 && result.servo_status == 0;
+    if (result.valid) {
+        result.cw_raw = values[0];
+        result.ccw_raw = values[1];
+    }
+    return result;
+}
 
 /**
  * @brief
@@ -79,10 +110,17 @@ public:
 
     // A failed bus read must never be presented as a measured angle.
     virtual ServoFeedback readFeedback() { return {}; }
+    // Passive counters copied by the bus-owning motor task; never queries UART.
+    virtual ServoDiagnostics diagnostics() const { return {}; }
+    // Explicit bus query; never call from HTTP or a snapshot reader.
+    virtual ServoDeadbandSnapshot readDeadbandSnapshot() { return {}; }
     void cancelMotion() { setTorqueEnabled(false); stop_motion_at_angle(Servo::getCurrentAngle()); }
     // Start an automatic pose from a validated sample, without a second UART
     // read that could substitute an internal fallback angle for the start point.
-    bool moveFromFeedbackWithSpeed(const ServoFeedback& feedback, int angle, int speed);
+    // An explicit margin permits at most 2 degrees below the current lower
+    // limit, using that limit as the command start. Feedback remains unchanged.
+    bool canStartFromFeedback(const ServoFeedback& feedback, int angle, int lower_margin = 0) const;
+    bool moveFromFeedbackWithSpeed(const ServoFeedback& feedback, int angle, int speed, int lower_margin = 0);
     bool isTrajectoryComplete() { return _angle_anim.done() && !_snap_to_target_on_rest; }
 
     /**
