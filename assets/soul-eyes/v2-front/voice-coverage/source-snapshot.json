@@ -1,0 +1,35 @@
+{
+  "source_path": "/Users/ghostxmerlin/soul/voice/outputs/20261106-stackchan-300/stackchan_candidates_300.json",
+  "source_sha256": "20e3ba9b653e15267bdd90dc27022e870fa99b7c83d4d2c1fd1a8ae1d85f94c0",
+  "source_modified_utc": "2026-11-06T14:10:35.961790+00:00",
+  "snapshot_created_utc": "2026-11-06T15:07:48.265327+00:00",
+  "schema_version": 2,
+  "source_as_of": "2026-11-06",
+  "edition": "300条筛选版",
+  "theme_policy": "主主题用于筛选，细分用途保留在intent；主题和优先级均是编辑建议。",
+  "audio_acquired": false,
+  "counts": {
+    "candidates": 300,
+    "themes": 20,
+    "distinct_intent_strings": 205,
+    "distinct_emotion_strings": 199,
+    "emotion_unspecified": 72,
+    "named_emotion_with_pending_annotation": 68
+  },
+  "theme_rule_source": {
+    "path": "/Users/ghostxmerlin/soul/voice/outputs/20261106-stackchan-catalog/_build/expand300.mjs",
+    "sha256": "179ec14c47026e56eaa07460fa31236e4e860921c9074c8c357fbfeba69cbfa7",
+    "lines": [
+      20,
+      45
+    ]
+  },
+  "evidence_lines": {
+    "source_counts": [
+      2,
+      70
+    ],
+    "theme_policy": 9873
+  },
+  "interpretation": "20 flat editorial expression themes, free-text intent and emotion. No formal emotion enum, alias table, numeric intensity or database file found."
+}

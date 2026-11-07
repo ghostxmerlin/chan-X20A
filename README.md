@@ -29,6 +29,7 @@
 | `upstream/StackChan/app/`、`server/` | 上游手机端与服务端参考源码，不是当前采集入口 |
 | `android/Collector/` | 独立 Android 观察台，原生 Java |
 | `config/` | 当前版本 ESP-IDF 构建配置 |
+| `assets/soul-eyes/v2-front/` | 三款正面眼睛资源，90 段动画；尚未接入 collector 首页 |
 | `scripts/`、`tests/` | 构建入口、主机协议验证与联调工具 |
 | `docs/` | 使用、协议、开发与验收记录 |
 
@@ -46,6 +47,8 @@ python3 -B -m unittest discover -s tests -v
 ```
 
 设备连接、记录和数据导出见 [使用说明](docs/collector-guide.md)，通信格式见 [协议](docs/collector-protocol.md)。部署前需核对设备与活动分区；项目内的开发设备偏移不能直接用于其他机器。
+
+三款正面眼睛的预览、状态清单、SD 文件布局和 ESP-IDF／LVGL 接入约束见 [眼睛资源使用说明](docs/soul-eyes.md)。
 
 仓库只发布源码、配置与整理后的验证结果。凭据、签名私钥、原机备份、原始串口日志、现场图像/录音和本机构建产物保留在本地，不随 Git 上传。历史文档中的 `logs/`、`artifacts/` 链接是本地证据路径，不是公开下载链接。
 

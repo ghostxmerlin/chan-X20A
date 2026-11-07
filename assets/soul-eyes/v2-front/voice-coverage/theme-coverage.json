@@ -1,0 +1,204 @@
+[
+  {
+    "theme": "关心／提醒",
+    "candidate_count": 26,
+    "proposed_animations": [
+      "worried",
+      "comforting",
+      "determined"
+    ],
+    "source_rule_line": 29
+  },
+  {
+    "theme": "决心／行动",
+    "candidate_count": 28,
+    "proposed_animations": [
+      "determined",
+      "encouraging",
+      "proud"
+    ],
+    "source_rule_line": 37
+  },
+  {
+    "theme": "吐槽／玩笑",
+    "candidate_count": 22,
+    "proposed_animations": [
+      "sarcastic",
+      "goofy",
+      "laughing",
+      "helpless"
+    ],
+    "source_rule_line": 36
+  },
+  {
+    "theme": "告别／思念",
+    "candidate_count": 12,
+    "proposed_animations": [
+      "farewell",
+      "sad",
+      "affectionate"
+    ],
+    "source_rule_line": 22
+  },
+  {
+    "theme": "和解／接纳",
+    "candidate_count": 7,
+    "proposed_animations": [
+      "relieved",
+      "comforting",
+      "affectionate"
+    ],
+    "source_rule_line": 23
+  },
+  {
+    "theme": "喜爱／称赞",
+    "candidate_count": 13,
+    "proposed_animations": [
+      "affectionate",
+      "happy",
+      "proud"
+    ],
+    "source_rule_line": 35
+  },
+  {
+    "theme": "安慰／陪伴",
+    "candidate_count": 18,
+    "proposed_animations": [
+      "comforting",
+      "affectionate",
+      "encouraging"
+    ],
+    "source_rule_line": 24
+  },
+  {
+    "theme": "庆祝／祝福",
+    "candidate_count": 4,
+    "proposed_animations": [
+      "happy",
+      "encouraging",
+      "expectant"
+    ],
+    "source_rule_line": 25
+  },
+  {
+    "theme": "惊讶／困惑",
+    "candidate_count": 5,
+    "proposed_animations": [
+      "surprised",
+      "confused",
+      "curious"
+    ],
+    "source_rule_line": 39
+  },
+  {
+    "theme": "感慨／倾诉",
+    "candidate_count": 14,
+    "proposed_animations": [
+      "sad",
+      "thinking",
+      "helpless",
+      "hurt"
+    ],
+    "source_rule_line": 40
+  },
+  {
+    "theme": "愿望／计划",
+    "candidate_count": 8,
+    "proposed_animations": [
+      "expectant",
+      "thinking",
+      "determined"
+    ],
+    "source_rule_line": 38
+  },
+  {
+    "theme": "拒绝／制止",
+    "candidate_count": 18,
+    "proposed_animations": [
+      "refusing",
+      "determined",
+      "angry"
+    ],
+    "source_rule_line": 30
+  },
+  {
+    "theme": "确认／回应",
+    "candidate_count": 17,
+    "proposed_animations": [
+      "determined",
+      "proud",
+      "happy"
+    ],
+    "source_rule_line": 33
+  },
+  {
+    "theme": "解释／澄清",
+    "candidate_count": 19,
+    "proposed_animations": [
+      "thinking",
+      "determined",
+      "curious"
+    ],
+    "source_rule_line": 32
+  },
+  {
+    "theme": "请求／求助",
+    "candidate_count": 21,
+    "proposed_animations": [
+      "pleading",
+      "worried",
+      "shy"
+    ],
+    "source_rule_line": 27
+  },
+  {
+    "theme": "质疑／反对",
+    "candidate_count": 6,
+    "proposed_animations": [
+      "confused",
+      "refusing",
+      "sarcastic"
+    ],
+    "source_rule_line": 31
+  },
+  {
+    "theme": "道歉／感谢",
+    "candidate_count": 4,
+    "proposed_animations": [
+      "apologetic",
+      "grateful",
+      "shy"
+    ],
+    "source_rule_line": 21
+  },
+  {
+    "theme": "邀请／协作",
+    "candidate_count": 12,
+    "proposed_animations": [
+      "greeting",
+      "expectant",
+      "determined"
+    ],
+    "source_rule_line": 28
+  },
+  {
+    "theme": "问候／闲聊",
+    "candidate_count": 27,
+    "proposed_animations": [
+      "greeting",
+      "curious",
+      "goofy"
+    ],
+    "source_rule_line": 34
+  },
+  {
+    "theme": "鼓励／支持",
+    "candidate_count": 19,
+    "proposed_animations": [
+      "encouraging",
+      "determined",
+      "comforting"
+    ],
+    "source_rule_line": 26
+  }
+]
