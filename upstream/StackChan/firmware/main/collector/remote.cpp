@@ -5,6 +5,7 @@
 #include "startup_pose.h"
 #include "remote_stop.h"
 #include "pitch_setting.h"
+#include "pitch_motion.h"
 #include "web_control.h"
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
@@ -161,6 +162,7 @@ void motor_task(void*)
             if (active) {
                 { std::lock_guard<std::mutex> lock(mutex); motor_state = "initializing"; }
                 GetHAL().initCollectorMotion();
+                configure_pitch_motion(GetStackChan().motion().pitchServo());
                 motor_ready = true;
                 // Re-check the requested state and feedback before any motion.
             } else {
@@ -488,6 +490,7 @@ void remote_init()
     load_pitch_setting();
     // Prepare UART synchronously on app_main, before audio and capture tasks.
     GetHAL().initCollectorMotion();
+    configure_pitch_motion(GetStackChan().motion().pitchServo());
     motor_ready = true;
     // Collector already owns the STA connection. Never restart Wi-Fi or force a channel here.
     espnow_config_t config = ESPNOW_INIT_CONFIG_DEFAULT();
@@ -579,7 +582,10 @@ void remote_pitch_setting_json(ArduinoJson::JsonObject target)
     if (pitch_has_command_start) target["command_start_deg"] = pitch_command_start / 10.0f;
     else target["command_start_deg"] = nullptr;
     target["storage_error"] = pitch_storage_error;
-    target["speed"] = StartupPose::kSpeed;
+    target["speed"] = StartupPose::kSpeed; // Requested value, overridden by the profile.
+    target["motion_profile"] = kPitchMotionProfile;
+    target["spring_stiffness"] = kPitchMotionStiffness;
+    target["spring_damping"] = kPitchMotionDamping;
     target["min_deg"] = kPitchSettingMinimum / 10.0f;
     target["max_deg"] = kPitchSettingMaximum / 10.0f;
     target["state_semantics"] = "trajectory_state_not_measured_arrival";
@@ -692,6 +698,7 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     if (physical_pitch_active) motor["pitch_target_deg"] = applied_pitch / 10.0f;
     else motor["pitch_target_deg"] = nullptr;
     motor["pitch_owner"] = physical_pitch_active ? "remote" : "setting";
+    motor["pitch_motion_profile"] = kPitchMotionProfile;
     motor["speed_limit"] = kRemoteSpeedLimit;
     motor["startup_pitch_target_deg"] = boot_pitch_target / 10.0f;
     motor["startup_pose_state"] = startup_state;

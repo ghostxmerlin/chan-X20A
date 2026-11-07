@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "../upstream/StackChan/firmware/main/collector/pitch_setting.h"
+#include "../upstream/StackChan/firmware/main/collector/pitch_motion.h"
+#include <cmath>
 #include "../upstream/StackChan/firmware/main/collector/web_control.h"
 #include "../upstream/StackChan/firmware/main/collector/startup_pose.h"
 #include "../upstream/StackChan/firmware/main/collector/remote_stop.h"
@@ -199,6 +201,106 @@ static void passive_yaw_first_command()
     assert(!std::strcmp(request.state, "trajectory_complete"));
 }
 
+// Exercise actual command trajectories; this cannot model payload mechanics.
+static int finish_gentle(Axis& axis, int start, int target)
+{
+    int previous = start, peak_step = 0;
+    const auto began = test_tick_ms;
+    for (int i = 0; i < 750 && !axis.isTrajectoryComplete(); ++i) {
+        test_tick_ms += 20; axis.update();
+        const int current = axis.commands.back();
+        peak_step = std::max(peak_step, std::abs(current - previous));
+        assert(current >= std::min(start, target) && current <= std::max(start, target));
+        assert(target >= start ? current >= previous : current <= previous);
+        previous = current;
+    }
+    assert(axis.isTrajectoryComplete() && axis.commands.back() == target);
+    assert(test_tick_ms - began < 15000);
+    std::cerr << "range " << start << " -> " << target << " peak " << peak_step << " time " << test_tick_ms - began << '\n';
+    assert(peak_step <= 10); // <=1 degree per 20ms, including final snap.
+    test_tick_ms += 300; axis.update();
+    assert(!axis.torque);
+    std::cout << "gentle " << start / 10.0 << " -> " << target / 10.0
+              << " peak_step=" << peak_step / 10.0 << "deg elapsed_ms=" << test_tick_ms - began << '\n';
+    return peak_step;
+}
+
+static void loaded_pitch_motion()
+{
+    Axis pitch;
+    // Configure only this axis; a second axis retains its original mapping.
+    collector::configure_pitch_motion(pitch);
+    assert(!pitch.setSpeedSpringOverride(0, 4.5f));
+    assert(!pitch.setSpeedSpringOverride(3.0f, -1));
+    assert(!pitch.setSpeedSpringOverride(INFINITY, 4.5f));
+    assert(!pitch.setSpeedSpringOverride(3.0f, NAN));
+    ServoFeedback feedback; feedback.valid = true; feedback.angle = 50;
+    assert(pitch.moveFromFeedbackWithSpeed(feedback, 850, StartupPose::kSpeed));
+    const int gentle_step = finish_gentle(pitch, 50, 850);
+    collector::RemoteCommand input{1,0,471,600,false};
+    input.center_v1 = true;
+    assert(collector::apply_remote_pitch(pitch, input, false, 100).pitch == 100);
+    finish_gentle(pitch, 850, 100);
+
+    Axis normal; normal.physical = 50; normal.passive();
+    normal.moveWithSpeed(850, 600);
+    int previous = 50, normal_step = 0;
+    for (int i = 0; i < 750 && !normal.isTrajectoryComplete(); ++i) {
+        test_tick_ms += 20; normal.update();
+        normal_step = std::max(normal_step, std::abs(normal.commands.back() - previous));
+        previous = normal.commands.back();
+    }
+    assert(normal.isTrajectoryComplete() && normal_step > gentle_step * 5);
+
+    // A committed web setting cancels remote motion and restarts from feedback.
+    // Cancelled velocity must not send a new downward request upward first.
+    for (bool from_setting : {true, false}) {
+        Axis takeover; collector::configure_pitch_motion(takeover);
+        feedback.angle = 50;
+        assert(takeover.moveFromFeedbackWithSpeed(feedback, 850, 600));
+        for (int i = 0; i < 30; ++i) { test_tick_ms += 20; takeover.update(); }
+        collector::apply_remote_pitch(takeover, input, false, 100);
+        for (int i = 0; i < 5; ++i) { test_tick_ms += 20; takeover.update(); }
+        feedback.angle = takeover.commands.back();
+        if (from_setting) {
+            takeover.cancelMotion();
+            assert(takeover.moveFromFeedbackWithSpeed(feedback, 100, StartupPose::kSpeed));
+        } else {
+            takeover.physical = feedback.angle;
+            collector::apply_remote_pitch(takeover, input, true, 100);
+        }
+        finish_gentle(takeover, feedback.angle, 100);
+    }
+
+    // Reversal during movement retains a smooth bounded trajectory.
+    input.pitch = 900;
+    collector::apply_remote_pitch(pitch, input, false, 100);
+    for (int i = 0; i < 25; ++i) { test_tick_ms += 20; pitch.update(); }
+    input.pitch = 471;
+    previous = pitch.commands.back();
+    collector::apply_remote_pitch(pitch, input, false, 100);
+    for (int i = 0; i < 750 && !pitch.isTrajectoryComplete(); ++i) {
+        test_tick_ms += 20; pitch.update();
+        const int current = pitch.commands.back();
+        assert(current >= 50 && current <= 850);
+        if (std::abs(current - previous) > 10) std::cerr << "reverse jump i=" << i << " prev=" << previous << " curr=" << current << '\n';
+        assert(std::abs(current - previous) <= 10);
+        previous = current;
+    }
+    assert(pitch.isTrajectoryComplete() && pitch.commands.back() == 100);
+    input.pitch = 900;
+    collector::apply_remote_pitch(pitch, input, false, 100);
+    test_tick_ms += 20; pitch.update();
+    pitch.cancelMotion();
+    const auto commands_at_stop = pitch.commands.size();
+    // Even an extra update after cancellation cannot restart the profiled axis.
+    for (int i = 0; i < 100; ++i) { test_tick_ms += 20; pitch.update(); }
+    assert(!pitch.torque && pitch.commands.size() == commands_at_stop);
+    feedback.angle = 100;
+    assert(pitch.moveFromFeedbackWithSpeed(feedback, 150, 1000));
+    finish_gentle(pitch, 100, 150);
+}
+
 int main()
 {
     smooth_ui_toolkit::ui_hal::on_get_tick([] { return test_tick_ms; });
@@ -216,6 +318,7 @@ int main()
         assert(axis.isTrajectoryComplete() && axis.commands.back() == 100 && !axis.torque);
         for (int angle : axis.commands) assert(angle >= 50 && angle <= 850);
     }
+    loaded_pitch_motion();
     storage_and_request_generation(); feedback_boundary(); terminal_states(); passive_yaw_first_command();
     trajectory({20}, 150, true);
     trajectory({19, 21}, 130, true);

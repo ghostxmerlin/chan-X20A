@@ -92,6 +92,10 @@ public:
      */
     void moveWithSpeed(int angle, int speed);
 
+    // Optional per-axis command profile. Configure before motion; this does not
+    // tune the servo's internal PID, calibration, limits, or holding torque.
+    bool setSpeedSpringOverride(float stiffness, float damping);
+
     /**
      * @brief Rotate servo with given velocity
      *
@@ -230,6 +234,8 @@ protected:
     bool _snap_to_target_on_rest      = false;
     bool _auto_torque_release_enabled = true;
     bool _auto_angle_sync_enabled     = true;
+    float _speed_spring_stiffness = 0.0f;
+    float _speed_spring_damping = 0.0f;
 
     void apply_default_spring_options();
     void update_angle_anim_target(int angle);

@@ -5,6 +5,7 @@
  */
 #include "servo.h"
 #include <hal/hal.h>
+#include <cmath>
 
 using namespace uitk;
 
@@ -89,8 +90,20 @@ void Servo::moveWithSpringParams(int angle, float stiffness, float damping)
     update_angle_anim_target(angle);
 }
 
+bool Servo::setSpeedSpringOverride(float stiffness, float damping)
+{
+    if (!std::isfinite(stiffness) || !std::isfinite(damping) || stiffness <= 0 || damping <= 0) return false;
+    _speed_spring_stiffness = stiffness;
+    _speed_spring_damping = damping;
+    return true;
+}
+
 void Servo::moveWithSpeed(int angle, int speed)
 {
+    if (_speed_spring_stiffness > 0) {
+        moveWithSpringParams(angle, _speed_spring_stiffness, _speed_spring_damping);
+        return;
+    }
     auto spring_options = map_speed_to_spring_options(speed);
     moveWithSpringParams(angle, spring_options.stiffness, spring_options.damping);
 }
@@ -138,16 +151,29 @@ void Servo::update_angle_anim_target(int angle)
     angle = uitk::clamp(angle, _angle_limit.x, _angle_limit.y);
 
     if (_auto_angle_sync_enabled) {
-        _angle_anim.teleport(getCurrentAngle());  // Use current angle as start
+        if (_speed_spring_stiffness > 0) stop_motion_at_angle(getCurrentAngle());
+        else _angle_anim.teleport(getCurrentAngle());  // Use current angle as start
     }
-    _angle_anim             = angle;  // Apply new target
+    if (_speed_spring_stiffness > 0) {
+        // update() advances by fixed 20ms steps. AnimateValue::operator= calls
+        // value(), adding wall-clock time again at retarget and jumping ahead.
+        // Start from the last commanded value and preserve the spring velocity.
+        if (angle != _angle_anim.end) _angle_anim.retarget(_angle_anim.directValue(), angle);
+    } else {
+        _angle_anim = angle;
+    }
     _snap_to_target_on_rest = true;
 }
 
 void Servo::stop_motion_at_angle(int angle)
 {
     angle = uitk::clamp(angle, _angle_limit.x, _angle_limit.y);
+    if (_speed_spring_stiffness > 0) _angle_anim.springOptions().velocity = 0.0f;
     _angle_anim.teleport(angle);
+    // teleport/init alone leaves the generator's cached velocity intact.
+    // Evaluate the zero-distance, zero-velocity curve without writing the bus
+    // so cancelled motion cannot leak into a new feedback-based start.
+    if (_speed_spring_stiffness > 0) _angle_anim.updateWithDelta(0.0f);
     _snap_to_target_on_rest = false;
 }
 
