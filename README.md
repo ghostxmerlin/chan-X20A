@@ -1,5 +1,7 @@
 # chan-X20A
 
+**Mac 网页监控（2026-11-07）：** 现在可打开 [本机观察台](http://127.0.0.1:8787/) 查看机身画面、麦克风电平、六轴/环境、舵机实际反馈和 ASR/M12。重启 Mac 后双击 `scripts/open-stackchan-monitor.command`；首次绑定和启停见 [网页说明](web/monitor/README.md)。只读，声音手动开启，无需重刷机器人。
+
 **当前版本：collector-0.4.17 基础版已部署（2026-11-07）。** 用户要求先保留首页、参数、日志、舵机、爱心/叉号及 ASR 控制 M12，后续逐项增加。情绪角落/接收接口、机身 ESP-DL 人脸检测、M12 自动识别与自动唤醒已停用。M12 启动请求待机，turn on 请求检测，turn off 或轻触人脸页退出请求待机。基础音视频采集与 Android 连接保留。构建/部署状态以[最新交接](docs/session-handoff.md)为准；下文按日期保留历史。
 
 2026-11-07：固件 **collector-0.4.13** 已部署：顶部黑口的 Unit ASR 说 forward / backward 显示爱心 / 叉号，说 turn on 让蓝口的 M12 做人脸检测并在屏幕上画框，turn off 回首页、M12 待机。日志只走 USB，三个串口分给 M12、舵机和 ASR。实测和限制见[交接](docs/session-handoff.md)与[协议](docs/collector-protocol.md)。
