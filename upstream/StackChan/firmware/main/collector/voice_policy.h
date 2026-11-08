@@ -22,7 +22,7 @@ inline int choose_voice(int requested, uint32_t random, int last)
     const int candidate=int(random%(kVoiceCount-1))+1;
     return candidate>=last ? candidate+1 : candidate;
 }
-inline bool voice_asr_open(uint8_t id, bool has_value) { return id==0x10 && !has_value; }
+inline bool voice_asr_next(uint8_t id, bool has_value) { return id==0x1b && !has_value; }
 class VoiceCooldown {
 public:
     bool allowed(int64_t now) const { return now>=until_; }

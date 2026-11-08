@@ -8,6 +8,7 @@
 #include "runtime_log.h"
 #include "playback.h"
 #include "hearing.h"
+#include "interaction.h"
 #include "eyes/eyes.h"
 #include "eyes/http.h"
 #include "voice_library.h"
@@ -716,6 +717,8 @@ esp_err_t info_handler(httpd_req_t* request)
     auto capabilities = doc["capabilities"].to<JsonObject>();
     capabilities["eyes"]="supported";
     capabilities["hearing"]="supported";
+    capabilities["interaction_modes"]="supported";
+    capabilities["face_tracking"]="supported";
     eyes::catalog_json(doc["eyes"].to<JsonObject>());
     hearing::json(doc["hearing"].to<JsonObject>());
     for (const char* name : {"camera", "audio", "imu", "magnetometer", "light", "proximity", "head_touch", "touch", "power", "remote", "motion", "imu_batch", "playback", "display_toggle", "pitch_setting", "bound_discovery", "asr_unit", "m12_serial", "chip_temperature", "web_control", "m12_recognition", "voice_library"}) capabilities[name] = "supported";
@@ -946,6 +949,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     eyes::status_json(doc["eyes"].to<JsonObject>());
     asr_json(doc["asr"].to<JsonObject>());
     m12_json(doc["m12"].to<JsonObject>());
+    interaction::json(doc["interaction"].to<JsonObject>());
     health["servo_commands_enabled"] = remote_enabled();
     wifi_ap_record_t ap{};
     health["wifi_profile_count"] = networks.size();
@@ -992,6 +996,7 @@ esp_err_t web_control_handler(httpd_req_t* request)
     if (strcmp(request->uri, "/v1/m12/view") == 0) {
         if (!doc["enabled"].is<bool>()) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK; }
         if (doc["enabled"].as<bool>() && !m12_snapshot().valid) return unavailable(request, "M12 serial unavailable");
+        interaction::release_for_manual_m12();
         m12_set_view(doc["enabled"].as<bool>());
         result["request_seq"] = m12_view_request() >> 2;
     } else if (strcmp(request->uri, "/v1/m12/mode") == 0) {
@@ -1001,6 +1006,7 @@ esp_err_t web_control_handler(httpd_req_t* request)
             strcmp(mode, "standby") == 0 ? M12Function::standby : M12Function::none;
         if (function == M12Function::none) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid M12 mode"); return ESP_OK; }
         if (function != M12Function::standby && !m12_snapshot().valid) return unavailable(request, "M12 serial unavailable");
+        interaction::release_for_manual_m12();
         m12_set_mode(function);
         result["request_seq"] = m12_view_request() >> 2;
     } else if (strcmp(request->uri, "/v1/voice/play") == 0) {
@@ -1246,6 +1252,13 @@ void start_server(int port, int control_port, bool audio_only)
             };
             ESP_ERROR_CHECK(httpd_register_uri_handler(server,&endpoint));
         }
+        httpd_uri_t interaction_control{};
+        interaction_control.uri="/v1/interaction";interaction_control.method=HTTP_POST;
+        interaction_control.handler=[](httpd_req_t* r)->esp_err_t {
+            if(!authorize(r)||!control_boot_matches(r,true))return ESP_FAIL;
+            return interaction::handle(r);
+        };
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server,&interaction_control));
         httpd_uri_t hearing_control{};
         hearing_control.uri="/v1/hearing";hearing_control.method=HTTP_POST;
         hearing_control.handler=[](httpd_req_t* r)->esp_err_t {
@@ -1358,9 +1371,9 @@ void update_screen(const std::string& ip)
             }
             // Unit ASR: "forward" shows the home heart, "backward" the reject X.
             // Display only: the unit already speaks its own reply, and a second
-            // sound would also reach the microphone. "turn on" opens the M12 face
-            // page and requests detection; "turn off" (or a tap on it) returns
-            // home and requests standby. Other inputs never wake the M12.
+            // sound would also reach the microphone. M12 commands are consumed
+            // once by the ASR task in UART order; this timer applies the requested
+            // preview visibility and handles explicit touch exits.
             static uint32_t asr_seen = 0;
             static bool face_view = false;
             static uint32_t view_seen = 0;
@@ -1372,10 +1385,6 @@ void update_screen(const std::string& ip)
                 const auto spoken = asr_reaction(id);
                 if (spoken != AsrReaction::none)
                     screen_show_reaction(spoken == AsrReaction::heart ? ScreenReaction::Heart : ScreenReaction::Reject, tick_ms);
-                const int face_switch = asr_face_switch(id);
-                if (face_switch != 0) {
-                    m12_set_view(face_switch > 0);
-                }
             }
             const uint32_t requested_view = m12_view_request();
             if (requested_view != view_seen) {
@@ -1384,6 +1393,7 @@ void update_screen(const std::string& ip)
             }
             if (face_view && !screen_showing_faces()) {
                 face_view = false;
+                interaction::release_for_manual_m12();
                 m12_set_view(false);
             }
             if (face_view) {
@@ -1491,6 +1501,7 @@ void run()
             last_attempt = esp_timer_get_time();
         }
         previous_ip = ip;
+        interaction::tick(esp_timer_get_time());
         update_screen(ip);
         const int64_t now = esp_timer_get_time();
         // One interrupt allocation table per boot (USB log): core 0 must keep free

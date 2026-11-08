@@ -16,6 +16,7 @@ struct M12Snapshot {
     M12Phase phase = M12Phase::idle;
     M12Function function = M12Function::none; // last requested function, not confirmed device state
     int64_t requested_us = 0;      // last command written
+    uint32_t mode_request_revision = 0; // request actually written to UART
     uint32_t results = 0;         // Face Detector results since boot
     uint32_t result_seq = 0;      // increments on every Face Detector result
     int64_t last_result_us = 0;
@@ -37,6 +38,10 @@ void m12_wake();
 // Explicit request: true selects Face Detector; false selects standby. Non-blocking.
 void m12_set_view(bool on);
 void m12_set_mode(M12Function mode);
+// Background processing leaves the eye home visible. Returns a mode ownership
+// revision; explicit preview requests use a separate display revision.
+uint32_t m12_set_background_mode(M12Function mode);
+uint32_t m12_mode_request();
 uint32_t m12_view_request();
 M12Snapshot m12_snapshot();
 const char* m12_phase_name(M12Phase phase);

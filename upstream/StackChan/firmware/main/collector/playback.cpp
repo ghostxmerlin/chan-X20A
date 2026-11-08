@@ -385,7 +385,7 @@ static esp_err_t playback_voice_impl(int requested_id, bool from_asr, uint32_t* 
         std::lock_guard<std::mutex> lock(status_mutex);
         id=job->id=++job_sequence; current_voice_id=selected; last_voice_id=selected;
         voice_accepted_us=accepted_us; voice_output_started_us=0;
-        source=hearing_session?"hearing_emotion":from_asr?"asr_open":"web_voice";
+        source=hearing_session?"hearing_emotion":from_asr?"asr_next":"web_voice";
         hearing_job=hearing_session?id:0;
         state="starting"; error_code=cleanup_error=0; error_stage="none";
         expected_bytes=job->bytes; received_bytes=submitted_bytes=0;
@@ -425,7 +425,7 @@ bool playback_self_sounding()
 
 void playback_asr_command(uint8_t id, bool has_value)
 {
-    if (voice_asr_open(id,has_value)) playback_voice(0,true);
+    if (voice_asr_next(id,has_value)) playback_voice(0,true);
 }
 
 bool playback_output_enabled()
@@ -450,9 +450,9 @@ void playback_json(ArduinoJson::JsonObject target)
     if (const auto* clip=voice_clip(current_voice_id)) {
         target["voice_text"]=clip->text; target["voice_title"]=clip->title;
     }
-    target["asr_open_received"]=asr_voice_received;
-    target["asr_open_accepted"]=asr_voice_accepted;
-    target["asr_open_dropped"]=asr_voice_dropped;
+    target["asr_next_received"]=asr_voice_received;
+    target["asr_next_accepted"]=asr_voice_accepted;
+    target["asr_next_dropped"]=asr_voice_dropped;
     target["asr_cooldown_ms"]=1200;
     target["asr_start_delay_ms"]=kAsrVoiceStartDelayMs;
     target["voice_accepted_us"]=current_voice_id ? voice_accepted_us : 0;

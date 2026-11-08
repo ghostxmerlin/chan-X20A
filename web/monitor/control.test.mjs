@@ -32,6 +32,51 @@ test('recognition requires new capability and an exact manual mode',async()=>{
  await assert.rejects(c.execute({action:'m12_mode',mode:'train',boot:'boot-a'}));
  assert.equal(calls.length,1);
 });
+test('interaction modes require exact schema, new capabilities and unchanged boot',async()=>{
+ const {m,c,calls}=fixture(),request={action:'interaction',mode:'tracking',enabled:true,boot:'boot-a'};
+ await assert.rejects(c.execute(request));
+ m.info.capabilities.interaction_modes='supported';
+ await assert.rejects(c.execute(request));
+ m.info.capabilities.face_tracking='supported';
+ await c.execute(request);
+ assert.deepEqual(calls[0].slice(0,3),['/v1/interaction',{mode:'tracking',enabled:true},'boot-a']);
+ for(const changed of [{mode:'auto'},{enabled:1},{extra:true},{boot:'old'}]) await assert.rejects(c.execute({...request,...changed}));
+ const {enabled,...missing}=request;await assert.rejects(c.execute(missing));
+ m.telemetryAt=Date.now()-2000;await assert.rejects(c.execute(request));
+ m.telemetryAt=Date.now();m.client.verified=false;await assert.rejects(c.execute(request));
+ assert.equal(calls.length,1);
+});
+test('interaction enabling respects prerequisites while disabling remains available',async()=>{
+ const {m,c,calls}=fixture();Object.assign(m.info.capabilities,{interaction_modes:'supported',face_tracking:'supported'});
+ const request={action:'interaction',mode:'tracking',enabled:true,boot:'boot-a'};
+ for(const field of ['enabled','requested']) {
+  m.telemetry.remote.motor[field]=false;await assert.rejects(c.execute(request));
+  await c.execute({...request,enabled:false});m.telemetry.remote.motor[field]=true;
+ }
+ m.telemetry.m12.valid=false;
+ for(const mode of ['tracking','recognition']) {
+  await assert.rejects(c.execute({...request,mode}));await c.execute({...request,mode,enabled:false});
+ }
+ await c.execute({...request,mode:'advanced'});
+ m.telemetry.m12.valid=true;m.telemetry.remote.motor.enabled=false;
+ await c.execute({...request,mode:'recognition'});
+ assert.equal(calls.length,6);
+ assert.deepEqual(calls.at(-2)[1],{mode:'advanced',enabled:true});
+});
+test('queued interaction rechecks freshness and never sends after its boot changed',async t=>{
+ const seen=[];const server=http.createServer((req,res)=>{seen.push(req.url);res.end('{"accepted":true}');});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const client=new DeviceClient({address:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(32),device_id:'test-device'});
+ client.verified=true;client.info={boot_id:'boot-a'};
+ let release;client.requestTail=new Promise(r=>release=r);
+ const command=client.control('/v1/interaction',{mode:'tracking',enabled:false},'boot-a',()=>{});
+ client.info.boot_id='boot-b';release();await assert.rejects(command);assert.equal(seen.length,0);
+ client.info.boot_id='boot-a';
+ await client.control('/v1/interaction',{mode:'recognition',enabled:true},'boot-a',()=>{});
+ assert.deepEqual(seen,['/v1/interaction']);
+ await assert.rejects(client.control('/v1/interaction',{mode:'tracking',enabled:true},'boot-a',()=>{throw new Error('stale');}),/stale/);
+ assert.equal(seen.length,1);
+});
 test('controls whitelist schema, boot, freshness and permissions before writing',async()=>{
   const {m,c,calls}=fixture();
   for(const input of [{action:'shell',boot:'boot-a'}, {action:'yaw',delta_deg:40,boot:'boot-a'}, {action:'motor',enabled:'false',boot:'boot-a'}, {action:'pitch',angle_deg:10.01,boot:'boot-a'}, {action:'m12',enabled:true,extra:1,boot:'boot-a'}, {action:'m12',enabled:true,boot:'old'}]) await assert.rejects(c.execute(input));

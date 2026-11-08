@@ -36,3 +36,13 @@ test('SD voices show storage and actionable missing-file status',()=>{
  s.telemetry.playback={busy:false,state:'failed',error_stage:'asset_missing'};
  ui.render(s,true);assert.match(el('voice-count').textContent,/SD 卡/);assert.match(el('voice-status').textContent,/请安装资源/);
 });
+test('ASR next label, source and counters replace open while retaining legacy playback',()=>{
+ const {ui,s,el}=setup();s.capabilities.interaction_modes='supported';
+ s.telemetry.playback={busy:false,source:'asr_next',voice_clip_id:1,asr_next_received:4,asr_next_accepted:3,asr_next_dropped:1};
+ ui.render(s,true);assert.match(el('voice-progress').textContent,/ASR next/);assert.match(el('voice-trigger').textContent,/next/);
+ assert.match(el('voice-asr-counts').textContent,/4.*3.*1/);
+ s.capabilities.interaction_modes=undefined;s.telemetry.playback={source:'asr_open',voice_clip_id:1,asr_open_received:2,asr_open_accepted:1,asr_open_dropped:1};
+ ui.render(s,true);assert.match(el('voice-progress').textContent,/ASR open/);assert.match(el('voice-trigger').textContent,/open/);
+ assert.match(el('voice-asr-counts').textContent,/2.*1.*1/);
+ ui.render(s,false);assert.doesNotMatch(el('voice-asr-counts').textContent,/2.*1.*1/);
+});

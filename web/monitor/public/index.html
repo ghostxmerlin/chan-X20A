@@ -34,16 +34,21 @@
     <section class="panel m12-panel" id="m12-panel">
       <div class="panel-head"><h2>M12 视觉</h2><span id="m12-state" class="muted">等待状态</span><button data-open="m12-diagnostics">详情</button></div>
       <div class="m12-layout panel-body">
-        <div class="m12-visual"><div class="m12-visual-head"><span>检测框示意 · 非视频</span><span id="m12-visual-state">等待检测</span></div><canvas id="m12-faces-canvas" aria-label="M12 人脸检测框坐标示意，非摄像头原图"></canvas><p id="m12-identity" class="command-result">认人使用 M12 已登记资料。</p></div>
+        <div class="m12-visual"><div class="m12-visual-head"><span>检测框示意 · 非视频</span><span id="m12-visual-state">等待检测</span></div><canvas id="m12-faces-canvas" aria-label="M12 人脸检测框坐标示意，非摄像头原图"></canvas><p id="m12-identity" class="command-result">认人使用 M12 已登记资料。</p>
+          <div class="control-buttons m12-manual"><button id="m12-start" disabled>手动检测</button><button id="m12-recognize" disabled>手动认人</button><button id="m12-stop" class="stop-button" disabled>待机</button></div>
+          <p id="m12-command" class="command-result" role="status" title="手动视觉预览独立于后台模式；手动切换会退出自动追踪与认人对话。turn on / off 保留手动视觉切换。">手动预览 · 切换会退出自动模式</p>
+        </div>
         <div class="m12-details">
           <div class="m12-readings">
             <div><span>芯片温度</span><strong id="m12-temperature">—</strong></div><div><span id="m12-rate-label">检测更新率</span><strong id="m12-fps">—</strong></div><div><span>人脸</span><strong id="m12-count">—</strong></div>
           </div>
-          <p id="m12-temperature-note" class="note">等待 M12 网络数据</p><p id="m12-confidence" class="note">等待检测结果</p>
-          <dl class="metrics"><div><dt>网络</dt><dd id="m12-network">等待连接</dd></div><div><dt>工作进程</dt><dd id="m12-process">—</dd></div></dl>
-          <div class="control-buttons"><button id="m12-start" disabled>检测</button><button id="m12-recognize" disabled>认人</button><button id="m12-stop" class="stop-button" disabled>待机</button></div>
-          <p id="m12-command" class="command-result" role="status">手动切换 · turn on / off</p>
-
+          <div class="m12-quality"><p id="m12-temperature-note" class="note">等待 M12 网络数据</p><p id="m12-confidence" class="note">等待检测结果</p></div>
+          <div class="interaction-modes" aria-label="后台交互模式">
+            <div class="interaction-row"><button id="interaction-tracking" aria-pressed="false" disabled>开启追踪</button><div><span id="tracking-state" role="status">等待模式状态</span><small id="tracking-detail">锚点 / 目标：—</small></div></div>
+            <div class="interaction-row"><button id="interaction-recognition" aria-pressed="false" disabled>开启认人对话</button><div><span id="recognition-state" role="status">等待模式状态</span><small id="recognition-detail">身份 / 听觉：—</small></div></div>
+            <div class="interaction-row"><button id="interaction-advanced" aria-pressed="false" disabled>开启高级预留</button><div><span id="advanced-state" role="status">高级语音尚未实现</span><small id="advanced-detail">预留意图关闭</small></div></div>
+          </div>
+          <p id="interaction-command" class="command-result" role="status">后台运行 · 仅明确操作后启用</p>
         </div>
       </div>
     </section>
@@ -52,15 +57,15 @@
       <div class="panel-body">
         <div class="angle-row"><div><span>左右实测</span><strong id="yaw">—</strong></div><div><span>俯仰实测</span><strong id="pitch">—</strong></div></div>
         <div class="control-buttons"><button id="yaw-left" disabled>← 左转 5°</button><button id="yaw-right" disabled>右转 5° →</button><button id="motor-enable" disabled>启用舵机</button><button id="motor-disable" class="stop-button" disabled>停用舵机</button></div>
-        <p id="remote-pitch-note" class="control-note">等待遥控上下状态。</p><p id="controls-note" class="control-note">等待有效状态</p><p class="control-note">左右动作：<span id="yaw-command-state">—</span></p><p id="servo-command" class="command-result" role="status">目标与实测分别显示。</p>
+        <p id="remote-pitch-note" data-detail-title class="control-note">等待遥控上下状态。</p><p id="controls-note" class="control-note">等待有效状态</p><p class="control-note">左右动作：<span id="yaw-command-state">—</span></p><p id="servo-command" class="command-result" role="status">目标与实测分别显示。</p>
       </div>
     </section>
     <section class="panel voice-panel" aria-labelledby="voice-heading">
       <div class="panel-head"><h2 id="voice-heading">随机台词</h2><span id="voice-count" class="muted">等待台词库</span></div>
       <div class="panel-body">
-        <div class="inline-status"><span id="voice-status">等待连接</span><span class="muted">ASR open · +800ms</span></div><p id="voice-current" class="voice-current">尚未播放台词</p><p id="voice-progress" class="note">网页点播或说 open，每次播放一条</p>
+        <div class="inline-status"><span id="voice-status">等待连接</span><span id="voice-trigger" class="muted">等待 ASR 能力</span></div><p id="voice-current" class="voice-current">尚未播放台词</p><p id="voice-progress" class="note">网页点播，每次播放一条</p>
         <label class="sr-only" for="voice-select">选择台词</label><select id="voice-select" disabled aria-label="选择本体播放的台词"></select>
-        <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div><p id="voice-command" class="command-result" role="status">由 StackChan 本体发声。</p>
+        <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div><p id="voice-asr-counts" data-detail-title class="note">ASR 计数：—</p><p id="voice-command" class="command-result" role="status">由 StackChan 本体发声。</p>
       </div>
     </section>
     <section class="panel eyes-panel" aria-labelledby="eyes-heading">
@@ -90,7 +95,7 @@
     </section>
     <section class="panel asr-panel" id="asr-panel">
       <div class="panel-head"><h2>ASR 指令</h2><span id="asr-state" class="muted">—</span></div>
-      <div class="panel-body"><dl class="metrics"><div><dt>最近</dt><dd id="asr-last">—</dd></div></dl><ol id="asr-events" class="asr-events"><li>尚无指令</li></ol><p class="note">open 台词 · start / stop 听觉<br>turn on / off 人脸检测</p></div>
+      <div class="panel-body"><dl class="metrics"><div><dt>最近</dt><dd id="asr-last">—</dd></div></dl><ol id="asr-events" class="asr-events"><li>尚无指令</li></ol><p id="asr-mode-note" data-detail-title class="note">等待当前固件的指令映射</p></div>
     </section>
     <section class="panel events-panel">
       <div class="panel-head"><h2>事件记录</h2><span id="event-count" class="muted">0 条</span></div><ol id="events"><li class="muted">等待连接事件</li></ol><div class="panel-foot">连接 / ASR / 状态变化 · 完整日志在 USB</div>
@@ -110,7 +115,7 @@
   <p class="note">对着机身麦克风自然说五句话，每句 1–12 秒，句间停顿。录入时暂停情绪回应，结束恢复原监听状态；120 秒未完成会取消。进度在连续听觉面板显示。</p>
   <p class="note">回应所有人，声纹只显示身份。后端情绪标签选择相近台词与眼睛；平静或未确定时不回应。自身播放声音不参与触发，回应至少间隔 10 秒。</p>
 </dialog>
-<dialog id="servo-settings" aria-labelledby="servo-heading"><div class="dialog-head"><h2 id="servo-heading">舵机反馈 / 仰角设置</h2><form method="dialog"><button>关闭</button></form></div><dl class="metrics"><div><dt>保存仰角</dt><dd id="pitch-saved">—</dd></div><div><dt>启动姿态</dt><dd id="startup-pose">—</dd></div></dl><p>俯仰实测：<strong data-mirror="pitch">—</strong> · <span data-mirror="motor-status">—</span></p><p data-mirror="servo-command" role="status">目标与实测分别显示。</p><label for="pitch-input">仰角设置（5–85°）</label><div class="pitch-controls"><input id="pitch-input" type="number" min="5" max="85" step="0.1" inputmode="decimal" disabled><button id="pitch-apply" disabled>保存并应用</button></div><p class="note">此操作立即尝试调整，并保存为下次开机角度。遥控上下仍按设备设置屏蔽。</p><p class="control-note">仰角动作：<span id="pitch-command-state">—</span></p></dialog>
-<dialog id="m12-diagnostics" aria-labelledby="m12-heading"><div class="dialog-head"><h2 id="m12-heading">M12 诊断</h2><form method="dialog"><button>关闭</button></form></div><dl class="metrics"><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近视觉结果</dt><dd id="m12-result-age">—</dd></div><div><dt>检测 / 识别 / 异常</dt><dd id="m12-counters">—</dd></div></dl><div id="m12-face-details" class="face-details"></div><p class="note">坐标框来自 M12 检测结果，非原始视频。更新率为当前模式的结果/秒，按 5 秒窗口计算；待机、切换或过期时清空检测框。</p></dialog>
+<dialog id="servo-settings" aria-labelledby="servo-heading"><div class="dialog-head"><h2 id="servo-heading">舵机反馈 / 仰角设置</h2><form method="dialog"><button>关闭</button></form></div><dl class="metrics"><div><dt>保存仰角</dt><dd id="pitch-saved">—</dd></div><div><dt>启动姿态</dt><dd id="startup-pose">—</dd></div></dl><p>俯仰实测：<strong data-mirror="pitch">—</strong> · <span data-mirror="motor-status">—</span></p><p data-mirror="servo-command" role="status">目标与实测分别显示。</p><label for="pitch-input">仰角设置（5–85°）</label><div class="pitch-controls"><input id="pitch-input" type="number" min="5" max="85" step="0.1" inputmode="decimal" disabled><button id="pitch-apply" disabled>保存并应用</button></div><p class="note">此操作立即尝试调整，并保存为下次开机角度。新模式固件的实体遥控四向只切换功能；网页调角会退出追踪。</p><p class="control-note">仰角动作：<span id="pitch-command-state">—</span></p></dialog>
+<dialog id="m12-diagnostics" aria-labelledby="m12-heading"><div class="dialog-head"><h2 id="m12-heading">M12 诊断 / 交互模式</h2><form method="dialog"><button>关闭</button></form></div><dl class="metrics"><div><dt>网络</dt><dd id="m12-network">等待连接</dd></div><div><dt>工作进程</dt><dd id="m12-process">—</dd></div><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近视觉结果</dt><dd id="m12-result-age">—</dd></div><div><dt>检测 / 识别 / 异常</dt><dd id="m12-counters">—</dd></div></dl><div id="m12-face-details" class="face-details"></div><p class="note">坐标框来自 M12 检测结果，非原始视频。更新率为当前模式的结果/秒，按 5 秒窗口计算；待机、切换或过期时清空检测框。</p><p class="note">追踪只水平运动，以本次有效实测角度为锚点 ±10°，单步 ≤1°。锚点和目标不代表实测到位；丢脸停止输出，不搜索、不回中。保护故障需关闭追踪后重开。</p><p class="note">任意已登记人脸视为主人，确认后启动现有听觉与情绪回应；手动 stop 后不自动重开。关闭认人只结束它自己仍持有的听觉意图。高级语音为预留，真正问答尚未实现。</p><p class="note">遥控摇杆左切追踪、右切认人对话、上切连续听觉、下切高级预留；松回中位后再拨动，中心开关屏幕。当前协议不能区分摇杆与体感页，请使用摇杆页。</p></dialog>
 </body>
 </html>

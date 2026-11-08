@@ -32,6 +32,12 @@ export class VoicePanel {
     this.el('voice-count').textContent=supported?`${clips.length} 条 · ${state?.voiceLibrary?.storage==='sd'?'SD 卡播放':'本体播放'}`:'等待新固件';
     this.el('voice-status').textContent=!fresh?'连接或状态已过期':!supported?'当前固件未安装台词库':p.state==='failed'&&['asset_missing','asset_invalid','storage_unavailable'].includes(p.error_stage)?'SD 语音缺失、损坏或卡不可用，请安装资源':stages[p.state]||'等待播放';
     this.el('voice-current').textContent=!fresh?'—':p.voice_text?`${p.voice_text} · ${p.voice_title||''}`:p.busy?'其他音频':'尚未播放台词';
-    this.el('voice-progress').textContent=fresh && p.voice_clip_id?`${p.source==='asr_open'?'ASR open':p.source==='hearing_emotion'?'听觉情绪':'网页'} · ${(Number(p.submitted_bytes||0)/48000).toFixed(1)} / ${(Number(p.expected_bytes||0)/48000).toFixed(1)} 秒${p.error?' · 播放失败，请重试':''}`:'网页点播或说 open，每次播放一条';
+    const trigger=state?.capabilities?.interaction_modes==='supported'||Object.hasOwn(p,'asr_next_received')?'next':'open';
+    const source={asr_next:'ASR next',asr_open:'ASR open',hearing_emotion:'听觉情绪'}[p.source]||'网页';
+    this.el('voice-trigger').textContent=`ASR ${trigger} · +800ms`;
+    this.el('voice-progress').textContent=fresh && p.voice_clip_id?`${source} · ${(Number(p.submitted_bytes||0)/48000).toFixed(1)} / ${(Number(p.expected_bytes||0)/48000).toFixed(1)} 秒${p.error?' · 播放失败，请重试':''}`:`网页点播或说 ${trigger}，每次播放一条`;
+    const counts=['received','accepted','dropped'].map(key=>Number.isInteger(p[`asr_${trigger}_${key}`])?p[`asr_${trigger}_${key}`]:'—');
+    this.el('voice-asr-counts').textContent=fresh?`${trigger} 收到 / 接收 / 丢弃：${counts.join(' / ')}`:'ASR 计数：—';
+    this.el('voice-asr-counts').title='本次开机累计：收到指令 / 接收播放 / 忙碌或冷却时丢弃。接收计数不证明实际声音播放成功。';
   }
 }

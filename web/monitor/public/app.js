@@ -1,4 +1,4 @@
-import { ControlPanel } from '/control-ui.js';
+import { ControlPanel, InteractionPanel } from '/control-ui.js';
 import { VoicePanel } from '/voice-ui.js';
 import { EyesPanel } from '/eyes-ui.js';
 import { HearingPanel } from '/hearing-ui.js';
@@ -10,6 +10,7 @@ const bool = (v, yes, no) => v === true ? yes : v === false ? no : '—';
 const duration = seconds => { const s = Math.max(0, Math.floor(seconds || 0)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 60)}m ${s % 60}s`; };
 const age = (t, stamp) => stamp > 0 && t >= stamp ? `${duration((t - stamp) / 1e6)} 前` : '尚无数据';
 const controls = new ControlPanel(document);
+const interaction = new InteractionPanel(document);
 const voices = new VoicePanel(document);
 const eyes = new EyesPanel(document);
 const hearing = new HearingPanel(document);
@@ -20,7 +21,7 @@ for (const button of document.querySelectorAll('[data-open]')) {
 const tooltipObserver = new MutationObserver(records => {
   for (const record of records) {
     const el = record.target.nodeType === Node.TEXT_NODE ? record.target.parentElement : record.target;
-    if (el.matches('.panel p, .panel dd, .panel-head > span, .identity-row p')) el.title = el.textContent;
+    if (el.matches('.panel p, .panel dd, .panel-head > span, .identity-row p') && !el.hasAttribute('data-detail-title')) el.title = el.textContent;
   }
 });
 tooltipObserver.observe(document.querySelector('.dashboard'), { subtree: true, childList: true, characterData: true });
@@ -137,6 +138,7 @@ function render() {
   const last = t.asr?.events?.at(-1);
   text('asr-last', last ? `${last.word || last.id} · ${age(t.timestamp_us, last.timestamp_us)}` : '尚无指令');
   controls.render(state, fresh && !document.hidden);
+  interaction.render(state, fresh && !document.hidden);
   voices.render(state, fresh && !document.hidden);
   eyes.render(state, fresh && !document.hidden);
   hearing.render(state, fresh && !document.hidden);

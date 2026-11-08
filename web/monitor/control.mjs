@@ -1,7 +1,7 @@
 import {hearingBody} from './hearing.mjs';
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
-const fields = {voice:['clip_id'],m12_mode:['mode'],m12:['enabled'],motor:['enabled'],yaw:['delta_deg'],pitch:['angle_deg']};
-const routes = {voice:'/v1/voice/play',m12_mode:'/v1/m12/mode',m12:'/v1/m12/view',motor:'/v1/remote',yaw:'/v1/motion/yaw-step',pitch:'/v1/settings/pitch'};
+const fields = {interaction:['mode','enabled'],voice:['clip_id'],m12_mode:['mode'],m12:['enabled'],motor:['enabled'],yaw:['delta_deg'],pitch:['angle_deg']};
+const routes = {interaction:'/v1/interaction',voice:'/v1/voice/play',m12_mode:'/v1/m12/mode',m12:'/v1/m12/view',motor:'/v1/remote',yaw:'/v1/motion/yaw-step',pitch:'/v1/settings/pitch'};
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
 Object.assign(routes,{eyes_configure:'/v1/eyes',eyes_play:'/v1/eyes',eyes_stop:'/v1/eyes'});
 Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[]});
@@ -12,7 +12,8 @@ export class Controls {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(fields,input.action)) fail(400,'未知控制操作');
     const keys=['action','boot',...fields[input.action]];
     if (Object.keys(input).length !== keys.length || !keys.every(k=>Object.hasOwn(input,k))) fail(400,'控制参数无效');
-    if (['m12','motor'].includes(input.action) && typeof input.enabled !== 'boolean') fail(400,'启用状态必须是布尔值');
+    if (['interaction','m12','motor'].includes(input.action) && typeof input.enabled !== 'boolean') fail(400,'启用状态必须是布尔值');
+    if (input.action==='interaction' && !['tracking','recognition','advanced'].includes(input.mode)) fail(400,'未知交互模式');
     if (input.action==='m12_mode' && !['standby','face_detector','face_recognition'].includes(input.mode)) fail(400,'未知 M12 模式');
     if (input.action==='yaw' && ![-5,5].includes(input.delta_deg)) fail(400,'左右每次只调整 5°');
     if (input.action==='pitch' && (typeof input.angle_deg!=='number' || !Number.isFinite(input.angle_deg) || input.angle_deg<5 || input.angle_deg>85 || Math.abs(input.angle_deg*10-Math.round(input.angle_deg*10))>1e-7)) fail(400,'仰角须为 5–85°，步长 0.1°');
@@ -35,6 +36,12 @@ export class Controls {
     }
     if (input.action==='m12_mode' && m.info?.capabilities?.m12_recognition!=='supported') fail(409,'当前固件尚未支持手动认人');
     const t=s.telemetry,motor=t.remote?.motor,pitch=t.pitch_setting;
+    if (input.action==='interaction') {
+      if(m.info?.capabilities?.interaction_modes!=='supported') fail(409,'当前固件尚未支持交互模式');
+      if(input.mode==='tracking' && m.info?.capabilities?.face_tracking!=='supported') fail(409,'当前固件尚未支持人脸追踪');
+      if(input.enabled && ['tracking','recognition'].includes(input.mode) && !t.m12?.valid) fail(409,'M12 串口尚未就绪');
+      if(input.enabled && input.mode==='tracking' && (!motor?.enabled || !motor?.requested)) fail(409,'请先启用舵机');
+    }
     if (input.action==='voice' && (m.info?.capabilities?.voice_library!=='supported' || !t.health?.audio_ready || !t.playback || t.playback.busy)) fail(409,'等待语音就绪和当前播放结束');
     if (((input.action==='m12' && input.enabled) || (input.action==='m12_mode' && input.mode!=='standby')) && !t.m12?.valid) fail(409,'M12 串口尚未就绪');
     if (['yaw','pitch'].includes(input.action) && (!motor?.enabled || !motor?.requested)) fail(409,'请先启用舵机');
@@ -50,7 +57,7 @@ export class Controls {
       const result=await this.monitor.client.control(routes[input.action],body,input.boot,()=>this.validate(input));
       if(result.accepted!==true) fail(502,'设备没有确认接收请求');
       this.monitor.event('control',`网页 ${input.action} 请求已接收，执行状态以遥测为准`);
-      return {...result,message:input.action==='pitch'?'仰角已保存并排队，执行状态见下方':'设备已接收请求，执行状态见下方'};
+      return {...result,message:input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':'设备已接收请求，执行状态见下方'};
     } catch(error) {
       const known=error.status>=400 && error.status<500;
       const message=known ? (error.status===409?'设备拒绝本次操作，请检查最新状态':error.message) : '请求结果未确认；请查看实时状态，本次不会自动重发';

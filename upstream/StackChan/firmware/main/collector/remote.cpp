@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 #include "remote.h"
 #include "remote_protocol.h"
-#include "remote_actuation.h"
+#include "remote_modes.h"
+#include "face_tracking.h"
+#include "m12_unit.h"
 #include "startup_pose.h"
 #include "remote_stop.h"
 #include "pitch_setting.h"
@@ -50,13 +52,14 @@ uint32_t sequence = 0, rejected = 0, wrong_target = 0;
 std::array<uint8_t, 8> rejected_payload{};
 size_t rejected_size = 0;
 int64_t rejected_timestamp = 0;
-int64_t feedback_timestamp = 0;
+int64_t feedback_timestamp = 0, yaw_feedback_timestamp = 0;
 // Collector is also the remote receiver app: it does not need an Android lease.
 bool control_requested = true;
 RemoteStopLatch stop_latch;
 ManualYaw manual_yaw;
+FaceTracking tracking;
+RemoteModeInput mode_input;
 std::atomic_bool web_yaw_active{false};
-uint32_t arm_after_seq = 0, applied_seq = 0;
 std::atomic_bool ready{false}, motor_ready{false}, enabled{false};
 stackchan::motion::ServoFeedback yaw_feedback, pitch_feedback;
 stackchan::motion::ServoDiagnostics yaw_diagnostics, pitch_diagnostics;
@@ -64,8 +67,6 @@ stackchan::motion::ServoDeadbandSnapshot yaw_deadband, pitch_deadband;
 int64_t diagnostics_timestamp = 0;
 bool yaw_trajectory_complete = false, pitch_trajectory_complete = false;
 bool yaw_command_started = false;
-int applied_yaw = 0, applied_speed = 0, applied_pitch = 0;
-bool physical_pitch_active = false;
 const char* motor_state = "starting";
 const char* startup_state = "waiting_feedback";
 
@@ -109,11 +110,6 @@ esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t
         return ESP_OK;
     }
     if (!remote_for_receiver(command, kReceiver)) { ++wrong_target; return ESP_OK; }
-    const auto old_target = remote_yaw_target(history[sequence % kHistory].command);
-    const auto new_target = remote_yaw_target(command);
-    if (!command.center_v1 || old_target.yaw != new_target.yaw || old_target.speed != new_target.speed) {
-        manual_yaw.cancel(); web_yaw_active = false;
-    }
     Packet packet;
     packet.command = command;
     packet.seq = ++sequence;
@@ -124,19 +120,19 @@ esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t
     history[sequence % kHistory] = packet;
     // Screen input is consumed here, independently of motor_task and feedback.
     center_input.accept(command, packet.source, packet.timestamp);
+    // Events only: no axis writes, mode changes or network work on ESP-NOW RX.
+    mode_input.accept(command, packet.source, packet.timestamp);
     return ESP_OK;
 }
 
 void motor_task(void*)
 {
-    // Boot pitch is one-shot; a new physical vertical input may supersede it.
-    // The official remote works independently of the observer connection.
+    // Boot pitch remains one-shot. Physical directions only emit mode events;
+    // neither enable/disable tracking nor remote heartbeats restart this pose.
     bool was_enabled = false;
     int64_t last_feedback = 0;
     bool yaw_deadband_attempted = false, pitch_deadband_attempted = false;
     StartupPose startup;
-    RemotePitchControl pitch_control;
-    uint32_t pitch_seen_seq = 0;
     PitchSettingRequest pitch_request;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -146,17 +142,13 @@ void motor_task(void*)
     TickType_t wake = xTaskGetTickCount();
     while (true) {
         const int64_t now = esp_timer_get_time();
-        Packet packet;
         bool active;
         bool stop_pending = false;
         bool pitch_cancelled = false;
         PitchSettingRequest latest_pitch;
-        uint32_t after;
         {
             std::lock_guard<std::mutex> lock(mutex);
-            packet = history[sequence % kHistory];
             active = control_requested;
-            after = arm_after_seq;
         }
         if (!motor_ready) {
             if (active) {
@@ -175,9 +167,11 @@ void motor_task(void*)
         stackchan::motion::ServoFeedback sampled_yaw;
         if (now - last_feedback >= 100000) {
             const auto yaw = motion.yawServo().readFeedback();
+            const int64_t yaw_sample_us = esp_timer_get_time();
             const auto pitch = motion.pitchServo().readFeedback();
             std::lock_guard<std::mutex> lock(mutex);
             yaw_feedback = yaw; pitch_feedback = pitch;
+            yaw_feedback_timestamp = yaw_sample_us;
             feedback_timestamp = esp_timer_get_time();
             last_feedback = now;
             startup_feedback = pitch;
@@ -189,8 +183,6 @@ void motor_task(void*)
             // A stop may arrive while the UART reads are in progress.
             std::lock_guard<std::mutex> lock(mutex);
             active = control_requested;
-            after = arm_after_seq;
-            packet = history[sequence % kHistory];
             stop_pending = stop_latch.consume();
             latest_pitch = pitch_requests.current();
             pitch_cancelled = pitch_requests.cancelled(latest_pitch);
@@ -199,7 +191,6 @@ void motor_task(void*)
             apply_remote_stop(startup, motion, now);
             was_enabled = false;
             yaw_command_started = false;
-            pitch_control.release();
         }
         if (latest_pitch.sequence != pitch_request.sequence) {
             // Only a successfully committed, explicit request replaces pitch.
@@ -208,32 +199,19 @@ void motor_task(void*)
             if (pitch_request.from_boot) {
                 std::lock_guard<std::mutex> lock(mutex); startup_state = "superseded";
             }
-            pitch_control.release();
             pitch_request = latest_pitch;
             startup = StartupPose{};
             { std::lock_guard<std::mutex> lock(mutex); pitch_has_command_start = false; }
         }
-        bool physical_pitch_command = false;
-        const bool pitch_was_active = pitch_control.active();
-        if (packet.seq != pitch_seen_seq) {
-            pitch_seen_seq = packet.seq;
-            physical_pitch_command = pitch_control.accept(packet.command, active && packet.seq > after,
-                                                           packet.timestamp, pitch_request.timestamp);
-        }
-        if (physical_pitch_command) {
-            // Only this task touches the servo; preserve NVS while cancelling the pose.
-            if (!pitch_was_active) motion.pitchServo().cancelMotion();
-            startup.step(now, false, false, true);
-        }
         const auto pitch_limits = motion.pitchServo().getAngleLimit();
-        if (active && !pitch_control.active() && !pitch_cancelled && strcmp(startup.state(), "target_unavailable") != 0 &&
+        if (active && !pitch_cancelled && strcmp(startup.state(), "target_unavailable") != 0 &&
             (pitch_request.target < pitch_limits.x || pitch_request.target > pitch_limits.y)) {
             motion.pitchServo().cancelMotion();
             startup.target_unavailable();
         }
         const bool valid_start = motion.pitchServo().canStartFromFeedback(
             startup_feedback, pitch_request.target, kPitchSettingLowerMargin);
-        auto pose_action = startup.step(now, active && !pitch_cancelled && !pitch_control.active(), valid_start,
+        auto pose_action = startup.step(now, active && !pitch_cancelled, valid_start,
                                        motion.pitchServo().isTrajectoryComplete());
         if (pose_action == StartupPose::Action::Start) {
             if (motion.pitchServo().moveFromFeedbackWithSpeed(startup_feedback, pitch_request.target,
@@ -258,8 +236,8 @@ void motor_task(void*)
         }
         {
             std::lock_guard<std::mutex> lock(mutex);
-            if (pitch_request.from_boot) startup_state = pitch_control.active() ? "superseded" : startup.state();
-            if (pitch_requests.current().sequence == pitch_request.sequence) pitch_state = pitch_control.active() ? "superseded" : startup.state();
+            if (pitch_request.from_boot) startup_state = startup.state();
+            if (pitch_requests.current().sequence == pitch_request.sequence) pitch_state = startup.state();
         }
         if (!active) {
             if (was_enabled) {
@@ -270,37 +248,63 @@ void motor_task(void*)
             { std::lock_guard<std::mutex> lock(mutex); motor_state = "disarmed"; }
         } else {
             enabled = true;
-            if (physical_pitch_command) {
-                const auto target = apply_remote_pitch(motion.pitchServo(), packet.command, !pitch_was_active, pitch_request.target);
+            // The M12 snapshot is passive; mode requests belong to interaction.
+            const auto camera = m12_snapshot();
+            {
                 std::lock_guard<std::mutex> lock(mutex);
-                applied_pitch = target.pitch;
-            }
-            // Do not replay any packet received before the user enabled control.
-            if (packet.seq > after && packet.seq != applied_seq) {
-                // Sync to the physical pose for a new control session, then retain the
-                // official spring velocity across subsequent remote packets.
-                const auto target = remote_yaw_target(packet.command);
-                // Center-v1 heartbeats refresh link/press observation, but must
-                // not wake an unchanged yaw target or delay torque release.
-                if (!packet.command.center_v1 || applied_seq <= after ||
-                    target.yaw != applied_yaw || target.speed != applied_speed) {
-                    apply_remote_yaw(motion.yawServo(), packet.command, applied_seq <= after);
-                    yaw_command_started = true; // motor-task owned
+                TrackingInput input;
+                input.now_us = esp_timer_get_time();
+                input.control_enabled = control_requested;
+                input.feedback_valid = yaw_feedback.valid;
+                input.feedback_us = yaw_feedback_timestamp;
+                input.measured = yaw_feedback.angle;
+                const auto limits = motion.yawServo().getAngleLimit();
+                input.lower = limits.x; input.upper = limits.y;
+                input.settled = manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete());
+                input.mode = static_cast<int>(camera.function);
+                input.mode_revision = m12_mode_request();
+                input.applied_mode_revision = camera.mode_request_revision;
+                input.requested_mode = static_cast<int>(m12_requested_function(input.mode_revision));
+                input.mode_requested_us = camera.requested_us;
+                input.frame_seq = camera.frame_seq; input.frame_us = camera.frame_us;
+                input.frame_mode = camera.frame_recognition ? 2 : 1;
+                if (camera.valid) {
+                    int largest = -1;
+                    for (size_t i = 0; i < camera.count; ++i) {
+                        const auto& face = camera.faces[i];
+                        const int area = face.w * face.h;
+                        if (area <= largest) continue;
+                        largest = area;
+                        input.x = face.x; input.y = face.y; input.w = face.w; input.h = face.h;
+                    }
+                    input.face_count = camera.count;
                 }
-                std::lock_guard<std::mutex> lock(mutex);
-                applied_seq = packet.seq;
-                applied_yaw = target.yaw; applied_speed = target.speed;
-                motor_state = "following";
+                const auto action = tracking.step(input);
+                if (action == FaceTracking::Action::Cancel) {
+                    // cancelMotion removes torque; it is not a physical hold.
+                    motion.yawServo().cancelMotion();
+                    yaw_command_started = false;
+                } else if (action == FaceTracking::Action::Move) {
+                    if (apply_tracking_move(motion.yawServo(), yaw_feedback, tracking.target())) {
+                        yaw_command_started = true;
+                        web_yaw_active = false;
+                    } else {
+                        motion.yawServo().cancelMotion();
+                        yaw_command_started = false;
+                        tracking.command_rejected(input);
+                    }
+                }
             }
-            // Match factory remote control: finish the spring trajectory even
-            // when a held joystick sends no new packet. Servo::update retains
-            // the factory automatic torque release when the motion has settled.
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 // Recheck stop after feedback reads; do not move from HTTP or a second UART owner.
+                if (tracking.take_cancel()) {
+                    motion.yawServo().cancelMotion();
+                    yaw_command_started = false;
+                }
                 if (control_requested && manual_yaw.take(esp_timer_get_time(), manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()))) {
-                    const bool fresh = yaw_feedback.valid && feedback_timestamp > 0 &&
-                        esp_timer_get_time() - feedback_timestamp < 1000000;
+                    const bool fresh = yaw_feedback.valid && yaw_feedback_timestamp > 0 &&
+                        esp_timer_get_time() - yaw_feedback_timestamp < 1000000;
                     const auto limits = motion.yawServo().getAngleLimit();
                     const bool accepted = fresh && manual_yaw.target >= limits.x && manual_yaw.target <= limits.y &&
                         motion.yawServo().moveFromFeedbackWithSpeed(yaw_feedback, manual_yaw.target, 100);
@@ -308,14 +312,20 @@ void motor_task(void*)
                     if (accepted) yaw_command_started = true;
                 }
             }
-            if (applied_seq > after || web_yaw_active) motion.yawServo().update();
-            else {
+            {
+                // Serialize explicit stop with the final update, not only with
+                // admission. No stale tracking action can write after stop wins.
                 std::lock_guard<std::mutex> lock(mutex);
-                motor_state = strcmp(startup.state(), "moving") == 0 ?
-                    (pitch_request.from_boot ? "startup_pose" : "pitch_setting") : "waiting_for_input";
+                if (control_requested && (tracking.active() || web_yaw_active)) {
+                    motion.yawServo().update();
+                    motor_state = tracking.active() ? "tracking" : "web_yaw";
+                } else {
+                    motor_state = strcmp(startup.state(), "moving") == 0 ?
+                        (pitch_request.from_boot ? "startup_pose" : "pitch_setting") : "waiting_for_input";
+                }
             }
             // Retain spring updates and factory torque release for either owner.
-            if (pitch_control.active() || pose_action == StartupPose::Action::Start || pose_action == StartupPose::Action::Update)
+            if (pose_action == StartupPose::Action::Start || pose_action == StartupPose::Action::Update)
                 motion.pitchServo().update();
         }
         // One read-only configuration probe per axis, after boot has settled and
@@ -344,7 +354,6 @@ void motor_task(void*)
             yaw_trajectory_complete = manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete());
             if (yaw_trajectory_complete) manual_yaw.complete();
             pitch_trajectory_complete = motion.pitchServo().isTrajectoryComplete();
-            physical_pitch_active = active && pitch_control.active();
             diagnostics_timestamp = esp_timer_get_time();
         }
         was_enabled = active;
@@ -508,20 +517,61 @@ bool remote_arm(bool active)
     std::lock_guard<std::mutex> storage_lock(pitch_storage_mutex);
     std::lock_guard<std::mutex> lock(mutex);
     if (active && !ready) return false;
-    if (active && !control_requested) arm_after_seq = sequence;
-    if (!active) { stop_latch.request(); pitch_requests.stop(); manual_yaw.cancel(); web_yaw_active = false; }
+    if (!active) { stop_latch.request(); pitch_requests.stop(); manual_yaw.cancel(); web_yaw_active = false;
+        tracking.request(false, esp_timer_get_time()); }
     control_requested = active;
     return true;
 }
 bool remote_enabled() { return enabled; }
+esp_err_t remote_set_tracking(bool active)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (active && (!control_requested || !motor_ready || manual_yaw.pending || manual_yaw.state == ManualYaw::moving))
+        return ESP_ERR_INVALID_STATE;
+    tracking.request(active, esp_timer_get_time());
+    return ESP_OK;
+}
+bool remote_tracking_requested()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return tracking.requested();
+}
+void remote_tracking_json(ArduinoJson::JsonObject target)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    target["requested"] = tracking.requested();
+    target["active"] = tracking.active();
+    target["state"] = tracking.state();
+    target["fault_latched"] = tracking.faulted();
+    target["range_deg"] = FaceTracking::kRange / 10.0f;
+    target["max_step_deg"] = FaceTracking::kMaxStep / 10.0f;
+    target["min_interval_ms"] = FaceTracking::kIntervalUs / 1000;
+    target["max_command_speed_deg_s"] = 5;
+    target["no_progress_timeout_ms"] = FaceTracking::kProgressTimeoutUs / 1000;
+    target["no_progress_time_basis"] = "cumulative_active_command_time";
+    target["min_progress_deg"] = FaceTracking::kProgressQuantum / 10.0f;
+    target["speed_semantics"] = "bounded_command_model_not_measured_physical_speed";
+    target["cancel_semantics"] = "torque_release_not_position_hold";
+    target["command_count"] = tracking.commands();
+    target["cancel_count"] = tracking.cancels();
+    target["frame_count"] = tracking.frames();
+    if (tracking.has_anchor()) {
+        target["anchor_deg"] = tracking.anchor() / 10.0f;
+        target["target_deg"] = tracking.target() / 10.0f;
+    } else {
+        target["anchor_deg"] = nullptr; target["target_deg"] = nullptr;
+    }
+}
 esp_err_t remote_step_yaw(int delta_tenths, uint32_t* request_seq)
 {
     if (delta_tenths != -50 && delta_tenths != 50) return ESP_ERR_INVALID_ARG;
     std::lock_guard<std::mutex> lock(mutex);
-    if ((sequence > arm_after_seq && sequence != applied_seq) ||
-        !manual_yaw.submit(delta_tenths, control_requested && enabled && motor_ready,
-            yaw_feedback.valid, yaw_trajectory_complete, yaw_feedback.angle,
-            feedback_timestamp, esp_timer_get_time())) return ESP_ERR_INVALID_STATE;
+    // Manual yaw may take over an in-flight tracking command; motor_task first
+    // consumes tracking's cancellation and then starts this measured ±5° step.
+    if (!manual_yaw.submit(delta_tenths, control_requested && enabled && motor_ready,
+            yaw_feedback.valid, tracking.active() || yaw_trajectory_complete, yaw_feedback.angle,
+            yaw_feedback_timestamp, esp_timer_get_time())) return ESP_ERR_INVALID_STATE;
+    tracking.request(false, esp_timer_get_time(), "manual_override");
     if (request_seq) *request_seq = manual_yaw.sequence;
     return ESP_OK;
 }
@@ -556,6 +606,7 @@ esp_err_t remote_set_pitch(int angle_tenths, uint32_t* request_seq)
     pitch_configured = angle_tenths;
     pitch_persisted = true;
     const uint32_t accepted = pitch_requests.submit_committed(angle_tenths, esp_timer_get_time());
+    tracking.request(false, esp_timer_get_time(), "manual_override");
     pitch_state = "queued";
     pitch_has_command_start = false;
     if (request_seq) *request_seq = accepted;
@@ -604,6 +655,10 @@ RemoteSnapshot remote_snapshot()
     result.display_requested = center_input.display_requested();
     result.center_event_seq = center_input.event_sequence();
     result.center_event_timestamp_us = center_input.event_timestamp();
+    result.mode_left_seq = mode_input.left_sequence();
+    result.mode_right_seq = mode_input.right_sequence();
+    result.mode_up_seq = mode_input.up_sequence();
+    result.mode_down_seq = mode_input.down_sequence();
     result.yaw_valid = yaw_feedback.valid; result.pitch_valid = pitch_feedback.valid;
     if (yaw_feedback.valid) result.yaw_angle_deg = yaw_feedback.angle / 10.0f;
     if (pitch_feedback.valid) result.pitch_angle_deg = pitch_feedback.angle / 10.0f;
@@ -615,7 +670,7 @@ const char* remote_display_state()
     std::lock_guard<std::mutex> lock(mutex);
     if (!control_requested) return "OFF";
     if (!motor_ready) return "WAIT";
-    return applied_seq > arm_after_seq ? "ON" : "READY";
+    return enabled ? "ON" : "READY";
 }
 void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_history, bool include_servo_diagnostics)
 {
@@ -650,13 +705,19 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     target["auxiliary_output_enabled"] = false;
     target["feedback_required_for_control"] = false;
     target["control_mode"] = "standalone";
-    target["yaw_control_enabled"] = true;
-    target["yaw_input_to_target_sign"] = -1;
-    target["pitch_control_enabled"] = kRemotePitchControlEnabled;
-    target["pitch_input_role"] = "disabled";
-    target["pitch_mapping"] = "center_v1_saved_neutral_legacy_absolute";
-    target["pitch_neutral_input_deg"] = kRemotePitchCenter / 10.0f;
+    target["yaw_control_enabled"] = false;
+    target["yaw_input_to_target_sign"] = nullptr;
+    target["yaw_input_role"] = "mode_toggle";
+    target["pitch_control_enabled"] = false;
+    target["pitch_input_role"] = "mode_toggle";
+    target["pitch_mapping"] = "none";
+    target["pitch_neutral_input_deg"] = 47.1f;
     target["pitch_neutral_target_deg"] = pitch_configured / 10.0f;
+    target["mode_left_seq"] = mode_input.left_sequence();
+    target["mode_right_seq"] = mode_input.right_sequence();
+    target["mode_up_seq"] = mode_input.up_sequence();
+    target["mode_down_seq"] = mode_input.down_sequence();
+    target["direction_input_role"] = "mode_toggle_joystick_page";
     target["auxiliary_input_role"] = "record_only";
     target["center_input_role"] = "display_toggle";
     target["nod_trigger"] = "none";
@@ -693,11 +754,12 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     motor["state"] = motor_state;
     motor["timestamp_us"] = feedback_timestamp;
     motor["feedback_age_ms"] = feedback_timestamp ? (esp_timer_get_time() - feedback_timestamp) / 1000 : -1;
-    motor["applied_seq"] = applied_seq;
-    if (applied_seq) { motor["yaw_target_deg"] = applied_yaw / 10.0f; motor["applied_speed"] = applied_speed; }
-    if (physical_pitch_active) motor["pitch_target_deg"] = applied_pitch / 10.0f;
-    else motor["pitch_target_deg"] = nullptr;
-    motor["pitch_owner"] = physical_pitch_active ? "remote" : "setting";
+    // Legacy packet application fields are intentionally zero/null: receiving
+    // a mode event does not mean an actuator command has been applied.
+    motor["applied_seq"] = 0;
+    motor["yaw_target_deg"] = nullptr; motor["applied_speed"] = nullptr;
+    motor["pitch_target_deg"] = nullptr;
+    motor["pitch_owner"] = "setting";
     motor["pitch_motion_profile"] = kPitchMotionProfile;
     motor["speed_limit"] = kRemoteSpeedLimit;
     motor["startup_pitch_target_deg"] = boot_pitch_target / 10.0f;

@@ -45,6 +45,57 @@ export class ControlPanel {
     this.el('yaw-command-state').textContent=fresh ? names[m.web_yaw?.state] || m.web_yaw?.state || '尚无网页动作' : '—';
     const pitchState=p.state==='feedback_unavailable' && p.feedback_valid && Number.isFinite(p.measured_deg) ? `反馈角度 ${p.measured_deg.toFixed(1)}°，未能启动调整` : names[p.state] || p.state || '—';
     this.el('pitch-command-state').textContent=fresh ? pitchState : '—';
-    this.el('remote-pitch-note').textContent=!fresh?'遥控状态已过期':t.remote?.pitch_control_enabled===false?'实体遥控上下已屏蔽，左右与中心开关屏保留。':t.remote?.pitch_control_enabled===true?'实体遥控上下仍启用，等待固件更新。':'等待遥控上下状态。';
+    const modes=state?.capabilities?.interaction_modes==='supported';
+    this.el('remote-pitch-note').textContent=!fresh?'遥控状态已过期':modes?'遥控：左追踪 · 右认人 · 上听觉 · 下预留':t.remote?.pitch_control_enabled===false?'实体遥控上下已屏蔽，左右与中心开关屏保留。':t.remote?.pitch_control_enabled===true?'实体遥控上下仍启用，等待固件更新。':'等待遥控上下状态。';
+    this.el('remote-pitch-note').title=modes?'实体遥控四向只切换模式，不直接转动舵机；使用摇杆页，松回中位后再次拨动。中心仍开关屏幕。网页左右 5° 和保存仰角仍为显式动作，并退出自动追踪。':this.el('remote-pitch-note').textContent;
+  }
+}
+
+const trackingStates={off:'已关闭',disabled:'已关闭',waiting_frame:'等待新鲜人脸',waiting_feedback:'等待反馈',recovering_feedback:'反馈恢复中',tracking:'追踪中',deadband:'中央死区，保持',at_limit:'已达追踪边界',mode_changed:'视觉模式已改变',direction_changed:'方向改变，等待新帧',face_lost:'丢脸，停止输出',frame_stale:'人脸结果过期',feedback_invalid:'反馈无效，停止输出',feedback_stale:'反馈过期，停止输出',fault_no_progress:'舵机未移动保护，请关闭后重开',frame_jump:'人脸跳变，等待稳定',fault_feedback_jump:'反馈跳变保护，请关闭后重开',fault_anchor_range:'超出锚点保护，请关闭后重开',manual_override:'手动接管，停止追踪',command_rejected:'动作被拒绝'};
+const recognitionStates={off:'已关闭',waiting_face:'等待已登记人脸',confirming:'正在确认主人',owner_confirmed:'已确认主人',external_mode:'手动视觉接管'};
+const dialogueStates={off:'听觉会话关闭',waiting_owner:'等待主人后开始听觉',listening:'听觉情绪回应中',shared_listening:'沿用手动听觉',stopped_by_user:'手动停止，等待重新开启',backend_unavailable:'听觉后端未就绪',enrolling:'声纹录入中'};
+const degrees=value=>Number.isFinite(value)?`${value.toFixed(1)}°`:'—';
+export class InteractionPanel {
+  constructor(doc,send=async body=>{
+    const response=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(7000)});
+    if(!response.ok)throw new Error(await response.text());return response.json();
+  }) {
+    this.doc=doc;this.send=send;this.pending=false;
+    for(const mode of ['tracking','recognition','advanced'])this.el('interaction-'+mode).addEventListener('click',()=>this.toggle(mode));
+  }
+  el(id){return this.doc.getElementById(id);}
+  label(id,text,title=text){this.el(id).textContent=text;this.el(id).title=title;}
+  async toggle(mode){
+    if(!this.ready||this.pending||this.el('interaction-'+mode).disabled)return;
+    const boot=this.state.boot,enabled=!this.state.telemetry.interaction[mode].requested;
+    this.pending=true;this.label('interaction-command','正在发送…');this.render(this.state,this.fresh);
+    try{const result=await this.send({action:'interaction',mode,enabled,boot});this.label('interaction-command',this.state?.boot===boot?result.message:'机器人已重启，请核对新状态');}
+    catch(error){this.label('interaction-command',error.name==='TimeoutError'?'结果未确认；不会自动重发':error.message||'结果未确认；不会自动重发');}
+    finally{this.pending=false;this.render(this.state,this.fresh);}
+  }
+  render(state,fresh){
+    this.state=state;this.fresh=!!fresh;
+    const supported=state?.capabilities?.interaction_modes==='supported';
+    this.ready=!!fresh&&supported&&state?.capabilities?.web_control==='supported';
+    const t=state?.telemetry||{},interaction=t.interaction||{},tracking=interaction.tracking||{},recognition=interaction.recognition||{},dialogue=interaction.dialogue||{};
+    const trackingSupported=supported&&state?.capabilities?.face_tracking==='supported';
+    const motorReady=!!t.remote?.motor?.requested&&!!t.remote?.motor?.enabled;
+    for(const [mode,name] of [['tracking','追踪'],['recognition','认人对话'],['advanced','高级预留']]){
+      const data=interaction[mode],requested=!!fresh&&!!data?.requested,button=this.el('interaction-'+mode);
+      button.textContent=`${requested?'关闭':'开启'}${name}`;button.setAttribute('aria-pressed',String(requested));
+      const allowed=mode==='tracking'?trackingSupported&&(requested||(motorReady&&t.m12?.valid)):mode==='recognition'?requested||t.m12?.valid:true;
+      button.disabled=!this.ready||this.pending||typeof data?.requested!=='boolean'||!allowed;
+      button.title=mode==='advanced'?'只记录预留意图；高级语音尚未实现，不会启动新的语音后端。':mode==='tracking'?'只水平追踪，锚点 ±10°，单步 ≤1°；开启需舵机启用和 M12 串口就绪。': '任意已登记人脸视为主人，确认后启动现有听觉与情绪回应；真正问答尚未实现。';
+    }
+    const unavailable=!fresh?'连接或状态已过期':!supported?'等待支持模式的新固件':!interaction.tracking?'等待模式遥测':'';
+    const trackingState=trackingStates[tracking.state]||tracking.state||'等待设备状态';
+    this.label('tracking-state',unavailable||(!trackingSupported?'当前固件不支持追踪':`${tracking.requested?'已请求 · ':''}${trackingState}`));
+    this.label('tracking-detail',unavailable?'锚点 / 目标：—':`锚 ${degrees(tracking.anchor_deg)} / 目标 ${degrees(tracking.target_deg)}`,unavailable||`锚点 ${degrees(tracking.anchor_deg)}；目标 ${degrees(tracking.target_deg)}（不是实测位置）；范围 ±${Number.isFinite(tracking.range_deg)?tracking.range_deg:10}°，单步 ≤${Number.isFinite(tracking.max_step_deg)?tracking.max_step_deg:1}°。${tracking.active?'追踪输出已激活':'当前未激活追踪输出'}。`);
+    this.label('recognition-state',unavailable||recognitionStates[recognition.state]||recognition.state||'等待设备状态');
+    const hearing=dialogueStates[dialogue.state]||dialogue.state||'等待听觉状态',owner=recognition.owner_seen&&recognition.owner_name?`${recognition.owner_name} · `:'';
+    this.label('recognition-detail',unavailable?'身份 / 听觉：—':owner+hearing,unavailable||`${owner}${hearing}。${dialogue.owned?'认人模式持有听觉意图':'认人模式未持有听觉意图'}；使用现有听觉/情绪回应，真正问答后续实现。`);
+    this.label('advanced-state',unavailable||'高级语音尚未实现');
+    this.label('advanced-detail',!fresh?'预留意图：—':!supported?'等待新固件':interaction.advanced?.requested?'仅预留意图开启':'预留意图关闭');
+    this.label('asr-mode-note',supported?'open 追踪 / close 关闭 · next 台词 · start / stop 听觉':'open 台词 · start / stop 听觉 · turn on / off 检测',supported?'open 开启追踪，close 关闭；next 随机台词并等待 800ms；start / stop 连续听觉；turn on / off 保留手动视觉切换。':'旧固件：open 随机台词并等待 800ms；start / stop 连续听觉；turn on / off 手动检测。');
   }
 }

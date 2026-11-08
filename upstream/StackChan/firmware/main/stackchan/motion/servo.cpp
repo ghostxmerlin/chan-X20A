@@ -168,12 +168,12 @@ void Servo::update_angle_anim_target(int angle)
 void Servo::stop_motion_at_angle(int angle)
 {
     angle = uitk::clamp(angle, _angle_limit.x, _angle_limit.y);
-    if (_speed_spring_stiffness > 0) _angle_anim.springOptions().velocity = 0.0f;
+    _angle_anim.springOptions().velocity = 0.0f;
     _angle_anim.teleport(angle);
     // teleport/init alone leaves the generator's cached velocity intact.
     // Evaluate the zero-distance, zero-velocity curve without writing the bus
     // so cancelled motion cannot leak into a new feedback-based start.
-    if (_speed_spring_stiffness > 0) _angle_anim.updateWithDelta(0.0f);
+    _angle_anim.updateWithDelta(0.0f);
     _snap_to_target_on_rest = false;
 }
 

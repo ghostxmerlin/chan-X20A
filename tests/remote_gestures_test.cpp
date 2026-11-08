@@ -1,3 +1,4 @@
+#include "../upstream/StackChan/firmware/main/collector/remote_modes.h"
 /* SPDX-License-Identifier: MIT */
 #include "../upstream/StackChan/firmware/main/collector/remote_gestures.h"
 #include "../upstream/StackChan/firmware/main/collector/remote_stop.h"
@@ -169,21 +170,16 @@ int main()
     assert(!stop_latch.consume());
     assert(startup.step(40000, requested, true, true) == collector::StartupPose::Action::None);
 
-    // Center protocol data remains intact through independent yaw actuation.
-    // Neither a new sender boot nor any center sequence can restart startup.
-    struct YawAxis {
-        int target = 0, speed = 0;
-        void setAutoAngleSyncEnabled(bool) {}
-        void moveWithSpeed(int angle, int velocity) { target = angle; speed = velocity; }
-    } yaw;
+    // Mode-event decoding preserves center data and never restarts startup.
+    collector::RemoteModeInput modes;
+    std::array<uint8_t,6> mode_source{1,2,3,4,5,6};
     collector::RemoteCommand command{1, 123, 450, 600, false};
     command.center_v1 = true;
     for (uint32_t boot : {1u, 2u, 0xffffffffu}) {
         for (uint32_t sequence : {0u, 1u, 1u, 0u, 2u, 0xffffffffu}) {
             command.sender_boot_nonce = boot;
             command.center_press_seq = sequence;
-            const auto target = collector::apply_remote_yaw(yaw, command, false);
-            assert(yaw.target == -123 && target.yaw == -123 && yaw.speed == 600);
+            modes.accept(command, mode_source, 60000);
             assert(command.sender_boot_nonce == boot && command.center_press_seq == sequence);
             assert(startup.step(60000, requested, true, true) == collector::StartupPose::Action::None);
         }

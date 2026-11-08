@@ -18,6 +18,7 @@ struct RemoteSnapshot {
     bool display_requested = true;
     uint32_t center_event_seq = 0;
     int64_t center_event_timestamp_us = 0;
+    uint32_t mode_left_seq = 0, mode_right_seq = 0, mode_up_seq = 0, mode_down_seq = 0;
     bool yaw_valid = false, pitch_valid = false;
     float yaw_angle_deg = 0, pitch_angle_deg = 0;
     int64_t feedback_timestamp_us = 0;
@@ -27,6 +28,9 @@ void remote_init();
 void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_history, bool include_servo_diagnostics = false);
 bool remote_arm(bool enabled);
 bool remote_enabled();
+esp_err_t remote_set_tracking(bool enabled);
+bool remote_tracking_requested();
+void remote_tracking_json(ArduinoJson::JsonObject target);
 esp_err_t remote_step_yaw(int delta_tenths, uint32_t* request_seq);
 const char* remote_display_state();
 // Commit one collector setting, then queue one explicit pitch attempt. ESP_OK

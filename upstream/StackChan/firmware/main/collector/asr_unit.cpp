@@ -2,6 +2,7 @@
 #include "asr_unit.h"
 #include "playback.h"
 #include "hearing.h"
+#include "interaction.h"
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_log.h>
@@ -65,6 +66,7 @@ void asr_task(void*)
     std::array<uint8_t, 64> buffer{};
     uint32_t seq = 0;
     while (true) {
+        interaction::tick(esp_timer_get_time());
         const int count = uart_read_bytes(kUart, buffer.data(), buffer.size(), pdMS_TO_TICKS(100));
         for (int i = 0; i < count; ++i) {
             AsrFrame frame;
@@ -79,7 +81,8 @@ void asr_task(void*)
             rx_seen = true;
             // Consume each newly parsed frame once, independent of webpage/LVGL polling.
             playback_asr_command(frame.id,frame.has_value);
-                    hearing::asr_command(frame.id,frame.has_value);
+            hearing::asr_command(frame.id,frame.has_value);
+            interaction::asr_command(frame.id,frame.has_value);
             const char* word = asr_word(frame.id);
             if (frame.has_value)
                 ESP_LOGI(kTag, "#%lu id=0x%02X value=0x%02X %s", static_cast<unsigned long>(event.seq), frame.id,
@@ -137,7 +140,7 @@ void asr_info_json(ArduinoJson::JsonObject out)
     out["tx"] = "unused";
     out["frame"] = "AA 55 <id> 55 AA; AA 55 <id> <value> 55 AA";
     out["history"] = kHistory;
-    // Same home reactions as the remote's up/down gestures; display only, no sound
+    // Independent ASR home reactions; display only, no sound
     // (the unit already speaks its own reply).
     auto reactions = out["screen_reactions"].to<ArduinoJson::JsonObject>();
     reactions["0x07 forward"] = "heart";
@@ -145,7 +148,9 @@ void asr_info_json(ArduinoJson::JsonObject out)
     reactions["0x14 turn on"] = "M12 face view";
     reactions["0x15 turn off"] = "home";
     out["reaction_sound"] = false;
-    out["open_action"] = "random_local_voice";
+    out["open_action"] = "horizontal_face_tracking_on";
+    out["close_action"] = "horizontal_face_tracking_off";
+    out["next_action"] = "random_local_voice_after_800ms";
     out["start_action"] = "continuous_hearing_start";
     out["stop_action"] = "continuous_hearing_stop";
 }

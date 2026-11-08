@@ -27,7 +27,8 @@ constexpr int64_t kResendUs = 8000000;
 constexpr int64_t kSlowResendUs = 30000000;
 constexpr int kFastResends = 6;
 
-std::atomic<uint32_t> view_request{0};
+std::atomic<uint32_t> mode_request{0},view_request{0};
+std::mutex request_mutex;
 std::mutex state_mutex;
 M12Snapshot state;
 // Diagnostics (task-owned writes, read under the same mutex).
@@ -112,7 +113,7 @@ void m12_task(void*)
     while (true) {
         const int64_t loop_us = esp_timer_get_time();
         bool explicit_request = false;
-        if (const uint32_t v = view_request.load(); v != seen_view) {
+        if (const uint32_t v = mode_request.load(); v != seen_view) {
             seen_view = v;
             explicit_request = true;
             policy.select(m12_requested_function(v), loop_us);
@@ -127,7 +128,8 @@ void m12_task(void*)
             requested_us = send(want);
             ESP_LOGI(kTag, "send %s", function_name(want));
             active = want;
-            { std::lock_guard<std::mutex> lock(state_mutex); state.count = 0; state.num = 0; state.frame_us = 0; }
+            { std::lock_guard<std::mutex> lock(state_mutex);
+              state.mode_request_revision=seen_view;state.count = 0; state.num = 0; state.frame_us = 0; }
             resends = 0;
             raw_logged = 0;
         } else if (active != M12Function::none &&
@@ -145,6 +147,7 @@ void m12_task(void*)
             if (unanswered) {
                 ++resends;
                 requested_us = send(active);
+                {std::lock_guard<std::mutex> lock(state_mutex);state.mode_request_revision=seen_view;}
                 ESP_LOGW(kTag, "no answer to %s; resend %d", function_name(active), resends);
             }
         }
@@ -246,10 +249,23 @@ void m12_wake() {}
 void m12_set_view(bool on) { m12_set_mode(on ? M12Function::detect : M12Function::standby); }
 void m12_set_mode(M12Function mode)
 {
+    std::lock_guard<std::mutex> lock(request_mutex);
+    auto previous_mode = mode_request.load();
+    while (!mode_request.compare_exchange_weak(previous_mode, next_m12_request(previous_mode, mode))) {}
     auto previous = view_request.load();
     while (!view_request.compare_exchange_weak(previous, next_m12_request(previous, mode))) {}
 }
 
+uint32_t m12_set_background_mode(M12Function mode)
+{
+    std::lock_guard<std::mutex> lock(request_mutex);
+    auto previous = mode_request.load();uint32_t requested;
+    do {requested=next_m12_request(previous,mode);} while(!mode_request.compare_exchange_weak(previous,requested));
+    auto preview = view_request.load();
+    while(!view_request.compare_exchange_weak(preview,next_m12_request(preview,M12Function::standby))) {}
+    return requested;
+}
+uint32_t m12_mode_request() {return mode_request.load();}
 uint32_t m12_view_request() { return view_request.load(); }
 
 const char* m12_phase_name(M12Phase phase)
@@ -281,6 +297,8 @@ void m12_json(ArduinoJson::JsonObject out)
     out["phase"] = m12_phase_name(state.phase);
     out["function"] = function_name(state.function);
     out["requested_us"] = state.requested_us;
+    out["mode_request_revision"] = state.mode_request_revision;
+    out["mode_request_pending"] = mode_request.load()!=state.mode_request_revision;
     out["sends"] = sends;
     out["running"] = last_running;
     out["last_reply"] = last_reply;
@@ -338,9 +356,9 @@ void m12_info_json(ArduinoJson::JsonObject out)
     policy["boot"] = "standby";
     policy["automatic_recognition"] = false;
     policy["automatic_wake"] = false;
-    policy["recognize"] = "explicit web request only";
-    policy["detect"] = "ASR turn on opens the face page";
-    policy["standby"] = "ASR turn off or leave the face page";
+    policy["recognize"] = "explicit web or remote owner mode; shared with tracking when enabled";
+    policy["detect"] = "ASR open or remote/web tracking in background; turn on opens preview";
+    policy["standby"] = "turn off, leave preview, or release the final background mode";
     auto commands = out["commands"].to<ArduinoJson::JsonObject>();
     commands["detect"] = "{\"function\":\"Face Detector\",\"args\":\"\"}";
     commands["recognize"] = "{\"function\":\"Face Recognition\",\"args\":\"\"}";

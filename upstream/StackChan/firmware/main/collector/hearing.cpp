@@ -35,8 +35,9 @@ std::atomic<uint32_t> worker_stack_free{0},encode_us{0},send_us{0},poll_us{0};
 std::atomic<uint32_t> capture_session{0},dropped{0};
 std::atomic<int64_t> quiet_until{0};
 std::string url,secret,device,boot;
-bool ready=false,requested=false,enrolling=false,connected=false,audio_ack=false,enroll_ack=false;
-uint32_t generation=1,packets=0,reconnects=0,responses=0,asr_starts=0,asr_stops=0;
+bool ready=false,connected=false,audio_ack=false,enroll_ack=false;
+ListeningControl control;
+uint32_t packets=0,reconnects=0,responses=0,asr_starts=0,asr_stops=0;
 int64_t last_tick=0,last_speech=0;
 std::string state="idle",error,enroll_name,enroll_id,enroll_phase="idle",speaker,band="none",text,emotion;
 std::vector<std::string> speakers;
@@ -46,28 +47,30 @@ ResponsePolicy policy;
 int pending_clip=0;int64_t pending_us=0;
 
 void new_session_locked() {
-    capture_session=0;++generation;
+    capture_session=0;control.next_session();
     if(active_socket)active_socket->Abort();
     connected=audio_ack=enroll_ack=false;pending_clip=0;last_tick=0;
     policy.seen=0; // Keep cooldown across reconnects.
-    playback_set_hearing_session(requested&&!enrolling?generation:0);
+    playback_set_hearing_session(control.requested()&&!control.enrolling()?control.generation():0);
 }
-bool wanted_locked(){return requested||enrolling;}
-bool live(uint32_t session) {std::lock_guard<std::mutex> lock(mutex);return generation==session&&wanted_locked();}
-bool listen(bool enable) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if(enable && (!ready||url.empty()||secret.empty())) {error="configure_backend_first";return false;}
-    if(enable&&enrolling){requested=true;return true;}
-    if(enable&&requested)return true;
-    requested=enable;
-    if(!enable){enrolling=false;enroll_phase="cancelled";}
+bool wanted_locked(){return control.requested()||control.enrolling();}
+bool live(uint32_t session) {std::lock_guard<std::mutex> lock(mutex);return control.generation()==session&&wanted_locked();}
+bool configured_locked(){return ready&&!url.empty()&&!secret.empty();}
+void apply_listening_locked(bool enable) {
+    if(!enable)enroll_phase="cancelled";
     new_session_locked();state=enable?"connecting":"idle";error.clear();
     quiet_until=esp_timer_get_time()+1200000;
+}
+bool explicit_listening_locked(bool enable,bool toggle=false) {
+    const auto before=control.snapshot();
+    const bool accepted=toggle?control.toggle_listening(configured_locked()):control.set_listening(enable,configured_locked());
+    if(!accepted){error="configure_backend_first";return false;}
+    if(!(enable&&(before.requested||before.enrolling)))apply_listening_locked(enable);
     return true;
 }
 void finish_enroll_locked(const char* phase,const char* why="") {
-    enrolling=false;enroll_phase=phase;error=why;
-    new_session_locked();state=requested?"connecting":"idle";
+    control.finish_enrollment();enroll_phase=phase;error=why;
+    new_session_locked();state=control.requested()?"connecting":"idle";
 }
 void read_speakers(JsonVariantConst source) {
     if(!source.is<JsonArrayConst>())return;
@@ -82,7 +85,7 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
     if(std::strcmp(doc["type"]|"","tick")||!doc["events"].is<JsonArray>())return;
     const int64_t now=esp_timer_get_time();
     std::lock_guard<std::mutex> lock(mutex);
-    if(generation!=session||!wanted_locked())return;
+    if(control.generation()!=session||!wanted_locked())return;
     last_tick=now;
     for(auto event:doc["events"].as<JsonArrayConst>()) {
         const char* type=event["type"]|"";
@@ -90,7 +93,7 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
         else if(!std::strcmp(type,"audio")) {
             audio_ack=!std::strcmp(event["format"]|"","opus")&&!std::strcmp(event["framing"]|"","sea1")&&event["input_sample_rate"].as<int>()==24000;
             if(!audio_ack)error="backend_protocol_mismatch";
-        } else if(!std::strcmp(type,"enroll")&&enrolling) {
+        } else if(!std::strcmp(type,"enroll")&&control.enrolling()) {
             if(enroll_id!=(event["request_id"]|""))continue;
             const char* phase=event["phase"]|"";
             if(!std::strcmp(phase,"started")||!std::strcmp(phase,"progress")) {
@@ -104,13 +107,13 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             pending_clip=0;
         } else if(!std::strcmp(type,"error")) {
             error=std::string(event["error"]|"backend_error").substr(0,160);
-            if(enrolling){const auto why=error;finish_enroll_locked("error",why.c_str());return;}
+            if(control.enrolling()){const auto why=error;finish_enroll_locked("error",why.c_str());return;}
         } else if(!std::strcmp(type,"speech")&&!std::strcmp(event["phase"]|"","end")) {
             // No identity gate: known, unsure and unknown speakers all use the same response policy.
             band=std::string(event["speaker"]["band"]|"none").substr(0,16);
             speaker=band=="known"?std::string(event["speaker"]["name"]|"").substr(0,144):"";
             text=std::string(event["text"]|"").substr(0,768);emotion=std::string(event["emotion"]|"unknown").substr(0,24);last_speech=now;
-            if(!requested||enrolling)continue;
+            if(!control.requested()||control.enrolling())continue;
             const char* id=event["id"]|"";unsigned seq=0;char extra;
             if(std::sscanf(id,"s-%u%c",&seq,&extra)!=1)continue;
             const auto end=event["pos"][1];
@@ -132,17 +135,17 @@ void worker(void*) {
         uint32_t session;std::string endpoint,key;bool enrollment;
         {
             std::lock_guard<std::mutex> lock(mutex);
-            session=wanted_locked()?generation:0;endpoint=url;key=secret;enrollment=enrolling;
+            session=wanted_locked()?control.generation():0;endpoint=url;key=secret;enrollment=control.enrolling();
             if(session)state="connecting";
         }
         if(!session){retry=0;vTaskDelay(pdMS_TO_TICKS(50));continue;}
         xQueueReset(queue);
         auto socket=std::make_shared<HearingSocket>();
-        {std::lock_guard<std::mutex> lock(mutex);if(generation==session)active_socket=socket;else socket->Abort();}
+        {std::lock_guard<std::mutex> lock(mutex);if(control.generation()==session)active_socket=socket;else socket->Abort();}
         const std::string authorization="Bearer "+key;
         socket->SetHeader("Authorization",authorization.c_str());
         socket->OnData([session](const char* data,size_t len,bool binary){receive(session,data,len,binary);});
-        socket->OnDisconnected([session]{std::lock_guard<std::mutex> lock(mutex);if(generation==session){connected=false;capture_session=0;}});
+        socket->OnDisconnected([session]{std::lock_guard<std::mutex> lock(mutex);if(control.generation()==session){connected=false;capture_session=0;}});
         bool ok=socket->Connect(endpoint.c_str());
         void* encoder=nullptr;
         esp_opus_enc_config_t cfg{};
@@ -169,19 +172,19 @@ void worker(void*) {
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 ack=audio_ack;
-                if(ack&&enrolling&&!enrollment_sent) {
+                if(ack&&control.enrolling()&&!enrollment_sent) {
                     enrollment_msg["type"]="enroll";enrollment_msg["name"]=enroll_name;
                     enrollment_msg["request_id"]=enroll_id;enrollment_msg["count"]=5;enrollment_msg["replace"]=replace_speaker;
                 }
-                activated=ack&&(!enrolling||enroll_ack);
-                if(activated&&generation==session){connected=true;state=enrolling?"enrolling":"listening";error.clear();capture_session=session;}
+                activated=ack&&(!control.enrolling()||enroll_ack);
+                if(activated&&control.generation()==session){connected=true;state=control.enrolling()?"enrolling":"listening";error.clear();capture_session=session;}
             }
             if(activated)break;
             if(!enrollment_msg.isNull()){ok=send_json(*socket,enrollment_msg);enrollment_sent=true;}
             if(esp_timer_get_time()>handshake_deadline){ok=false;break;}
             vTaskDelay(pdMS_TO_TICKS(20));
         }
-        {std::lock_guard<std::mutex> lock(mutex);if(ok&&generation==session&&audio_ack)retry=0;}
+        {std::lock_guard<std::mutex> lock(mutex);if(ok&&control.generation()==session&&audio_ack)retry=0;}
         std::vector<uint8_t> encoded(std::max(0,output_size)+16);
         std::array<int16_t,1440> pcm{};
         unsigned blocks=0;uint32_t previous=0,wire_seq=0;bool sent=false,sounding=false;
@@ -197,7 +200,7 @@ void worker(void*) {
             }
             if(clip&&playback_hearing(clip,session)==ESP_OK) {
                 std::lock_guard<std::mutex> lock(mutex);
-                if(generation==session){policy.accepted(esp_timer_get_time());++responses;}
+                if(control.generation()==session){policy.accepted(esp_timer_get_time());++responses;}
             }
             Block block;
             if(!ok||xQueueReceive(queue,&block,pdMS_TO_TICKS(20))!=pdTRUE)continue;
@@ -231,9 +234,9 @@ void worker(void*) {
         uint32_t wait_generation=0;
         {
             std::lock_guard<std::mutex> lock(mutex);
-            if(generation==session) {
+            if(control.generation()==session) {
                 if(enrollment)finish_enroll_locked("error","backend_disconnected");
-                else {new_session_locked();state=requested?"retrying":"idle";error="backend_disconnected:"+transport_error;++reconnects;wait_generation=generation;}
+                else {new_session_locked();state=control.requested()?"retrying":"idle";error="backend_disconnected:"+transport_error;++reconnects;wait_generation=control.generation();}
             }
         }
         if(wait_generation) {
@@ -288,23 +291,45 @@ void feed_audio(const int16_t* data,size_t frames,uint32_t seq,int64_t timestamp
         Block stale;xQueueReceive(queue,&stale,0);++dropped;xQueueSend(queue,&block,0);
     }
 }
+ListeningIntent listening_intent() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return control.snapshot();
+}
+bool set_listening(bool enabled) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return explicit_listening_locked(enabled);
+}
+bool toggle_listening() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return explicit_listening_locked(!(control.requested()||control.enrolling()),true);
+}
+OwnerStart start_for_owner(uint32_t expected_revision,uint32_t& owner_revision) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto result=control.start_for_owner(expected_revision,configured_locked(),owner_revision);
+    if(result==OwnerStart::Started)apply_listening_locked(true);
+    return result;
+}
+void stop_for_owner(uint32_t owner_revision) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if(control.stop_for_owner(owner_revision))apply_listening_locked(false);
+}
 void asr_command(uint8_t id,bool has_value) {
     const int action=asr_action(id,has_value);if(!action)return;
     {std::lock_guard<std::mutex> lock(mutex);if(action>0)++asr_starts;else ++asr_stops;}
-    listen(action>0);
+    set_listening(action>0);
 }
 void json(JsonObject out) {
     std::lock_guard<std::mutex> lock(mutex);
     out["supported"]=true;out["ready"]=ready;out["url"]=url;out["token_configured"]=!secret.empty();
-    out["requested"]=requested;out["connected"]=connected;out["state"]=state;out["error"]=error;
+    out["requested"]=control.requested();out["connected"]=connected;out["state"]=state;out["error"]=error;
     out["worker_stack_free_bytes"]=worker_stack_free.load();
     out["last_encode_us"]=encode_us.load();out["last_send_us"]=send_us.load();out["last_poll_us"]=poll_us.load();
-    out["session"]=generation;out["packets"]=packets;out["dropped_blocks"]=dropped.load();out["reconnects"]=reconnects;out["responses"]=responses;
+    out["session"]=control.generation();out["packets"]=packets;out["dropped_blocks"]=dropped.load();out["reconnects"]=reconnects;out["responses"]=responses;
     out["asr_starts"]=asr_starts;out["asr_stops"]=asr_stops;out["speaker"]=speaker;out["speaker_band"]=band;
     out["text"]=text;out["emotion"]=emotion;out["emotion_reliable"]=false;out["respond_to"]="everyone";
     out["last_speech_age_ms"]=last_speech?(esp_timer_get_time()-last_speech)/1000:-1;
     auto list=out["speakers"].to<JsonArray>();for(const auto& name:speakers)list.add(name);
-    auto enrollment=out["enrollment"].to<JsonObject>();enrollment["active"]=enrolling;enrollment["name"]=enroll_name;
+    auto enrollment=out["enrollment"].to<JsonObject>();enrollment["active"]=control.enrolling();enrollment["name"]=enroll_name;
     enrollment["phase"]=enroll_phase;enrollment["n"]=enroll_n;enrollment["count"]=5;
 }
 
@@ -319,7 +344,7 @@ esp_err_t handle(httpd_req_t* request) {
     if(deserializeJson(doc,buffer,received)||!doc.is<JsonObject>())return respond(request,"400 Bad Request","expected_object");
     const std::string op=doc["op"]|"";
     if(op=="listen"&&doc.size()==2&&doc["enabled"].is<bool>())
-        return listen(doc["enabled"])?respond(request,"202 Accepted","listen_updated"):respond(request,"409 Conflict","configure_backend_first");
+        return set_listening(doc["enabled"])?respond(request,"202 Accepted","listen_updated"):respond(request,"409 Conflict","configure_backend_first");
     std::lock_guard<std::mutex> lock(mutex);
     if(op=="config"&&doc.size()==3&&doc["url"].is<const char*>()&&doc["token"].is<const char*>()) {
         const std::string endpoint=doc["url"].as<std::string>(),key=doc["token"].as<std::string>().empty()?secret:doc["token"].as<std::string>();
@@ -328,18 +353,22 @@ esp_err_t handle(httpd_req_t* request) {
         nvs_handle_t nvs;esp_err_t err=nvs_open("collector",NVS_READWRITE,&nvs);
         if(err==ESP_OK){err=nvs_set_str(nvs,"ear_config",value.c_str());if(err==ESP_OK)err=nvs_commit(nvs);nvs_close(nvs);}
         if(err!=ESP_OK)return respond(request,"503 Service Unavailable","config_save_failed");
-        requested=enrolling=false;new_session_locked();url=endpoint;secret=key;state="idle";error.clear();enroll_phase="idle";
+        control.configure();new_session_locked();url=endpoint;secret=key;state="idle";error.clear();enroll_phase="idle";
         return respond(request,"202 Accepted","configuration_saved");
     }
     if(op=="enroll"&&doc.size()==3&&doc["name"].is<const char*>()&&doc["replace"].is<bool>()) {
         const std::string name=doc["name"].as<std::string>();
         if(name.empty()||name.size()>144||name.find_first_of("/\\\r\n\t")!=std::string::npos)return respond(request,"400 Bad Request","invalid_name");
-        if(!ready||url.empty()||secret.empty()||enrolling)return respond(request,"409 Conflict","not_ready_or_enrollment_active");
-        enrolling=true;enroll_name=name;replace_speaker=doc["replace"];enroll_n=0;enroll_phase="connecting";
-        new_session_locked();enroll_id=boot+"-"+std::to_string(generation);state="connecting";error.clear();quiet_until=esp_timer_get_time()+1200000;
+        if(!ready||url.empty()||secret.empty()||control.enrolling())return respond(request,"409 Conflict","not_ready_or_enrollment_active");
+        control.begin_enrollment();enroll_name=name;replace_speaker=doc["replace"];enroll_n=0;enroll_phase="connecting";
+        new_session_locked();enroll_id=boot+"-"+std::to_string(control.generation());state="connecting";error.clear();quiet_until=esp_timer_get_time()+1200000;
         return respond(request,"202 Accepted","enrollment_requested");
     }
-    if(op=="cancel"&&doc.size()==1) {if(enrolling)finish_enroll_locked("cancelled");return respond(request,"202 Accepted","enrollment_cancelled");}
+    if(op=="cancel"&&doc.size()==1) {
+        const bool was_enrolling=control.enrolling();control.cancel_enrollment();
+        if(was_enrolling)finish_enroll_locked("cancelled");
+        return respond(request,"202 Accepted","enrollment_cancelled");
+    }
     return respond(request,"400 Bad Request","invalid_hearing_command");
 }
 }

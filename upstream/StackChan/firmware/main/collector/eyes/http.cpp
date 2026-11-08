@@ -88,7 +88,7 @@ void catalog_json(JsonObject out) {
     out["first_frame_deadline_ms"]=kVoiceFirstFrameDeadlineMs;out["voice_first_frame_deadline_ms"]=kVoiceFirstFrameDeadlineMs;
     out["manual_first_frame_deadline_ms"]=kManualFirstFrameDeadlineMs;out["natural_cycle"]=true;
     out["request_history_count"]=16;out["request_history_ms"]=60000;
-    out["asset_install"]=upload_queue!=nullptr;out["max_asset_bytes"]=kAssetCapacity;out["asr_open"]=true;out["persistent"]=false;
+    out["asset_install"]=upload_queue!=nullptr;out["max_asset_bytes"]=kAssetCapacity;out["asr_next"]=true;out["persistent"]=false;
 }
 void status_json(JsonObject out) {
     const auto s=snapshot();out["supported"]=s.supported;out["ready"]=s.ready;out["enabled"]=s.enabled;

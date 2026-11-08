@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
     }
     assert(choose_voice(-1,0,0)==0 && choose_voice(41,0,0)==0);
     assert(choose_voice(21,0,0)==21 && choose_voice(40,0,0)==40);
-    assert(voice_asr_open(0x10,false) && !voice_asr_open(0x14,false) && !voice_asr_open(0x10,true));
+    assert(voice_asr_next(0x1b,false) && !voice_asr_next(0x10,false) && !voice_asr_next(0x1b,true));
     VoiceCooldown cooldown;
     assert(cooldown.allowed(0)); cooldown.finished(1000);
     assert(!cooldown.allowed(1000) && !cooldown.allowed(1200999) && cooldown.allowed(1201000));

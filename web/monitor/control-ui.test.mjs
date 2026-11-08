@@ -24,3 +24,10 @@ test('recognition is disabled on old firmware and only an explicit click request
  s.capabilities.m12_recognition='supported';ui.render(s,true);assert.equal(calls.length,0);
  await el('m12-recognize').click();assert.deepEqual(calls,[{action:'m12_mode',mode:'face_recognition',boot:'a'}]);
 });
+test('mode firmware explains four-way remote toggles while preserving explicit web movement',async()=>{
+ const {ui,s,calls,el}=harness();s.capabilities.interaction_modes='supported';ui.render(s,true);
+ assert.match(el('remote-pitch-note').textContent,/左追踪.*右认人.*上听觉.*下预留/);
+ assert.match(el('remote-pitch-note').title,/中心.*开关屏幕/);
+ await el('yaw-left').click();await el('pitch-apply').click();
+ assert.deepEqual(calls,[{action:'yaw',delta_deg:-5,boot:'a'},{action:'pitch',angle_deg:10,boot:'a'}]);
+});
