@@ -6,152 +6,111 @@
   <link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script>
 </head>
 <body>
-  <main>
-    <header class="toolbar">
-      <div class="connection"><span id="status-dot" class="dot"></span><strong id="status" role="status">连接中</strong><span id="firmware" class="muted">StackChan</span></div>
-      <div class="actions"><button id="listen" aria-pressed="false">开启监听</button><button id="pause" aria-pressed="false">暂停监控</button></div>
-    </header>
-    <p id="notice" class="notice" role="status">正在连接本机数据桥…</p>
-    <div class="top-grid">
-      <section class="panel camera-panel">
-        <div class="panel-head"><h1>机身相机</h1><span id="camera-status" class="muted">等待画面</span></div>
-        <div class="camera-stage"><img id="camera" alt="StackChan 机身相机实时画面" hidden><div id="camera-empty">等待机器人画面<span>CoreS3 · 320 × 240</span></div></div>
-        <div class="panel-foot"><span>完整画幅 · 机身镜头</span><span id="frame-meta">—</span></div>
-      </section>
-      <div class="side-stack">
-        <section class="panel" id="system-panel">
-          <div class="panel-head"><h2>运行状态</h2><span id="uptime" class="muted">—</span></div>
-          <dl class="metrics"><div><dt>芯片温度</dt><dd id="chip-temperature">—</dd></div><div><dt>电量</dt><dd id="battery">—</dd></div><div><dt>Wi-Fi</dt><dd id="wifi">—</dd></div><div><dt>光照</dt><dd id="light">—</dd></div><div><dt>接近</dt><dd id="proximity">—</dd></div><div><dt>可用内存</dt><dd id="heap">—</dd></div><div><dt>遥控器</dt><dd id="remote">—</dd></div><div><dt>显示</dt><dd id="display">—</dd></div></dl>
-          <div class="thermal-caption"><span id="chip-temperature-note">ESP32-S3 · 等待读数</span><span>最近 2 分钟</span></div><canvas id="chip-thermal" aria-label="StackChan 芯片温度趋势"></canvas>
-        </section>
-        <section class="panel" id="servo-panel">
-          <div class="panel-head"><h2>舵机控制与反馈</h2><span id="motor-status" class="muted">—</span></div>
-          <div class="angle-row"><div><span>左右轴 · 实测</span><strong id="yaw">—</strong></div><div><span>俯仰轴 · 实测</span><strong id="pitch">—</strong></div></div>
-          <dl class="metrics compact"><div><dt>保存仰角</dt><dd id="pitch-saved">—</dd></div><div><dt>启动姿态</dt><dd id="startup-pose">—</dd></div></dl>
-          <div class="control-block">
-            <div class="control-buttons"><button id="motor-enable" disabled>启用舵机</button><button id="motor-disable" class="stop-button" disabled>停用舵机</button></div>
-            <div class="control-buttons"><button id="yaw-left" disabled>← 左转 5°</button><button id="yaw-right" disabled>右转 5° →</button></div>
-            <p id="remote-pitch-note" class="control-note">等待遥控上下状态。</p>
-            <p id="controls-note" class="control-note">等待有效状态</p>
-            <p class="control-note">左右动作：<span id="yaw-command-state">—</span></p>
-            <label class="pitch-label" for="pitch-input">仰角设置（5–85°）</label>
-            <div class="pitch-controls"><input id="pitch-input" type="number" min="5" max="85" step="0.1" inputmode="decimal" disabled><button id="pitch-apply" disabled>保存并应用</button></div>
-            <p class="control-note">立即尝试调整，并保存为下次开机角度。<br>仰角动作：<span id="pitch-command-state">—</span></p>
-            <p id="servo-command" class="command-result" role="status">点击按钮发送操作；目标值与实测角度分别显示。</p>
-          </div>
-        </section>
+<main>
+  <header class="toolbar">
+    <div class="connection"><span class="brand">STACKCHAN /</span><span id="status-dot" class="dot"></span><strong id="status" role="status">连接中</strong><span id="firmware" class="muted">StackChan</span></div>
+    <div class="actions"><button data-open="hearing-config">配置 / 声纹</button><button id="listen" aria-pressed="false">开启监听</button><button id="pause" aria-pressed="false">暂停监控</button></div>
+  </header>
+  <div class="status-line"><p id="notice" class="notice" role="status">正在连接本机数据桥…</p><span id="freshness">尚未收到数据</span></div>
+  <div class="dashboard">
+    <section class="panel system-panel" id="system-panel">
+      <div class="panel-head"><h1>机身状态</h1><span id="uptime" class="muted">—</span></div>
+      <div class="panel-body">
+        <dl class="metrics system-metrics">
+          <div><dt>芯片温度</dt><dd id="chip-temperature">—</dd></div><div><dt>电量</dt><dd id="battery">—</dd></div>
+          <div><dt>内部 RAM 余</dt><dd id="heap">—</dd></div><div><dt>最大连续块</dt><dd id="heap-largest">—</dd></div>
+          <div><dt>PSRAM 余</dt><dd id="psram">—</dd></div><div title="各内部堆区域历史最低空闲之和，不是同时发生的最低总空闲，也不是 DMA 空闲。"><dt>各堆最低之和 ⓘ</dt><dd id="heap-minimum">—</dd></div>
+          <div><dt>Wi-Fi</dt><dd id="wifi">—</dd></div><div><dt>遥控器</dt><dd id="remote">—</dd></div>
+          <div><dt>光照</dt><dd id="light">—</dd></div><div><dt>接近</dt><dd id="proximity">—</dd></div><div><dt>显示</dt><dd id="display">—</dd></div>
+        </dl>
+        <div class="thermal-caption"><span id="chip-temperature-note">ESP32-S3 · 等待读数</span><span>2 min</span></div><canvas id="chip-thermal" aria-label="StackChan 芯片温度趋势"></canvas>
       </div>
-    </div>
-    <section class="panel hearing-panel" aria-labelledby="hearing-heading">
-      <div class="panel-head"><h2 id="hearing-heading">语音后端 · 配置与声纹</h2><span id="hearing-status" class="muted">等待连接</span></div>
-      <div class="voice-layout">
-        <div class="voice-actions">
-          <label for="hearing-url">后端 WebSocket 地址</label>
-          <input id="hearing-url" type="url" maxlength="256" placeholder="ws://IPv4地址:端口/" autocomplete="off" disabled>
-          <label for="hearing-token">连接密钥</label>
-          <input id="hearing-token" type="password" maxlength="192" autocomplete="new-password" placeholder="留空保留已保存密钥" disabled>
-          <p id="hearing-secret-status" class="note">尚未配置</p>
-          <div class="control-buttons"><button id="hearing-save" disabled>保存配置</button><button id="hearing-import" disabled>使用本机现有后端</button></div>
-          <p class="note">保存后待机。说 start 开始连续监听，说 stop 停止；也可用下方按钮。</p>
-          <div class="control-buttons"><button id="hearing-start" disabled>开始连续监听</button><button id="hearing-stop" class="stop-button" disabled>停止监听</button></div>
-          <label for="hearing-name">声纹姓名</label>
-          <input id="hearing-name" maxlength="48" placeholder="例如 papa" autocomplete="off" disabled>
-          <label class="hearing-check"><input id="hearing-replace" type="checkbox" disabled>重新录入同名身份（先备份原资料）</label>
-          <div class="control-buttons"><button id="hearing-enroll" disabled>录入五句话</button><button id="hearing-cancel" disabled>取消录入</button></div>
-          <p id="hearing-command" class="command-result" role="status">仅点击或收到 ASR 指令后操作；刷新页面不会开始监听。</p>
-        </div>
-        <div class="voice-now">
-          <p id="hearing-identity">身份：—</p><p id="hearing-emotion">情绪标签：—</p>
-          <p id="hearing-text" class="hearing-transcript">等待语音</p>
-          <p id="hearing-progress" role="status">尚未录入 · 0 / 5 句</p>
-          <p id="hearing-speakers" class="note">已登记：—</p><p id="hearing-error" class="note"></p>
-          <p class="note">录入时请对着 StackChan 麦克风，自然说五句话，每句 1–12 秒，句间稍作停顿。录入期间暂停情绪回应，完成后恢复原监听状态；120 秒未完成会取消。</p>
-          <p class="note">回应所有人，声纹只显示身份。后端的情绪标签选择相近台词与眼睛表情；平静或未确定时不回应。自己的播放声音不参与触发，回应至少间隔 10 秒。</p>
-          <p class="note">连续监听由 StackChan 直接连接后端。关闭网页仍会继续，开机默认关闭。后端沿用现有录音保存设置。</p>
+    </section>
+    <section class="panel camera-panel">
+      <div class="panel-head"><h2>机身相机</h2><span id="camera-status" class="muted">等待画面</span></div>
+      <div class="camera-stage"><img id="camera" alt="StackChan 机身相机实时画面" hidden><div id="camera-empty">等待机器人画面<span>CoreS3 · 320 × 240</span></div></div>
+      <div class="panel-foot"><span>机身镜头 · 完整画幅</span><span id="frame-meta">—</span></div>
+    </section>
+    <section class="panel m12-panel" id="m12-panel">
+      <div class="panel-head"><h2>M12 视觉</h2><span id="m12-state" class="muted">等待状态</span><button data-open="m12-diagnostics">详情</button></div>
+      <div class="m12-layout panel-body">
+        <div class="m12-visual"><div class="m12-visual-head"><span>检测框示意 · 非视频</span><span id="m12-visual-state">等待检测</span></div><canvas id="m12-faces-canvas" aria-label="M12 人脸检测框坐标示意，非摄像头原图"></canvas><p id="m12-identity" class="command-result">认人使用 M12 已登记资料。</p></div>
+        <div class="m12-details">
+          <div class="m12-readings">
+            <div><span>芯片温度</span><strong id="m12-temperature">—</strong></div><div><span id="m12-rate-label">检测更新率</span><strong id="m12-fps">—</strong></div><div><span>人脸</span><strong id="m12-count">—</strong></div>
+          </div>
+          <p id="m12-temperature-note" class="note">等待 M12 网络数据</p><p id="m12-confidence" class="note">等待检测结果</p>
+          <dl class="metrics"><div><dt>网络</dt><dd id="m12-network">等待连接</dd></div><div><dt>工作进程</dt><dd id="m12-process">—</dd></div></dl>
+          <div class="control-buttons"><button id="m12-start" disabled>检测</button><button id="m12-recognize" disabled>认人</button><button id="m12-stop" class="stop-button" disabled>待机</button></div>
+          <p id="m12-command" class="command-result" role="status">手动切换 · turn on / off</p>
+
         </div>
       </div>
     </section>
-    <section class="panel voice-panel" aria-labelledby="eyes-heading">
-      <div class="panel-head"><h2 id="eyes-heading">眼睛表情</h2><span id="eyes-status" class="muted">等待连接</span></div>
-      <div class="voice-layout">
-        <div class="voice-actions">
-          <label for="eyes-style">眼睛款式</label><select id="eyes-style" disabled></select>
-          <div class="control-buttons"><button id="eyes-enable" disabled>启用所选款式</button><button id="eyes-disable" class="stop-button" disabled>恢复原首页</button></div>
-          <label for="eyes-state">表情</label><select id="eyes-state" disabled></select>
-          <div class="control-buttons"><button id="eyes-play" disabled>播放一次</button><button id="eyes-stop" disabled>停止表情</button></div>
-          <p id="eyes-command" class="command-result" role="status">点击操作；刷新页面不会启用或重播。</p>
-        </div>
-        <div class="voice-now"><p id="eyes-current">—</p><p id="eyes-result" class="note">—</p><p class="note">说 open，等待 ASR 的 OK 后，台词配合近似表情；结束回到眼睛待机。手动表情优先。恢复原首页会关闭本次开机的自动表情。</p></div>
+    <section class="panel servo-panel" id="servo-panel">
+      <div class="panel-head"><h2>舵机</h2><span id="motor-status" class="muted">—</span><button data-open="servo-settings">详情</button></div>
+      <div class="panel-body">
+        <div class="angle-row"><div><span>左右实测</span><strong id="yaw">—</strong></div><div><span>俯仰实测</span><strong id="pitch">—</strong></div></div>
+        <div class="control-buttons"><button id="yaw-left" disabled>← 左转 5°</button><button id="yaw-right" disabled>右转 5° →</button><button id="motor-enable" disabled>启用舵机</button><button id="motor-disable" class="stop-button" disabled>停用舵机</button></div>
+        <p id="remote-pitch-note" class="control-note">等待遥控上下状态。</p><p id="controls-note" class="control-note">等待有效状态</p><p class="control-note">左右动作：<span id="yaw-command-state">—</span></p><p id="servo-command" class="command-result" role="status">目标与实测分别显示。</p>
       </div>
     </section>
     <section class="panel voice-panel" aria-labelledby="voice-heading">
       <div class="panel-head"><h2 id="voice-heading">随机台词</h2><span id="voice-count" class="muted">等待台词库</span></div>
-      <div class="voice-layout">
-        <div class="voice-actions">
-          <label for="voice-select">选择台词</label>
-          <select id="voice-select" disabled aria-label="选择本体播放的台词"></select>
-          <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div>
-          <p id="voice-command" class="command-result" role="status">点击后由 StackChan 本体发声。</p>
-        </div>
-        <div class="voice-now"><span id="voice-status" class="muted">等待连接</span><p id="voice-current">尚未播放台词</p><p id="voice-progress" class="note">网页点播或说 open，每次播放一条</p></div>
-      </div>
-      <p class="note">ASR open 随机播放 · 播放中忽略新的语音触发 · 随机不连续重复 · 关闭网页后仍可用 ASR</p>
-    </section>
-    <section class="panel m12-panel" id="m12-panel">
-      <div class="panel-head"><h2>M12 视觉模块</h2><span id="m12-state" class="muted">等待状态</span></div>
-      <div class="m12-layout">
-        <div class="m12-visual">
-          <div class="m12-visual-head"><span>检测框示意 · 640 × 480</span><span id="m12-visual-state">等待检测</span></div>
-          <canvas id="m12-faces-canvas" aria-label="M12 人脸检测框坐标示意，非摄像头原图"></canvas>
-          <p class="note">显示 M12 返回的位置与置信度；此处为检测坐标，暂不传输原始视频。</p>
-        </div>
-        <div class="m12-details">
-          <div class="control-block m12-controls"><div class="control-buttons"><button id="m12-start" disabled>人脸检测</button><button id="m12-recognize" disabled>人脸识别（认人）</button><button id="m12-stop" class="stop-button" disabled>退出待机</button></div><p id="m12-command" class="command-result" role="status">手动切换；ASR turn on / turn off 仍然有效。</p></div>
-          <div class="m12-readings">
-            <div><span>芯片温度</span><strong id="m12-temperature">—</strong><small id="m12-temperature-note">等待 M12 网络数据</small></div>
-            <div><span id="m12-rate-label">检测更新率</span><strong id="m12-fps">—</strong><small>结果 / 秒 · 5 秒窗口</small></div>
-            <div><span>当前人脸</span><strong id="m12-count">—</strong><small id="m12-confidence">等待检测结果</small></div>
-          </div>
-          <dl class="metrics"><div><dt>网络监控</dt><dd id="m12-network">等待连接</dd></div><div><dt>设备工作进程</dt><dd id="m12-process">—</dd></div><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近视觉结果</dt><dd id="m12-result-age">—</dd></div><div><dt>检测 / 识别 / 异常</dt><dd id="m12-counters">—</dd></div></dl>
-          <p id="m12-identity" class="command-result">认人使用 M12 已登记资料。</p>
-          <div id="m12-face-details" class="face-details"></div>
-          <p class="note">更新率来自当前模式的设备结果计数，不是网页或视频帧率。待机、切换或结果过期时清空检测框。</p>
-        </div>
+      <div class="panel-body">
+        <div class="inline-status"><span id="voice-status">等待连接</span><span class="muted">ASR open · +800ms</span></div><p id="voice-current" class="voice-current">尚未播放台词</p><p id="voice-progress" class="note">网页点播或说 open，每次播放一条</p>
+        <label class="sr-only" for="voice-select">选择台词</label><select id="voice-select" disabled aria-label="选择本体播放的台词"></select>
+        <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div><p id="voice-command" class="command-result" role="status">由 StackChan 本体发声。</p>
       </div>
     </section>
-    <div class="signals-grid">
-      <section class="panel audio-panel">
-        <div class="panel-head"><h2>麦克风</h2><span id="audio-status" class="muted">等待音频</span></div>
-        <div class="audio-reading"><strong id="db">—</strong><span>dBFS</span><span id="listen-state">外放关闭</span></div>
-        <div class="meter" role="meter" aria-label="麦克风电平" aria-valuemin="-60" aria-valuemax="0"><div id="meter-fill"></div></div>
-        <div class="meter-scale"><span>−60</span><span>−30</span><span>0 dBFS</span></div>
-        <canvas id="wave" aria-label="麦克风最近四秒包络"></canvas>
-        <div class="panel-foot"><span>第一通道 · 固定刻度</span><span id="audio-gaps">缺包 —</span></div>
-      </section>
-      <section class="panel imu-panel">
-        <div class="panel-head"><h2>六轴运动</h2><span class="legend"><i>X</i><i>Y</i><i>Z</i><span>最近 4 秒</span></span></div>
-        <div class="imu-charts"><div><div class="chart-head"><span>加速度</span><span>m/s²</span></div><canvas id="accel" aria-label="三轴加速度"></canvas><p id="accel-value" class="axis-values">—</p></div><div><div class="chart-head"><span>角速度</span><span>°/s</span></div><canvas id="gyro" aria-label="三轴角速度"></canvas><p id="gyro-value" class="axis-values">—</p></div></div>
-      </section>
-    </div>
-    <div class="details-grid">
-      <section class="panel" id="asr-panel">
-        <div class="panel-head"><h2>ASR 语音指令</h2><span id="asr-state" class="muted">—</span></div>
-        <dl class="metrics"><div><dt>最近指令</dt><dd id="asr-last">—</dd></div></dl>
-        <ol id="asr-events" class="asr-events"><li>尚无指令</li></ol>
-        <p class="note">Unit ASR · 黑口 Port B<br>open 随机台词 · turn on 开检测 · turn off 退出待机</p>
-      </section>
-      <section class="panel" id="mag-panel">
-        <div class="panel-head"><h2>磁场</h2><span class="muted">µT</span></div>
-        <div class="mag-reading"><div id="mag-xy" class="mag-compass"><span id="mag-arrow">↑</span><small>X / Y</small></div><dl class="metrics"><div><dt>X</dt><dd id="mag-x">—</dd></div><div><dt>Y</dt><dd id="mag-y">—</dd></div><div><dt>Z</dt><dd id="mag-z">—</dd></div></dl></div>
-        <p class="note">传感器坐标 · 航向未校准</p>
-      </section>
-      <section class="panel events-panel">
-        <div class="panel-head"><h2>事件记录</h2><span id="event-count" class="muted">0 条</span></div>
-        <ol id="events"><li class="muted">等待连接事件</li></ol>
-        <p class="note">连接 / ASR / 状态变化 · 完整固件日志仍在 USB</p>
-      </section>
-    </div>
-    <footer><span>StackChan · 本机监控与手动控制观察台</span><span id="freshness">尚未收到数据</span><span>关闭页面后释放采集连接</span></footer>
-  </main>
+    <section class="panel eyes-panel" aria-labelledby="eyes-heading">
+      <div class="panel-head"><h2 id="eyes-heading">眼睛表情</h2><span id="eyes-status" class="muted">等待连接</span></div>
+      <div class="panel-body">
+        <p id="eyes-current">—</p><p id="eyes-result" class="note">—</p>
+        <div class="select-row"><label for="eyes-style">款式</label><select id="eyes-style" disabled></select></div><div class="control-buttons"><button id="eyes-enable" disabled>启用款式</button><button id="eyes-disable" class="stop-button" disabled>恢复原首页</button></div>
+        <div class="select-row"><label for="eyes-state">表情</label><select id="eyes-state" disabled></select></div><div class="control-buttons"><button id="eyes-play" disabled>播放一次</button><button id="eyes-stop" disabled>停止表情</button></div><p id="eyes-command" class="command-result" role="status">open 台词配合表情，结束回待机。</p>
+      </div>
+    </section>
+    <section class="panel hearing-panel" aria-labelledby="hearing-heading">
+      <div class="panel-head"><h2 id="hearing-heading">连续听觉</h2><span id="hearing-status" class="muted">等待连接</span></div>
+      <div class="panel-body">
+        <div class="identity-row"><p id="hearing-identity">身份：—</p><p id="hearing-emotion">情绪标签：—</p></div><p id="hearing-text" class="hearing-transcript">等待语音</p>
+        <div class="control-buttons"><button id="hearing-start" disabled>开始 · start</button><button id="hearing-stop" class="stop-button" disabled>停止 · stop</button></div>
+        <p id="hearing-progress" role="status">尚未录入 · 0 / 5 句</p><p id="hearing-error" class="note"></p><p id="hearing-command" class="command-result" role="status">刷新页面不会开始监听。</p>
+      </div>
+    </section>
+    <section class="panel audio-panel">
+      <div class="panel-head"><h2>麦克风</h2><span id="audio-status" class="muted">等待音频</span></div>
+      <div class="panel-body"><div class="audio-reading"><strong id="db">—</strong><span>dBFS</span><span id="listen-state">外放关闭</span></div><div class="meter" role="meter" aria-label="麦克风电平" aria-valuemin="-60" aria-valuemax="0"><div id="meter-fill"></div></div><div class="meter-scale"><span>−60</span><span>−30</span><span>0 dBFS</span></div><canvas id="wave" aria-label="麦克风最近四秒包络"></canvas><div class="panel-foot"><span>第一通道 · 4s</span><span id="audio-gaps">缺包 —</span></div></div>
+    </section>
+    <section class="panel imu-panel">
+      <div class="panel-head"><h2>运动 / 磁场</h2><span class="legend"><i>X</i><i>Y</i><i>Z</i></span></div>
+      <div class="panel-body"><div class="imu-charts"><div><div class="chart-head"><span>加速度</span><span>m/s²</span></div><canvas id="accel" aria-label="三轴加速度"></canvas><p id="accel-value" class="axis-values">—</p></div><div><div class="chart-head"><span>角速度</span><span>°/s</span></div><canvas id="gyro" aria-label="三轴角速度"></canvas><p id="gyro-value" class="axis-values">—</p></div></div>
+      <div id="mag-panel" class="mag-reading"><div id="mag-xy" class="mag-compass"><span id="mag-arrow">↑</span></div><span class="muted" title="传感器坐标，航向未校准">µT</span><dl class="metrics"><div><dt>X</dt><dd id="mag-x">—</dd></div><div><dt>Y</dt><dd id="mag-y">—</dd></div><div><dt>Z</dt><dd id="mag-z">—</dd></div></dl></div></div>
+    </section>
+    <section class="panel asr-panel" id="asr-panel">
+      <div class="panel-head"><h2>ASR 指令</h2><span id="asr-state" class="muted">—</span></div>
+      <div class="panel-body"><dl class="metrics"><div><dt>最近</dt><dd id="asr-last">—</dd></div></dl><ol id="asr-events" class="asr-events"><li>尚无指令</li></ol><p class="note">open 台词 · start / stop 听觉<br>turn on / off 人脸检测</p></div>
+    </section>
+    <section class="panel events-panel">
+      <div class="panel-head"><h2>事件记录</h2><span id="event-count" class="muted">0 条</span></div><ol id="events"><li class="muted">等待连接事件</li></ol><div class="panel-foot">连接 / ASR / 状态变化 · 完整日志在 USB</div>
+    </section>
+  </div>
+  <footer><span>本机监控 · 操作后发送指令</span><span>过期读数自动隐藏 · 详细信息可悬停查看</span></footer>
+</main>
+<dialog id="hearing-config" aria-labelledby="config-heading">
+  <div class="dialog-head"><h2 id="config-heading">后端配置 / 声纹录入</h2><form method="dialog"><button>关闭</button></form></div>
+  <div class="dialog-feedback" role="status"><p data-mirror="hearing-command">刷新页面不会开始监听。</p><p data-mirror="hearing-progress">尚未录入</p><p data-mirror="hearing-error"></p></div>
+  <label for="hearing-url">后端 WebSocket 地址</label><input id="hearing-url" type="url" maxlength="256" placeholder="ws://IPv4地址:端口/" autocomplete="off" disabled>
+  <label for="hearing-token">连接密钥</label><input id="hearing-token" type="password" maxlength="192" autocomplete="new-password" placeholder="留空保留已保存密钥" disabled><p id="hearing-secret-status" class="note">尚未配置</p>
+  <div class="control-buttons"><button id="hearing-save" disabled>保存配置</button><button id="hearing-import" disabled>使用本机现有后端</button></div>
+  <p class="note">保存后待机。说 start 开始连续监听，stop 停止；关闭网页仍会继续，开机默认关闭。后端沿用现有录音保存设置。</p>
+  <label for="hearing-name">声纹姓名</label><input id="hearing-name" maxlength="48" placeholder="例如 papa" autocomplete="off" disabled><label class="hearing-check"><input id="hearing-replace" type="checkbox" disabled>重新录入同名身份（先备份原资料）</label>
+  <div class="control-buttons"><button id="hearing-enroll" disabled>录入五句话</button><button id="hearing-cancel" disabled>取消录入</button></div><p id="hearing-speakers" class="note">已登记：—</p>
+  <p class="note">对着机身麦克风自然说五句话，每句 1–12 秒，句间停顿。录入时暂停情绪回应，结束恢复原监听状态；120 秒未完成会取消。进度在连续听觉面板显示。</p>
+  <p class="note">回应所有人，声纹只显示身份。后端情绪标签选择相近台词与眼睛；平静或未确定时不回应。自身播放声音不参与触发，回应至少间隔 10 秒。</p>
+</dialog>
+<dialog id="servo-settings" aria-labelledby="servo-heading"><div class="dialog-head"><h2 id="servo-heading">舵机反馈 / 仰角设置</h2><form method="dialog"><button>关闭</button></form></div><dl class="metrics"><div><dt>保存仰角</dt><dd id="pitch-saved">—</dd></div><div><dt>启动姿态</dt><dd id="startup-pose">—</dd></div></dl><p>俯仰实测：<strong data-mirror="pitch">—</strong> · <span data-mirror="motor-status">—</span></p><p data-mirror="servo-command" role="status">目标与实测分别显示。</p><label for="pitch-input">仰角设置（5–85°）</label><div class="pitch-controls"><input id="pitch-input" type="number" min="5" max="85" step="0.1" inputmode="decimal" disabled><button id="pitch-apply" disabled>保存并应用</button></div><p class="note">此操作立即尝试调整，并保存为下次开机角度。遥控上下仍按设备设置屏蔽。</p><p class="control-note">仰角动作：<span id="pitch-command-state">—</span></p></dialog>
+<dialog id="m12-diagnostics" aria-labelledby="m12-heading"><div class="dialog-head"><h2 id="m12-heading">M12 诊断</h2><form method="dialog"><button>关闭</button></form></div><dl class="metrics"><div><dt>请求模式</dt><dd id="m12-request">—</dd></div><div><dt>最近设备报告</dt><dd id="m12-running">—</dd></div><div><dt>最近串口接收</dt><dd id="m12-age">—</dd></div><div><dt>最近视觉结果</dt><dd id="m12-result-age">—</dd></div><div><dt>检测 / 识别 / 异常</dt><dd id="m12-counters">—</dd></div></dl><div id="m12-face-details" class="face-details"></div><p class="note">坐标框来自 M12 检测结果，非原始视频。更新率为当前模式的结果/秒，按 5 秒窗口计算；待机、切换或过期时清空检测框。</p></dialog>
 </body>
 </html>

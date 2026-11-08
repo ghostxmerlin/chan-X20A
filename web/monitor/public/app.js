@@ -4,7 +4,7 @@ import { EyesPanel } from '/eyes-ui.js';
 import { HearingPanel } from '/hearing-ui.js';
 import { renderM12, renderThermal } from '/m12-ui.js';
 const $ = id => document.getElementById(id);
-const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) el.textContent = next; };
+const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) { el.textContent = next; el.title = next; } };
 const num = (n, digits = 1) => Number.isFinite(n) ? n.toFixed(digits) : '—';
 const bool = (v, yes, no) => v === true ? yes : v === false ? no : '—';
 const duration = seconds => { const s = Math.max(0, Math.floor(seconds || 0)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m` : `${Math.floor(s / 60)}m ${s % 60}s`; };
@@ -13,6 +13,17 @@ const controls = new ControlPanel(document);
 const voices = new VoicePanel(document);
 const eyes = new EyesPanel(document);
 const hearing = new HearingPanel(document);
+for (const button of document.querySelectorAll('[data-open]')) {
+  button.addEventListener('click', () => $(button.dataset.open).showModal());
+}
+// Keep the complete text available when dense status rows are ellipsized.
+const tooltipObserver = new MutationObserver(records => {
+  for (const record of records) {
+    const el = record.target.nodeType === Node.TEXT_NODE ? record.target.parentElement : record.target;
+    if (el.matches('.panel p, .panel dd, .panel-head > span, .identity-row p')) el.title = el.textContent;
+  }
+});
+tooltipObserver.observe(document.querySelector('.dashboard'), { subtree: true, childList: true, characterData: true });
 let source, state, received = 0, paused = false, generation = 0, frameSeq = null, frameURL = null, framePending = false;
 let lastBoot = '', lastEvent = -1, listening = false, audioContext, audioAbort, audioGeneration = 0;
 
@@ -86,7 +97,10 @@ function render() {
   text('wifi', t.health ? `${num(t.health.wifi_rssi_dbm, 0)} dBm · CH ${t.health.wifi_channel ?? '—'}` : '—');
   text('light', t.light?.valid ? `${num(t.light.lux)} lux` : '—');
   text('proximity', t.proximity?.valid ? `${t.proximity.raw} raw` : '—');
-  text('heap', t.health ? `${num(t.health.heap_free / 1024, 0)} KB / PSRAM ${num(t.health.psram_free / 1048576, 1)} MB` : '—');
+  text('heap', t.health ? `${num(t.health.heap_free / 1024, 1)} KiB` : '—');
+  text('heap-largest', t.health ? `${num(t.health.heap_largest_free / 1024, 1)} KiB` : '—');
+  text('psram', t.health ? `${num(t.health.psram_free / 1048576, 2)} MiB` : '—');
+  text('heap-minimum', t.health ? `${num(t.health.heap_min_free / 1024, 1)} KiB` : '—');
   text('remote', t.remote ? `${bool(t.remote.valid, '收到数据', '等待数据')} · ${t.remote.rx_packets ?? 0} 包` : '—');
   text('display', bool(t.display?.enabled, '开启', '关闭'));
   text('motor-status', bool(motor.enabled, '控制启用', '控制停用'));
@@ -126,6 +140,10 @@ function render() {
   voices.render(state, fresh && !document.hidden);
   eyes.render(state, fresh && !document.hidden);
   hearing.render(state, fresh && !document.hidden);
+  for (const mirror of document.querySelectorAll('[data-mirror]')) {
+    const value = $(mirror.dataset.mirror).textContent;
+    if (mirror.textContent !== value) mirror.textContent = value;
+  }
   renderM12(state, fresh, bridge);
   renderThermal(t.temperature, fresh ? state.thermalHistory : [], t.timestamp_us);
   const asrList = $('asr-events'); asrList.replaceChildren();

@@ -1,5 +1,7 @@
 # chan-X20A
 
+PC 观察台现为四列紧凑总览，刷新 `http://127.0.0.1:8787/` 使用。内部 RAM / Flash 的可量化候选和验证边界见 [优化评估](docs/resource-optimization.md)。
+
 **当前版本：collector-0.4.30（2026-11-08）。** 已部署SD台词/眼睛与连续听觉，功能提交`9659664`已推送。后续开发先看[RAM / PSRAM / DMA / Flash 与接口清单](docs/resource-inventory.md)：UART已全部占用，内部内存连续块和长期运行峰值需要优先评估。短测通过与较晚累计重连记录分开保留，准确状态见[最新交接](docs/session-handoff.md)。
 
 **Mac 网页监控（2026-11-07）：** 现在可打开 [本机观察台](http://127.0.0.1:8787/) 查看机身画面、麦克风电平、六轴/环境、舵机实际反馈和 ASR/M12。重启 Mac 后双击 `scripts/open-stackchan-monitor.command`；首次绑定和启停见 [网页说明](web/monitor/README.md)。现已支持 M12 检测/待机、舵机左右5°步进/启停、仰角保存并应用；打开页面不自动动作，声音手动开启。
