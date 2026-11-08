@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "screen.h"
+#include "runtime_log.h"
 #include "laughing_man.h"
 #include "packed_palette.h"
 #include "remote_gestures.h"
@@ -39,7 +40,7 @@ enum class Page { Home, Summary, Log, Pairing, Faces };
 Page page = Page::Home;
 ScreenReaction reaction = ScreenReaction::None;
 uint32_t reaction_at = 0;
-char log_text[4096] = {};
+char log_text[kRuntimeLogTextBytes] = {};
 uint32_t log_sequence = 0;
 bool log_dirty = true;
 int touch_start_x = -1, touch_start_y = -1, touch_last_x = -1, touch_last_y = -1;

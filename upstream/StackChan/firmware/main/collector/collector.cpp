@@ -912,6 +912,11 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     auto health = doc["health"].to<JsonObject>();
     health["heap_free"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     health["heap_largest_free"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    // Internal 8-bit heaps may include memory unsuitable for SPI/I2S DMA.
+    // Report the stricter capability pool separately, never infer it from heap_free.
+    constexpr uint32_t dma_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT;
+    health["dma_free"] = heap_caps_get_free_size(dma_caps);
+    health["dma_largest_free"] = heap_caps_get_largest_free_block(dma_caps);
     health["reset_reason_code"] = static_cast<int>(esp_reset_reason());
     health["psram_free"] = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     health["heap_min_free"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);

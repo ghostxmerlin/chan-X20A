@@ -16,27 +16,26 @@ struct Runtime {
     Style frame_style[2]{Style::Invalid,Style::Invalid};State frame_state[2]{State::Idle,State::Idle};
     int held_slot=-1;uint32_t held_generation=0;
     Stats stats{};
-    explicit Runtime(Backend& b):backend(b) {}
+    explicit Runtime(Backend& b):backend(b) { player.seed_random(b.random_seed()); }
+    void hold_visible() {
+        if(visible()) {held_slot=pool.bound();held_generation=pool.slot(held_slot).generation;}
+    }
     void sync() {
+        hold_visible();
         player.tick(backend.now_us());const auto s=player.snapshot();pool.cancel(s.generation);
-        if(s.phase!=Phase::Loading)held_slot=-1;
+        if(!s.enabled || !player.gate())held_slot=-1;
     }
     bool visible() const {
         const auto s=player.snapshot();const int bound=pool.bound();
-        // An accepted replacement loads behind the previous complete image.
-        // Cancel/page/off transitions do not get this exception, so they cannot
-        // resurrect the previous expression when the page is shown again.
+        // Eye-to-eye transitions retain the last complete frame through idle
+        // loading. Closing the gate/disable revokes this lease before reopening.
         return s.enabled && player.gate() && bound>=0 &&
             (pool.slot(bound).generation==s.generation ||
-             (s.phase==Phase::Loading && bound==held_slot && pool.slot(bound).generation==held_generation));
+             (bound==held_slot && pool.slot(bound).generation==held_generation));
     }
     SubmitResult apply(const Command& c,Source source,uint32_t job=0) {
-        const bool keep=visible();const int bound=pool.bound();
+        hold_visible();
         const auto result=player.submit(c,source,backend.now_us(),job);
-        if(result.accepted && !result.duplicate) {
-            held_slot=keep && player.snapshot().phase==Phase::Loading?bound:-1;
-            if(held_slot>=0)held_generation=pool.slot(held_slot).generation;
-        }
         sync();return result;
     }
 };
@@ -72,7 +71,7 @@ void startup_failed() {
     for(auto& p:r.pixels) {r.backend.release(p);p=nullptr;}
     r.backend.release(r.scratch);r.scratch=nullptr;r.stats.allocated_bytes=0;
     r.player.set_resources(r.backend.available(),false);
-    r.player.failed(r.player.snapshot().generation,Error::NoMemory,r.backend.now_us());r.player.idle_failed();r.sync();
+    r.player.failed(r.player.snapshot().generation,Error::NoMemory,r.backend.now_us());r.player.idle_failed(r.backend.now_us());r.sync();
 }
 SubmitResult submit(const Command& command,Source source) {
     if (!runtime) return {false,0,Error::NoMemory};
@@ -110,7 +109,7 @@ void voice_started(uint32_t job,int clip,uint32_t duration) {
 void cancel_voice(uint32_t job) {
     if (!runtime) return;
     auto& r=*runtime;std::lock_guard<std::mutex> lock(r.mutex);
-    r.player.cancel_voice(job,r.backend.now_us());r.sync();
+    r.hold_visible();r.player.cancel_voice(job,r.backend.now_us());r.sync();
 }
 void step() {
     if (!runtime) return;
@@ -119,7 +118,7 @@ void step() {
     {
         std::lock_guard<std::mutex> lock(r.mutex);r.sync();auto s=r.player.snapshot();
         r.stats.internal_low_water_bytes=r.backend.internal_low_water();
-        if (!s.memory_ready) return;
+        if (!s.memory_ready || !r.player.can_decode(r.backend.now_us())) return;
         configuring=r.player.configuring();
         if (!r.player.gate() && !configuring) return;
         if (!s.enabled && s.phase!=Phase::Loading) return;
@@ -148,8 +147,10 @@ void step() {
     std::lock_guard<std::mutex> lock(r.mutex);r.sync();
     if (plan.generation!=r.player.snapshot().generation) {r.pool.abandon(output);return;}
     if (error!=Error::None) {
-        ++r.stats.failures;r.pool.abandon(output);r.player.failed(plan.generation,error,r.backend.now_us());
-        if (r.cache[r.idle_slot].metadata!=asset(r.player.snapshot().selected_style,State::Idle) || (source==r.idle_slot && plan.style==r.player.snapshot().selected_style && plan.state==State::Idle)) r.player.idle_failed();
+        ++r.stats.failures;r.pool.abandon(output);r.hold_visible();r.player.failed(plan.generation,error,r.backend.now_us());
+        if (r.cache[r.idle_slot].metadata!=asset(r.player.snapshot().selected_style,State::Idle) || (source==r.idle_slot && plan.style==r.player.snapshot().selected_style && plan.state==State::Idle)) {
+            r.cache[r.idle_slot].metadata=nullptr;r.player.idle_failed(r.backend.now_us());
+        }
         r.sync();return;
     }
     r.idle_slot=idle;r.player.set_idle_ready(true);r.player.loaded(plan.generation,r.backend.now_us());r.sync();
@@ -179,6 +180,6 @@ void rendered(bool showing) {
 bool show_bound_frame() {
     if (!runtime) return false;
     auto& r=*runtime;std::lock_guard<std::mutex> lock(r.mutex);
-    return r.visible();
+    r.sync();return r.visible();
 }
 }

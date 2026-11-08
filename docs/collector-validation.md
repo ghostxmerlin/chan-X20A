@@ -1,5 +1,27 @@
 # Collector 验证记录
 
+## 2026-11-08 · collector-0.4.34自然循环：部署及并发短窗口通过
+
+- 最终构建/部署：应用3,488,640 B，SHA256 `7269e08487f52ad024dd466c79bb3a74e9ae6afaaf2552bc5faaf7043d586b88`；仅应用写入、独立verify通过，静态RAM仍173,163 B。0.4.34将听觉worker由不绑核改为core1/priority4；eyes core1/priority3、LVGL core0/priority3、JPEG core1/priority2。栈与缓存不变，临时USB任务统计诊断已在构建前移除。
+- 主机回归：Python70项，66通过/4既有跳过；Node53通过。覆盖本体2–7秒随机排期、同款29种非idle加权选择/1–3轮/不连续重复、手动及语音抢占、隐藏后重新排期、失败退避和旧固件网页兼容。复用原任务/缓存，不新增NVS写入；0.4.34实际浏览器1366×768检查无脚本错误、横向溢出或意外控制请求，页面台词completed约4.5/4.5秒、听觉idle。证据`logs/eyes-v0434/browser-live.json`及PNG。
+- 最终实机总窗口110.725989秒/188样本；其中81.625482秒/120样本全部听觉connected且眼睛visible。rendered+162、decoded+187，出现comforting/curious/determined/happy/laughing/shy/worried及idle，SD reads+8；听觉packets+1,360、dropped_blocks+0、reconnects+0。SD/眼睛失败0，相机/音频错误增量0、HTTP音频skipped增量0。
+- 台词job1 completed，214,272/214,272 B完整提交，输出关闭，error/cleanup_error均0。窗口DMA free最低17,643 B、largest最低9,728 B；串口panic、DMA申请失败、显示锁错误均0。精确汇总`logs/eyes-v0434/result-summary.json`。
+- 加载中取消补验：手动请求进入Loading后Stop，后续12样本全部visible，旧请求未复活、SD失败0，`logs/eyes-v0434/cancel-check.json`为PASS。停止串口采集后再次核实同一boot在线，末态v05 natural_cycle=true、hearing=false，见`final-state.json`。
+- 性能边界：并发相机约2.254198次采集尝试/秒、采集错误0，未达到10 fps目标；不能把它称为目标视频帧率通过。约81.6秒零丢块/重连仅描述该窗口，仍需长时和其他音画组合验证，未新增逐条台词听校或机械动作验收。
+
+### 0.4.31–0.4.33复现与失败对照
+
+- 闪回原首页：真实v14资源在正常结束和模拟2秒读卡场景复现旧帧交接断档。0.4.31保留合法播放→idle过渡的完整旧帧，手动首帧预算改10秒，语音1.5秒及job取消不变；切页/关屏/心叉/关闭仍服从门控。0.4.31实机v05/v14自然/手动通过，v18手动读卡发生`setup_dma_priv_buffer`私有RX申请失败→`sdmmc_read_sectors_dma`返回0x101→SD不可用；保帧有效、无panic。用户反馈“好像是正常哦”，不扩写为完整并发通过。
+- 0.4.32回收日志冗余：ring32→实际显示9行，屏幕拼接缓冲4096→1089 B。源级容量减少5,790 B，链接`.bss`减少5,784 B；新增严格`MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL`口径的free/largest遥测。SDSPI每扇区已有516 B复用缓冲，但非4字节倍数的实际接收长度仍可能触发SPI小额私有RX分配；未以无效的上层4 KiB staging或修改SPI成功路径替代诊断。
+- 0.4.32部署：身份、活动ota_1、otadata CRC核对通过；旧0.4.31完整备份与归档一致，仅0x510000应用写入及独立校验PASS。镜像3,488,640 B，SHA256 `fa26ccea82e20365e5fec89d24a4a8a408543eb70005adf5c2dd5c2547178664`，variant `natural-eye-idle-dma-headroom`。固定IDF5.5.4及原分区保留。
+- 第一实机窗口166.640秒、281样本：v05/v14/v18自然循环、手动播放、回idle和台词完成，SD读取11/失败0、眼睛失败0；末态v14 idle、natural_cycle=true，submitted/rendered均51。采样最低内部free28,515 B、largest7,680 B；DMA free20,727 B、largest7,680 B；PSRAM free5,761,208 B。最大单次解码墙钟时间27,944,263 µs，包含等待/被抢占的可能性，不能据此直接判定解码算法CPU耗时。
+- **随后听觉并发未通过性能验收：** 23.379秒/24样本，packets1805→2150（+345）、dropped_blocks1113→1353（+240），reconnects保持0；两个音频订阅且HTTP skipped保持0。眼睛全部样本为idle/source=none，SD reads保持11，未观察到自然表情推进。不能将第一窗口的SD零错误外推为听觉并发或长期稳定。
+- 0.4.32受控基线：45.659896秒/40样本，其中39样本connected；眼睛rendered+1、decoded+1、SD reads+0，听觉packets+680、dropped_blocks+377、reconnects+0。暂停听觉16.180252秒后，rendered+41、decoded+45、reads+1/read_us+581,529。该对照支持检查调度竞争，未证明全部延迟均由一个任务参数导致。脚本与结果保留在`logs/eyes-v0432/concurrency-baseline.{json,log}`。
+- 0.4.33调度候选已部署：仅eyes worker由core0/priority1改为core1/priority3，任务栈、缓存和静态RAM173,163 B不变。构建通过；完整0.4.32备份已校验，`backups/ota_1-collector-0.4.32-before-eyes-natural-20261108.bin`保留；仅应用写入和独立verify通过。镜像3,488,640 B，SHA256 `3448ff794f891bb4b25d26917be0f5cec4f24645e1155b3c6a2d3f3017493aca`。随后80.608555秒并发窗口仍失败：rendered+6、decoded+13，听觉packets+889、dropped_blocks+2,049，台词报`display_bus_unavailable`；SD failures保持0。证据`logs/eyes-v0433/live-check.json`的continuous样本，不能将SD零错误写成显示/音频并发通过。
+- 临时USB任务运行时间采样支持core0调度竞争判断，但不把存在格式限制的原始CPU百分比作为精确对比指标；最终采纳的调度变更及结果见本节开头。
+
+证据仅保存在本机`logs/eyes-v0432/`、`logs/eyes-v0433/`及`logs/eyes-v0434/`。未自动追加机械动作，保存10°及遥控俯仰禁用保持。后续结果须另记版本和窗口，不覆盖上述失败/边界。
+
 ## 2026-11-08 14:23缓存 · 后续资源盘点
 
 用户反馈音画暂无明显问题。资源审计见[完整清单](resource-inventory.md)，以功能提交9659664及已部署06b6cd…cc08e镜像为基准；本轮未改固件或执行新硬件动作。现有map/镜像与部署归档一致，实读分区表与构建表一致。

@@ -4,6 +4,7 @@
 //   upstream/StackChan/firmware/main/collector/runtime_log.cpp -o /tmp/runtime-log-test
 #include "collector/runtime_log.h"
 #include <cassert>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -82,6 +83,32 @@ int main()
     assert(s.count == kRuntimeLogVisibleLines && s.sequence == 50);
     assert(std::strcmp(s.lines[0], "line 41") == 0);
     assert(std::strcmp(s.lines[8], "line 49") == 0);
+
+    // Max-width lines must survive multiple complete wraps in chronological
+    // order and still fit the screen's nine-line text contract without losing
+    // either end. A partial credential crossing the wrap stays redacted.
+    runtime_log_test_reset();
+    for (int i = 0; i < 27; ++i) {
+        const auto line=std::string(120, char('A'+i%26));
+        runtime_log_test_printf("%s\n",line.c_str());
+        if(i>=8) {
+            s=snapshot();assert(s.count==9);
+            for(size_t n=0;n<9;++n) {
+                assert(std::strlen(s.lines[n])==120);
+                assert(std::string(s.lines[n])==std::string(120,char('A'+(i-8+int(n))%26)));
+            }
+        }
+    }
+    s=snapshot();
+    std::string screen_text;
+    for(size_t n=0;n<s.count;++n){if(n)screen_text+='\n';screen_text+=s.lines[n];}
+    assert(screen_text.size()==1088 && screen_text.front()=='S' && screen_text.back()=='A');
+    std::array<char,kRuntimeLogTextBytes> rendered{};
+    assert(std::snprintf(rendered.data(),rendered.size(),"%s",screen_text.c_str())==1088);
+    assert(std::string(rendered.data())==screen_text);
+    runtime_log_test_printf("pass");runtime_log_test_printf("word=hidden-after-wrap\n");
+    s=snapshot();assert(s.count==9 && std::strcmp(s.lines[8],"[REDACTED]")==0);
+    assert(std::string(s.lines[0])==std::string(120,'T'));
 
     runtime_log_test_reset();
     std::thread producer_a([] {

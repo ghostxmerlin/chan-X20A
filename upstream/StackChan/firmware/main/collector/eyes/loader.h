@@ -13,6 +13,7 @@ public:
     virtual Error read(const Asset&,uint8_t* destination,size_t capacity)=0;
     virtual bool sha256(const uint8_t* bytes,size_t length,uint8_t digest[32])=0;
     virtual uint32_t internal_low_water() const { return 0; }
+    virtual uint32_t random_seed() const { return uint32_t(now_us()); }
 };
 class MemoryReader : public soul::Reader {
 public:

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "player.h"
+#include <algorithm>
 #include <cstring>
 namespace collector::eyes {
 namespace {
@@ -35,9 +36,34 @@ void Player::update_result(Record& r,RequestStatus status,Error error) {
     r.result.status=status;r.result.error=error;
     if (r.result.request_seq==value_.last_request.request_seq) value_.last_request=r.result;
 }
-void Player::finish(RequestStatus status,Error error,int64_t) {
+uint32_t Player::random_below(uint32_t limit) {
+    random_^=random_<<13;random_^=random_>>17;random_^=random_<<5;
+    return random_%limit;
+}
+void Player::update_countdown(int64_t now) {
+    value_.next_change_ms=value_.natural_cycle && gate_ && !active() && natural_due_>now
+        ?uint32_t((natural_due_-now+999)/1000):0;
+}
+void Player::begin_natural(int64_t now) {
+    // Every non-idle state remains eligible. Friendly/curious/thoughtful beats
+    // get more turns; hurt/angry/refusing/scared remain uncommon.
+    constexpr uint8_t weights[kStateCount]={0,6,1,2,1,5,3,3,1,2,4,4,2,5,5,3,1,2,4,2,3,3,6,5,6,4,2,1,4,3};
+    uint32_t total=0;
+    for(size_t i=1;i<kStateCount;++i)if(State(i)!=last_natural_)total+=weights[i];
+    auto draw=random_below(total);
+    for(size_t i=1;i<kStateCount;++i)if(State(i)!=last_natural_) {
+        if(draw<weights[i]){value_.state=State(i);break;}draw-=weights[i];
+    }
+    last_natural_=value_.state;natural_rounds_=1+random_below(3);natural_frames_=0;
+    natural_active_=true;loaded_=false;began_=idle_began_=natural_due_=natural_frame_due_=0;
+    first_deadline_=now+int64_t(kManualFirstFrameDeadlineMs)*1000;
+    value_.source=Source::Natural;value_.mode=Mode::Loop;value_.phase=Phase::Loading;++value_.generation;
+}
+void Player::finish(RequestStatus status,Error error,int64_t now) {
+    if(natural_active_ && (status==RequestStatus::Failed || status==RequestStatus::Expired))natural_after_=now+5000000;
     if (current_>=0) update_result(history_[current_],status,error);
-    current_=-1;loaded_=false;began_=idle_began_=0;
+    current_=-1;natural_active_=false;loaded_=false;began_=idle_began_=natural_due_=natural_frame_due_=0;
+    natural_frames_=0;value_.next_change_ms=0;
     value_.state=State::Idle;value_.mode=Mode::Once;value_.source=Source::None;
     value_.phase=!value_.enabled?Phase::Legacy:gate_?Phase::Idle:Phase::Suspended;
     ++value_.generation;
@@ -46,13 +72,14 @@ void Player::set_gate(bool allowed,Error reason,int64_t now) {
     if (gate_==allowed && value_.suspended_reason==reason) return;
     gate_=allowed;value_.suspended_reason=allowed?Error::None:reason;
     value_.visible=value_.enabled && gate_;
-    if (!allowed && current_>=0 && !configuring()) finish(RequestStatus::Cancelled,reason,now);
+    natural_due_=0;value_.next_change_ms=0;
+    if (!allowed && active() && !configuring()) finish(RequestStatus::Cancelled,reason,now);
     else { ++value_.generation;idle_began_=0; }
     if (current_<0) value_.phase=!value_.enabled?Phase::Legacy:allowed?Phase::Idle:Phase::Suspended;
 }
 SubmitResult Player::submit(const Command& c,Source source,int64_t now,uint32_t job) {
     tick(now);
-    if (!valid_command(c) || source==Source::None) return {false,0,Error::InvalidArgument};
+    if (!valid_command(c) || (source!=Source::Manual && source!=Source::Voice)) return {false,0,Error::InvalidArgument};
     for (auto& r:history_) if (r.result.request_seq && now-r.at<60000000 && !std::strcmp(c.request_id,r.command.request_id)) {
         if (!same(c,r.command)) return {false,0,Error::IdConflict};
         return {true,r.result.request_seq,Error::None,true};
@@ -67,51 +94,84 @@ SubmitResult Player::submit(const Command& c,Source source,int64_t now,uint32_t 
         if (!value_.storage_ready) return {false,0,Error::StorageUnavailable};
         if (!value_.memory_ready) return {false,0,Error::NoMemory};
     }
-    if (current_>=0) finish(RequestStatus::Cancelled,Error::Superseded,now);
+    if (active()) finish(RequestStatus::Cancelled,Error::Superseded,now);
     else { ++value_.generation;idle_began_=0; }
     auto& r=history_[next_];r={};r.command=c;r.at=now;r.source=source;r.voice_job=job;
     std::memcpy(r.result.request_id,c.request_id,37);r.result.request_seq=++sequence_;
     r.result.operation=c.op;r.result.status=RequestStatus::Accepted;
     current_=int(next_);next_=(next_+1)%history_.size();value_.last_request=r.result;
-    value_.last_error=Error::None;loaded_=false;began_=0;
+    value_.last_error=Error::None;loaded_=false;began_=natural_due_=decode_after_=0;value_.next_change_ms=0;
+    first_deadline_=now+int64_t(source==Source::Voice?kVoiceFirstFrameDeadlineMs:kManualFirstFrameDeadlineMs)*1000;
     if (c.op==Operation::Configure) {
         auto_enable_=false;value_.requested_style=c.style;
-        if (!c.enabled) { value_.enabled=false;value_.visible=false;finish(RequestStatus::Completed,Error::None,now); }
+        if (!c.enabled) { value_.natural_cycle=false;value_.enabled=false;value_.visible=false;finish(RequestStatus::Completed,Error::None,now); }
         else { value_.state=State::Idle;value_.source=source;value_.phase=Phase::Loading; }
     } else if (c.op==Operation::Stop) finish(RequestStatus::Completed,Error::None,now);
     else {
         value_.state=c.state;value_.mode=c.mode;value_.source=source;value_.phase=Phase::Loading;
-        first_deadline_=now+1500000;
     }
     return {true,r.result.request_seq,Error::None};
 }
 void Player::tick(int64_t now) {
-    if (current_<0 || configuring()) return;
+    update_countdown(now);
+    if(!active()) {
+        if(value_.natural_cycle && value_.enabled && value_.ready && value_.storage_ready && gate_ &&
+           idle_began_ && natural_due_ && now>=natural_due_)begin_natural(now);
+        return;
+    }
     if (!began_) { if (now>=first_deadline_) finish(RequestStatus::Expired,Error::Expired,now);return; }
+    if(natural_active_) {
+        if(natural_frames_>=natural_rounds_*8 && now>=natural_frame_due_)finish(RequestStatus::Completed,Error::None,now);
+        return;
+    }
     const auto& c=history_[current_].command;
     const uint32_t duration=c.mode==Mode::Loop?c.loop_for_ms:asset(value_.selected_style,c.state)->duration_ms;
     if (now-began_>=int64_t(duration)*1000) finish(RequestStatus::Completed,Error::None,now);
 }
 void Player::loaded(uint32_t gen,int64_t now) {
-    tick(now);if (gen!=value_.generation || current_<0) return;
-    loaded_=true;value_.ready=true;
+    tick(now);if (gen!=value_.generation) return;
+    value_.ready=true;decode_after_=0;
+    if(!active())return;
+    loaded_=true;
     if (configuring()) {
-        value_.selected_style=history_[current_].command.style;value_.enabled=true;value_.visible=gate_;
+        value_.selected_style=history_[current_].command.style;value_.enabled=true;value_.visible=gate_;value_.natural_cycle=true;
+        last_natural_=State::Invalid;natural_after_=0;
         update_result(history_[current_],RequestStatus::Completed,Error::None);
         current_=-1;value_.source=Source::None;value_.phase=gate_?Phase::Idle:Phase::Suspended;idle_began_=0;
-    } else { value_.enabled=true;value_.visible=gate_; }
+    } else {
+        // A first explicit voice cue may enable the default V05 style. Once
+        // that succeeds it has the same autonomous idle behavior as a selection.
+        if(!value_.enabled)value_.natural_cycle=true;
+        value_.enabled=true;value_.visible=gate_;
+    }
 }
 void Player::failed(uint32_t gen,Error error,int64_t now) {
     tick(now);if (gen!=value_.generation) return;
     value_.last_error=error;value_.last_error_seq=current_>=0?history_[current_].result.request_seq:0;
-    finish(RequestStatus::Failed,error,now);value_.phase=Phase::Error;
+    finish(RequestStatus::Failed,error,now);natural_after_=now+5000000;value_.phase=Phase::Error;
+}
+void Player::idle_failed(int64_t now) {
+    // Retain an already enabled style/frame. A broken idle asset is retried
+    // with bounded backoff, never in a worker busy loop and never via legacy.
+    value_.ready=false;value_.phase=Phase::Error;decode_after_=now+5000000;
+    natural_due_=0;value_.next_change_ms=0;
 }
 bool Player::presented(uint32_t gen,uint16_t frame,uint32_t sequence,int64_t now) {
     tick(now);
-    if (gen!=value_.generation || !gate_ || !value_.enabled || frame>=8 || (current_>=0 && !loaded_)) return false;
-    if (current_>=0 && !began_) {
-        began_=now?now:1;value_.phase=Phase::Playing;update_result(history_[current_],RequestStatus::Presenting,Error::None);
-    } else if (current_<0 && !idle_began_) idle_began_=now?now:1;
+    if (gen!=value_.generation || !gate_ || !value_.enabled || frame>=8 || (active() && !loaded_)) return false;
+    if(natural_active_ && (frame!=natural_frames_%8 || (began_ && now<natural_frame_due_)))return false;
+    if (active() && !began_) {
+        began_=now?now:1;value_.phase=Phase::Playing;
+        if(current_>=0)update_result(history_[current_],RequestStatus::Presenting,Error::None);
+    } else if (!active() && !idle_began_) {
+        idle_began_=now?now:1;value_.phase=Phase::Idle;
+        if(value_.natural_cycle)natural_due_=std::max(now+int64_t(2000+random_below(5001))*1000,natural_after_);
+        update_countdown(now);
+    }
+    if(natural_active_) {
+        ++natural_frames_;
+        natural_frame_due_=now+int64_t(asset(value_.selected_style,value_.state)->durations[frame])*1000;
+    }
     value_.frame_index=frame;value_.submitted_seq=sequence;value_.active_style=value_.selected_style;
     return true;
 }
@@ -126,6 +186,7 @@ RequestResult Player::query(const char* id,int64_t now) const {
 FramePlan Player::frame_plan(int64_t now,int bound_frame) const {
     const Style style=configuring()?history_[current_].command.style:value_.selected_style;
     const State state=configuring()?State::Idle:value_.state;
+    if(natural_active_)return {style,state,value_.generation,uint16_t(natural_frames_%8),began_?natural_frame_due_:0};
     const auto* a=asset(style,state);const int64_t start=current_>=0?began_:idle_began_;
     if (!start) return {style,state,value_.generation,0,0};
     const int64_t elapsed=now>start?now-start:0,total=int64_t(a->duration_ms)*1000;

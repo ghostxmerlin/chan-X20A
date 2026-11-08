@@ -6,6 +6,10 @@
 namespace collector {
 constexpr size_t kRuntimeLogLineChars = 120;
 constexpr size_t kRuntimeLogVisibleLines = 9;
+// Nine maximum-width lines, eight separators, and the final NUL. Shared with
+// the screen cache so retaining hidden history cannot inflate internal RAM.
+constexpr size_t kRuntimeLogTextBytes = kRuntimeLogVisibleLines * kRuntimeLogLineChars +
+    (kRuntimeLogVisibleLines - 1) + 1;
 
 struct RuntimeLogSnapshot {
     uint32_t sequence = 0;

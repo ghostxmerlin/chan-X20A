@@ -10,7 +10,7 @@
 
 namespace collector {
 namespace {
-constexpr size_t kStoredLines = 32;
+constexpr size_t kStoredLines = kRuntimeLogVisibleLines;
 [[maybe_unused]] constexpr size_t kFormatBytes = 384;
 enum class Escape { None, Start, Csi, Osc, OscEnd };
 std::atomic_flag cache_lock = ATOMIC_FLAG_INIT;

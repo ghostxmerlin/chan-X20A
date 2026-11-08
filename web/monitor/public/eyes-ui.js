@@ -11,9 +11,16 @@ export class EyesPanel {
     this.el('eyes-disable').addEventListener('click',()=>this.act('configure',{enabled:false,style:this.el('eyes-style').value}));
     this.el('eyes-play').addEventListener('click',()=>this.act('play',{state:this.el('eyes-state').value}));
     this.el('eyes-stop').addEventListener('click',()=>this.act('stop'));
+    this.el('eyes-style').addEventListener('change',()=>{
+      if(this.styleMismatch())this.el('eyes-command').textContent=this.styleHint();
+      else this.el('eyes-command').textContent='所选款式已应用，可播放一次表情。';
+    });
   }
   el(id){return this.doc.getElementById(id);}
+  styleMismatch(){return this.el('eyes-style').value!==this.state?.telemetry?.eyes?.selected_style;}
+  styleHint(){return `请先点击“${this.state?.eyesCatalog?.natural_cycle===true?'自然循环':'启用款式'}”应用所选款式。`;}
   async act(op,fields={}) {
+    if(op==='play'&&this.ready&&this.styleMismatch()) {this.el('eyes-command').textContent=this.styleHint();return;}
     if(!this.ready||this.pending||(op==='play'&&!this.canPlay))return;
     const boot=this.state.boot;this.pending=true;this.el('eyes-command').textContent='正在发送…';this.render(this.state,this.fresh);
     try {
@@ -35,12 +42,22 @@ export class EyesPanel {
       }
     }
     if(this.boot!==state?.boot) {this.boot=state?.boot;if(c.styles?.some(i=>i.id===s.selected_style))this.el('eyes-style').value=s.selected_style;}
-    this.ready=!!fresh&&supported;this.canPlay=this.ready&&s.enabled&&s.storage_ready&&s.memory_ready&&s.phase!=='loading'&&s.phase!=='suspended';
+    const naturalLoading=s.phase==='loading'&&s.source==='natural'&&c.natural_cycle===true;
+    this.ready=!!fresh&&supported;this.canPlay=this.ready&&s.enabled&&s.storage_ready&&s.memory_ready&&(s.phase!=='loading'||naturalLoading)&&s.phase!=='suspended';
     for(const id of ['eyes-enable','eyes-disable','eyes-stop','eyes-style','eyes-state'])this.el(id).disabled=!this.ready||this.pending;
     this.el('eyes-enable').disabled=!this.ready||this.pending||!s.storage_ready||!s.memory_ready;
     this.el('eyes-play').disabled=!this.canPlay||this.pending;
-    this.el('eyes-status').textContent=!fresh?'连接或状态已过期':!supported?'等待支持眼睛的新固件':!s.storage_ready?'存储卡未就绪':phases[s.phase]||'等待状态';
-    this.el('eyes-current').textContent=fresh&&supported?`${c.styles?.find(i=>i.id===s.selected_style)?.label||s.selected_style||'—'} · ${c.states?.find(i=>i.id===s.state)?.label||'待机'} · ${s.source==='voice'?'ASR 台词':s.source==='manual'?'网页手动':'待机'}`:'—';
+    this.el('eyes-enable').textContent=c.natural_cycle===true?'自然循环':'启用款式';
+    this.el('eyes-stop').textContent='回到待机';
+    const natural=s.enabled&&c.natural_cycle===true&&s.natural_cycle===true;
+    const active=['idle','loading','playing'].includes(s.phase);
+    const takeover=natural&&['loading','playing'].includes(s.phase)&&['manual','voice'].includes(s.source);
+    const cycleStatus=takeover?`自然循环 · ${s.source==='voice'?'语音':'手动'}接管`:s.phase==='loading'?'自然循环 · 加载中':'自然循环';
+    this.el('eyes-status').textContent=!fresh?'连接或状态已过期':!supported?'等待支持眼睛的新固件':!s.storage_ready?'存储卡未就绪':natural&&active?cycleStatus:phases[s.phase]||'等待状态';
+    const source=s.source==='natural'?(natural?'自然循环':'自动表情'):s.source==='voice'?'ASR 台词':s.source==='manual'?'网页手动':natural&&active?'自然循环':'待机';
+    const next=natural&&active&&!takeover&&Number.isFinite(s.next_change_ms)&&s.next_change_ms>0?` · 下次 ${(s.next_change_ms/1000).toFixed(1)} 秒`:'';
+    this.el('eyes-current').textContent=fresh&&supported?`${c.styles?.find(i=>i.id===s.selected_style)?.label||s.selected_style||'—'} · ${c.states?.find(i=>i.id===s.state)?.label||'待机'} · ${source}${next}`:'—';
+    for(const name of ['eyes-status','eyes-current','eyes-command'])this.el(name).title=this.el(name).textContent;
     const r=s.last_request||{};
     this.el('eyes-result').textContent=fresh&&supported?`${results[r.status]||'尚无请求'}${r.error?' · '+(errors[r.error]||r.error):''}${s.last_error?' · '+(errors[s.last_error]||s.last_error):''} · 提交 ${s.submitted_seq||0} / 渲染 ${s.rendered_seq||0}`:'—';
   }

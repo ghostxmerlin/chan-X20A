@@ -85,12 +85,15 @@ void catalog_json(JsonObject out) {
     auto states=out["states"].to<JsonArray>();
     for(size_t i=0;i<kStateCount;++i) {auto o=states.add<JsonObject>();o["id"]=state_id(State(i));o["label"]=kStateLabels[i];}
     out["modes"][0]="once";out["modes"][1]="loop";out["loop_min_ms"]=1000;out["loop_max_ms"]=30000;
-    out["first_frame_deadline_ms"]=1500;out["request_history_count"]=16;out["request_history_ms"]=60000;
+    out["first_frame_deadline_ms"]=kVoiceFirstFrameDeadlineMs;out["voice_first_frame_deadline_ms"]=kVoiceFirstFrameDeadlineMs;
+    out["manual_first_frame_deadline_ms"]=kManualFirstFrameDeadlineMs;out["natural_cycle"]=true;
+    out["request_history_count"]=16;out["request_history_ms"]=60000;
     out["asset_install"]=upload_queue!=nullptr;out["max_asset_bytes"]=kAssetCapacity;out["asr_open"]=true;out["persistent"]=false;
 }
 void status_json(JsonObject out) {
     const auto s=snapshot();out["supported"]=s.supported;out["ready"]=s.ready;out["enabled"]=s.enabled;
     out["storage_ready"]=s.storage_ready;out["memory_ready"]=s.memory_ready;
+    out["natural_cycle"]=s.natural_cycle;out["next_change_ms"]=s.next_change_ms;
     out["requested_style"]=style_id(s.requested_style);out["selected_style"]=style_id(s.selected_style);
     out["active_style"]=valid(s.active_style)?style_id(s.active_style):nullptr;
     out["state"]=state_id(s.state);out["mode"]=name(s.mode);out["source"]=name(s.source);out["phase"]=name(s.phase);

@@ -3,6 +3,7 @@
 #include "loader.h"
 #include "hal/board/shared_storage.h"
 #include <esp_heap_caps.h>
+#include <esp_random.h>
 #include <esp_timer.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -27,6 +28,7 @@ struct EspBackend final:Backend {
     }
     bool sha256(const uint8_t* data,size_t size,uint8_t* digest) override { return mbedtls_sha256(data,size,digest,0)==0; }
     uint32_t internal_low_water() const override { return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT); }
+    uint32_t random_seed() const override { return esp_random(); }
 } backend;
 StaticTask_t worker_control;
 constexpr size_t kWorkerStackBytes=16384;
@@ -38,7 +40,10 @@ void start() {
     // Eye decoding and SD reads never write flash. Keep their stack in PSRAM
     // so LCD/SD DMA and concurrent network clients retain internal memory.
     worker_stack=static_cast<StackType_t*>(heap_caps_malloc(kWorkerStackBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
-    if (!worker_stack || !xTaskCreateStaticPinnedToCore(worker,"eyes",kWorkerStackBytes,nullptr,1,worker_stack,&worker_control,0)) {
+    // Keep decoding off the Wi-Fi/LVGL core and above the JPEG worker (2).
+    // Hearing (4) and microphone capture (7) still take priority. A starved
+    // SD read also holds the shared LCD bus lease, freezing the displayed eyes.
+    if (!worker_stack || !xTaskCreateStaticPinnedToCore(worker,"eyes",kWorkerStackBytes,nullptr,3,worker_stack,&worker_control,1)) {
         heap_caps_free(worker_stack);worker_stack=nullptr;
         startup_failed();
         ESP_LOGE("Eyes","Worker unavailable; caches released, eye requests disabled");

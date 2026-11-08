@@ -269,7 +269,9 @@ void init(const std::string& device_id,const std::string& boot_id) {
     // This worker never writes flash; external task stacks are enabled already.
     worker_stack=static_cast<StackType_t*>(heap_caps_malloc(kWorkerStackBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
     // Keep encoding ahead of display/JPEG work while leaving the sampler (7) first.
-    if(queue&&worker_stack&&xTaskCreateStatic(worker,"collector_ear",kWorkerStackBytes,nullptr,4,worker_stack,&worker_control))ready=true;
+    // Opus must share core 1 with JPEG (priority 2), not crowd out the
+    // core-0 LVGL task alongside Wi-Fi/TCP. Capture (7) still takes priority.
+    if(queue&&worker_stack&&xTaskCreateStaticPinnedToCore(worker,"collector_ear",kWorkerStackBytes,nullptr,4,worker_stack,&worker_control,1))ready=true;
     else {
         if(queue)vQueueDelete(queue);
         queue=nullptr;heap_caps_free(storage);heap_caps_free(worker_stack);worker_stack=nullptr;
