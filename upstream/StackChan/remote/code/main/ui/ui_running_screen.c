@@ -46,6 +46,7 @@ void create_running_screen()
 
     if (running_screen == NULL) {
         ESP_LOGE("UI", "Failed to create running screen!");
+        lvgl_port_unlock();
         return;
     }
 
@@ -152,6 +153,10 @@ void update_running_screen(int16_t joyX, int16_t joyY, uint8_t channel, uint8_t 
 
     while (!lvgl_port_lock()) {
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (running_screen == NULL || !lv_obj_is_valid(running_screen)) {
+        lvgl_port_unlock();
+        return;
     }
     // Update joystick dot position (relative to joystick_area center)
     lv_obj_align(joystick_dot, LV_ALIGN_TOP_LEFT, x_pos - 5, y_pos - 5);

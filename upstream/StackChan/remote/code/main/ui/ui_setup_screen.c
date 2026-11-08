@@ -59,7 +59,7 @@ void create_setup_screen()
     // Create Channel dropdown
     channel_dropdown = lv_dropdown_create(setup_screen);
     lv_dropdown_set_options(channel_dropdown, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14");
-    lv_dropdown_set_selected(channel_dropdown, 0);
+    lv_dropdown_set_selected(channel_dropdown, joystick_data.channel - 1);
     lv_obj_align(channel_dropdown, LV_ALIGN_TOP_LEFT, 5, 50);
     lv_dropdown_set_symbol(channel_dropdown, &updown_img);
     // Set dropdown background color
@@ -78,7 +78,7 @@ void create_setup_screen()
         "0(Broadcast)"
         "\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n3"
         "0\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50");
-    lv_dropdown_set_selected(id_dropdown, 0);
+    lv_dropdown_set_selected(id_dropdown, joystick_data.id);
     lv_obj_align(id_dropdown, LV_ALIGN_TOP_LEFT, 5, 120);
     lv_dropdown_set_symbol(id_dropdown, &updown_img);
     // Set dropdown background color
@@ -86,7 +86,7 @@ void create_setup_screen()
     lv_obj_set_style_bg_opa(id_dropdown, LV_OPA_COVER, LV_PART_MAIN);                    // Ensure background is opaque
 
     lv_obj_t *btn_label = lv_label_create(setup_screen);
-    lv_label_set_text(btn_label, "Press to Start");
+    lv_label_set_text(btn_label, "Save & Start");
     lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_18, 0);
     lv_obj_align(btn_label, LV_ALIGN_BOTTOM_MID, 0, -30);
 
@@ -94,6 +94,17 @@ void create_setup_screen()
     lv_label_set_text(arrow_label, LV_SYMBOL_DOWN);
     lv_obj_align(arrow_label, LV_ALIGN_BOTTOM_MID, 0, -5);
 
+    lvgl_port_unlock();
+}
+
+void sync_setup_screen(const joystick_data_t *data)
+{
+    while (!lvgl_port_lock()) vTaskDelay(pdMS_TO_TICKS(10));
+    if (channel_dropdown != NULL && id_dropdown != NULL &&
+        lv_obj_is_valid(channel_dropdown) && lv_obj_is_valid(id_dropdown)) {
+        lv_dropdown_set_selected(channel_dropdown, data->channel - 1);
+        lv_dropdown_set_selected(id_dropdown, data->id);
+    }
     lvgl_port_unlock();
 }
 
@@ -114,6 +125,12 @@ void update_setup_screen(joystick_data_t *data)
 {
     while (!lvgl_port_lock()) {
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    // A setup task may have read the joystick immediately before BtnA exited.
+    // Recheck under the confirmation lock before touching either saved value.
+    if (data->screen_mode != MODE_SETUP || channel_dropdown == NULL || id_dropdown == NULL) {
+        lvgl_port_unlock();
+        return;
     }
     // Update setup screen
     if (data->select_mode == CHANNEL_SELECT) {

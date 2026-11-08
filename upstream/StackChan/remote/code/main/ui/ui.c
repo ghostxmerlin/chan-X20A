@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "ui.h"
+#include "../lvgl_port.h"
 
 /**
  * @brief Switches between different UI screens based on the provided screen ID
@@ -38,11 +39,15 @@ void switch_screen(int screen_id)
             create_setup_screen();
             ESP_LOGI("UI", "Setup screen created");
         }
-        // Load only if object is valid
+        sync_setup_screen(&joystick_data); // Acquires its own non-recursive lock.
+        while (!lvgl_port_lock()) vTaskDelay(pdMS_TO_TICKS(10));
+        // Validate and load together; creation/destruction lock internally.
         if (setup_screen != NULL && lv_obj_is_valid(setup_screen)) {
             ESP_LOGI("UI", "Setup screen loaded");
             lv_scr_load_anim(setup_screen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 200, 0, false);
+            lvgl_port_unlock();
         } else {
+            lvgl_port_unlock();
             ESP_LOGE("UI", "Setup screen is NULL or invalid!");
             ui_setup_screen_destory();
             goto setup_create;
@@ -53,11 +58,14 @@ void switch_screen(int screen_id)
             create_running_screen();
             ESP_LOGI("UI", "Running screen created");
         }
+        while (!lvgl_port_lock()) vTaskDelay(pdMS_TO_TICKS(10));
         // Load only if object is valid
         if (running_screen != NULL && lv_obj_is_valid(running_screen)) {
             ESP_LOGI("UI", "Running screen loaded");
             lv_scr_load_anim(running_screen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 200, 0, false);
+            lvgl_port_unlock();
         } else {
+            lvgl_port_unlock();
             ESP_LOGE("UI", "Running screen is NULL or invalid!");
             ui_running_screen_destory();
             goto running_create;
@@ -68,11 +76,14 @@ void switch_screen(int screen_id)
             create_imu_screen();
             ESP_LOGI("UI", "IMU screen created");
         }
+        while (!lvgl_port_lock()) vTaskDelay(pdMS_TO_TICKS(10));
         // Load only if object is valid
         if (imu_screen != NULL && lv_obj_is_valid(imu_screen)) {
             ESP_LOGI("UI", "IMU screen loaded");
             lv_scr_load_anim(imu_screen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 200, 0, false);
+            lvgl_port_unlock();
         } else {
+            lvgl_port_unlock();
             ESP_LOGE("UI", "Running screen is NULL or invalid!");
             ui_imu_screen_destory();
             goto imu_create;
@@ -83,16 +94,19 @@ void switch_screen(int screen_id)
 }
 
 /**
- * @brief Initialize the UI system by creating and loading the initial setup screen
+ * @brief Initialize the UI on the joystick control screen
  * @note This function serves as the entry point for UI initialization
  * @details
- *      1. Creates the setup screen using create_setup_screen()
- *      2. Immediately loads the setup screen as the current display
+ *      1. Creates the running screen
+ *      2. Immediately loads it to match joystick_init's initial mode
  *      3. Sets up the initial UI state for user interaction
  * @warning This function should only be called once during application startup
  */
 void ui_init()
 {
-    create_setup_screen();
-    lv_disp_load_scr(setup_screen);
+    create_running_screen();
+    update_running_screen(X_CENTER, Y_CENTER, joystick_data.channel, joystick_data.id, joystick_data.bat);
+    while (!lvgl_port_lock()) vTaskDelay(pdMS_TO_TICKS(10));
+    if (running_screen != NULL && lv_obj_is_valid(running_screen)) lv_disp_load_scr(running_screen);
+    lvgl_port_unlock();
 }

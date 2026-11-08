@@ -17,6 +17,7 @@ extern "C" {
 #include "ui.h"
 #include "esp_now_init.h"
 #include "joystick_handle.h"
+#include "remote_settings.h"
 
 #include "lvgl_port.h"
 
@@ -34,25 +35,30 @@ joystick_data_t joystick_data;
  */
 void handle_button_press()
 {
-    static uint8_t screen_mode = MODE_SETUP;
     // check if BtnA is pressed
     if (M5.BtnA.wasPressed()) {
-        // use BtnA to switch mode
-        screen_mode = (screen_mode + 1) % 3;
-
-        if (screen_mode == MODE_SETUP) {
-            // in setup mode, press A to enter running mode
-            joystick_set_mode(&joystick_data, MODE_SETUP);
-            switch_screen(joystick_data.screen_mode);
-        } else if (screen_mode == MODE_RUNNING) {
-            // in running mode, press A to enter IMU mode
+        // Keep one mode source: JOYSTICK -> IMU -> SETUP -> JOYSTICK.
+        const uint8_t next_mode = (joystick_data.screen_mode + 1) % 3;
+        if (joystick_data.screen_mode == MODE_SETUP) {
+            // The setup worker uses this same lock, so both values are one
+            // confirmed snapshot and no late UI update can alter them after it.
+            while (!lvgl_port_lock()) vTaskDelay(pdMS_TO_TICKS(10));
+            remote_settings_t settings = {joystick_data.channel, joystick_data.id};
+            const esp_err_t err = remote_settings_confirm(&settings);
+            joystick_data.channel = settings.channel;
+            joystick_data.id = settings.id;
+            if (err != ESP_OK) {
+                ESP_LOGW("remote_settings", "Save unconfirmed (%s); using CH%d/ID%d, stored outcome may differ after restart",
+                         esp_err_to_name(err), settings.channel, settings.id);
+            }
             wifi_espnow_reinit(joystick_data.channel);
-            joystick_set_mode(&joystick_data, MODE_RUNNING);
-            switch_screen(joystick_data.screen_mode);
-        } else if (screen_mode == MODE_IMU) {
-            // in IMU mode, press A to return to setup mode
-            joystick_set_mode(&joystick_data, MODE_IMU);
-            switch_screen(joystick_data.screen_mode);
+            joystick_set_mode(&joystick_data, next_mode);
+            lvgl_port_unlock();
+            switch_screen(next_mode);
+        } else {
+            // Prepare a screen before its worker can run (setup is now lazy).
+            switch_screen(next_mode);
+            joystick_set_mode(&joystick_data, next_mode);
         }
     }
     if (M5.BtnB.wasPressed()) {

@@ -37,6 +37,7 @@ extern lv_obj_t *channel_dropdown;
 extern lv_obj_t *id_dropdown;
 
 void create_setup_screen();
+void sync_setup_screen(const joystick_data_t *data);
 void update_setup_screen(joystick_data_t *data);
 void ui_setup_screen_destory();
 

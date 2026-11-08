@@ -1,6 +1,7 @@
 set(SOURCES
     esp_now/esp_now_init.c
     joystick/joystick_handle.c
+    remote_settings.c
     ui/ui_running_screen.c
     ui/ui_setup_screen.c
     ui/ui_imu_screen.c

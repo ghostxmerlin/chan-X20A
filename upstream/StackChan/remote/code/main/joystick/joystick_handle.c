@@ -9,6 +9,8 @@
 #include "mapped_target.h"
 #include "freertos/semphr.h"
 #include "esp_random.h"
+#include "nvs.h"
+#include "../remote_settings.h"
 
 i2c_bus_device_handle_t i2c_device1;  // i2c device handle
 static SemaphoreHandle_t joystick_mutex;
@@ -130,27 +132,32 @@ static bool joystick_read_center(joystick_data_t *data, uint8_t expected_mode, u
  * @details
  *      1. Calls internal： device_joystick_init()
  *      2. Initializes all fields of 'joystick_data_t'
- *         - channel: 1 (default communication channel)
- *         - id: 0 (default target ID)
+ *         - channel/id: saved connection, otherwise CH6/receiver 1
  *         - bat: 0 (battery level, to be updated later)
  *         - joyX, joyY: 0 (initial joystick positions)
- *         - screen_mode: MODE_SETUP (start in setup mode)
+ *         - screen_mode: MODE_RUNNING (ready for joystick control)
  *         - select_mode: CHANNEL_SELECT (default selection mode)
  * @return joystick_data_t
  */
 joystick_data_t joystick_init()
 {
     joystick_i2c_init();
+    remote_settings_t settings;
+    const esp_err_t settings_err = remote_settings_load(&settings);
+    if (settings_err != ESP_OK && settings_err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW("remote_init", "Connection settings unavailable (%s); using CH6/ID1 without changing storage",
+                 esp_err_to_name(settings_err));
+    }
     joystick_data_t tmp;
-    tmp.channel     = 1;
-    tmp.id          = 0;
+    tmp.channel     = settings.channel;
+    tmp.id          = settings.id;
     tmp.bat         = 0;
     tmp.joyX        = 0;
     tmp.joyY        = 0;
     tmp.accel_x     = 0.0f;
     tmp.accel_y     = 0.0f;
     tmp.accel_z     = 0.0f;
-    tmp.screen_mode = MODE_SETUP;
+    tmp.screen_mode = MODE_RUNNING;
     tmp.select_mode = CHANNEL_SELECT;
     tmp.btnB_status = false;
     do { tmp.sender_boot_nonce = esp_random(); } while (!tmp.sender_boot_nonce);
@@ -225,10 +232,8 @@ void handle_running_screen(void *pvParam)
             }
             joystick_read_xy(&joystick_data->joyX, &joystick_data->joyY);
 
-            if (running_screen != NULL && lv_obj_is_valid(running_screen)) {
-                update_running_screen(joystick_data->joyX, joystick_data->joyY, joystick_data->channel,
-                                      joystick_data->id, joystick_data->bat);
-            }
+            update_running_screen(joystick_data->joyX, joystick_data->joyY, joystick_data->channel,
+                                  joystick_data->id, joystick_data->bat);
 
             // handle data from joystick
             if ((joystick_data->joyX < X_CENTER + DEAD_ZONE) && (joystick_data->joyX > X_CENTER - DEAD_ZONE)) {
