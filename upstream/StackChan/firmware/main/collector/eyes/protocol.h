@@ -3,7 +3,14 @@
 #include "types.h"
 #include <ArduinoJson.h>
 #include <cstring>
+#include <string>
 namespace collector::eyes {
+inline void request_json(JsonObject out,const RequestResult& r) {
+    // const char arrays are borrowed by ArduinoJson. Own this snapshot string
+    // so telemetry and query responses remain valid after the result expires.
+    out["request_id"]=std::string(r.request_id);out["request_seq"]=r.request_seq;out["op"]=name(r.operation);
+    out["status"]=name(r.status);out["error"]=r.error==Error::None?nullptr:name(r.error);
+}
 // ArduinoJson accepts some JavaScript extensions. This API defines only flat
 // JSON strings, booleans and integers, with double-quoted keys and no trailing
 // comma. No defined identifier needs escape sequences.

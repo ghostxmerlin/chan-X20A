@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "stackchan_display.h"
+#include "shared_storage.h"
 #include "hal_bridge.h"
 #include <esp_log.h>
 #include <esp_err.h>
@@ -163,6 +164,7 @@ StackChanAvatarDisplay::StackChanAvatarDisplay(esp_lcd_panel_io_handle_t panel_i
         ESP_LOGE(TAG, "Failed to add display");
         return;
     }
+    shared_storage::attach_display(panel_io_);
 
     if (offset_x != 0 || offset_y != 0) {
         lv_display_set_offset(display_, offset_x, offset_y);

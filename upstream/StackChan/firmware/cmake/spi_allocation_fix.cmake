@@ -1,0 +1,28 @@
+# Keep IDF 5.5.4 itself untouched. Compile one hash-verified driver copy with a
+# fix for DMA allocation failure cleanup (which otherwise copies from NULL).
+idf_component_get_property(spi_fix_lib esp_driver_spi COMPONENT_LIB)
+idf_component_get_property(spi_fix_dir esp_driver_spi COMPONENT_DIR)
+set(spi_fix_script "${PROJECT_DIR}/../../../scripts/prepare-spi-driver.py")
+set(spi_fix_original "${spi_fix_dir}/src/gpspi/spi_master.c")
+set(spi_fix_generated "${CMAKE_BINARY_DIR}/collector_patches/spi_master.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${spi_fix_script}" "${spi_fix_original}")
+execute_process(COMMAND "${PYTHON}" "${spi_fix_script}"
+    "${spi_fix_original}" "${spi_fix_generated}" RESULT_VARIABLE spi_fix_result)
+if(NOT spi_fix_result EQUAL 0)
+    message(FATAL_ERROR "Cannot prepare the pinned SPI allocation-failure fix")
+endif()
+get_target_property(spi_fix_sources ${spi_fix_lib} SOURCES)
+set(spi_fix_replacements 0)
+foreach(spi_fix_source IN LISTS spi_fix_sources)
+    if(spi_fix_source MATCHES "(^|/)src/gpspi/spi_master\\.c$")
+        list(REMOVE_ITEM spi_fix_sources "${spi_fix_source}")
+        list(APPEND spi_fix_sources "${spi_fix_generated}")
+        math(EXPR spi_fix_replacements "${spi_fix_replacements}+1")
+    endif()
+endforeach()
+if(NOT spi_fix_replacements EQUAL 1)
+    message(FATAL_ERROR "SPI driver source layout changed; review the allocation fix")
+endif()
+set_property(TARGET ${spi_fix_lib} PROPERTY SOURCES "${spi_fix_sources}")
+message(STATUS "SPI master: pinned allocation-failure cleanup fix enabled")

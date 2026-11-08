@@ -3,6 +3,20 @@
 #include <string>
 using namespace collector::eyes;
 int main() {
+    // The document outlives the snapshot/query result used by HTTP handlers.
+    // Reuse its backing buffer before serialization to expose borrowed storage.
+    for (const char* expected : {"", "12345678-1234-4234-8234-123456789abc"}) {
+        JsonDocument doc;
+        {
+            RequestResult result;
+            std::strcpy(result.request_id,expected);
+            request_json(doc.to<JsonObject>(),result);
+            std::memset(result.request_id,'x',36);result.request_id[36]='\0';
+        }
+        std::string wire;serializeJson(doc,wire);
+        JsonDocument parsed;assert(!deserializeJson(parsed,wire));
+        assert(parsed["request_id"].as<std::string>()==expected);
+    }
     const std::string id="\"request_id\":\"12345678-1234-4234-8234-123456789abc\"";
     Command c;
     auto parse=[&](std::string s){return parse_command(s.data(),s.size(),c);};

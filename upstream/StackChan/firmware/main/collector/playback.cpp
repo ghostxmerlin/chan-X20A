@@ -15,6 +15,7 @@
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/queue.h>
 #include <lwip/sockets.h>
 #include <algorithm>
 #include <cstdio>
@@ -92,6 +93,14 @@ struct Job {
     bool from_asr = false;
     uint32_t hearing_session = 0;
 };
+QueueHandle_t playback_queue=nullptr;
+StaticQueue_t playback_queue_control;
+StaticTask_t playback_worker_control;
+Job* playback_slot[1];
+constexpr size_t kPlaybackStackBytes=16384;
+StackType_t* playback_stack=nullptr;
+std::atomic<uint32_t> playback_stack_free{0};
+bool enqueue_playback(Job* job) {return playback_queue&&xQueueSend(playback_queue,&job,0)==pdTRUE;}
 
 struct Output {
     CoreS3AudioCodec* codec;
@@ -150,9 +159,8 @@ struct Output {
     }
 };
 
-void playback_task(void* context)
+void process_playback(Job* job)
 {
-    auto* job = static_cast<Job*>(context);
     for (;;) {
     PlaybackUpload upload(job->bytes);
     const int64_t deadline = esp_timer_get_time() + kUploadTimeoutUs;
@@ -184,8 +192,8 @@ void playback_task(void* context)
         if (!failure && completion_error != ESP_OK) { failure = completion_error; failure_stage = "response"; }
         job->request = nullptr;
     } else if (job->voice) {
-        if (!voice_decode(*job->voice, job->pcm)) {
-            failure=ESP_ERR_INVALID_SIZE; failure_stage="voice_decode";
+        if (const auto* error=voice_decode(*job->voice, job->pcm)) {
+            failure=ESP_FAIL; failure_stage=error;
         } else {
             upload.append(job->bytes);
             std::lock_guard<std::mutex> lock(status_mutex);
@@ -234,8 +242,27 @@ void playback_task(void* context)
     }
     heap_caps_free(job->pcm);
     delete job;
-    vTaskDelete(nullptr);
 }
+void playback_worker(void*) {
+    for (;;) {
+        Job* job=nullptr;
+        if(xQueueReceive(playback_queue,&job,portMAX_DELAY)==pdTRUE) {
+            process_playback(job);
+            playback_stack_free=uxTaskGetStackHighWaterMark(nullptr);
+        }
+    }
+}
+}
+void playback_init() {
+    if(playback_queue)return;
+    // Collector output is transient I2S/I2C work and never writes NVS. Reserve
+    // one external stack before network clients fragment internal heap memory.
+    playback_stack=static_cast<StackType_t*>(heap_caps_malloc(kPlaybackStackBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    if(!playback_stack)return;
+    playback_queue=xQueueCreateStatic(1,sizeof(Job*),reinterpret_cast<uint8_t*>(playback_slot),&playback_queue_control);
+    if(playback_queue&&xTaskCreateStatic(playback_worker,"collector_playback",kPlaybackStackBytes,nullptr,3,playback_stack,&playback_worker_control))return;
+    if(playback_queue)vQueueDelete(playback_queue);
+    playback_queue=nullptr;heap_caps_free(playback_stack);playback_stack=nullptr;
 }
 
 esp_err_t playback_handle(httpd_req_t* request)
@@ -263,7 +290,7 @@ esp_err_t playback_handle(httpd_req_t* request)
         state = "uploading"; source = "upload"; error_code = cleanup_error = 0; error_stage = "none";
         expected_bytes = job->bytes; received_bytes = submitted_bytes = 0;
     }
-    if (xTaskCreate(playback_task, "collector_playback", 8192, job, 3, nullptr) != pdPASS) {
+    if (!enqueue_playback(job)) {
         response(job->request, "503 Service Unavailable", "{\"error\":\"playback_task\"}");
         complete_request(job->request, true);
         heap_caps_free(job->pcm); delete job;
@@ -310,7 +337,7 @@ bool playback_reaction(RemoteReaction reaction)
         state = "starting"; error_code = cleanup_error = 0; error_stage = "none";
         expected_bytes = job->bytes; received_bytes = submitted_bytes = 0;
     }
-    if (xTaskCreate(playback_task, "collector_playback", 8192, job, 3, nullptr) == pdPASS) return true;
+    if (enqueue_playback(job)) return true;
     heap_caps_free(job->pcm); delete job;
     {
         std::lock_guard<std::mutex> lock(status_mutex);
@@ -321,7 +348,7 @@ bool playback_reaction(RemoteReaction reaction)
     return false;
 }
 
-void playback_set_audio_ready() { voice_audio_ready=true; }
+void playback_set_audio_ready() { voice_audio_ready=playback_queue!=nullptr; }
 
 static esp_err_t playback_voice_impl(int requested_id, bool from_asr, uint32_t* job_id, int* selected_id, uint32_t hearing_session)
 {
@@ -363,7 +390,7 @@ static esp_err_t playback_voice_impl(int requested_id, bool from_asr, uint32_t* 
         state="starting"; error_code=cleanup_error=0; error_stage="none";
         expected_bytes=job->bytes; received_bytes=submitted_bytes=0;
     }
-    if (xTaskCreate(playback_task,"collector_playback",8192,job,3,nullptr)!=pdPASS) {
+    if (!enqueue_playback(job)) {
         heap_caps_free(job->pcm); delete job;
         std::lock_guard<std::mutex> lock(status_mutex);
         state="failed"; error_code=ESP_ERR_NO_MEM; error_stage="task";
@@ -411,6 +438,7 @@ void playback_json(ArduinoJson::JsonObject target)
 {
     std::lock_guard<std::mutex> lock(status_mutex);
     target["state"] = state; target["busy"] = gate.busy(); target["job_id"] = job_sequence;
+    target["worker_ready"] = playback_queue!=nullptr;target["worker_stack_free_bytes"] = playback_stack_free.load();
     target["expected_bytes"] = expected_bytes; target["received_bytes"] = received_bytes;
     target["submitted_bytes"] = submitted_bytes; target["error"] = error_code;
     target["error_stage"] = error_stage; target["cleanup_error"] = cleanup_error;

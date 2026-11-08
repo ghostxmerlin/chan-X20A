@@ -2,7 +2,7 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
-set(PROJECT_VER "collector-0.4.28")
+set(PROJECT_VER "collector-0.4.30")
 add_definitions(-DFIRMWARE_VERSION=\"${PROJECT_VER}\")
 
 # Add this line to disable the specific warning
@@ -23,3 +23,4 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(stack-chan)
 
 include(cmake/face_dl_symbols.cmake)
+include(cmake/spi_allocation_fix.cmake)

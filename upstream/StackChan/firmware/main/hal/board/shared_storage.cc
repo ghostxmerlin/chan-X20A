@@ -6,6 +6,7 @@
 #include <esp_vfs_fat.h>
 #include <esp_timer.h>
 #include <esp_log.h>
+#include <esp_lvgl_port.h>
 #include <sdmmc_cmd.h>
 #include <mbedtls/sha256.h>
 #include <freertos/FreeRTOS.h>
@@ -29,12 +30,27 @@ struct AtomicStatus {
 } stats;
 bool attempted=false;
 sdmmc_card_t* card=nullptr;
+esp_lcd_panel_io_handle_t display_io=nullptr;
+struct DisplayLease {
+    bool locked=false;
+    esp_err_t error=ESP_OK;
+    DisplayLease() {
+        if (!display_io) return; // Initial SD mount precedes LCD/LVGL creation.
+        locked=lvgl_port_lock(1000);
+        if (!locked) {error=ESP_ERR_TIMEOUT;return;}
+        // IDF 5.5.4's tx_color releases the bus after queueing its last DMA.
+        // Merely acquiring the SD device can then overtake that LCD transfer.
+        // Negative command drains the LCD queue without sending a command.
+        error=esp_lcd_panel_io_tx_param(display_io,-1,nullptr,0);
+    }
+    ~DisplayLease() {if(locked)lvgl_port_unlock();}
+};
 constexpr char kRoot[]="/sdcard";
 bool known(const collector::eyes::Asset& a) { return collector::eyes::asset(a.style,a.state)==&a; }
 void path_for(const collector::eyes::Asset& a,char* path,size_t size)
 { std::snprintf(path,size,"/sdcard/soul/%s/%s.soul",collector::eyes::style_id(a.style),collector::eyes::state_id(a.state)); }
 const char* io_error() { ++stats.failures; stats.mounted=false; return "io_error"; }
-bool file_matches(const char* path,const collector::eyes::Asset& a)
+bool file_matches(const char* path,const FileSpec& a)
 {
     struct stat st{};
     if (stat(path,&st) || size_t(st.st_size)!=a.bytes) return false;
@@ -89,12 +105,21 @@ esp_err_t initialize()
 }
 Status status() { return {stats.mounted.load(),stats.mount_error.load(),stats.reads.load(),stats.installs.load(),stats.failures.load(),stats.read_us.load(),stats.write_us.load()}; }
 bool available() { return stats.mounted.load(); }
+void attach_display(esp_lcd_panel_io_handle_t panel) { display_io=panel; }
 const char* read(const collector::eyes::Asset& a,uint8_t* destination,size_t capacity)
 {
-    if (!known(a) || !destination || capacity<a.bytes) return "invalid_argument";
+    if (!known(a)) return "invalid_argument";
+    char path[96];path_for(a,path,sizeof(path));
+    return read_file({path,a.bytes,a.sha256},destination,capacity);
+}
+const char* read_file(const FileSpec& a,uint8_t* destination,size_t capacity)
+{
+    if (!destination || capacity<a.bytes) return "invalid_argument";
     std::lock_guard<std::mutex> lock(mutex);
     if (!stats.mounted) return "storage_unavailable";
-    char path[96]; path_for(a,path,sizeof(path)); struct stat st{};
+    DisplayLease display;
+    if (display.error!=ESP_OK) return "display_bus_unavailable";
+    const char* path=a.path; struct stat st{};
     if (stat(path,&st)) return errno==ENOENT?"asset_missing":io_error();
     if (size_t(st.st_size)!=a.bytes) return "asset_invalid";
     FILE* f=std::fopen(path,"rb"); if (!f) return io_error();
@@ -106,19 +131,30 @@ const char* read(const collector::eyes::Asset& a,uint8_t* destination,size_t cap
     }
     ok=std::fclose(f)==0 && ok; stats.read_us+=esp_timer_get_time()-began;
     if (!ok) return io_error();
+    uint8_t digest[32];
+    if (mbedtls_sha256(destination,total,digest,0) || std::memcmp(digest,a.sha256,32)) return "asset_invalid";
     ++stats.reads; return nullptr;
 }
 const char* install(const collector::eyes::Asset& a,const uint8_t* bytes,size_t length,bool& unchanged)
 {
+    if (!known(a)) return "invalid_argument";
+    char path[96];path_for(a,path,sizeof(path));
+    return install_file({path,a.bytes,a.sha256},bytes,length,unchanged);
+}
+const char* install_file(const FileSpec& a,const uint8_t* bytes,size_t length,bool& unchanged)
+{
     unchanged=false;
-    if (!known(a) || !bytes || length!=a.bytes) return "invalid_argument";
+    if (!bytes || length!=a.bytes) return "invalid_argument";
     uint8_t digest[32];
     if (mbedtls_sha256(bytes,length,digest,0) || std::memcmp(digest,a.sha256,32)) return "asset_invalid";
     std::lock_guard<std::mutex> lock(mutex);
     if (!stats.mounted) return "storage_unavailable";
-    char path[96],part[104],previous[104],dir[64]; path_for(a,path,sizeof(path));
+    DisplayLease display;
+    if (display.error!=ESP_OK) return "display_bus_unavailable";
+    const char* path=a.path;char part[104],previous[104],dir[96];
+    if (std::strlen(path)>=sizeof(dir) || !std::strrchr(path,'/')) return "invalid_argument";
     std::snprintf(part,sizeof(part),"%s.part",path); std::snprintf(previous,sizeof(previous),"%s.prev",path);
-    std::snprintf(dir,sizeof(dir),"/sdcard/soul/%s",collector::eyes::style_id(a.style));
+    std::snprintf(dir,sizeof(dir),"%s",path);*std::strrchr(dir,'/')=0;
     for (const char* d:{"/sdcard/soul",static_cast<const char*>(dir)}) {
         if (mkdir(d,0755) && errno!=EEXIST) return io_error();
         struct stat st{}; if (stat(d,&st) || !S_ISDIR(st.st_mode)) return "asset_path_conflict";

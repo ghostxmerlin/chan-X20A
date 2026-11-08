@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin the verified IDF LCD DC tri-state and SD bus-ownership implementation."""
+"""Pin driver prerequisites; shared_storage also drains LCD DMA under the LVGL lock."""
 import hashlib
 from pathlib import Path
 import sys

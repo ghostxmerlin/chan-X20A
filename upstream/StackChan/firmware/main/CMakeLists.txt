@@ -311,7 +311,7 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 endif()
 
 get_filename_component(VOICE_ASSET_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../.private/voice-library" ABSOLUTE)
-if(NOT EXISTS "${VOICE_ASSET_DIR}/voice-library.bin" OR NOT EXISTS "${VOICE_ASSET_DIR}/voice_assets.h")
+if(NOT EXISTS "${VOICE_ASSET_DIR}/voice_assets.h")
     message(FATAL_ERROR "Prepare local voice assets: python3 scripts/prepare-voice-library.py /path/to/voice/outputs/stackchan_playable_40.json")
 endif()
 idf_component_register(SRCS ${SOURCES}
@@ -353,7 +353,6 @@ idf_component_register(SRCS ${SOURCES}
                     )
 target_include_directories(${COMPONENT_LIB} PRIVATE "${VOICE_ASSET_DIR}")
 target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../../../assets/soul-eyes/v2-front/decoder")
-target_add_binary_data(${COMPONENT_LIB} "${VOICE_ASSET_DIR}/voice-library.bin" BINARY RENAME_TO voice_library)
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE

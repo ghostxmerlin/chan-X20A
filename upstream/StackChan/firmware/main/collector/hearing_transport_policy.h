@@ -8,6 +8,10 @@ struct OperationDeadline {
     std::atomic<bool> cancelled{false};int64_t until=0;
     void begin(int64_t now,int ms){until=now+int64_t(ms)*1000;}
     void cancel(){cancelled=true;}
+    int poll_timeout(int requested,int64_t now)const {
+        const int left=remaining(now);
+        return left>0 ? (requested<0?left:(requested<left?requested:left)) : -1;
+    }
     int remaining(int64_t now)const {return cancelled||now>=until?0:static_cast<int>((until-now+999)/1000);}
 };
 struct MessageBuffer {

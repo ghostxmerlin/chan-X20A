@@ -8,8 +8,11 @@ struct VoiceClip {
     int id;
     const char *source_id, *title, *text;
     uint32_t offset, bytes, frames;
+    const char* path;
+    uint8_t sha256[32];
 };
 const VoiceClip* voice_clip(int id);
-bool voice_decode(const VoiceClip& clip, int16_t* pcm);
+// Returns null only after a verified SD read and complete in-memory decode.
+const char* voice_decode(const VoiceClip& clip, int16_t* pcm);
 void voice_library_json(ArduinoJson::JsonObject out);
 }

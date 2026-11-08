@@ -2,11 +2,13 @@
 #include "http.h"
 #include "eyes.h"
 #include "protocol.h"
+#include "collector/voice_library.h"
 #include "hal/board/shared_storage.h"
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/queue.h>
 #include <lwip/sockets.h>
 #include <algorithm>
 #include <atomic>
@@ -24,32 +26,57 @@ esp_err_t reject(httpd_req_t* r,const char* status,const char* error) {
     httpd_resp_set_status(r,status);httpd_resp_set_hdr(r,"Connection","close");
     JsonDocument doc;doc["accepted"]=false;doc["error"]=error;send(r,doc);return ESP_FAIL;
 }
-void request_json(JsonObject out,const RequestResult& r) {
-    out["request_id"]=r.request_id;out["request_seq"]=r.request_seq;out["op"]=name(r.operation);
-    out["status"]=name(r.status);out["error"]=r.error==Error::None?nullptr:name(r.error);
-}
-struct Upload {httpd_req_t* request=nullptr;const Asset* asset=nullptr;uint8_t* bytes=nullptr;};
-void upload_task(void* parameter) {
-    auto* u=static_cast<Upload*>(parameter);auto* r=u->request;
+struct Upload {httpd_req_t* request=nullptr;const Asset* asset=nullptr;const VoiceClip* voice=nullptr;uint8_t* bytes=nullptr;};
+QueueHandle_t upload_queue=nullptr;
+StaticQueue_t upload_queue_control;
+StaticTask_t upload_worker_control;
+Upload* upload_slot[1];
+constexpr size_t kUploadStackBytes=16384;
+StackType_t* upload_stack=nullptr;
+void process_upload(Upload* u) {
+    auto* r=u->request;
+    const size_t length=u->voice?u->voice->bytes:u->asset->bytes;
     const int64_t deadline=esp_timer_get_time()+10000000;size_t at=0;
-    while(at<u->asset->bytes && esp_timer_get_time()<deadline) {
-        const int got=httpd_req_recv(r,reinterpret_cast<char*>(u->bytes+at),std::min<size_t>(4096,u->asset->bytes-at));
+    while(at<length && esp_timer_get_time()<deadline) {
+        const int got=httpd_req_recv(r,reinterpret_cast<char*>(u->bytes+at),std::min<size_t>(4096,length-at));
         if(got==HTTPD_SOCK_ERR_TIMEOUT) {vTaskDelay(1);continue;}
         if(got<=0)break;
         at+=got;vTaskDelay(1);
     }
-    const bool incomplete=at!=u->asset->bytes || esp_timer_get_time()>=deadline;
+    const bool incomplete=at!=length || esp_timer_get_time()>=deadline;
     bool unchanged=false;
-    const char* error=incomplete?"incomplete_or_timed_out_upload":shared_storage::install(*u->asset,u->bytes,at,unchanged);
+    const char* error=incomplete?"incomplete_or_timed_out_upload":u->voice?
+        shared_storage::install_file({u->voice->path,u->voice->bytes,u->voice->sha256},u->bytes,at,unchanged):
+        shared_storage::install(*u->asset,u->bytes,at,unchanged);
     JsonDocument doc;doc["accepted"]=!error;doc["installed"]=!error;doc["unchanged"]=unchanged;
-    doc["style"]=style_id(u->asset->style);doc["state"]=state_id(u->asset->state);doc["error"]=error;
+    if(u->voice)doc["clip_id"]=u->voice->id;
+    else {doc["style"]=style_id(u->asset->style);doc["state"]=state_id(u->asset->state);}
+    doc["error"]=error;
     httpd_resp_set_status(r,error?(incomplete||!std::strcmp(error,"asset_invalid")?"400 Bad Request":"503 Service Unavailable"):"200 OK");
     if(incomplete)httpd_resp_set_hdr(r,"Connection","close");
     const auto sent=send(r,doc);
     if(incomplete || sent!=ESP_OK)shutdown(httpd_req_to_sockfd(r),SHUT_RDWR);
     httpd_req_async_handler_complete(r);heap_caps_free(u->bytes);delete u;
-    installing=false;vTaskDelete(nullptr);
+    // Return normally so JsonDocument releases its pools before opening the gate.
 }
+void upload_task(void*) {
+    for (;;) {
+        Upload* u=nullptr;
+        if(xQueueReceive(upload_queue,&u,portMAX_DELAY)==pdTRUE) {
+            process_upload(u);
+            installing=false;
+        }
+    }
+}
+}
+void start_asset_installer() {
+    if(upload_queue)return;
+    upload_stack=static_cast<StackType_t*>(heap_caps_malloc(kUploadStackBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    if(!upload_stack)return;
+    upload_queue=xQueueCreateStatic(1,sizeof(Upload*),reinterpret_cast<uint8_t*>(upload_slot),&upload_queue_control);
+    if(upload_queue&&xTaskCreateStatic(upload_task,"asset_install",kUploadStackBytes,nullptr,1,upload_stack,&upload_worker_control))return;
+    if(upload_queue)vQueueDelete(upload_queue);
+    upload_queue=nullptr;heap_caps_free(upload_stack);upload_stack=nullptr;
 }
 void catalog_json(JsonObject out) {
     out["supported"]=true;out["version"]=1;
@@ -59,7 +86,7 @@ void catalog_json(JsonObject out) {
     for(size_t i=0;i<kStateCount;++i) {auto o=states.add<JsonObject>();o["id"]=state_id(State(i));o["label"]=kStateLabels[i];}
     out["modes"][0]="once";out["modes"][1]="loop";out["loop_min_ms"]=1000;out["loop_max_ms"]=30000;
     out["first_frame_deadline_ms"]=1500;out["request_history_count"]=16;out["request_history_ms"]=60000;
-    out["asset_install"]=true;out["max_asset_bytes"]=kAssetCapacity;out["asr_open"]=true;out["persistent"]=false;
+    out["asset_install"]=upload_queue!=nullptr;out["max_asset_bytes"]=kAssetCapacity;out["asr_open"]=true;out["persistent"]=false;
 }
 void status_json(JsonObject out) {
     const auto s=snapshot();out["supported"]=s.supported;out["ready"]=s.ready;out["enabled"]=s.enabled;
@@ -110,22 +137,34 @@ esp_err_t command_handler(httpd_req_t* r) {
     httpd_resp_set_status(r,"202 Accepted");return send(r,doc);
 }
 esp_err_t install_handler(httpd_req_t* r) {
-    char style[8],state[32];
-    if(httpd_req_get_hdr_value_str(r,"X-Eyes-Style",style,sizeof(style))!=ESP_OK ||
-       httpd_req_get_hdr_value_str(r,"X-Eyes-State",state,sizeof(state))!=ESP_OK)
-        return reject(r,"400 Bad Request","invalid_argument");
-    const auto* a=asset(parse_style(style),parse_state(state));
-    if(!a || r->content_len!=a->bytes || r->content_len>kAssetCapacity)return reject(r,"400 Bad Request","invalid_asset_length");
+    if(!upload_queue)return reject(r,"503 Service Unavailable","installer_unavailable");
+    const Asset* a=nullptr;const VoiceClip* voice=nullptr;size_t length=0;
+    if(!std::strcmp(r->uri,"/v1/voice/assets")) {
+        char id[3];
+        if(httpd_req_get_hdr_value_str(r,"X-Voice-Id",id,sizeof(id))!=ESP_OK || id[0]<'1'||id[0]>'9' ||
+            (id[1] && (id[1]<'0'||id[1]>'9')))return reject(r,"400 Bad Request","invalid_argument");
+        const int number=(id[0]-'0')*(id[1]?10:1)+(id[1]?id[1]-'0':0);
+        voice=voice_clip(number);if(voice)length=voice->bytes;
+    } else {
+        char style[8],state[32];
+        if(httpd_req_get_hdr_value_str(r,"X-Eyes-Style",style,sizeof(style))!=ESP_OK ||
+           httpd_req_get_hdr_value_str(r,"X-Eyes-State",state,sizeof(state))!=ESP_OK)
+            return reject(r,"400 Bad Request","invalid_argument");
+        a=asset(parse_style(style),parse_state(state));if(a)length=a->bytes;
+    }
+    if(!length || r->content_len!=length || length>kAssetCapacity)return reject(r,"400 Bad Request","invalid_asset_length");
     if(!shared_storage::available())return reject(r,"503 Service Unavailable","storage_unavailable");
     if(installing.exchange(true))return reject(r,"409 Conflict","install_busy");
     auto* u=new(std::nothrow)Upload;
-    if(u) {u->asset=a;u->bytes=static_cast<uint8_t*>(heap_caps_malloc(a->bytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));}
+    if(u) {u->asset=a;u->voice=voice;u->bytes=static_cast<uint8_t*>(heap_caps_malloc(length,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));}
     if(!u || !u->bytes) {delete u;installing=false;return reject(r,"503 Service Unavailable","no_memory");}
     if(httpd_req_async_handler_begin(r,&u->request)!=ESP_OK) {
         heap_caps_free(u->bytes);delete u;installing=false;return reject(r,"503 Service Unavailable","request_unavailable");
     }
-    if(xTaskCreate(upload_task,"eyes_install",12288,u,1,nullptr)!=pdPASS) {
-        reject(u->request,"503 Service Unavailable","task_unavailable");shutdown(httpd_req_to_sockfd(u->request),SHUT_RDWR);
+    // The persistent PSRAM worker avoids per-file task allocation/deletion and
+    // the extra internal cleanup task required by self-deleting WithCaps tasks.
+    if(xQueueSend(upload_queue,&u,0)!=pdTRUE) {
+        reject(u->request,"503 Service Unavailable","queue_unavailable");shutdown(httpd_req_to_sockfd(u->request),SHUT_RDWR);
         httpd_req_async_handler_complete(u->request);heap_caps_free(u->bytes);delete u;installing=false;
     }
     return ESP_OK;

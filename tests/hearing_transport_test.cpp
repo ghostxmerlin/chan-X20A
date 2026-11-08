@@ -11,7 +11,11 @@ int main(){
  assert(b.add(0,true,1,"x",1)==MessageBuffer::Invalid);
  b.clear();assert(b.add(1,true,9000,"x",1)==MessageBuffer::Invalid);
  b.clear();assert(b.add(1,true,3,"abc",3)==MessageBuffer::Complete);
- OperationDeadline d;d.begin(1000,200);assert(d.remaining(1000)==200);assert(d.remaining(200999)==1);assert(d.remaining(201000)==0);
+ OperationDeadline d;d.begin(1000,200);
+ assert(d.poll_timeout(0,1000)==0); // Zero is a real nonblocking socket probe.
+ assert(d.poll_timeout(2000,1000)==200);
+ assert(d.poll_timeout(0,201000)==-1); // Expiry is distinct from nonblocking.
+ assert(d.remaining(1000)==200);assert(d.remaining(200999)==1);assert(d.remaining(201000)==0);
  d.cancel();d.begin(300000,2000);assert(d.remaining(300001)==0); // cancellation cannot be revived by another I/O call
  std::cout<<"PASS bounded receive fragments and irreversible transport cancellation\n";
 }

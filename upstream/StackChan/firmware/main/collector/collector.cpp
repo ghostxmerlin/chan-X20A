@@ -911,6 +911,8 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     power["timestamp_us"] = power_us;
     auto health = doc["health"].to<JsonObject>();
     health["heap_free"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    health["heap_largest_free"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    health["reset_reason_code"] = static_cast<int>(esp_reset_reason());
     health["psram_free"] = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     health["heap_min_free"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     health["camera_errors"] = camera_errors.load();
@@ -1231,7 +1233,7 @@ void start_server(int port, int control_port, bool audio_only)
         register_get("/v1/frame", frame_handler);
         register_get("/v1/eyes", [](httpd_req_t* r)->esp_err_t {if(!authorize(r))return ESP_FAIL;return eyes::catalog_handler(r);});
         register_get("/v1/eyes/status", [](httpd_req_t* r)->esp_err_t {if(!authorize(r))return ESP_FAIL;return eyes::status_handler(r);});
-        for(const char* uri:{"/v1/eyes","/v1/eyes/assets"}) {
+        for(const char* uri:{"/v1/eyes","/v1/eyes/assets","/v1/voice/assets"}) {
             httpd_uri_t endpoint{};endpoint.uri=uri;endpoint.method=HTTP_POST;
             endpoint.handler=[](httpd_req_t* r)->esp_err_t {
                 if(!authorize(r)||!control_boot_matches(r,true))return ESP_FAIL;
@@ -1448,6 +1450,8 @@ void run()
     m12_init();
     temperature_init();
     eyes::start();
+    eyes::start_asset_installer();
+    playback_init();
     hearing::init(device_id,boot_id);
     update_screen({});
     ESP_ERROR_CHECK(xTaskCreate(sensor_task, "collector_sensors", 6144, nullptr, 3, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);

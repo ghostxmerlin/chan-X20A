@@ -7,6 +7,7 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <esp_random.h>
+#include <esp_log.h>
 #include <nvs.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -27,6 +28,10 @@ std::mutex mutex;
 std::shared_ptr<HearingSocket> active_socket;
 QueueHandle_t queue=nullptr;
 StaticQueue_t queue_control;
+constexpr size_t kWorkerStackBytes=32768;
+StaticTask_t worker_control;
+StackType_t* worker_stack=nullptr;
+std::atomic<uint32_t> worker_stack_free{0},encode_us{0},send_us{0},poll_us{0};
 std::atomic<uint32_t> capture_session{0},dropped{0};
 std::atomic<int64_t> quiet_until{0};
 std::string url,secret,device,boot;
@@ -176,13 +181,13 @@ void worker(void*) {
             if(esp_timer_get_time()>handshake_deadline){ok=false;break;}
             vTaskDelay(pdMS_TO_TICKS(20));
         }
-        if(ok&&live(session))retry=0;
+        {std::lock_guard<std::mutex> lock(mutex);if(ok&&generation==session&&audio_ack)retry=0;}
         std::vector<uint8_t> encoded(std::max(0,output_size)+16);
         std::array<int16_t,1440> pcm{};
         unsigned blocks=0;uint32_t previous=0,wire_seq=0;bool sent=false,sounding=false;
         int64_t first_us=0;
         while(ok&&live(session)&&socket->IsConnected()) {
-            socket->Poll();
+            const auto poll_started=esp_timer_get_time();socket->Poll();poll_us=esp_timer_get_time()-poll_started;
             int clip=0;
             {
                 std::lock_guard<std::mutex> lock(mutex);
@@ -204,17 +209,22 @@ void worker(void*) {
             blocks=0;
             esp_audio_enc_in_frame_t in{reinterpret_cast<uint8_t*>(pcm.data()),2880};
             esp_audio_enc_out_frame_t out{};out.buffer=encoded.data()+16;out.len=output_size;
-            if(esp_opus_enc_process(encoder,&in,&out)!=ESP_AUDIO_ERR_OK||!out.encoded_bytes||out.encoded_bytes>static_cast<unsigned>(output_size)){ok=false;break;}
+            const auto encode_started=esp_timer_get_time();
+            const auto encoded_result=esp_opus_enc_process(encoder,&in,&out);encode_us=esp_timer_get_time()-encode_started;
+            if(encoded_result!=ESP_AUDIO_ERR_OK||!out.encoded_bytes||out.encoded_bytes>static_cast<unsigned>(output_size)){ok=false;break;}
             if(!live(session))break;
             JsonDocument flags;flags["type"]="self";flags["sounding"]=sounding;flags["moving"]=false;flags["t_us"]=first_us;
-            ok=send_json(*socket,flags);
+            const auto send_started=esp_timer_get_time();ok=send_json(*socket,flags);
             std::memcpy(encoded.data(),"SEA1",4);
             for(unsigned i=0;i<4;++i)encoded[4+i]=(wire_seq>>(i*8))&255;
             for(unsigned i=0;i<8;++i)encoded[8+i]=(static_cast<uint64_t>(first_us)>>(i*8))&255;
             if(ok&&live(session))ok=socket->Send(encoded.data(),out.encoded_bytes+16,true);
-            if(ok){sent=true;++wire_seq;std::lock_guard<std::mutex> lock(mutex);++packets;}
+            send_us=esp_timer_get_time()-send_started;
+            if(ok){sent=true;++wire_seq;worker_stack_free=uxTaskGetStackHighWaterMark(nullptr);std::lock_guard<std::mutex> lock(mutex);++packets;}
         }
         capture_session=0;
+        const auto transport_error=socket->Error();
+        ESP_LOGI("Hearing","session ended error=%s stack_free=%u",transport_error.c_str(),unsigned(uxTaskGetStackHighWaterMark(nullptr)));
         if(encoder)esp_opus_enc_close(encoder);
         {std::lock_guard<std::mutex> lock(mutex);if(active_socket==socket)active_socket.reset();}
         socket.reset(); // Synchronous transport: every callback has already returned.
@@ -223,7 +233,7 @@ void worker(void*) {
             std::lock_guard<std::mutex> lock(mutex);
             if(generation==session) {
                 if(enrollment)finish_enroll_locked("error","backend_disconnected");
-                else {new_session_locked();state=requested?"retrying":"idle";error="backend_disconnected";++reconnects;wait_generation=generation;}
+                else {new_session_locked();state=requested?"retrying":"idle";error="backend_disconnected:"+transport_error;++reconnects;wait_generation=generation;}
             }
         }
         if(wait_generation) {
@@ -255,8 +265,16 @@ void init(const std::string& device_id,const std::string& boot_id) {
     }
     auto* storage=static_cast<uint8_t*>(heap_caps_malloc(kQueue*sizeof(Block),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
     if(storage)queue=xQueueCreateStatic(kQueue,sizeof(Block),storage,&queue_control);
-    if(queue&&xTaskCreate(worker,"collector_ear",12288,nullptr,2,nullptr)==pdPASS)ready=true;
-    else error="hearing_memory";
+    // Match the existing Opus path (24–28 KiB) plus our frame/network buffers.
+    // This worker never writes flash; external task stacks are enabled already.
+    worker_stack=static_cast<StackType_t*>(heap_caps_malloc(kWorkerStackBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    // Keep encoding ahead of display/JPEG work while leaving the sampler (7) first.
+    if(queue&&worker_stack&&xTaskCreateStatic(worker,"collector_ear",kWorkerStackBytes,nullptr,4,worker_stack,&worker_control))ready=true;
+    else {
+        if(queue)vQueueDelete(queue);
+        queue=nullptr;heap_caps_free(storage);heap_caps_free(worker_stack);worker_stack=nullptr;
+        error="hearing_memory";
+    }
 }
 
 void feed_audio(const int16_t* data,size_t frames,uint32_t seq,int64_t timestamp_us) {
@@ -277,6 +295,8 @@ void json(JsonObject out) {
     std::lock_guard<std::mutex> lock(mutex);
     out["supported"]=true;out["ready"]=ready;out["url"]=url;out["token_configured"]=!secret.empty();
     out["requested"]=requested;out["connected"]=connected;out["state"]=state;out["error"]=error;
+    out["worker_stack_free_bytes"]=worker_stack_free.load();
+    out["last_encode_us"]=encode_us.load();out["last_send_us"]=send_us.load();out["last_poll_us"]=poll_us.load();
     out["session"]=generation;out["packets"]=packets;out["dropped_blocks"]=dropped.load();out["reconnects"]=reconnects;out["responses"]=responses;
     out["asr_starts"]=asr_starts;out["asr_stops"]=asr_stops;out["speaker"]=speaker;out["speaker_band"]=band;
     out["text"]=text;out["emotion"]=emotion;out["emotion_reliable"]=false;out["respond_to"]="everyone";

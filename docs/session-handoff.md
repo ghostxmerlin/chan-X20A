@@ -1,5 +1,22 @@
 # 会话交接记录
 
+## 2026-11-08：0.4.30 SD 媒体、总线交接与实机听觉修复
+
+分支 `codex/continuous-hearing`，基于5952fd5继续实机部署。用户追加要求“最终声音也要移动到SD卡”；已实现40段台词与90眼睛动画共用SD，操作见[SD媒体](sd-media.md)。最新应用3,486,976字节，SHA256 `06b6cd100f19b23386b6077d9f716caad8fac7d524709a7bc970ddd680dcc08e`，本机 `artifacts/collector-0.4.30-sd-dma/`。本轮每次先核对身份/活动ota_1/otadata CRC并保留完整槽备份，仅写0x510000应用、独立verify通过；没有改分区、依赖锁或IDF5.5.4版本。
+
+- 按用户要求对照原可用版本：0.4.26的40条声音实际嵌入Flash，不能用其能播放推断SD曾挂载。只读扇区诊断确认原卡是exFAT，固定FatFs不支持；完整断电仍失败。用户自行备份并格式化FAT32后，同一固件挂载恢复。固件从未自动格式化卡，临时扇区探针已移除。
+- FAT32后首次实际mkdir捕获`spi_hal_setup_trans` running-command断言：LCD队列最后DMA未完成时SD获得总线并开始poll_busy。固定IDF的DC释放/总线锁不足以覆盖此交接窗口。现文件读写先锁LVGL，再以`esp_lcd_panel_io_tx_param(-1,nullptr,0)`排空LCD队列，持锁完成单文件I/O后释放；失败不进入SD。眼睛和PCM在播放前完整缓存，运行期没有逐帧读卡。独立复核确认没有LVGL/eyes锁逆序或ISR完成回调死锁。
+- 资源安装改走系统curl，令牌仍只经stdin，解决Mac的Node直连EHOSTUNREACH。实机上传任务曾因内部RAM不足返回503；改为16 KiB PSRAM常驻worker、静态TCB及单槽队列。也修正原自删任务跳过JsonDocument析构的逐文件泄漏。下一文件先等installing=false，避免成功响应先到而收尾未完成时409。未知结果仍停止、不自动重放POST。
+- 两路音频订阅与眼睛运行时，旧播放入口虽有约30 KiB总空闲内存，仍无法申请连续8 KiB任务栈而返回503。播放也改为开机创建16 KiB PSRAM常驻worker、静态TCB/单槽队列，保留播放门、取消归属和收尾复位；增加worker就绪/栈余量、最大连续内部空闲块及复位原因遥测。最新候选及最终固件实播第1/40条均完整提交214272/172800字节，error及cleanup_error均0，结束功放关闭且保持硬件复位。
+- d46e3fd候选切换三款眼睛后捕获新的LoadProhibited：日志先报`Failed to allocate priv RX buffer`，回溯为SPI setup_priv_desc失败清理→uninstall_priv_desc→memcpy(NULL)。与之前running-command断言是不同问题。实际IDF函数故障注入先复现ASan空指针崩溃，再修正为仅释放局部临时TX/RX，256组合加实机同条件用例通过；成功路径不改。CMake构建时生成哈希固定的补丁副本，原IDF文件不改；原SHA `1981ca91462f20cb74978e794895cd4b0650990711031e03cf433509fcad90eb`，补丁后`2239515feaaa0e890aeb0c4c474e3f2fd318ae841001f66603a963feb1a89b1c`。眼睛worker移至16 KiB PSRAM，释放原8 KiB内部栈空间；最终实机验证见collector-validation。
+- 台词逐段存`/sdcard/soul/voice/PLAY-001..040.adpcm`，合计1,402,880字节；与0.4.29 ELF中嵌入音频逐字节一致，SHA256 `4b00df24383f29a87c7fe4e1dcdc4d8d9efde86fd8fe2868113f5f08da9c1bba`。固件只留白名单元数据/哈希，缺卡、缺文件或损坏时明确失败，不回退Flash。网页标记SD播放；ASR open800ms、40条随机池、情绪配音/眼睛、遥控仅左右、保存10°、M12手动均保留。
+- 实机听觉旧候选出现LVGL LoadProhibited，原12 KiB worker栈明显小于实测约24.7 KiB占用；改32 KiB PSRAM栈后该问题未再观察到。再修非阻塞poll、共享200ms读预算、TCP_NODELAY和编码优先级4；0.4.29比较窗口由大量丢块恢复为278包/约17秒、0丢块/0重连。仅audio_ack后重置退避；eyes request_id复制到JSON，修正悬空指针导致的遥测乱码。
+- Python62项（58通过/4旧跳过）、Node49项通过；真实40段SD读取/解码与参考一致，错误路径无音频输出。独立复核覆盖SPI屏障、常驻worker所有权/析构和驱动失败清理。最终固件三款idle/happy及缓存5秒不读SD、首尾台词、同长度损坏上传拒绝通过；57.986秒并发窗口972个音频包、0丢块/重连/SD错误，台词与眼睛同时运行，停止回待机。后端实际记录976包/936960个16k样本，无错误。用户现场确认声音完整、眼睛正常。实体两次open已实收并播放38/39，comforting/encouraging眼睛以voice来源显示；指令至输出初始化约1002/1001ms，包含800ms等待。实体start/stop补验尚待完成，网页链路已通过。
+
+诊断过程中SPI屏障候选曾有一次未捕获回溯的重启；之后带日志续装54个眼睛文件未再捕获panic。常驻上传worker候选约12:29–12:30又有一次未捕获回溯的重启，用户明确未碰USB或供电；不能把这些重启归因为用户动作、JSON泄漏或WithCaps清理峰值。随后同候选暂停Mac监视服务，全量复核130文件均unchanged且无SD错误，PSRAM窗口首尾均6242528字节，没有逐文件泄漏趋势。最终版本的通过窗口与长期稳定性要分开记录。没有新增真实声纹；声纹质量、后端情绪准确率和逐条音质仍需现场验收。
+
+本机证据：`logs/sd-v0430/`、`logs/sd-v0430-spi/`、`logs/sd-v0430-final/`、`logs/sd-v0430-release/`、`logs/sd-v0430-dma/`，早期听觉对照在`logs/hearing-v0429*/`；串口原文/配置仅`.private/`，不提交。
+
 ## 2026-11-08：连续听觉与声纹（0.4.28；后端已更新，本体待部署）
 
 分支 `codex/continuous-hearing`，基于已推送的638ea24。功能提交83d42e9（后端）、267cc68（本体）、5171463（网页），复核修正a6b3ddb。用户选定后端情绪标签，回应所有人、声纹仅显示身份。实现/操作/限制见[连续听觉](continuous-hearing.md)。

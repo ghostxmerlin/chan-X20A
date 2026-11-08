@@ -5,6 +5,7 @@
 #include "reaction_sound.h"
 
 namespace collector {
+void playback_init();
 // Caller must authorize and verify that microphone initialization has completed.
 esp_err_t playback_handle(httpd_req_t* request);
 // Nonblocking; keeps only the latest fresh cue behind an active remote cue,

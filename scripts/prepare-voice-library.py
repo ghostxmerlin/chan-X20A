@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the user's 40 verified PCM files into local, embedded 16 kHz IMA blocks."""
+"""Prepare 40 verified SD voice files and their firmware metadata."""
 import argparse
 import array
 import hashlib
@@ -75,9 +75,12 @@ def main():
                'source_sha256': clip['sha256']['pcm'], 'encoded_sha256': hashlib.sha256(encoded).hexdigest()}
         rows.append(row)
         strings = ', '.join(json.dumps(row[k], ensure_ascii=False) for k in ('source_id', 'title', 'text'))
-        entries.append(f'    {{{i}, {strings}, {row["offset"]}, {len(encoded)}, {frames}}},')
+        row['sd_path'] = f'/sdcard/soul/voice/{clip["id"]}.adpcm'
+        digest = ','.join(f'0x{x:02x}' for x in hashlib.sha256(encoded).digest())
+        entries.append(f'    {{{i}, {strings}, {row["offset"]}, {len(encoded)}, {frames}, '
+                       f'{json.dumps(row["sd_path"])}, {{{digest}}}}},')
         bundle.extend(encoded)
-    assert len(bundle) < 1500000, 'Voice bundle exceeds reserved application budget'
+    assert len(bundle) < 1500000, 'Unexpected voice library size'
     (out / 'voice-library.bin').write_bytes(bundle)
     (out / 'voice_assets.h').write_text('// Generated locally by scripts/prepare-voice-library.py\n#pragma once\n'
         'inline constexpr int kVoiceEncodedRate=16000, kVoicePlaybackRate=24000;\n'

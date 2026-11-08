@@ -16,6 +16,7 @@ public:
     bool Send(const void*,size_t,bool binary);
     void Poll();
     void Abort();
+    const std::string& Error() const;
     void OnData(std::function<void(const char*,size_t,bool)>);
     void OnDisconnected(std::function<void()>);
 private:

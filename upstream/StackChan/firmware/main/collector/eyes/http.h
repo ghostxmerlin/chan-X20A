@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <esp_http_server.h>
 namespace collector::eyes {
+void start_asset_installer();
 void catalog_json(JsonObject out);
 void status_json(JsonObject out);
 // Collector wrappers perform Bearer authentication and mandatory boot check.

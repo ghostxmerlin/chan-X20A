@@ -28,11 +28,18 @@ struct EspBackend final:Backend {
     bool sha256(const uint8_t* data,size_t size,uint8_t* digest) override { return mbedtls_sha256(data,size,digest,0)==0; }
     uint32_t internal_low_water() const override { return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT); }
 } backend;
+StaticTask_t worker_control;
+constexpr size_t kWorkerStackBytes=16384;
+StackType_t* worker_stack=nullptr;
 void worker(void*) { for (;;) {step();vTaskDelay(1);} }
 }
 void start() {
     if (!initialize(backend)) { ESP_LOGW("Eyes","Storage or PSRAM unavailable; retaining original home");return; }
-    if (xTaskCreatePinnedToCore(worker,"eyes",8192,nullptr,1,nullptr,0)!=pdPASS) {
+    // Eye decoding and SD reads never write flash. Keep their stack in PSRAM
+    // so LCD/SD DMA and concurrent network clients retain internal memory.
+    worker_stack=static_cast<StackType_t*>(heap_caps_malloc(kWorkerStackBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    if (!worker_stack || !xTaskCreateStaticPinnedToCore(worker,"eyes",kWorkerStackBytes,nullptr,1,worker_stack,&worker_control,0)) {
+        heap_caps_free(worker_stack);worker_stack=nullptr;
         startup_failed();
         ESP_LOGE("Eyes","Worker unavailable; caches released, eye requests disabled");
     }

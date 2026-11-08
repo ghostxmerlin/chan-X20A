@@ -31,3 +31,8 @@ test('busy, stale, unready and old firmware block playback and never replay',asy
  s.telemetry.playback.busy=false;s.telemetry.health.audio_ready=false;ui.render(s,true);await el('voice-play').click();
  s.telemetry.health.audio_ready=true;s.capabilities={};ui.render(s,true);await el('voice-random').click();assert.equal(calls.length,0);
 });
+test('SD voices show storage and actionable missing-file status',()=>{
+ const {ui,s,el}=setup();s.voiceLibrary.storage='sd';
+ s.telemetry.playback={busy:false,state:'failed',error_stage:'asset_missing'};
+ ui.render(s,true);assert.match(el('voice-count').textContent,/SD 卡/);assert.match(el('voice-status').textContent,/请安装资源/);
+});

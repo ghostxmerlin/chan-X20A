@@ -612,8 +612,8 @@ private:
 
     void InitializeSpi()
     {
-        // Shared SPI3/DC-MISO arbitration is provided by the pinned IDF driver.
-        // SD probing finishes before any LCD transaction; no-card keeps LCD alive.
+        // SD probing finishes before LCD creation. Runtime file access also
+        // locks LVGL and drains queued LCD DMA before SD takes SPI3/GPIO35.
         ESP_ERROR_CHECK(shared_storage::initialize());
     }
 

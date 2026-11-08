@@ -19,7 +19,7 @@ struct HearingSocket::Impl {
     OperationDeadline deadline;
     std::mutex descriptor_mutex;int descriptor=-1;
     bool connected=false;
-    std::string auth;
+    std::string auth,error;
     MessageBuffer buffer;
     std::function<void(const char*,size_t,bool)> on_data;
     std::function<void()> on_disconnected;
@@ -45,14 +45,15 @@ struct HearingSocket::Impl {
             [](esp_transport_handle_t t,const char* host,int port,int timeout){
                 auto& s=self(t);const int ms=s.budget(timeout);if(!ms)return -1;
                 const int result=esp_transport_connect(s.native,host,port,ms);
-                {std::lock_guard<std::mutex> lock(s.descriptor_mutex);s.descriptor=esp_transport_get_socket(s.native);}
+                {std::lock_guard<std::mutex> lock(s.descriptor_mutex);s.descriptor=esp_transport_get_socket(s.native);
+                    if(result>=0&&s.descriptor>=0){const int enabled=1;setsockopt(s.descriptor,IPPROTO_TCP,TCP_NODELAY,&enabled,sizeof(enabled));}}
                 return s.deadline.cancelled?-1:result;
             },
             [](esp_transport_handle_t t,char* b,int len,int timeout){auto& s=self(t);const int ms=s.budget(timeout);return ms?esp_transport_read(s.native,b,len,ms):-1;},
             [](esp_transport_handle_t t,const char* b,int len,int timeout){auto& s=self(t);const int ms=s.budget(timeout);return ms?esp_transport_write(s.native,b,len,ms):-1;},
             [](esp_transport_handle_t t){auto& s=self(t);std::lock_guard<std::mutex> lock(s.descriptor_mutex);s.descriptor=-1;return esp_transport_close(s.native);},
-            [](esp_transport_handle_t t,int timeout){auto& s=self(t);const int ms=s.budget(timeout);return ms?esp_transport_poll_read(s.native,ms):0;},
-            [](esp_transport_handle_t t,int timeout){auto& s=self(t);const int ms=s.budget(timeout);return ms?esp_transport_poll_write(s.native,ms):0;},
+            [](esp_transport_handle_t t,int timeout){auto& s=self(t);const int ms=s.deadline.poll_timeout(timeout,esp_timer_get_time());return ms>=0?esp_transport_poll_read(s.native,ms):0;},
+            [](esp_transport_handle_t t,int timeout){auto& s=self(t);const int ms=s.deadline.poll_timeout(timeout,esp_timer_get_time());return ms>=0?esp_transport_poll_write(s.native,ms):0;},
             [](esp_transport_handle_t){return 0;});
         ws=esp_transport_ws_init(bounded);if(!ws)return false;
         esp_transport_ws_set_path(ws,slash==std::string::npos?"/":url.c_str()+slash);
@@ -61,7 +62,7 @@ struct HearingSocket::Impl {
         // connect, HTTP header reads and writes share this one absolute budget.
         deadline.begin(esp_timer_get_time(),2000);
         connected=esp_transport_connect(ws,host.c_str(),port,2000)>=0&&!deadline.cancelled;
-        if(!connected)close();
+        if(!connected){error="connect";close();}
         return connected;
     }
     bool send(const void* data,size_t size,bool binary) {
@@ -69,18 +70,23 @@ struct HearingSocket::Impl {
         deadline.begin(esp_timer_get_time(),200);
         const auto opcode=static_cast<ws_transport_opcodes_t>((binary?WS_TRANSPORT_OPCODES_BINARY:WS_TRANSPORT_OPCODES_TEXT)|WS_TRANSPORT_OPCODES_FIN);
         const int result=esp_transport_ws_send_raw(ws,opcode,static_cast<const char*>(data),size,200);
-        if(result!=static_cast<int>(size)||deadline.cancelled){close();return false;}return true;
+        if(result!=static_cast<int>(size)||deadline.cancelled){error="send_"+std::to_string(result);close();return false;}return true;
     }
     void poll() {
         if(!connected)return;
         if(deadline.cancelled){close();return;}
-        char bytes[2048];deadline.begin(esp_timer_get_time(),50);
-        int n=esp_transport_read(ws,bytes,sizeof(bytes),50);
-        if(n<0||deadline.cancelled){close();return;}
+        // An idle poll must not spend the frame-read budget or stall capture.
+        // Once readable, allow the complete header/payload a shared 200 ms.
+        char bytes[2048];deadline.begin(esp_timer_get_time(),200);
+        const int available=esp_transport_poll_read(ws,0);
+        if(available<0){error="poll";close();return;}
+        if(!available)return;
+        int n=esp_transport_read(ws,bytes,sizeof(bytes),200);
+        if(n<0||deadline.cancelled){error="read_"+std::to_string(n);close();return;}
         if(!n)return;
         const auto result=buffer.add(esp_transport_ws_get_read_opcode(ws),esp_transport_ws_get_fin_flag(ws),
             esp_transport_ws_get_read_payload_len(ws),bytes,n);
-        if(result==MessageBuffer::Invalid){close();return;}
+        if(result==MessageBuffer::Invalid){error="frame_"+std::to_string(esp_transport_ws_get_read_opcode(ws))+"_"+std::to_string(esp_transport_ws_get_read_payload_len(ws));close();return;}
         if(result==MessageBuffer::Complete){
             // Callback executes synchronously on the worker and finishes before
             // any subsequent close/destruction; stop only sets cancellation.
@@ -102,6 +108,7 @@ bool HearingSocket::Send(const std::string& text){return impl_->send(text.data()
 bool HearingSocket::Send(const void* data,size_t size,bool binary){return impl_->send(data,size,binary);}
 void HearingSocket::Poll(){impl_->poll();}
 void HearingSocket::Abort(){impl_->abort();}
+const std::string& HearingSocket::Error()const{return impl_->error;}
 void HearingSocket::OnData(std::function<void(const char*,size_t,bool)> cb){impl_->on_data=std::move(cb);}
 void HearingSocket::OnDisconnected(std::function<void()> cb){impl_->on_disconnected=std::move(cb);}
 }
