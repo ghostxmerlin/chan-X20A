@@ -242,6 +242,7 @@ public:
     float speedSpringStiffness() const { return _speed_spring_stiffness; }
     float speedSpringDamping() const { return _speed_spring_damping; }
     // An explicit cancel releases immediately; it also ends any arrival hold.
+    bool holdPending() const { return _hold_pending; }
     void cancelMotion() { setTorqueEnabled(false); stop_motion_at_angle(Servo::getCurrentAngle()); _hold_pending = false; }
     // Start an automatic pose from a validated sample, without a second UART
     // read that could substitute an internal fallback angle for the start point.
@@ -276,7 +277,10 @@ public:
      */
     virtual void setTorqueEnabled(bool enabled)
     {
+        if (enabled) _rest_released = false;
     }
+    // -1 unknown (read failed), 0 off, 1 on. Only a confirmed 0 ends rest polling.
+    virtual int readTorqueState() { return getTorqueEnabled() ? 1 : 0; }
     virtual bool getTorqueEnabled()
     {
         return false;
@@ -364,6 +368,7 @@ protected:
     int _release_tolerance_tenths = 10; // 1.0 degree, about 3 encoder steps
     uint32_t _last_goal_write_tick    = 0;
     bool _hold_pending                = false;
+    bool _rest_released               = false; // release at rest confirmed; no bus polling until the next goal
     bool _snap_to_target_on_rest      = false;
     bool _auto_torque_release_enabled = true;
     bool _auto_angle_sync_enabled     = true;

@@ -68,10 +68,14 @@ void Servo::update()
 
     // Auto release torque on rest, once the measured angle has arrived or the
     // bounded hold has elapsed. ReadMove alone cannot confirm arrival.
-    else if (_auto_torque_release_enabled && !isMoving()) {
+    // Once the release is confirmed (torque read back as 0) nothing is polled until the next goal
+    // write: each read is a chance for bus noise, and the pitch axis was polled ~20 times a second.
+    else if (_auto_torque_release_enabled && !_rest_released && !isMoving()) {
         if (GetHAL().millis() - _last_torque_check_tick > 200) {
-            if (release_allowed(GetHAL().millis()) && getTorqueEnabled()) {
-                setTorqueEnabled(false);
+            if (release_allowed(GetHAL().millis())) {
+                const int torque = readTorqueState();
+                if (torque > 0) setTorqueEnabled(false);
+                else if (torque == 0) _rest_released = true;
             }
             _last_torque_check_tick = GetHAL().millis();
         }
@@ -80,6 +84,7 @@ void Servo::update()
 
 void Servo::note_goal_write()
 {
+    _rest_released        = false;
     _last_goal_write_tick = _last_tick;
     _hold_pending         = true;
 }

@@ -16,7 +16,8 @@ bool toggle_listening();
 OwnerStart start_for_owner(uint32_t expected_revision,uint32_t& owner_revision);
 void stop_for_owner(uint32_t owner_revision);
 void asr_command(uint8_t id,bool has_value);
-void json(ArduinoJson::JsonObject target);
+// events: include hearing events with seq > events_after (speech, sound, gap, error, link).
+void json(ArduinoJson::JsonObject target,bool events=false,uint32_t events_after=0);
 // Body of POST /v1/control {"target":"hearing",op,...}; auth and boot checked by the caller.
 esp_err_t handle(httpd_req_t* request,ArduinoJson::JsonObject body);
 }

@@ -197,6 +197,12 @@ public:
         // mclog::tagInfo(_tag, "id: {} set torque: {}", _id, enabled);
     }
 
+    int readTorqueState() override
+    {
+        const int torque_enable = _scs_bus.ReadToqueEnable(_config.id); // -1 when the read failed
+        return torque_enable < 0 ? -1 : torque_enable > 0 ? 1 : 0;
+    }
+
     bool getTorqueEnabled() override
     {
         int torque_enable = _scs_bus.ReadToqueEnable(_config.id);

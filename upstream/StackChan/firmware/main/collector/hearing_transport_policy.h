@@ -14,6 +14,14 @@ struct OperationDeadline {
     }
     int remaining(int64_t now)const {return cancelled||now>=until?0:static_cast<int>((until-now+999)/1000);}
 };
+// The backend applies the last self flags to all audio that follows, so they are sent once per
+// session and then only when they change; each message is its own TCP segment, and lwIP stops
+// reporting the socket writable at 8 queued segments.
+struct SelfFlagGate {
+    bool known=false,sounding=false;
+    void reset(){known=false;}
+    bool should_send(bool now){if(known&&now==sounding)return false;known=true;sounding=now;return true;}
+};
 struct MessageBuffer {
     enum Result {Invalid,More,Complete};
     std::string message;

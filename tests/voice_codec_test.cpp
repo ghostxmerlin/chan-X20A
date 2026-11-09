@@ -1,3 +1,4 @@
+#include "../upstream/StackChan/firmware/main/collector/volume_setting.h"
 #include "../upstream/StackChan/firmware/main/collector/voice_codec.h"
 #include "../upstream/StackChan/firmware/main/collector/voice_policy.h"
 #include <cassert>
@@ -13,13 +14,19 @@ int main(int argc, char** argv) {
     assert(!decode_voice_ima(block, 256, output, 506));
     block[2]=89; assert(!decode_voice_ima(block, 256, output, 505)); block[2]=0;
     block[3]=1; assert(!decode_voice_ima(block, 256, output, 505));
-    assert(kVoiceCount==40);
-    for (int last=0; last<=40; ++last) for (uint32_t seed=0;seed<1000;++seed) {
-        int id=choose_voice(0,seed,last); assert(id>=1 && id<=40 && id!=last);
+    assert(kVoiceCount==80);
+    // Volume: ASR 0x40..0x44 step, clamp and preset; other commands and valued frames ignored.
+    assert(volume_for_asr(0x40,false,80)==90 && volume_for_asr(0x40,false,100)==100 && volume_for_asr(0x40,false,95)==100);
+    assert(volume_for_asr(0x41,false,80)==70 && volume_for_asr(0x41,false,10)==10 && volume_for_asr(0x41,false,15)==10);
+    assert(volume_for_asr(0x42,false,30)==100 && volume_for_asr(0x43,false,30)==60 && volume_for_asr(0x44,false,90)==10);
+    assert(volume_for_asr(0x1b,false,80)==-1 && volume_for_asr(0x40,true,80)==-1);
+    assert(volume_valid(10) && volume_valid(100) && !volume_valid(9) && !volume_valid(101) && volume_valid(kVolumeDefault));
+    for (int last=0; last<=kVoiceCount; ++last) for (uint32_t seed=0;seed<1000;++seed) {
+        int id=choose_voice(0,seed,last); assert(id>=1 && id<=kVoiceCount && id!=last);
         assert(choose_voice(7,seed,last)==7);
     }
-    assert(choose_voice(-1,0,0)==0 && choose_voice(41,0,0)==0);
-    assert(choose_voice(21,0,0)==21 && choose_voice(40,0,0)==40);
+    assert(choose_voice(-1,0,0)==0 && choose_voice(kVoiceCount+1,0,0)==0);
+    assert(choose_voice(21,0,0)==21 && choose_voice(40,0,0)==40 && choose_voice(80,0,0)==80 && choose_voice(81,0,0)==0);
     assert(voice_asr_next(0x1b,false) && !voice_asr_next(0x10,false) && !voice_asr_next(0x1b,true));
     VoiceCooldown cooldown;
     assert(cooldown.allowed(0)); cooldown.finished(1000);

@@ -2,7 +2,7 @@
 #pragma once
 #include <cstdint>
 namespace collector {
-inline constexpr int kVoiceCount=40;
+inline constexpr int kVoiceCount=80;
 inline constexpr int kAsrVoiceStartDelayMs=800;
 inline int64_t voice_not_before(bool from_asr, int64_t accepted_us)
 { return accepted_us+(from_asr ? kAsrVoiceStartDelayMs*1000 : 0); }

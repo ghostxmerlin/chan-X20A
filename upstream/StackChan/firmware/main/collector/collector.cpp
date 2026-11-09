@@ -842,7 +842,7 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["playback"]["bits"] = 16;
     doc["playback"]["max_bytes"] = 384000;
     doc["playback"]["max_seconds"] = 8;
-    doc["playback"]["volume"] = kPlaybackVolume;
+    doc["playback"]["volume"] = playback_volume();
     doc["playback"]["automatic"] = true;
     doc["playback"]["remote_cues"] = "heart,reject";
     doc["playback"]["persistent"] = false;
@@ -933,10 +933,11 @@ bool query_counter(httpd_req_t* request, const char* key, uint32_t& value, bool&
 esp_err_t telemetry_handler(httpd_req_t* request)
 {
     if (!authorize(request)) return ESP_OK;
-    uint32_t imu_after = 0, remote_after = 0, servo_diag = 0;
-    bool imu_requested = false, remote_requested = false, servo_diag_requested = false;
+    uint32_t imu_after = 0, remote_after = 0, servo_diag = 0, hearing_after = 0;
+    bool imu_requested = false, remote_requested = false, servo_diag_requested = false, hearing_requested = false;
     if (!query_counter(request, "imu_after", imu_after, imu_requested) ||
         !query_counter(request, "remote_after", remote_after, remote_requested) ||
+        !query_counter(request, "hearing_after", hearing_after, hearing_requested) ||
         !query_counter(request, "servo_diag", servo_diag, servo_diag_requested) || servo_diag > 1) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid sample cursor"); return ESP_OK;
     }
@@ -1049,13 +1050,31 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     {
         std::lock_guard<std::mutex> lock(audio_mutex);
         health["audio_capture_seq"] = audio_sequence;
+        // Mic channel level over the last 25 blocks (0.5 s) of the capture ring: replaces the
+        // monitor's raw PCM stream for the level indicator.
+        double sum = 0; int peak = 0; size_t samples = 0;
+        if (audio_ring) for (uint32_t i = 0; i < 25 && i < audio_sequence; ++i) {
+            const auto& block = audio_ring[(audio_sequence - i) % kRingBlocks];
+            if (block.seq != audio_sequence - i || !block.timestamp_us) continue;
+            for (size_t f = 0; f < kFrames; ++f) {
+                const int v = block.samples[f * kChannels];
+                sum += double(v) * v; peak = std::max(peak, v < 0 ? -v : v); ++samples;
+            }
+        }
+        if (samples) {
+            health["mic_level_dbfs"] = std::round(200.0 * std::log10(std::max(std::sqrt(sum / samples), 1.0) / 32768.0)) / 10.0;
+            health["mic_peak_dbfs"] = std::round(200.0 * std::log10(std::max(peak, 1) / 32768.0)) / 10.0;
+        } else {
+            health["mic_level_dbfs"] = nullptr; health["mic_peak_dbfs"] = nullptr;
+        }
+        health["mic_window_ms"] = 500;
     }
     health["speaker_enabled"] = playback_output_enabled();
     const int speaker_reset = hal_bridge::board_speaker_reset_state();
     if (speaker_reset < 0) health["speaker_hardware_reset_held"] = nullptr;
     else health["speaker_hardware_reset_held"] = speaker_reset != 0;
     playback_json(doc["playback"].to<JsonObject>());
-    hearing::json(doc["hearing"].to<JsonObject>());
+    hearing::json(doc["hearing"].to<JsonObject>(), hearing_requested, hearing_after);
     eyes::status_json(doc["eyes"].to<JsonObject>());
     asr_json(doc["asr"].to<JsonObject>());
     m12_json(doc["m12"].to<JsonObject>());
@@ -1323,6 +1342,13 @@ const ControlTarget kControlTargets[] = {
     {"interaction", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return interaction::handle(r, body); }},
     {"hearing", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return hearing::handle(r, body); }},
     {"eyes", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return eyes::command_handler(r, body); }},
+    {"volume", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t {
+        // {"target":"volume","value":10..100}; applies to the next playback and is saved.
+        if (body.size() != 1 || !body["value"].is<int>() || playback_set_volume(body["value"].as<int>(), "web") != ESP_OK) {
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Volume must be an integer 10..100"); return ESP_OK;
+        }
+        JsonDocument result; result["accepted"] = true; result["volume"] = playback_volume();
+        httpd_resp_set_status(r, "202 Accepted"); return send_json(r, result); }},
 };
 
 void control_info_json(JsonObject target)

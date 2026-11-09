@@ -6,11 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {uploadVoice,verifiedVoices} from '../../scripts/install-voice-assets.mjs';
-test('voice installer verifies forty SD files against original encoded hashes',async t=>{
+test('voice installer verifies all eighty SD files against original encoded hashes',async t=>{
  try {await fs.access(new URL('../../.private/voice-library/manifest.json',import.meta.url));}
  catch {t.skip('Prepare local voice assets first');return;}
- const list=await verifiedVoices();assert.equal(list.length,40);assert.equal(list.reduce((n,a)=>n+a.bytes.length,0),1402880);
- assert.deepEqual(list.map(a=>a.id),Array.from({length:40},(_,i)=>i+1));
+ const list=await verifiedVoices();assert.equal(list.length,80);assert.equal(list.reduce((n,a)=>n+a.bytes.length,0),2288128);
+ assert.deepEqual(list.map(a=>a.id),Array.from({length:80},(_,i)=>i+1));
+ assert.equal(list.slice(0,40).reduce((n,a)=>n+a.bytes.length,0),1402880); // first forty unchanged
 });
 test('voice verification rejects modified files and paths before upload',async t=>{
  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'voice-assets-'));t.after(()=>fs.rm(folder,{recursive:true,force:true}));
@@ -38,6 +39,6 @@ test('voice uploads bind clip, boot and binary; reject unknown IDs and redirect'
  const binding={address:`http://127.0.0.1:${server.address().port}`,token:'b'.repeat(32),device_id:'test'};
  assert.equal((await uploadVoice(binding,'test-boot',40,data)).installed,true);
  await assert.rejects(uploadVoice(binding,'test-boot',40,data));assert.equal(count,2);
- for(const id of [0,41,'1\r\nInjected: yes',1.2])await assert.rejects(uploadVoice(binding,'test-boot',id,data));
+ for(const id of [0,81,'1\r\nInjected: yes',1.2])await assert.rejects(uploadVoice(binding,'test-boot',id,data));
  assert.equal(count,2);
 });

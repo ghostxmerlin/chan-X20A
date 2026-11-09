@@ -2,7 +2,10 @@
 #include "hearing.h"
 #include "hearing_policy.h"
 #include "playback.h"
+#include "voice_library.h"
+#include "voice_policy.h"
 #include "hearing_socket.h"
+#include "hearing_transport_policy.h"
 #include <esp_opus_enc.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -13,6 +16,8 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <algorithm>
+#include <cmath>
+#include <string>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -22,7 +27,9 @@
 namespace collector::hearing {
 using namespace ArduinoJson;
 namespace {
-constexpr size_t kFrames=480,kQueue=32;
+// Capture queue in PSRAM: 150 x 20 ms = 3 s, so a send that waits up to 1 s loses no audio.
+constexpr size_t kFrames=480,kQueue=150;
+constexpr int64_t kMaxBlockAgeUs=3000000;
 struct Block {uint32_t session,seq;int64_t us;bool sounding;int16_t pcm[kFrames];};
 std::mutex mutex;
 std::shared_ptr<HearingSocket> active_socket;
@@ -44,12 +51,30 @@ std::vector<std::string> speakers;
 bool replace_speaker=false;
 int enroll_n=0;
 ResponsePolicy policy;
-int pending_clip=0;int64_t pending_us=0;
+QuietWait quiet;              // chosen response waiting for a quiet room (hearing_policy.h)
+bool server_speaking=false;int64_t last_speaking_us=0; // backend VAD state from every tick
+// Heartbeat: the backend sends a tick every 100 ms; 3 s without one ends the session.
+constexpr int64_t kTickTimeoutUs=3000000;
+uint32_t ticks=0,tick_gap_max_ms=0,tick_gap_max_boot_ms=0,send_max_us=0,session_dropped_base=0;
+int64_t session_started=0;
+bool server_level_valid=false;float server_level_db=0,server_noise_db=0;int server_rx_gap_ms=-1;
+// Why sessions ended (each counted once per session; "stopped" is a requested stop).
+struct EndCounts {uint32_t heartbeat_timeout=0,send_failed=0,transport_closed=0,connect_failed=0,handshake_timeout=0,encode_failed=0,stopped=0;} ends;
+std::string last_end_reason,last_end_error;int64_t last_end_us=0;uint32_t last_end_duration_ms=0,last_end_dropped=0;
+// Recent hearing events for the monitor's combined log (telemetry cursor hearing_after).
+constexpr size_t kEvents=32;
+struct HearingEvent {uint32_t seq=0;int64_t us=0;const char* kind="";std::string label,detail;int p=-1;};
+std::array<HearingEvent,kEvents> events;uint32_t event_seq=0;
+void record_locked(const char* kind,std::string label,std::string detail={},int p=-1) {
+    auto& e=events[++event_seq%kEvents];
+    e.seq=event_seq;e.us=esp_timer_get_time();e.kind=kind;e.label=std::move(label);e.detail=std::move(detail);e.p=p;
+}
 
 void new_session_locked() {
     capture_session=0;control.next_session();
     if(active_socket)active_socket->Abort();
-    connected=audio_ack=enroll_ack=false;pending_clip=0;last_tick=0;
+    connected=audio_ack=enroll_ack=false;quiet.clear();server_speaking=false;last_speaking_us=0;last_tick=0;ticks=0;tick_gap_max_ms=0;send_max_us=0;
+    server_level_valid=false;server_rx_gap_ms=-1;
     policy.seen=0; // Keep cooldown across reconnects.
     playback_set_hearing_session(control.requested()&&!control.enrolling()?control.generation():0);
 }
@@ -86,7 +111,16 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
     const int64_t now=esp_timer_get_time();
     std::lock_guard<std::mutex> lock(mutex);
     if(control.generation()!=session||!wanted_locked())return;
-    last_tick=now;
+    if(last_tick) {
+        const uint32_t gap=static_cast<uint32_t>((now-last_tick)/1000);
+        tick_gap_max_ms=std::max(tick_gap_max_ms,gap);tick_gap_max_boot_ms=std::max(tick_gap_max_boot_ms,gap);
+    }
+    last_tick=now;++ticks;
+    if(doc["level_db"].is<float>()&&doc["noise_db"].is<float>()) {
+        server_level_valid=true;server_level_db=doc["level_db"];server_noise_db=doc["noise_db"];
+    }
+    if(doc["rx_gap_ms"].is<int>())server_rx_gap_ms=doc["rx_gap_ms"];
+    if(doc["speaking"].is<bool>()){server_speaking=doc["speaking"];if(server_speaking)last_speaking_us=now;}
     for(auto event:doc["events"].as<JsonArrayConst>()) {
         const char* type=event["type"]|"";
         if(!std::strcmp(type,"hello"))read_speakers(event["speakers"]);
@@ -104,15 +138,21 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
                 finish_enroll_locked(phase,event["error"]|"enrollment_cancelled");return;
             }
         } else if(!std::strcmp(type,"audio_gap")) {
-            pending_clip=0;
+            record_locked("gap","",std::to_string(event["missing_packets"]|0));
+        } else if(!std::strcmp(type,"sound")&&!std::strcmp(event["phase"]|"","start")) {
+            record_locked("sound",std::string(event["label"]|"").substr(0,48),std::string(event["kind"]|"").substr(0,24),
+                          static_cast<int>(std::lround((event["p"]|0.0f)*100)));
         } else if(!std::strcmp(type,"error")) {
             error=std::string(event["error"]|"backend_error").substr(0,160);
+            record_locked("error",error);
             if(control.enrolling()){const auto why=error;finish_enroll_locked("error",why.c_str());return;}
         } else if(!std::strcmp(type,"speech")&&!std::strcmp(event["phase"]|"","end")) {
             // No identity gate: known, unsure and unknown speakers all use the same response policy.
             band=std::string(event["speaker"]["band"]|"none").substr(0,16);
             speaker=band=="known"?std::string(event["speaker"]["name"]|"").substr(0,144):"";
             text=std::string(event["text"]|"").substr(0,768);emotion=std::string(event["emotion"]|"unknown").substr(0,24);last_speech=now;
+            record_locked("speech",text.substr(0,160),emotion+"/"+band+(speaker.empty()?"":"/"+speaker.substr(0,48)),
+                          static_cast<int>(std::lround((event["voice"]["p"]|-0.01f)*100)));
             if(!control.requested()||control.enrolling())continue;
             const char* id=event["id"]|"";unsigned seq=0;char extra;
             if(std::sscanf(id,"s-%u%c",&seq,&extra)!=1)continue;
@@ -122,8 +162,10 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             const bool valid=end.is<int64_t>()&&age_samples>=0&&age_samples<=80000&&processing>=0&&processing<=5000&&
                 !std::strcmp(event["event"]|"","speech")&&!std::strcmp(event["voice"]["acoustic_band"]|"","voice")&&!text.empty();
             const bool self= !event["self"]["sounding"].is<bool>()||event["self"]["sounding"].as<bool>()||playback_self_sounding();
-            const int clip=policy.consider(seq,emotion.c_str(),valid,self,valid?static_cast<int>(processing):-1,now,esp_random());
-            if(clip&&!pending_clip){pending_clip=clip;pending_us=now;}
+            if(quiet.pending())continue; // one response at a time; this utterance is not considered
+            const int clip=policy.consider(seq,emotion.c_str(),valid,self,valid?static_cast<int>(processing):-1,now,esp_random(),
+                kVoiceCount,[](int clip_id){return voice_emotion(clip_id);});
+            if(clip)quiet.hold(clip,now,text.substr(0,120),emotion);
         }
     }
 }
@@ -147,12 +189,14 @@ void worker(void*) {
         socket->OnData([session](const char* data,size_t len,bool binary){receive(session,data,len,binary);});
         socket->OnDisconnected([session]{std::lock_guard<std::mutex> lock(mutex);if(control.generation()==session){connected=false;capture_session=0;}});
         bool ok=socket->Connect(endpoint.c_str());
+        const char* end_reason=ok?nullptr:"connect_failed";
         void* encoder=nullptr;
         esp_opus_enc_config_t cfg{};
         cfg.sample_rate=24000;cfg.channel=1;cfg.bits_per_sample=16;cfg.bitrate=40000;
         cfg.frame_duration=ESP_OPUS_ENC_FRAME_DURATION_60_MS;cfg.application_mode=ESP_OPUS_ENC_APPLICATION_AUDIO;
         cfg.complexity=0;cfg.enable_vbr=true;
         if(ok&&live(session))ok=esp_opus_enc_open(&cfg,sizeof(cfg),&encoder)==ESP_AUDIO_ERR_OK;
+        if(!ok&&!end_reason)end_reason="encode_failed";
         int input_size=0,output_size=0;
         if(ok&&encoder)ok=esp_opus_enc_get_frame_size(encoder,&input_size,&output_size)==ESP_AUDIO_ERR_OK&&input_size==2880&&output_size>0&&output_size<=4096;
         if(ok&&live(session)) {
@@ -177,11 +221,14 @@ void worker(void*) {
                     enrollment_msg["request_id"]=enroll_id;enrollment_msg["count"]=5;enrollment_msg["replace"]=replace_speaker;
                 }
                 activated=ack&&(!control.enrolling()||enroll_ack);
-                if(activated&&control.generation()==session){connected=true;state=control.enrolling()?"enrolling":"listening";error.clear();capture_session=session;}
+                if(activated&&control.generation()==session){
+                    connected=true;state=control.enrolling()?"enrolling":"listening";error.clear();capture_session=session;
+                    session_started=esp_timer_get_time();session_dropped_base=dropped.load();record_locked("link","connected");
+                }
             }
             if(activated)break;
             if(!enrollment_msg.isNull()){ok=send_json(*socket,enrollment_msg);enrollment_sent=true;}
-            if(esp_timer_get_time()>handshake_deadline){ok=false;break;}
+            if(esp_timer_get_time()>handshake_deadline){ok=false;end_reason="handshake_timeout";break;}
             vTaskDelay(pdMS_TO_TICKS(20));
         }
         {std::lock_guard<std::mutex> lock(mutex);if(ok&&control.generation()==session&&audio_ack)retry=0;}
@@ -189,22 +236,29 @@ void worker(void*) {
         std::array<int16_t,1440> pcm{};
         unsigned blocks=0;uint32_t previous=0,wire_seq=0;bool sent=false,sounding=false;
         int64_t first_us=0;
+        SelfFlagGate self_gate;
         while(ok&&live(session)&&socket->IsConnected()) {
             const auto poll_started=esp_timer_get_time();socket->Poll();poll_us=esp_timer_get_time()-poll_started;
-            int clip=0;
+            int clip=0,waited=0;std::string heard,felt;
             {
                 std::lock_guard<std::mutex> lock(mutex);
-                if(last_tick&&esp_timer_get_time()-last_tick>3000000)ok=false;
-                if(pending_clip&&esp_timer_get_time()-pending_us<500000)clip=pending_clip;
-                pending_clip=0;
+                const int64_t now=esp_timer_get_time();
+                if(last_tick&&now-last_tick>kTickTimeoutUs){ok=false;end_reason="heartbeat_timeout";}
+                // Speak only into a quiet room: someone talking (backend VAD) or our own playback waits.
+                const int held=quiet.clip;
+                const auto r=quiet.poll(now,server_speaking||playback_self_sounding(),last_speaking_us);
+                if(r==QuietWait::Play){clip=quiet.clip;heard=quiet.heard;felt=quiet.felt;waited=quiet.waited_ms(now);quiet.clear();}
+                else if(r==QuietWait::Expired)record_locked("response",quiet.heard,quiet.felt+"/"+std::to_string(held)+"/talking/"+std::to_string(quiet.waited_ms(now)));
             }
-            if(clip&&playback_hearing(clip,session)==ESP_OK) {
+            if(clip) {
+                const esp_err_t played=playback_hearing(clip,session);
                 std::lock_guard<std::mutex> lock(mutex);
-                if(control.generation()==session){policy.accepted(esp_timer_get_time());++responses;}
+                if(played==ESP_OK&&control.generation()==session){policy.accepted(esp_timer_get_time());++responses;}
+                record_locked("response",heard,felt+"/"+std::to_string(clip)+"/"+(played==ESP_OK?"":esp_err_to_name(played))+"/"+std::to_string(waited));
             }
             Block block;
             if(!ok||xQueueReceive(queue,&block,pdMS_TO_TICKS(20))!=pdTRUE)continue;
-            if(block.session!=session||esp_timer_get_time()-block.us>500000){++dropped;blocks=0;if(sent)++wire_seq;continue;}
+            if(block.session!=session||esp_timer_get_time()-block.us>kMaxBlockAgeUs){++dropped;blocks=0;if(sent)++wire_seq;continue;}
             if(previous&&block.seq!=previous+1){blocks=0;++dropped;if(sent)++wire_seq;}
             if(!blocks){first_us=block.us;sounding=false;}
             std::copy_n(block.pcm,kFrames,pcm.data()+blocks*kFrames);sounding|=block.sounding;previous=block.seq;
@@ -214,19 +268,25 @@ void worker(void*) {
             esp_audio_enc_out_frame_t out{};out.buffer=encoded.data()+16;out.len=output_size;
             const auto encode_started=esp_timer_get_time();
             const auto encoded_result=esp_opus_enc_process(encoder,&in,&out);encode_us=esp_timer_get_time()-encode_started;
-            if(encoded_result!=ESP_AUDIO_ERR_OK||!out.encoded_bytes||out.encoded_bytes>static_cast<unsigned>(output_size)){ok=false;break;}
+            if(encoded_result!=ESP_AUDIO_ERR_OK||!out.encoded_bytes||out.encoded_bytes>static_cast<unsigned>(output_size)){ok=false;end_reason="encode_failed";break;}
             if(!live(session))break;
-            JsonDocument flags;flags["type"]="self";flags["sounding"]=sounding;flags["moving"]=false;flags["t_us"]=first_us;
-            const auto send_started=esp_timer_get_time();ok=send_json(*socket,flags);
+            const auto send_started=esp_timer_get_time();
+            if(self_gate.should_send(sounding)) {
+                JsonDocument flags;flags["type"]="self";flags["sounding"]=sounding;flags["moving"]=false;flags["t_us"]=first_us;
+                ok=send_json(*socket,flags);
+            }
             std::memcpy(encoded.data(),"SEA1",4);
             for(unsigned i=0;i<4;++i)encoded[4+i]=(wire_seq>>(i*8))&255;
             for(unsigned i=0;i<8;++i)encoded[8+i]=(static_cast<uint64_t>(first_us)>>(i*8))&255;
             if(ok&&live(session))ok=socket->Send(encoded.data(),out.encoded_bytes+16,true);
             send_us=esp_timer_get_time()-send_started;
+            if(!ok&&!end_reason&&live(session))end_reason="send_failed";
+            {std::lock_guard<std::mutex> lock(mutex);send_max_us=std::max(send_max_us,send_us.load());}
             if(ok){sent=true;++wire_seq;worker_stack_free=uxTaskGetStackHighWaterMark(nullptr);std::lock_guard<std::mutex> lock(mutex);++packets;}
         }
         capture_session=0;
         const auto transport_error=socket->Error();
+        if(!end_reason)end_reason=!live(session)?"stopped":!socket->IsConnected()?"transport_closed":"send_failed";
         ESP_LOGI("Hearing","session ended error=%s stack_free=%u",transport_error.c_str(),unsigned(uxTaskGetStackHighWaterMark(nullptr)));
         if(encoder)esp_opus_enc_close(encoder);
         {std::lock_guard<std::mutex> lock(mutex);if(active_socket==socket)active_socket.reset();}
@@ -234,6 +294,15 @@ void worker(void*) {
         uint32_t wait_generation=0;
         {
             std::lock_guard<std::mutex> lock(mutex);
+            const std::string reason=end_reason;
+            if(reason=="heartbeat_timeout")++ends.heartbeat_timeout;else if(reason=="send_failed")++ends.send_failed;
+            else if(reason=="transport_closed")++ends.transport_closed;else if(reason=="connect_failed")++ends.connect_failed;
+            else if(reason=="handshake_timeout")++ends.handshake_timeout;else if(reason=="encode_failed")++ends.encode_failed;else ++ends.stopped;
+            const int64_t ended=esp_timer_get_time();
+            last_end_reason=reason;last_end_error=transport_error.substr(0,96);last_end_us=ended;
+            last_end_duration_ms=session_started?static_cast<uint32_t>((ended-session_started)/1000):0;
+            last_end_dropped=dropped.load()-session_dropped_base;session_started=0;
+            record_locked("link",reason,transport_error.substr(0,96));
             if(control.generation()==session) {
                 if(enrollment)finish_enroll_locked("error","backend_disconnected");
                 else {new_session_locked();state=control.requested()?"retrying":"idle";error="backend_disconnected:"+transport_error;++reconnects;wait_generation=control.generation();}
@@ -318,8 +387,41 @@ void asr_command(uint8_t id,bool has_value) {
     {std::lock_guard<std::mutex> lock(mutex);if(action>0)++asr_starts;else ++asr_stops;}
     set_listening(action>0);
 }
-void json(JsonObject out) {
+void json(JsonObject out,bool with_events,uint32_t events_after) {
     std::lock_guard<std::mutex> lock(mutex);
+    const int64_t now=esp_timer_get_time();
+    auto hb=out["heartbeat"].to<JsonObject>();
+    hb["interval_ms"]=100;hb["timeout_ms"]=kTickTimeoutUs/1000;
+    hb["last_age_ms"]=last_tick?static_cast<int32_t>((now-last_tick)/1000):-1;
+    hb["ticks"]=ticks;hb["max_gap_ms"]=tick_gap_max_ms;hb["max_gap_boot_ms"]=tick_gap_max_boot_ms;
+    if(server_level_valid){hb["server_level_db"]=server_level_db;hb["server_noise_db"]=server_noise_db;}
+    else {hb["server_level_db"]=nullptr;hb["server_noise_db"]=nullptr;}
+    hb["server_rx_gap_ms"]=server_rx_gap_ms;
+    out["session_age_ms"]=session_started?static_cast<int32_t>((now-session_started)/1000):-1;
+    out["session_dropped_blocks"]=session_started?dropped.load()-session_dropped_base:0;
+    out["send_max_us"]=send_max_us;
+    auto end=out["disconnects"].to<JsonObject>();
+    end["heartbeat_timeout"]=ends.heartbeat_timeout;end["send_failed"]=ends.send_failed;end["transport_closed"]=ends.transport_closed;
+    end["connect_failed"]=ends.connect_failed;end["handshake_timeout"]=ends.handshake_timeout;end["encode_failed"]=ends.encode_failed;end["stopped"]=ends.stopped;
+    auto last=out["last_end"].to<JsonObject>();
+    last["reason"]=last_end_reason;last["error"]=last_end_error;last["duration_ms"]=last_end_duration_ms;
+    last["age_ms"]=last_end_us?static_cast<int32_t>((now-last_end_us)/1000):-1;last["dropped_blocks"]=last_end_dropped;
+    out["event_seq"]=event_seq;
+    auto reply=out["response"].to<JsonObject>();
+    reply["pending"]=quiet.pending();reply["pending_clip"]=quiet.clip;
+    reply["pending_wait_ms"]=quiet.pending()?quiet.waited_ms(now):0;reply["server_speaking"]=server_speaking;
+    reply["quiet_ms"]=QuietWait::kQuietUs/1000;reply["max_wait_ms"]=QuietWait::kMaxWaitUs/1000;
+    reply["happy_count"]=policy.happy_count;reply["happy_needed"]=policy.happy_needed;
+    reply["happy_window_left_s"]=policy.happy_window&&now-policy.happy_window<kHappyWindowUs?static_cast<int32_t>((kHappyWindowUs-(now-policy.happy_window))/1000000):0;
+    if(with_events) {
+        auto list=out["events"].to<JsonArray>();
+        const uint32_t first=event_seq>=kEvents?event_seq-kEvents+1:1;
+        for(uint32_t seq=std::max(first,events_after+1);seq<=event_seq;++seq) {
+            const auto& e=events[seq%kEvents];if(e.seq!=seq)continue;
+            auto item=list.add<JsonObject>();item["seq"]=e.seq;item["age_ms"]=static_cast<int32_t>((now-e.us)/1000);
+            item["kind"]=e.kind;item["label"]=e.label;item["detail"]=e.detail;if(e.p>=0)item["p"]=e.p/100.0f;
+        }
+    }
     out["supported"]=true;out["ready"]=ready;out["url"]=url;out["token_configured"]=!secret.empty();
     out["requested"]=control.requested();out["connected"]=connected;out["state"]=state;out["error"]=error;
     out["worker_stack_free_bytes"]=worker_stack_free.load();

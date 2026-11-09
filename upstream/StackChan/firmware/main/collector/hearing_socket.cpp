@@ -67,9 +67,12 @@ struct HearingSocket::Impl {
     }
     bool send(const void* data,size_t size,bool binary) {
         if(!connected||deadline.cancelled||size>8192)return false;
-        deadline.begin(esp_timer_get_time(),200);
+        // 1 s, not 200 ms: the uplink to the backend sees RTT spikes past 300 ms (Mac wired ping,
+        // 2026-11-09), and lwIP stops reporting the socket writable at 8 queued segments.
+        constexpr int kSendBudgetMs=1000;
+        deadline.begin(esp_timer_get_time(),kSendBudgetMs);
         const auto opcode=static_cast<ws_transport_opcodes_t>((binary?WS_TRANSPORT_OPCODES_BINARY:WS_TRANSPORT_OPCODES_TEXT)|WS_TRANSPORT_OPCODES_FIN);
-        const int result=esp_transport_ws_send_raw(ws,opcode,static_cast<const char*>(data),size,200);
+        const int result=esp_transport_ws_send_raw(ws,opcode,static_cast<const char*>(data),size,kSendBudgetMs);
         if(result!=static_cast<int>(size)||deadline.cancelled){error="send_"+std::to_string(result);close();return false;}return true;
     }
     void poll() {

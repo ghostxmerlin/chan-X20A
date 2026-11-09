@@ -1,5 +1,47 @@
 # 会话交接记录
 
+## 2026-11-09：舵机“反馈问题”与读取频率（0.4.58–0.4.59，Claude）
+
+现象：网页常见舵机“无有效反馈”。`/v1/telemetry?servo_diag=1` 统计：yaw 13,087 次读 94.4% 成功、pitch 57,803 次 96.5%；失败为 no_reply / 校验 / ID / 长度错，UART 硬件事件 frame_errors 2013、FIFO 溢出 0、缓冲满 0。出错帧缺包头或半截中断 → 总线信号受干扰（帧错误丢字节），非软件丢数据。A/B 否定“听觉编码抢占”“播放导致”；电机 `web_yaw` 运动更新时失败率 4–13%，空闲 0–1%，疑似舵机出力时的电源/地噪声（待硬件确认）。
+“一直在读”的来源：①motor_task 每 100 ms 读两轴完整状态块；②`Servo::update()` 静止卸力逻辑每次更新读 ReadMove、每 200 ms 读 ReadTorqueEnable，卸力完成后也不停（俯仰开机姿态后、左右网页转动后一直跑），每轴约 35 次/秒。
+修复：`Servo::readTorqueState()`（-1 未知/0/1，HAL 返回原始值）；静止时只有确认读到扭矩 0 才停止轮询（`_rest_released`），下次写目标或显式上扭矩恢复，读失败不算卸力（`tests/servo_torque_release_test.cpp` 新增）。motor_task：读失败立即重试一次；连续两次失败才公布无效，期间保留上次有效值及其时间戳（追踪的 300 ms 过期判断照常生效）；忙（追踪请求、网页左右、手动步进、已启动的 yaw 命令未完成、保持中、开机姿态等待/运动、俯仰请求）及其后 3 s 为 10 Hz，否则 2 Hz。0.4.58 误用被动初始化后的 `isTrajectoryComplete()` 使空闲判断恒忙，0.4.59 改用 `manual_yaw_idle(yaw_command_started,…)`。遥测 `remote.motor.feedback_period_ms/feedback_reads/feedback_retries/feedback_masked`。
+实测：0.4.57 每轴 ~35 读/秒、公布无效 6.5%；0.4.59 空闲每轴 2 读/秒、公布无效 0%（总线失败率仍约 2–8%，由重试与去抖吸收）。快速档切换未单独实机验收。Python 84、Node 82 通过。产物 `artifacts/collector-0.4.59-servo-reads/`（3,568,224 B，SHA256 `6975ee741615872b1443971fd8571bed11b30a05e43c30eab50cb7c9e36be7d8`），备份 `backups/ota_1-collector-0.4.5{7,8}-before-*.bin`。建议硬件检查舵机线与扬声器/电源线分开、接头、电源端电容或磁环。未提交。
+
+## 2026-11-09：回应等安静、开心累计、音量控制（0.4.57，Claude）；网络栈失联复现
+
+用户反馈回应太频繁，要求：①有人说话时不出声，下次安静时再说（不是立刻）；②开心 5 分钟窗口内首次触发、之后每 2 次触发一次；③网页和设备端音量控制。
+- **等安静**（`hearing_policy.h` `QuietWait`）：选中的回应挂起，后端 tick 的 `speaking` 为 false 且安静 ≥1.5 s、本体不在发声时才播；10 s 内等不到则放弃，log 记“一直有人在说话，放弃”；成功时记“等安静 x s 后播放”。挂起期间不考虑新语句。遥测 `hearing.response{pending,pending_clip,pending_wait_ms,server_speaking,happy_count,happy_needed,happy_window_left_s}`，听觉面板显示。
+- **开心累计**（`ResponsePolicy`）：窗口自首个有效开心起 5 分钟；首个即回应，此后每累计 2 个有效开心回应一次；冷却中达到次数则顺延到下一个；无效（非人声/自身/过期）不计数。
+- **音量**（`volume_setting.h`、`playback_set_volume`）：10–100，默认 80，存 NVS `collector/volume`（在请求方任务写，不在播放 worker 写）；`POST /v1/control {"target":"volume","value":N}`；Unit ASR 出厂指令 0x40 increase / 0x41 decrease（±10）、0x42 maximum=100、0x43 medium=60、0x44 minimum=10；台词面板音量滑块，显示来源（网页/语音指令/开机保存值）。实测网页设 70/80 生效并 `volume_saved=true`，5 被拒绝；ASR 语音调音量与重启后读回未实测。
+- 测试：Python 84、Node 80 通过。产物 `artifacts/collector-0.4.57-quiet-happy-volume/`（3,567,456 B，SHA256 `b92d87a55a45d1c5e2b841122af0fa572b8428a2439886ac14638223d2713f11`），备份 `backups/ota_1-collector-0.4.56-before-quiet-happy-volume-20261109.bin`。
+- **未解决：设备网络栈失联第二次出现**（第一次 0.4.52）。0.4.57 开监听约 3.5 分钟后 ping 不通、监控连不上，屏幕正常；此前本地采集丢块成串（会话 439 块），服务器统计丢包率 0.4.54 0%（12.6 min）、0.4.55 0.7%（50 min）、0.4.56 7.3%、0.4.57 15.7%，期间无播放、无追踪/M12/相机。内部 RAM 历史最低降到 11.5 KB（此前 13.9 KB）。所以 0.4.52 的结论“待发队列导致失联”不成立，原因待查。已 USB 复位，`logs/wedge-v0457/usb-continuous.log` 持续录 USB 日志（≤50 min），`logs/wedge-v0457/memwatch.jsonl` 每 5 s 记内部堆/丢块/状态，用于下次失联定位。服务端另有一次 `inference failed`（说话人嵌入 num_frames 0），待查。未提交。
+
+## 2026-11-09：她说话时不听（方案 A，耳朵服务端，Claude）
+
+现象：连续听觉会把她自己播放的台词听回来（无回声消除）；原有保护只是“播放＋1.2 s 尾巴”期间打 self 标记，不触发回应，但仍转写并进 log。用户在 A（说话时不听）/ B（上传参考声道做服务端 AEC）/ C（esp-sr AFE 设备端 AEC）中选 A。实现在 `server/ear/ear_server.py`：收到 self.sounding=true 后，送入 VAD/ASR/声音分类的音频换成静音；录音文件仍保存原始音频，电平表仍统计原始声音；协议、序号、固件不变。新增测试 `test_her_own_voice_is_silenced_before_listening`（耳朵 17 项通过）。离线回放 16:56 段：原先被听回的“呀，我全都要 / 精神小伙”消失。已部署（服务器原文件与上次部署一致，只差此处）。实机 17:57–17:58 连续 4 次情绪回应（#41/#71/#43/#17），台词均未被听回。
+附带观察：neutral/unknown 现在会回应，实测约每 11 s 一句；“しよ。/ 그对.”这类噪声误识别也会触发，建议后续加识别质量门槛（语言、字数、人声把握）。未提交。
+
+## 2026-11-09：台词库 40 → 80 条，全部挂情绪（0.4.56，Claude）
+
+用户在 `voice/outputs/20261108-playable-41-80/` 增补 PLAY-041…080，要求导入并让全部台词都能对应到后端情绪（实在不行随机）。依据 `stackchan_playable_80.json` 每条的 emotion/theme 写出 `config/voice-emotions.json`（8 个后端标签全覆盖，原 13 条不变；分布见[连续听觉](continuous-hearing.md)）。`prepare-voice-library.py` 改为按索引条数（须等于 `kVoiceCount`）并把情绪写入 `voice_assets.h` / manifest；固件 `kVoiceCount=80`，`VoiceClip.emotion`、`voice_emotion(id)`，`ResponsePolicy` 在该标签全部台词中均匀随机且避开上一次（`hearing_policy.h` 模板函数，主机测试用假目录）；info 每条台词带 `emotion`，网页台词下拉显示情绪；网页/控制/安装器/上传 ID 上限随目录。前 40 条重新编码后 SHA 与旧文件一致，安装时校验跳过；新 40 条 885,248 B 写入并读回校验（共 80 条 2,288,128 B）。安装器新增“固件目录条数须与本地一致，否则不写”。Node 78、Python 83 通过。产物 `artifacts/collector-0.4.56-voice-80/`（3,564,688 B，SHA256 `ac048af96e5533b42d2fe4b3dbbd8032bcac338278dc948df31dd2bcb9d92330`），备份 `backups/ota_1-collector-0.4.55-before-voice-80-20261109.bin`。
+**行为变化**：此前 neutral/unknown（约占识别结果 91%）不回应；现在都会回应，仍受 10 s 冷却、人声、非自身、5 s 新鲜度限制，回应频率会明显上升。未做实际播放验收。未提交。
+
+## 2026-11-09：听觉链路断线根因与修复、监控页总 log（0.4.51–0.4.55，Claude）
+
+**根因（实测）**：断线全部是 `send_failed`（`send_0`），心跳稳定（最大间隔 ≤ 344 ms）。lwIP 发送缓冲 5760 B → `TCP_SND_QUEUELEN` 16 段，排队 ≥ 8 段即不可写；旧固件每 60 ms 发 2 段（self JSON + 音频）= 33 段/s，路径 RTT 超过约 240 ms 就写不进，200 ms 发送时限一到即断。Mac 走有线（en10）往同一后端 ping：平均约 85 ms、最大 312–523 ms、不丢包；Mac→机器人 ping 0.7% 丢、平均 5.5 ms，无线这一跳不是主因。
+**A/B（同一办公室、各开连续监听）**：0.4.51 5 分钟断 6 次、丢 1143 块；0.4.53（self 标记仅在变化时发，段数减半）5 分钟 2 次、99 块；0.4.54（再把发送时限 200 ms→1 s、PSRAM 采集队列 32→150 块 = 3 s、旧块门限 0.5→3 s）8 分钟 0 次、0 块，最慢发送 421 ms，同期路径最大 RTT 523 ms。
+**弃用 0.4.52**：PSRAM 待发队列 + “先 poll 可写再发”。lwIP 的可写标志会滞后，仍出现只写出帧头的 `send_0`；运行约 55 s 后机器人网络栈失联（ping 不通，屏幕/动画正常，USB 复位恢复），已回刷 0.4.51 再改。补丁留在 `logs/hearing-v0452/`。lwIP 统计在此 IDF 版本无重传计数，未启用；sdkconfig 未改。内部 RAM 仅约 29 KB 空闲（最低 13.9 KB），故不加大 lwIP 发送缓冲。
+**0.4.51 起的观测**：遥测 `health.mic_level_dbfs/mic_peak_dbfs`（最近 0.5 s）；`hearing.heartbeat`（tick 间隔/次数/最大间隔、服务端电平/底噪/rx gap）、`hearing.disconnects` 按原因计数、`hearing.last_end`；听觉事件环（speech/sound/gap/error/link，0.4.55 加 response）经 `/v1/telemetry?hearing_after=` 增量读取。
+**0.4.55**：情绪回应写入事件：感知文字 + 情绪 + 台词编号，未播放时附原因（忙/过期）。
+**监控页**：不再拉原始音频流（`/api/listen`、外放按钮、麦克风/IMU/磁场面板删除，IMU 批量不再请求）；麦克风电平进机身状态；ASR 指令、事件记录、听觉、声音、回应合并为右侧上下贯通的“总 log”，可按全部/ASR/听觉/声音/回应/系统筛选，回应为白字（按台词库显示出处与台词），2 s 内连续丢包合并为一行；听觉面板显示心跳与断线原因。Node 78、Python 83（装齐 numpy/websockets/opuslib_next）全部通过。
+**部署**：每版只写 ota_1 并独立 verify，备份 `backups/ota_1-collector-0.4.5{0,1,2,3,4}-before-*-20261109.bin`；当前 **0.4.55**（`artifacts/collector-0.4.55-response-log/`，3,557,456 B，SHA256 `12a46b156e22357570118f8711e23cb45c91174d9edccbf156715a6b1dfd1333`）。布局未做截图验收（无头 Chrome 被实时事件流挂住）。未提交。
+
+## 2026-11-09：连续听觉“音量小、声音事件少”（耳朵服务端，Claude）
+
+离线核对 127 分钟机器人录音（11-08 最长 8 段 + 11-09 全部，`recordings/server/`）：ES7210 输入增益代码写 60、芯片上限 37.5 dB，已是满增益；说话 −31…−38 dBFS，底噪 −42…−45 dBFS 且为 100 Hz 整数倍谐波（CED 把底噪认成昆虫/电器/鸟/心跳）；说话仅高于底噪 7–19 dB。CED 听出打字 31 个窗口（p 0.2–0.66，中位 +6.7 dB），全部被为 Mac 麦克风标定的 15 dB 门挡住；11-08 的 146 分钟只有 17 个声音事件，无打字/呼吸。麦克风通道与说话低频正常；11-09 会话丢包约 7%（成串，设备侧序号缺口）。
+修改（`server/ear/ear_server.py`，只对 `stackchan*` 来源，Mac 不变）：打字/键盘/叹气/呼吸/喘/吸鼻/咳嗽/清嗓/喷嚏标签在非说话时，高于底噪 ≥5 dB 且 p≥0.30 即可开始事件（1 个窗口）；像底噪的种类保持原门。audio 回执加 `sound_profile: device|default`。离线回放：仅在用户打字的两段多出 9 个打字事件，其余不变；本机完整服务回放 16:36 段：机器人来源 7 个打字、Mac 来源 0、说话一致；另 4 段无打字录音无新增事件。已用 `deploy.sh` 部署（先 dry-run，服务器原文件与 HEAD 一致），公网回放（来源 `stackchan-replay-typing`）同样 7 个打字。`tests/test_ear_protocol.py` 新增 3 项；**耳朵测试需 numpy/websockets/opuslib_next，系统 python3.14 缺包才显示 13 项失败**，在装齐依赖的环境中 16 项全部通过。
+待办：找底噪来源（关屏/舵机卸力/拔 M12 对照录音），提升信噪比；呼吸/叹气 CED 几乎没有 ≥0.3 的窗口，可能还要靠降噪。未提交。
+
 ## 2026-11-09：抬头（俯仰）无效修复（0.4.50，Claude）
 
 现象：网页调角、开机姿态都不动。遥测 `pitch_setting.state=feedback_unavailable`、`request_seq=0`、反馈有效、实测 −3.4°（raw 631），保存 15°。根因：俯仰软件下限 5°，`canStartFromFeedback` 只允许从下限以下 2°（`kPitchSettingLowerMargin=20`）向内恢复；头卸力/断电后靠在 −3.4°，每次判不能起步，5 s 后放弃。修复：余量改 10°（`kPitchSettingLowerMargin=100`，`Servo::canStartFromFeedback` 上限 20→100），目标仍须在 5–85°、命令仍从限位起（首个目标即 5°，约 8.4° 向上阶跃）。`tests/pitch_setting_test.cpp` 加 −3.4°/−5.0° 可起、−5.1° 拒绝，先失败后通过；全量 Python 仅已知 `test_ear_protocol` 13 项失败。产物 `artifacts/collector-0.4.50-pitch-recovery/`（3,548,032 B，SHA256 `43828ae4915081c43fef02e46e17ca01e1b9235328624afd9f79d605336a4ee1`），备份 `backups/ota_1-collector-0.4.49-before-pitch-recovery-20261109.bin`，只写 ota_1 并独立 verify。重启后开机姿态 −3.4°→14.0°（目标 15°，误差 −1.0°，峰值负载 135‰，最终目标后 575 ms 卸力）。网页调角待用户确认。未提交。

@@ -3,6 +3,9 @@
 #include "playback_session.h"
 #include "voice_library.h"
 #include "voice_policy.h"
+#include "volume_setting.h"
+#include <nvs.h>
+#include <atomic>
 #include "hearing_policy.h"
 #include "eyes/eyes.h"
 #include "eyes/voice_cue.h"
@@ -28,6 +31,8 @@ constexpr char kTag[] = "CollectorPlayback";
 constexpr int64_t kUploadTimeoutUs = 10000000;
 PlaybackGate gate;
 std::mutex status_mutex;
+std::atomic<int> volume_now{kVolumeDefault}; // playback_set_volume / NVS collector/volume
+const char* volume_source="default";int64_t volume_changed_us=0;bool volume_saved=false;
 const char* state = "idle";
 const char* source = "none";
 uint32_t reaction_dropped = 0;
@@ -129,7 +134,7 @@ struct Output {
         err = hal_bridge::board_set_speaker_reset(false);
         if (err != ESP_OK) return err;
         vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(50)));
-        err = codec->BeginCollectorOutput(kPlaybackVolume);
+        err = codec->BeginCollectorOutput(volume_now.load());
         if (err==ESP_OK) {
             std::lock_guard<std::mutex> lock(status_mutex);
             if (current_voice_id) voice_output_started_us=esp_timer_get_time();
@@ -253,8 +258,28 @@ void playback_worker(void*) {
     }
 }
 }
+int playback_volume() { return volume_now.load(); }
+// NVS is written here, in the requesting HTTP or ASR task, never in the playback worker.
+esp_err_t playback_set_volume(int volume, const char* source)
+{
+    if (!volume_valid(volume)) return ESP_ERR_INVALID_ARG;
+    volume_now = volume;
+    nvs_handle_t nvs; esp_err_t err = nvs_open("collector", NVS_READWRITE, &nvs);
+    if (err == ESP_OK) { err = nvs_set_u8(nvs, "volume", static_cast<uint8_t>(volume)); if (err == ESP_OK) err = nvs_commit(nvs); nvs_close(nvs); }
+    std::lock_guard<std::mutex> lock(status_mutex);
+    volume_source = source; volume_changed_us = esp_timer_get_time(); volume_saved = err == ESP_OK;
+    ESP_LOGI("Playback", "volume %d from %s%s", volume, source, err == ESP_OK ? "" : " (not saved)");
+    return ESP_OK;
+}
 void playback_init() {
     if(playback_queue)return;
+    {
+        nvs_handle_t nvs; uint8_t saved = 0;
+        if (nvs_open("collector", NVS_READONLY, &nvs) == ESP_OK) {
+            if (nvs_get_u8(nvs, "volume", &saved) == ESP_OK && volume_valid(saved)) { volume_now = saved; volume_source = "saved"; volume_saved = true; }
+            nvs_close(nvs);
+        }
+    }
     // Collector output is transient I2S/I2C work and never writes NVS. Reserve
     // one external stack before network clients fragment internal heap memory.
     playback_stack=static_cast<StackType_t*>(heap_caps_malloc(kPlaybackStackBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
@@ -427,6 +452,8 @@ bool playback_busy() { return gate.busy(); }
 void playback_asr_command(uint8_t id, bool has_value)
 {
     if (voice_asr_next(id,has_value)) playback_voice(0,true);
+    const int volume = volume_for_asr(id, has_value, playback_volume());
+    if (volume >= 0) playback_set_volume(volume, "asr");
 }
 
 bool playback_output_enabled()
@@ -444,7 +471,10 @@ void playback_json(ArduinoJson::JsonObject target)
     target["submitted_bytes"] = submitted_bytes; target["error"] = error_code;
     target["error_stage"] = error_stage; target["cleanup_error"] = cleanup_error;
     target["sample_rate"] = 24000; target["channels"] = 1; target["bits"] = 16;
-    target["format"] = "s16le"; target["volume"] = kPlaybackVolume;
+    target["format"] = "s16le"; target["volume"] = volume_now.load();
+    target["volume_min"] = kVolumeMin; target["volume_max"] = kVolumeMax; target["volume_step"] = kVolumeStep;
+    target["volume_source"] = volume_source; target["volume_saved"] = volume_saved;
+    target["volume_changed_age_ms"] = volume_changed_us ? static_cast<int32_t>((esp_timer_get_time() - volume_changed_us) / 1000) : -1;
     target["source"] = source; target["reaction_dropped"] = reaction_dropped;
     target["reaction_queued"] = reaction_queued;
     target["voice_clip_id"]=current_voice_id;

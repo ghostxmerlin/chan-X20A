@@ -14,7 +14,7 @@ export async function waitForAssetSlot(client) {
 export async function uploadResource(binding,boot,resource,bytes) {
   const b=validateBinding(binding),{kind,style,state,clip_id}=resource,voice=kind==='voice';
   if(!/^[\w-]{1,79}$/.test(boot)||!['voice','eyes'].includes(kind)||!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>262144)throw Error('Invalid asset');
-  if(voice?(!Number.isInteger(clip_id)||clip_id<1||clip_id>40):(!['v05','v14','v18'].includes(style)||!/^[a-z_]{1,31}$/.test(state)))throw Error('Invalid asset ID');
+  if(voice?(!Number.isInteger(clip_id)||clip_id<1||clip_id>80):(!['v05','v14','v18'].includes(style)||!/^[a-z_]{1,31}$/.test(state)))throw Error('Invalid asset ID');
   const headers=voice?`X-Voice-Id: ${clip_id}\n`:`X-Eyes-Style: ${style}\nX-Eyes-State: ${state}\n`;
   return new Promise((resolve,reject)=>{
     // Match the monitor's system network path on macOS. No redirects/retries,

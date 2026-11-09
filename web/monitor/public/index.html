@@ -9,7 +9,7 @@
 <main>
   <header class="toolbar">
     <div class="connection"><span class="brand">STACKCHAN /</span><span id="status-dot" class="dot"></span><strong id="status" role="status">连接中</strong><span id="firmware" class="muted">StackChan</span></div>
-    <div class="actions"><button data-open="hearing-config">配置 / 声纹</button><button id="listen" aria-pressed="false">开启监听</button><button id="pause" aria-pressed="false">暂停监控</button></div>
+    <div class="actions"><button data-open="hearing-config">配置 / 声纹</button><button id="pause" aria-pressed="false">暂停监控</button></div>
   </header>
   <div class="status-line"><p id="notice" class="notice" role="status">正在连接本机数据桥…</p><span id="freshness">尚未收到数据</span></div>
   <div class="dashboard">
@@ -22,6 +22,7 @@
           <div><dt>PSRAM 余</dt><dd id="psram">—</dd></div><div title="各内部堆区域历史最低空闲之和，不是同时发生的最低总空闲，也不是 DMA 空闲。"><dt>各堆最低之和 ⓘ</dt><dd id="heap-minimum">—</dd></div>
           <div><dt>Wi-Fi <button data-open="wifi-config" class="inline-button">网络</button></dt><dd id="wifi">—</dd></div><div><dt>遥控器</dt><dd id="remote">—</dd></div>
           <div><dt>光照</dt><dd id="light">—</dd></div><div><dt>接近</dt><dd id="proximity">—</dd></div><div><dt>显示</dt><dd id="display">—</dd></div>
+          <div class="mic-row" title="机身麦克风通道最近 0.5 s 的平均与峰值电平（来自遥测，不拉音频流）；ADC 已是最大增益。"><dt>麦克风</dt><dd><span id="mic">—</span><span class="meter mic-meter" role="meter" aria-label="麦克风电平" aria-valuemin="-60" aria-valuemax="0"><span id="mic-fill"></span></span></dd></div>
         </dl>
         <div class="thermal-caption"><span id="chip-temperature-note">ESP32-S3 · 等待读数</span><span>2 min</span></div><canvas id="chip-thermal" aria-label="StackChan 芯片温度趋势"></canvas>
       </div>
@@ -65,7 +66,8 @@
       <div class="panel-body">
         <div class="inline-status"><span id="voice-status">等待连接</span><span id="voice-trigger" class="muted">等待 ASR 能力</span></div><p id="voice-current" class="voice-current">尚未播放台词</p><p id="voice-progress" class="note">网页点播，每次播放一条</p>
         <label class="sr-only" for="voice-select">选择台词</label><select id="voice-select" disabled aria-label="选择本体播放的台词"></select>
-        <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div><p id="voice-asr-counts" data-detail-title class="note">ASR 计数：—</p><p id="voice-command" class="command-result" role="status">由 StackChan 本体发声。</p>
+        <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div><p id="voice-asr-counts" data-detail-title class="note">ASR 计数：—</p>
+        <div class="volume-row" title="所有播放共用；保存在机身，重启后保留。机身上可说 increase / decrease / maximum / medium / minimum volume。"><label for="volume-input">音量</label><input id="volume-input" type="range" min="10" max="100" step="10" value="80" disabled><span id="volume-value">—</span></div><p id="voice-command" class="command-result" role="status">由 StackChan 本体发声。</p>
       </div>
     </section>
     <section class="panel eyes-panel" aria-labelledby="eyes-heading">
@@ -81,24 +83,16 @@
       <div class="panel-body">
         <div class="identity-row"><p id="hearing-identity">身份：—</p><p id="hearing-emotion">情绪标签：—</p></div><p id="hearing-text" class="hearing-transcript">等待语音</p>
         <div class="control-buttons"><button id="hearing-start" disabled>开始 · start</button><button id="hearing-stop" class="stop-button" disabled>停止 · stop</button></div>
+        <p id="hearing-heartbeat" class="note" role="status">心跳：—</p><p id="hearing-link" class="note">断线：—</p><p id="hearing-response" class="note">回应：—</p>
         <p id="hearing-progress" role="status">尚未录入 · 0 / 5 句</p><p id="hearing-error" class="note"></p><p id="hearing-command" class="command-result" role="status">刷新页面不会开始监听。</p>
       </div>
     </section>
-    <section class="panel audio-panel">
-      <div class="panel-head"><h2>麦克风</h2><span id="audio-status" class="muted">等待音频</span></div>
-      <div class="panel-body"><div class="audio-reading"><strong id="db">—</strong><span>dBFS</span><span id="listen-state">外放关闭</span></div><div class="meter" role="meter" aria-label="麦克风电平" aria-valuemin="-60" aria-valuemax="0"><div id="meter-fill"></div></div><div class="meter-scale"><span>−60</span><span>−30</span><span>0 dBFS</span></div><canvas id="wave" aria-label="麦克风最近四秒包络"></canvas><div class="panel-foot"><span>第一通道 · 4s</span><span id="audio-gaps">缺包 —</span></div></div>
-    </section>
-    <section class="panel imu-panel">
-      <div class="panel-head"><h2>运动 / 磁场</h2><span class="legend"><i>X</i><i>Y</i><i>Z</i></span></div>
-      <div class="panel-body"><div class="imu-charts"><div><div class="chart-head"><span>加速度</span><span>m/s²</span></div><canvas id="accel" aria-label="三轴加速度"></canvas><p id="accel-value" class="axis-values">—</p></div><div><div class="chart-head"><span>角速度</span><span>°/s</span></div><canvas id="gyro" aria-label="三轴角速度"></canvas><p id="gyro-value" class="axis-values">—</p></div></div>
-      <div id="mag-panel" class="mag-reading"><div id="mag-xy" class="mag-compass"><span id="mag-arrow">↑</span></div><span class="muted" title="传感器坐标，航向未校准">µT</span><dl class="metrics"><div><dt>X</dt><dd id="mag-x">—</dd></div><div><dt>Y</dt><dd id="mag-y">—</dd></div><div><dt>Z</dt><dd id="mag-z">—</dd></div></dl></div></div>
-    </section>
-    <section class="panel asr-panel" id="asr-panel">
-      <div class="panel-head"><h2>ASR 指令</h2><span id="asr-state" class="muted">—</span></div>
-      <div class="panel-body"><dl class="metrics"><div><dt>最近</dt><dd id="asr-last">—</dd></div></dl><ol id="asr-events" class="asr-events"><li>尚无指令</li></ol><p id="asr-mode-note" data-detail-title class="note">等待当前固件的指令映射</p></div>
-    </section>
-    <section class="panel events-panel">
-      <div class="panel-head"><h2>事件记录</h2><span id="event-count" class="muted">0 条</span></div><ol id="events"><li class="muted">等待连接事件</li></ol><div class="panel-foot">连接 / ASR / 状态变化 · 完整日志在 USB</div>
+    <section class="panel log-panel" id="log-panel">
+      <div class="panel-head"><h2>总 log</h2>
+        <div class="log-filters" role="group" aria-label="按类别筛选"><button data-log-filter="all" aria-pressed="true">全部</button><button data-log-filter="asr" aria-pressed="false">ASR</button><button data-log-filter="hearing" aria-pressed="false">听觉</button><button data-log-filter="sound" aria-pressed="false">声音</button><button data-log-filter="response" aria-pressed="false">回应</button><button data-log-filter="system" aria-pressed="false">系统</button></div>
+        <span id="asr-state" class="muted">—</span><span id="event-count" class="muted">0 条</span></div>
+      <ol id="events"><li class="muted">等待事件</li></ol>
+      <div class="panel-foot"><span id="asr-mode-note" data-detail-title>等待当前固件的指令映射</span><span>ASR / 听觉 / 回应 / 声音 / 系统 · 完整日志在 USB</span></div>
     </section>
   </div>
   <footer><span>本机监控 · 操作后发送指令</span><span>过期读数自动隐藏 · 详细信息可悬停查看</span></footer>

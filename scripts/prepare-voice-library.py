@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare 40 verified SD voice files and their firmware metadata."""
+"""Prepare the verified SD voice files and their firmware metadata (catalog + emotion labels).
+
+Clip count follows the index (PLAY-001..PLAY-N, N must equal kVoiceCount in voice_policy.h).
+Each clip's response emotion comes from config/voice-emotions.json; every clip needs one.
+"""
 import argparse
 import array
 import hashlib
@@ -26,12 +30,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=pathlib.Path)
     parser.add_argument('--output', type=pathlib.Path, default=ROOT / '.private/voice-library')
+    parser.add_argument('--emotions', type=pathlib.Path, default=ROOT / 'config/voice-emotions.json')
     args = parser.parse_args()
     source, out = args.source.resolve(), args.output.resolve()
-    index = source if source.is_file() else source / 'stackchan_playable_40.json'
+    index = source if source.is_file() else source / 'stackchan_playable_80.json'
     source = index.parent
     data = json.loads(index.read_text())['candidates']
-    assert len(data) == 40 and [x['id'] for x in data] == [f'PLAY-{i:03}' for i in range(1, 41)]
+    count = len(data)
+    assert count and [x['id'] for x in data] == [f'PLAY-{i:03}' for i in range(1, count + 1)]
+    policy = (ROOT / 'upstream/StackChan/firmware/main/collector/voice_policy.h').read_text()
+    assert f'kVoiceCount={count};' in policy, f'set kVoiceCount={count} in voice_policy.h'
+    emotions = json.loads(args.emotions.read_text())
+    labels, tagged = emotions['labels'], emotions['clips']
+    missing = [x['id'] for x in data if tagged.get(x['id']) not in labels]
+    assert not missing and set(tagged) == {x['id'] for x in data}, f'emotion labels missing or extra: {missing}'
     out.mkdir(parents=True, exist_ok=True)
     bundle, entries, rows = bytearray(), [], []
     for i, clip in enumerate(data, 1):
@@ -71,6 +83,7 @@ def main():
         decoded.write_bytes(reference24.tobytes())
         (out / f'{clip["id"]}.adpcm').write_bytes(encoded)
         row = {'id': i, 'source_id': clip['id'], 'title': clip['title'], 'text': clip['original_text'],
+               'emotion': tagged[clip['id']],
                'offset': len(bundle), 'bytes': len(encoded), 'frames': frames,
                'source_sha256': clip['sha256']['pcm'], 'encoded_sha256': hashlib.sha256(encoded).hexdigest()}
         rows.append(row)
@@ -78,9 +91,9 @@ def main():
         row['sd_path'] = f'/sdcard/soul/voice/{clip["id"]}.adpcm'
         digest = ','.join(f'0x{x:02x}' for x in hashlib.sha256(encoded).digest())
         entries.append(f'    {{{i}, {strings}, {row["offset"]}, {len(encoded)}, {frames}, '
-                       f'{json.dumps(row["sd_path"])}, {{{digest}}}}},')
+                       f'{json.dumps(row["sd_path"])}, {{{digest}}}, {json.dumps(row["emotion"])}}},')
         bundle.extend(encoded)
-    assert len(bundle) < 1500000, 'Unexpected voice library size'
+    assert len(bundle) < 40000 * count, 'Unexpected voice library size'
     (out / 'voice-library.bin').write_bytes(bundle)
     (out / 'voice_assets.h').write_text('// Generated locally by scripts/prepare-voice-library.py\n#pragma once\n'
         'inline constexpr int kVoiceEncodedRate=16000, kVoicePlaybackRate=24000;\n'

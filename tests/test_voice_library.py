@@ -44,7 +44,8 @@ inline void heap_caps_free(void* p){if(p)--voice_allocations;free(p);}
             if not (assets/'manifest.json').exists():
                 return  # Pure malformed-input/policy regressions always run on clean checkouts.
             manifest = json.loads((assets/'manifest.json').read_text())
-            self.assertEqual(len(manifest['clips']),40)
+            self.assertEqual(len(manifest['clips']),80)
+            self.assertTrue(all(c['emotion'] for c in manifest['clips']))
             for clip in manifest['clips']:
                 decoded = pathlib.Path(directory) / 'decoded.pcm'
                 subprocess.run([str(binary), str(assets/(clip['source_id']+'.adpcm')),

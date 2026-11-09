@@ -1,4 +1,5 @@
 #include "collector/voice_library.h"
+#include "collector/voice_policy.h"
 #include "hal/board/shared_storage.h"
 #include <openssl/sha.h>
 #include <cassert>
@@ -26,8 +27,9 @@ const char* read_file(const FileSpec& a,uint8_t* out,size_t capacity) {
 }
 int main(int argc,char** argv) {
     assert(argc==2);folder=argv[1];using namespace collector;
-    assert(!voice_clip(0)&&!voice_clip(41));
-    for(int id=1;id<=40;++id) {
+    assert(!voice_clip(0)&&!voice_clip(kVoiceCount+1));
+    for(int id=1;id<=kVoiceCount;++id) {
+        assert(*voice_emotion(id));
         const auto& clip=*voice_clip(id);std::vector<int16_t> pcm(clip.frames);
         assert(!voice_decode(clip,pcm.data()));assert(!voice_allocations);
         std::ifstream f(folder+"/"+clip.source_id+".reference.pcm",std::ios::binary);

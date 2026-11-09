@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHmac } from 'node:crypto';
-import { AudioDecoder, DeviceClient, Monitor, validateBinding, deviceRequest } from './core.mjs';
+import { AudioDecoder, DeviceClient, Monitor, validateBinding, deviceRequest, hearingEvent } from './core.mjs';
 
 function audio(seq, mic = 16384, reference = 32767) {
   const b = Buffer.alloc(32 + 480 * 4);
@@ -130,4 +130,83 @@ trace-ascii = "${trace}"
     if (previous === undefined) delete process.env.CURL_HOME; else process.env.CURL_HOME = previous;
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('hearing events join the combined log once, in device time, and gaps in the cursor are reported', () => {
+  const monitor = new Monitor({}); monitor.acceptInfo({ boot_id: 'a' });
+  const hearing = { events: [
+    { seq: 1, age_ms: 4000, kind: 'link', label: 'connected', detail: '' },
+    { seq: 2, age_ms: 3000, kind: 'sound', label: '键盘打字', detail: 'typing', p: 0.42 },
+    { seq: 3, age_ms: 1000, kind: 'speech', label: '你好', detail: 'happy/known/主人', p: 0.57 } ] };
+  monitor.acceptTelemetry({ boot_id: 'a', seq: 1, timestamp_us: 1, hearing }, 100_000);
+  monitor.acceptTelemetry({ boot_id: 'a', seq: 2, timestamp_us: 2, hearing }, 100_500); // same events again
+  const logged = monitor.events.filter(e => e.kind === 'hearing' || e.kind === 'sound');
+  assert.equal(logged.length, 3); assert.equal(monitor.hearingSeq, 3);
+  assert.deepEqual(logged.map(e => e.at), [96_000, 97_000, 99_000]);
+  assert.match(logged[1].text, /键盘打字（typing） 0.42/); assert.equal(logged[1].kind, 'sound');
+  assert.match(logged[2].text, /听到「你好」.*情绪 happy.*身份 主人.*人声 0.57/);
+  monitor.acceptTelemetry({ boot_id: 'a', seq: 3, timestamp_us: 3, hearing: { events: [
+    { seq: 7, age_ms: 0, kind: 'link', label: 'heartbeat_timeout', detail: 'timeout' } ] } }, 101_000);
+  assert.ok(monitor.events.some(e => /缺 3 条/.test(e.text)));
+  assert.match(monitor.events.at(-1).text, /听觉断开：心跳超时.*timeout/);
+  monitor.acceptInfo({ boot_id: 'b' }); assert.equal(monitor.hearingSeq, 0);
+  assert.equal(hearingEvent({ kind: 'gap', detail: '4' }).text, '听觉丢包 4 个（服务端发现序号缺口）');
+  assert.equal(hearingEvent({ kind: 'other' }), null);
+});
+
+test('the telemetry poll asks for hearing events and no IMU batch, and never opens the raw audio stream', () => {
+  const source = fs.readFileSync(new URL('./core.mjs', import.meta.url), 'utf8');
+  const poll = source.slice(source.indexOf('async loop('));
+  assert.match(poll, /hearing_after=\$\{this\.hearingSeq\}/);
+  assert.doesNotMatch(poll, /imu_after/); assert.doesNotMatch(poll, /ensureAudio\(/);
+});
+
+test('consecutive hearing gaps within 2 s collapse into one running line', () => {
+  const monitor = new Monitor({}); monitor.acceptInfo({ boot_id: 'a' });
+  const gap = (seq, age, n) => ({ seq, age_ms: age, kind: 'gap', label: '', detail: String(n) });
+  monitor.acceptTelemetry({ boot_id: 'a', seq: 1, timestamp_us: 1, hearing: { events: [gap(1, 3000, 7), gap(2, 2500, 8), gap(3, 1800, 4)] } }, 10_000);
+  monitor.acceptTelemetry({ boot_id: 'a', seq: 2, timestamp_us: 2, hearing: { events: [gap(4, 0, 5)] } }, 14_000);
+  const lines = monitor.events.filter(e => e.kind === 'hearing');
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0].text, '听觉丢包 共 19 个（3 次，服务端发现序号缺口）');
+  assert.equal(lines[1].text, '听觉丢包 5 个（服务端发现序号缺口）');
+});
+
+test('emotion responses are logged with what was perceived and which clip played', () => {
+  const monitor = new Monitor({});
+  monitor.acceptInfo({ boot_id: 'a', voice_library: { clips: [{ id: 6, title: '武林外传', text: '额滴神啊' }] } });
+  monitor.acceptTelemetry({ boot_id: 'a', seq: 1, timestamp_us: 1, hearing: { events: [
+    { seq: 1, age_ms: 0, kind: 'response', label: '今天真开心', detail: 'happy/6' },
+    { seq: 2, age_ms: 0, kind: 'response', label: '烦死了', detail: 'angry/30/ESP_ERR_INVALID_STATE' },
+    { seq: 3, age_ms: 0, kind: 'response', label: '嗯', detail: 'sad/35/expired' }] } }, 1000);
+  const lines = monitor.events.filter(e => e.kind === 'response').map(e => e.text);
+  assert.deepEqual(lines, [
+    '感知「今天真开心」· 情绪 开心 → 播放 #6 武林外传：额滴神啊',
+    '感知「烦死了」· 情绪 生气 → 选了 #30，未播放（播放器忙或未就绪）',
+    '感知「嗯」· 情绪 低落 → 选了 #35，未播放（选中后超过 0.5 s 未能开始）']);
+});
+
+test('responses report the wait for quiet and give-ups while people keep talking', () => {
+  const monitor = new Monitor({});
+  monitor.acceptInfo({ boot_id: 'a', voice_library: { clips: [{ id: 41, title: '常见答题回应', text: '正确，答对了。' }] } });
+  monitor.acceptTelemetry({ boot_id: 'a', seq: 1, timestamp_us: 1, hearing: { events: [
+    { seq: 1, age_ms: 0, kind: 'response', label: '对吧', detail: 'neutral/41//2300' },
+    { seq: 2, age_ms: 0, kind: 'response', label: '然后呢', detail: 'unknown/41/talking/10000' }] } }, 1000);
+  assert.deepEqual(monitor.events.filter(e => e.kind === 'response').map(e => e.text), [
+    '感知「对吧」· 情绪 平静 → 等安静 2.3 s 后播放 #41 常见答题回应：正确，答对了。',
+    '感知「然后呢」· 情绪 未确定 → 选了 #41 常见答题回应：正确，答对了。，未播放（一直有人在说话，放弃，等了 10.0 s）']);
+});
+
+test('speech with no words or no voice stays out of the log and is only counted', () => {
+  const monitor = new Monitor({}); monitor.acceptInfo({ boot_id: 'a' });
+  monitor.acceptTelemetry({ boot_id: 'a', seq: 1, timestamp_us: 1, hearing: { events: [
+    { seq: 1, age_ms: 0, kind: 'speech', label: '.', detail: 'unknown/none', p: 0.0 },
+    { seq: 2, age_ms: 0, kind: 'speech', label: '。？', detail: 'unknown/none', p: 0.4 },
+    { seq: 3, age_ms: 0, kind: 'speech', label: '嗯好', detail: 'neutral/none', p: 0.1 },
+    { seq: 4, age_ms: 0, kind: 'speech', label: '今天天气不错', detail: 'happy/none', p: 0.62 },
+    { seq: 5, age_ms: 0, kind: 'speech', label: 'OK', detail: 'neutral/none' }] } }, 1000);
+  const heard = monitor.events.filter(e => e.kind === 'hearing').map(e => e.text);
+  assert.equal(heard.length, 2); assert.match(heard[0], /今天天气不错/); assert.match(heard[1], /「OK」/);
+  assert.equal(monitor.snapshot().filteredSpeech, 3);
+  monitor.acceptInfo({ boot_id: 'b' }); assert.equal(monitor.snapshot().filteredSpeech, 0);
 });

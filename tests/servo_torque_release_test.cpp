@@ -34,7 +34,9 @@ struct LoadedAxis : Servo {
         if (torque && !enabled) { ++releases; release_ms = test_tick_ms; }
         torque = enabled;
     }
-    bool getTorqueEnabled() override { return torque; }
+    bool getTorqueEnabled() override { ++torque_reads; return torque; }
+    int torque_reads = 0, moving_reads = 0; bool torque_read_fails = false;
+    int readTorqueState() override { ++torque_reads; return torque_read_fails ? -1 : torque ? 1 : 0; }
     void tick(uint32_t advance = 20) { test_tick_ms += advance; update(); }
     // Run the spring until its final snap write, then return that time.
     uint32_t run_to_final(int target, uint32_t limit_ms = 8000)
@@ -49,12 +51,48 @@ struct LoadedAxis : Servo {
     }
 protected:
     void set_angle_impl(int angle) override { writes.push_back({test_tick_ms, angle}); torque = true; final_write_ms = test_tick_ms; }
-    bool is_moving_impl() override { return moving_flag; }
+    bool is_moving_impl() override { ++moving_reads; return moving_flag; }
 };
+
+
 
 static ServoFeedback feedback_at(int angle)
 {
     ServoFeedback f; f.valid = true; f.angle = angle; f.position_raw = 461 + angle * 16 / 5 / 10; return f;
+}
+
+// 2026-11-09: once release at rest is confirmed (torque read back as 0) the axis stops polling
+// ReadMove / ReadTorqueEnable until the next goal write; a failed torque read never counts as
+// released. The pitch axis had been read ~20 times a second forever after its boot pose.
+static void rest_polling_stops_after_confirmed_release()
+{
+    test_tick_ms = 100000;
+    LoadedAxis axis; axis.physical = 0; axis.feedback_valid = true;
+    axis.setReleasePolicy(500, 1500, 60);
+    axis.moveFromFeedbackWithSpeed(feedback_at(0), 200, 1000);
+    axis.physical = 200;
+    for (int i = 0; i < 200; ++i) axis.tick();          // trajectory, hold, release, confirm
+    assert(axis.releases == 1 && !axis.torque);
+    const int moving = axis.moving_reads, torque = axis.torque_reads, feedback = axis.feedback_reads;
+    for (int i = 0; i < 500; ++i) axis.tick();          // 10 s at rest
+    assert(axis.moving_reads == moving && axis.torque_reads == torque && axis.feedback_reads == feedback);
+    // The next goal resumes the rest checks.
+    axis.moveFromFeedbackWithSpeed(feedback_at(200), 0, 1000); axis.physical = 0;
+    for (int i = 0; i < 200; ++i) axis.tick();
+    assert(axis.releases == 2 && axis.moving_reads > moving);
+    // A torque read that fails is not a confirmed release: polling continues.
+    LoadedAxis noisy; noisy.physical = 0; noisy.setReleasePolicy(500, 1500, 60);
+    noisy.moveFromFeedbackWithSpeed(feedback_at(0), 200, 1000); noisy.physical = 200;
+    for (int i = 0; i < 200; ++i) noisy.tick();
+    noisy.torque_read_fails = true; const int before = noisy.torque_reads;
+    for (int i = 0; i < 100; ++i) noisy.tick();
+    if (noisy.releases == 0) assert(noisy.torque_reads > before);   // still trying to confirm
+    noisy.torque_read_fails = false;
+    for (int i = 0; i < 50; ++i) noisy.tick();
+    const int settled = noisy.torque_reads;
+    for (int i = 0; i < 100; ++i) noisy.tick();
+    assert(noisy.torque_reads == settled && !noisy.torque);
+    std::cout << "PASS: rest polling stops after a confirmed release and resumes on the next goal\n";
 }
 
 static void web_yaw_hold_when_shaft_lags()
@@ -177,5 +215,6 @@ int main()
     cancel_clears_hold_and_idle_axis_reads_nothing();
     new_command_during_hold_restarts_hold();
     pitch_profile_uses_same_release_rule();
+    rest_polling_stops_after_confirmed_release();
     std::cout << "PASS: torque release waits for measured arrival or a bounded hold\n";
 }

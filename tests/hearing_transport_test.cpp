@@ -17,5 +17,12 @@ int main(){
  assert(d.poll_timeout(0,201000)==-1); // Expiry is distinct from nonblocking.
  assert(d.remaining(1000)==200);assert(d.remaining(200999)==1);assert(d.remaining(201000)==0);
  d.cancel();d.begin(300000,2000);assert(d.remaining(300001)==0); // cancellation cannot be revived by another I/O call
+ // Self flags go out once per session and then only on change: every extra TCP segment
+ // counts against lwIP's 8-segment writable threshold (2026-11-09: 2 per 60 ms tripped
+ // the 200 ms send budget whenever path RTT spiked past ~240 ms).
+ SelfFlagGate g;
+ assert(g.should_send(false));assert(!g.should_send(false));assert(!g.should_send(false));
+ assert(g.should_send(true));assert(!g.should_send(true));assert(g.should_send(false));
+ g.reset();assert(g.should_send(false)); // a new session states its flags again
  std::cout<<"PASS bounded receive fragments and irreversible transport cancellation\n";
 }

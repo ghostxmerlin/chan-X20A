@@ -9,6 +9,7 @@ namespace collector {
 static_assert(sizeof(kVoiceClips)/sizeof(kVoiceClips[0])==kVoiceCount);
 static_assert(kVoiceEncodedRate==16000 && kVoicePlaybackRate==24000);
 const VoiceClip* voice_clip(int id) { return id>=1 && id<=kVoiceCount ? &kVoiceClips[id-1] : nullptr; }
+const char* voice_emotion(int id) { const auto* clip=voice_clip(id); return clip ? clip->emotion : ""; }
 const char* voice_decode(const VoiceClip& clip, int16_t* pcm)
 {
     if (voice_clip(clip.id)!=&clip || !pcm) return "voice_invalid_clip";
@@ -29,7 +30,7 @@ void voice_library_json(ArduinoJson::JsonObject out)
     for (const auto& clip:kVoiceClips) {
         auto item=clips.add<ArduinoJson::JsonObject>();
         item["id"]=clip.id; item["source_id"]=clip.source_id;
-        item["title"]=clip.title; item["text"]=clip.text; item["seconds"]=clip.frames/24000.0;
+        item["title"]=clip.title; item["text"]=clip.text; item["emotion"]=clip.emotion; item["seconds"]=clip.frames/24000.0;
     }
 }
 }

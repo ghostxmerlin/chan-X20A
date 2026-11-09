@@ -139,17 +139,49 @@ export class AudioDecoder {
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const END_REASONS = { heartbeat_timeout: '心跳超时（3 s 未收到 tick）', send_stalled: '发送卡死（15 s 发不出去）', send_failed: '发送失败', transport_closed: '连接被关闭',
+  connect_failed: '连接失败', handshake_timeout: '握手超时', encode_failed: '编码失败', stopped: '已停止' };
+const pct = p => Number.isFinite(p) ? ` ${p.toFixed(2)}` : '';
+const EMOTIONS = { happy: '开心', sad: '低落', angry: '生气', fearful: '害怕', disgusted: '嫌弃', surprised: '惊讶', neutral: '平静', unknown: '未确定' };
+const PLAY_ERRORS = { expired: '选中后超过 0.5 s 未能开始', talking: '一直有人在说话，放弃', ESP_ERR_INVALID_STATE: '播放器忙或未就绪', ESP_ERR_NOT_FOUND: '台词文件不存在', ESP_ERR_INVALID_ARG: '会话已结束' };
+// Speech the ear segmented but that carries no words (only punctuation) or no voice (CED voice
+// probability below the ear's VOICE_LO 0.2) is a VAD misfire on typing, knocks or noise; it never
+// triggers a response and is kept out of the log, only counted (user, 2026-11-09).
+const WORDS = /[\p{L}\p{N}]/u;
+export const speechMisfire = e => e.kind === 'speech' && (!WORDS.test(e.label || '') || (Number.isFinite(e.p) && e.p < 0.2));
+// One line per hearing event for the combined log; kind selects the log filter.
+export function hearingEvent(e, clips = []) {
+  if (e.kind === 'response') {
+    const [emotion, id, error, waitedMs] = String(e.detail || '').split('/');
+    const waited = Number(waitedMs) > 0 ? `${(Number(waitedMs) / 1000).toFixed(1)} s` : '';
+    const clip = clips.find(c => String(c.id) === id);
+    const line = clip ? `#${id} ${clip.title ? clip.title + '：' : ''}${clip.text || ''}` : `#${id || '?'}`;
+    const felt = `感知「${e.label || '（无文字）'}」· 情绪 ${EMOTIONS[emotion] || emotion || '—'}`;
+    return { kind: 'response', text: error ? `${felt} → 选了 ${line}，未播放（${PLAY_ERRORS[error] || error}${waited ? '，等了 ' + waited : ''}）` :
+      `${felt} → ${waited ? '等安静 ' + waited + ' 后' : ''}播放 ${line}` };
+  }
+  if (e.kind === 'speech') {
+    const [emotion, band, speaker] = String(e.detail || '').split('/');
+    return { kind: 'hearing', text: `听到「${e.label || '（无文字）'}」· 情绪 ${emotion || '—'} · ${speaker ? '身份 ' + speaker : '声纹 ' + (band || '—')}${Number.isFinite(e.p) ? ' · 人声' + pct(e.p) : ''}` };
+  }
+  if (e.kind === 'sound') return { kind: 'sound', text: `声音 ${e.label || e.detail}（${e.detail || '—'}）${pct(e.p)}` };
+  if (e.kind === 'gap') return { kind: 'hearing', text: `听觉丢包 ${e.detail || '?'} 个（服务端发现序号缺口）` };
+  if (e.kind === 'error') return { kind: 'hearing', text: `听觉后端错误 ${e.label}` };
+  if (e.kind === 'link') return { kind: 'hearing', text: e.label === 'connected' ? '听觉已连接后端' :
+    `听觉断开：${END_REASONS[e.label] || e.label}${e.detail ? ' · ' + e.detail : ''}` };
+  return null;
+}
 export class Monitor extends EventEmitter {
   constructor(client, m12System = new M12System(null)) {
     super(); this.m12System = m12System; this.client = client; this.info = null; this.telemetry = null; this.telemetryAt = 0;
     this.frame = null; this.motion = []; this.audio = { at: 0, db: -96, gaps: 0, history: [] };
-    this.events = []; this.eventSeq = 0; this.asrSeq = 0; this.online = false; this.running = false;
+    this.events = []; this.eventSeq = 0; this.asrSeq = 0; this.hearingSeq = 0; this.filteredSpeech = 0; this.online = false; this.running = false;
     this.m12Tracker = new M12Tracker(); this.thermalHistory = [];
     this.viewers = 0; this.epoch = 0; this.error = ''; this.audioError = ''; this.cameraError = '';
   }
   event(kind, text, at = Date.now()) {
     this.events.push({ id: ++this.eventSeq, at, kind, text: String(text).slice(0, 240) });
-    if (this.events.length > 120) this.events.shift();
+    if (this.events.length > 400) this.events.shift();
   }
   clearStreams() {
     this.m12Tracker.clear(); this.thermalHistory = [];
@@ -160,7 +192,7 @@ export class Monitor extends EventEmitter {
   acceptInfo(info) {
     if (this.info?.boot_id !== info.boot_id) {
       if (this.info) this.event('boot', '机器人重新启动，旧画面和曲线已清空');
-      this.clearStreams(); this.telemetry = null; this.telemetryAt = 0; this.asrSeq = 0;
+      this.clearStreams(); this.telemetry = null; this.telemetryAt = 0; this.asrSeq = 0; this.hearingSeq = 0; this.filteredSpeech = 0;
     }
     this.info = info;
   }
@@ -187,6 +219,23 @@ export class Monitor extends EventEmitter {
       this.asrSeq = event.seq;
       this.event('asr', `ASR${delay > 2000 ? '（历史）' : ''} ${event.word || ('指令 ' + event.id)}`, now - delay);
     }
+    for (const event of data.hearing?.events || []) if (event.seq > this.hearingSeq) {
+      if (this.hearingSeq && event.seq > this.hearingSeq + 1) this.event('hearing', `听觉事件缺 ${event.seq - this.hearingSeq - 1} 条（超出机身缓存）`, now);
+      this.hearingSeq = event.seq;
+      const at = now - Math.max(0, Number(event.age_ms) || 0);
+      if (speechMisfire(event)) { this.filteredSpeech++; continue; }
+      const formatted = hearingEvent(event, this.info?.voice_library?.clips || []);
+      if (!formatted) continue;
+      // Consecutive gap reports within 2 s become one line with a running total.
+      const last = this.events.at(-1);
+      if (event.kind === 'gap' && last?.gap && at - last.gapAt <= 2000) {
+        last.gap.total += Number(event.detail) || 0; last.gap.times++; last.gapAt = at;
+        last.text = `听觉丢包 共 ${last.gap.total} 个（${last.gap.times} 次，服务端发现序号缺口）`; last.id = ++this.eventSeq;
+        continue;
+      }
+      this.event(formatted.kind, formatted.text, at);
+      if (event.kind === 'gap') Object.assign(this.events.at(-1), { gap: { total: Number(event.detail) || 0, times: 1 }, gapAt: at });
+    }
     if (data.m12?.function !== previous?.m12?.function || data.m12?.running !== previous?.m12?.running)
       this.event('m12', `M12 请求 ${data.m12?.function || '—'} · 设备报告 ${data.m12?.running || '尚无回应'}`);
     const state = data.remote?.motor?.state;
@@ -204,7 +253,7 @@ export class Monitor extends EventEmitter {
       audio: { ...this.audio, error: this.audioError }, cameraError: this.cameraError,
       m12: { ...this.m12Tracker.snapshot(this.telemetry, this.online && fresh.telemetry),
         system: this.m12System.snapshot(now), temperature: this.m12System.snapshot(now).temperature }, thermalHistory: this.thermalHistory,
-      motion: this.motion, events: this.events, now };
+      motion: this.motion, events: this.events, filteredSpeech: this.filteredSpeech, now };
   }
   addViewer() {
     this.viewers++; clearTimeout(this.idleTimer);
@@ -267,7 +316,8 @@ export class Monitor extends EventEmitter {
           if (epoch !== this.epoch || signal.aborted) break;
           this.acceptInfo(info); lastInfo = Date.now();
         }
-        const query = `/v1/telemetry?imu_after=${this.telemetry?.seq || 0}&remote_after=${this.telemetry?.remote?.rx_packets || 0}`;
+        // No IMU batch and no raw audio stream: the page shows neither (user, 2026-11-09).
+        const query = `/v1/telemetry?remote_after=${this.telemetry?.remote?.rx_packets || 0}&hearing_after=${this.hearingSeq}`;
         const data = await this.client.json(query, signal);
         if (epoch !== this.epoch || signal.aborted) break;
         if (data.boot_id !== this.info.boot_id) { this.client.verified = false; continue; }
@@ -292,7 +342,6 @@ export class Monitor extends EventEmitter {
           if (epoch !== this.epoch || signal.aborted) break;
           this.cameraError = err.message;
         }
-        this.ensureAudio(epoch);
       } catch (err) {
         if (epoch !== this.epoch) break;
         if (this.online || this.error !== err.message) this.event('connection', err.message);

@@ -69,15 +69,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
       res.on('close', () => { clearInterval(heartbeat); monitor.off('state', send); monitor.removeViewer(); });
       return;
     }
-    if (url.pathname === '/api/listen') {
-      if (!monitor.online || !monitor.snapshot().fresh.audio) { respond(503, '音频尚未准备好'); return; }
-      res.writeHead(200, { 'Content-Type': 'application/octet-stream', Connection: 'close' }); res.flushHeaders();
-      const send = packet => { if (res.writableLength > 32768) res.destroy(); else res.write(packet); };
-      const reset = () => res.end();
-      monitor.on('pcm', send); monitor.on('audioReset', reset);
-      res.on('close', () => { monitor.off('pcm', send); monitor.off('audioReset', reset); });
-      return;
-    }
+    // /api/listen (browser playback of the raw mic stream) was removed with the stream itself.
     respond(404, '未找到页面');
   });
   server.requestTimeout = 10000; server.headersTimeout = 10000;

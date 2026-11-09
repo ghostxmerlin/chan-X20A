@@ -71,6 +71,14 @@ RemoteModeInput mode_input;
 std::atomic_bool web_yaw_active{false};
 std::atomic_bool ready{false}, motor_ready{false}, enabled{false};
 stackchan::motion::ServoFeedback yaw_feedback, pitch_feedback;
+// Servo bus reads (2026-11-09): ~5% of reads hit UART frame errors (bus noise under load).
+// Each failed read is retried once; a published sample turns invalid only after two failed
+// samples in a row, until then the last valid sample and its timestamp stay (and age).
+// Idle axes are read at 2 Hz instead of 10 Hz.
+constexpr int64_t kFeedbackFastUs = 100000, kFeedbackIdleUs = 500000, kFeedbackBusyHoldUs = 3000000;
+uint32_t feedback_retries = 0, feedback_masked = 0, feedback_reads = 0;
+int yaw_invalid_streak = 0, pitch_invalid_streak = 0;
+int64_t feedback_period_us = kFeedbackFastUs, axes_busy_us = 0;
 stackchan::motion::ServoDiagnostics yaw_diagnostics, pitch_diagnostics;
 stackchan::motion::ServoDeadbandSnapshot yaw_deadband, pitch_deadband;
 stackchan::motion::ServoTorqueCommandProbe yaw_tracking_torque;
@@ -211,19 +219,45 @@ void motor_task(void*)
         auto& motion = GetStackChan().motion();
         stackchan::motion::ServoFeedback startup_feedback;
         stackchan::motion::ServoFeedback sampled_yaw;
-        if (now - last_feedback >= 100000) {
-            const auto yaw = motion.yawServo().readFeedback();
-            const int64_t yaw_sample_us = esp_timer_get_time();
-            const auto pitch = motion.pitchServo().readFeedback();
+        {
+            // Fast while anything uses the axes (tracking, web moves, trajectories, holds, boot pose)
+            // and for 3 s after; otherwise 2 Hz for telemetry only.
             std::lock_guard<std::mutex> lock(mutex);
-            yaw_feedback = yaw; pitch_feedback = pitch;
-            yaw_feedback_timestamp = yaw_sample_us;
-            feedback_timestamp = esp_timer_get_time();
+            const bool busy = tracking.requested() || web_yaw_active || manual_yaw.pending ||
+                // Passive init can leave the spring "not done" without any motion: only a started
+                // yaw command counts; pitch motion is covered by the boot pose / pitch request states.
+                !manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()) ||
+                motion.yawServo().holdPending() || motion.pitchServo().holdPending() ||
+                !strcmp(startup.state(), "waiting_feedback") || !strcmp(startup.state(), "moving") ||
+                pitch_requests.current().sequence != pitch_request.sequence;
+            if (busy) axes_busy_us = now;
+            feedback_period_us = now - axes_busy_us < kFeedbackBusyHoldUs ? kFeedbackFastUs : kFeedbackIdleUs;
+        }
+        if (now - last_feedback >= feedback_period_us) {
+            auto read = [](stackchan::motion::Servo& servo) {
+                auto f = servo.readFeedback(); ++feedback_reads;
+                if (!f.valid) { f = servo.readFeedback(); ++feedback_reads; ++feedback_retries; }
+                return f;
+            };
+            const auto yaw = read(motion.yawServo());
+            const int64_t yaw_sample_us = esp_timer_get_time();
+            const auto pitch = read(motion.pitchServo());
+            std::lock_guard<std::mutex> lock(mutex);
+            const int64_t pitch_sample_us = esp_timer_get_time();
+            // One bad sample keeps the previous valid one (and its older timestamp).
+            if (yaw.valid || ++yaw_invalid_streak >= 2 || !yaw_feedback.valid) {
+                if (yaw.valid) yaw_invalid_streak = 0;
+                yaw_feedback = yaw; yaw_feedback_timestamp = yaw_sample_us;
+            } else ++feedback_masked;
+            if (pitch.valid || ++pitch_invalid_streak >= 2 || !pitch_feedback.valid) {
+                if (pitch.valid) pitch_invalid_streak = 0;
+                pitch_feedback = pitch; feedback_timestamp = pitch_sample_us;
+            } else ++feedback_masked;
             yaw_trace.sample(yaw, yaw_sample_us);
-            pitch_trace.sample(pitch, feedback_timestamp);
+            pitch_trace.sample(pitch, pitch_sample_us);
             last_feedback = now;
-            startup_feedback = pitch;
-            sampled_yaw = yaw;
+            startup_feedback = pitch_feedback;
+            sampled_yaw = yaw_feedback;
             // Feedback is observation data. Factory receiver control does not
             // disable itself because an optional position read failed.
         }
@@ -1083,6 +1117,9 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     motor["state"] = motor_state;
     motor["timestamp_us"] = feedback_timestamp;
     motor["feedback_age_ms"] = feedback_timestamp ? (esp_timer_get_time() - feedback_timestamp) / 1000 : -1;
+    motor["feedback_period_ms"] = feedback_period_us / 1000;
+    motor["feedback_reads"] = feedback_reads; motor["feedback_retries"] = feedback_retries;
+    motor["feedback_masked"] = feedback_masked; // single bad samples hidden behind the last valid one
     // Legacy packet application fields are intentionally zero/null: receiving
     // a mode event does not mean an actuator command has been applied.
     motor["applied_seq"] = 0;
