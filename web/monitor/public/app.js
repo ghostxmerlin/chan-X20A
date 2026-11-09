@@ -2,6 +2,7 @@ import { ControlPanel, InteractionPanel } from '/control-ui.js';
 import { VoicePanel } from '/voice-ui.js';
 import { EyesPanel } from '/eyes-ui.js';
 import { HearingPanel } from '/hearing-ui.js';
+import { ServoTuningPanel } from '/servo-tuning-ui.js';
 import { renderM12, renderThermal } from '/m12-ui.js';
 const $ = id => document.getElementById(id);
 const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) { el.textContent = next; el.title = next; } };
@@ -14,6 +15,7 @@ const interaction = new InteractionPanel(document);
 const voices = new VoicePanel(document);
 const eyes = new EyesPanel(document);
 const hearing = new HearingPanel(document);
+const servoTuning = new ServoTuningPanel(document);
 for (const button of document.querySelectorAll('[data-open]')) {
   button.addEventListener('click', () => $(button.dataset.open).showModal());
 }
@@ -90,7 +92,7 @@ function render() {
   text('firmware', state?.firmware || 'StackChan');
   text('notice', paused ? '此页面已暂停；其他已打开的观察页面仍可继续采集。' : !bridge ? '本机数据桥未连接，正在重试…' : !connected ? (state?.error || '正在验证机器人并建立连接…') : !fresh ? '遥测未更新，旧数据已隐藏。' : '实时监控 · 点击控制按钮才发送操作 · 声音需手动开启');
   $('notice').classList.toggle('warn', !paused && !fresh);
-  text('camera-status', cameraFresh ? '实时画面' : paused ? '已暂停' : (state?.cameraError || '等待新画面'));
+  text('camera-status', cameraFresh ? '实时画面' : paused ? '已暂停' : t.health?.camera_enabled === false ? '相机已关闭' : (state?.cameraError || '等待新画面'));
   text('frame-meta', cameraFresh ? `#${state.frame.seq} · ${num(state.frame.bytes / 1024, 1)} KB` : '—');
   void updateFrame(state, cameraFresh);
   text('uptime', fresh ? '运行 ' + duration(t.timestamp_us / 1e6) : '—');
@@ -142,6 +144,7 @@ function render() {
   voices.render(state, fresh && !document.hidden);
   eyes.render(state, fresh && !document.hidden);
   hearing.render(state, fresh && !document.hidden);
+  servoTuning.render(state, fresh && !document.hidden);
   for (const mirror of document.querySelectorAll('[data-mirror]')) {
     const value = $(mirror.dataset.mirror).textContent;
     if (mirror.textContent !== value) mirror.textContent = value;

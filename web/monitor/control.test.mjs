@@ -23,6 +23,46 @@ test('local voice is explicit, bounded, fresh, audio-ready and single-job',async
  m.telemetry.playback.busy=false;m.telemetry.health.audio_ready=false;await assert.rejects(c.execute(request));
  assert.equal(calls.length,3);
 });
+test('yaw buttons send one 20-degree slot and center sends slot 0',async()=>{
+ const {m,c,calls}=fixture();
+ await c.execute({action:'yaw',delta_deg:20,boot:'boot-a'});assert.deepEqual(calls[0][1],{delta_deg:20});
+ await c.execute({action:'yaw_center',slot:0,boot:'boot-a'});assert.equal(calls[1][0],'/v1/motion/yaw-step');assert.deepEqual(calls[1][1],{slot:0});
+ for(const bad of [{action:'yaw',delta_deg:5,boot:'boot-a'},{action:'yaw',delta_deg:-10,boot:'boot-a'},{action:'yaw_center',slot:1,boot:'boot-a'}]) await assert.rejects(c.execute(bad));
+ assert.equal(calls.length,2);
+});
+test('servo tuning actions require the capability, an axis and in-range values',async()=>{
+ const {m,c,calls}=fixture();
+ const eeprom={action:'servo_eeprom',axis:'yaw',p:30,d:15,i:0,punch:200,dead_cw:2,dead_ccw:2,max_torque:1000,boot:'boot-a'};
+ await assert.rejects(c.execute(eeprom));
+ m.info.capabilities.servo_tuning='supported';
+ await c.execute(eeprom);assert.equal(calls[0][0],'/v1/servo');assert.deepEqual(calls[0][1],{op:'eeprom',axis:'yaw',p:30,d:15,i:0,punch:200,dead_cw:2,dead_ccw:2,max_torque:1000});
+ await c.execute({action:'servo_refresh',axis:'pitch',boot:'boot-a'});assert.deepEqual(calls[1][1],{op:'refresh',axis:'pitch'});
+ await c.execute({action:'servo_restore',axis:'yaw',boot:'boot-a'});assert.deepEqual(calls[2][1],{op:'restore',axis:'yaw'});
+ const runtime={action:'servo_runtime',axis:'yaw',goal_time_ms:0,goal_speed:200,spring_stiffness:0,spring_damping:0,hold_min_ms:500,hold_max_ms:3000,tolerance_deg:0.6,boot:'boot-a'};
+ await c.execute(runtime);assert.deepEqual(calls[3][1],{op:'runtime',axis:'yaw',goal_time_ms:0,goal_speed:200,spring_stiffness:0,spring_damping:0,hold_min_ms:500,hold_max_ms:3000,tolerance_deg:0.6});
+ for(const bad of [{...eeprom,axis:'roll'},{...eeprom,p:255},{...eeprom,punch:1001},{...eeprom,dead_cw:17},{...eeprom,max_torque:-1},{...eeprom,p:1.5},{...runtime,spring_stiffness:50},{...runtime,hold_max_ms:400},{...runtime,goal_speed:1001},{action:'servo_eeprom',axis:'yaw',p:30,boot:'boot-a'}]) await assert.rejects(c.execute(bad));
+ assert.equal(calls.length,4);
+});
+test('diagnostic yaw step requires the capability and exact integer parameters',async()=>{
+ const {m,c,calls}=fixture();
+ const ok={action:'yaw_step',delta_deg:-15,speed:600,path:'remote',boot:'boot-a'};
+ await assert.rejects(c.execute(ok));
+ m.info.capabilities.yaw_step_diagnostics='supported';
+ await c.execute(ok);assert.equal(calls[0][0],'/v1/motion/yaw-step');assert.deepEqual(calls[0][1],{delta_deg:-15,speed:600,path:'remote'});
+ for(const bad of [{...ok,delta_deg:0},{...ok,delta_deg:31},{...ok,delta_deg:2.5},{...ok,speed:40},{...ok,speed:1001},{...ok,path:'joystick'},{action:'yaw_step',delta_deg:5,boot:'boot-a'}]) await assert.rejects(c.execute(bad));
+ m.telemetry.remote.motor.web_yaw={state:'moving'};await assert.rejects(c.execute(ok));
+ assert.equal(calls.length,1);
+});
+test('camera streaming toggle requires the new capability and a boolean',async()=>{
+ const {m,c,calls}=fixture();
+ await assert.rejects(c.execute({action:'camera',enabled:true,boot:'boot-a'}));
+ m.info.capabilities.camera_control='supported';
+ await c.execute({action:'camera',enabled:true,boot:'boot-a'});
+ assert.equal(calls[0][0],'/v1/camera');assert.deepEqual(calls[0][1],{enabled:true});
+ await c.execute({action:'camera',enabled:false,boot:'boot-a'});assert.deepEqual(calls[1][1],{enabled:false});
+ for(const bad of [{action:'camera',enabled:'true',boot:'boot-a'},{action:'camera',boot:'boot-a'},{action:'camera',enabled:true,extra:1,boot:'boot-a'},{action:'camera',enabled:true,boot:'old'}]) await assert.rejects(c.execute(bad));
+ assert.equal(calls.length,2);
+});
 test('recognition requires new capability and an exact manual mode',async()=>{
  const {m,c,calls}=fixture();
  await assert.rejects(c.execute({action:'m12_mode',mode:'face_recognition',boot:'boot-a'}));
@@ -83,14 +123,14 @@ test('controls whitelist schema, boot, freshness and permissions before writing'
   m.telemetryAt=Date.now()-2000;await assert.rejects(c.execute({action:'m12',enabled:true,boot:'boot-a'}));
   assert.equal(calls.length,0);
   m.telemetryAt=Date.now();m.telemetry.remote.motor.yaw.valid=false;
-  await assert.rejects(c.execute({action:'yaw',delta_deg:5,boot:'boot-a'}));
+  await assert.rejects(c.execute({action:'yaw',delta_deg:20,boot:'boot-a'}));
   await c.execute({action:'motor',enabled:false,boot:'boot-a'}); assert.equal(calls.length,1);
 });
 test('single command never retries after unknown network result and rejects competing actions',async()=>{
   const {m,c,calls}=fixture();let fail;
   m.client.control=()=>{calls.push(1);return new Promise((_,reject)=>fail=reject);};
   const first=c.execute({action:'m12',enabled:true,boot:'boot-a'});
-  await assert.rejects(c.execute({action:'yaw',delta_deg:5,boot:'boot-a'}), /正在/);
+  await assert.rejects(c.execute({action:'yaw',delta_deg:20,boot:'boot-a'}), /正在/);
   fail(new Error('connection lost'));await assert.rejects(first,/未确认/);assert.equal(calls.length,1);
 });
 test('local POST needs exact same origin and JSON; GET never actuates',async t=>{

@@ -93,7 +93,7 @@ export class DeviceClient {
   async control(path, body, boot, check) {
     return this.serialRequest(async () => {
       check();
-      if (!this.verified || this.info?.boot_id !== boot || !['/v1/interaction','/v1/hearing','/v1/eyes','/v1/voice/play','/v1/m12/view','/v1/m12/mode','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch'].includes(path)) throw new Error('控制状态已变化');
+      if (!this.verified || this.info?.boot_id !== boot || !['/v1/interaction','/v1/hearing','/v1/eyes','/v1/voice/play','/v1/m12/view','/v1/m12/mode','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch','/v1/camera','/v1/servo'].includes(path)) throw new Error('控制状态已变化');
       return JSON.parse((await deviceRequest(this.binding.address+path, {token:this.binding.token, method:'POST', body, boot, maxBytes:16384})).body);
     });
   }
@@ -275,7 +275,11 @@ export class Monitor extends EventEmitter {
         if (!this.online) this.event('connection', '已验证机器人，实时数据已连接');
         this.online = true; this.error = '';
         // A single sequential main-port poll leaves room for Android's two requests.
-        try {
+        // The body camera is off by default; do not poll frames the robot will refuse.
+        if (this.telemetry?.health?.camera_enabled === false) {
+          if (this.frame) this.frame = null;
+          this.cameraError = '机身相机已关闭（默认）；需要时在相机面板开启';
+        } else try {
           const image = await this.client.request('/v1/frame', signal);
           if (epoch !== this.epoch || signal.aborted) break;
           const seq = Number(image.headers['x-seq']);
