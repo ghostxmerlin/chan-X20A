@@ -142,6 +142,59 @@ class EarLifecycleTest(unittest.IsolatedAsyncioTestCase):
         await self.ear.end_speech(cur,np.zeros(32000),0,32000,1)
         self.assertTrue(self.ear.outbox[-1]['self']['sounding'])
 
+    async def quiet_window(self, source, tags, lift_db=7.0):
+        """One 1 s window lift_db above a -44 dBFS floor, tagged as given; returns posted sound starts."""
+        import sound_kinds
+        if source is not None:
+            await self.ear.on_text('{"type":"audio","format":"pcm16","sample_rate":16000,"channels":1,"source":"%s"}' % source)
+        self.models.kind_of = {name: k for k, (_, labels) in sound_kinds.KINDS.items() for name in labels}
+        self.models.tags = lambda _: tags
+        self.models.kinds = lambda t: self.module.Models.kinds(self.models, t)
+        self.ear.floor = lambda: -44.0
+        self.ear.ring.write(np.full(16000, 10 ** ((-44.0 + lift_db) / 20), dtype=np.float32))
+        before = len(self.ear.outbox)
+        await self.ear.tag_window(self.ear.ring.end - 16000, self.ear.ring.end)
+        return [e for e in self.ear.outbox[before:] if e.get('type') == 'sound' and e.get('phase') == 'start']
+
+    async def test_robot_mic_reports_quiet_typing(self):
+        starts = await self.quiet_window('stackchan-test', [('Typing', 0.34), ('Insect', 0.5)])
+        self.assertEqual([e['kind'] for e in starts], ['typing'])  # the hum-like insect keeps the 15 dB gate
+        self.assertEqual(self.ear.outbox[0]['type'], 'hello')
+
+    async def test_mac_mic_keeps_the_original_gate(self):
+        self.assertEqual(await self.quiet_window('mac-mic', [('Typing', 0.34)]), [])
+        self.assertEqual(await self.quiet_window(None, [('Typing', 0.9)]), [])  # still faint at +7 dB
+
+    async def test_robot_quiet_gate_limits(self):
+        self.assertEqual(await self.quiet_window('stackchan-test', [('Heart sounds, heartbeat', 0.6)]), [])
+        self.assertEqual(await self.quiet_window(None, [('Typing', 0.29)]), [])          # below 0.30
+        self.assertEqual(await self.quiet_window(None, [('Typing', 0.5)], lift_db=4.0), [])  # below +5 dB
+        self.ear.speaking = True
+        self.assertEqual(await self.quiet_window(None, [('Typing', 0.5)]), [])          # not during speech
+        self.ear.speaking = False
+        self.assertEqual([e['kind'] for e in await self.quiet_window(None, [('Sigh', 0.31)])], ['body'])
+
+    async def test_her_own_voice_is_silenced_before_listening(self):
+        """Approach A (2026-11-09): while the robot reports sounding (playback + its 1.2 s tail) the
+        ear listens to silence; the recording keeps what the mic really heard."""
+        fed = []
+        self.ear.vad = SimpleNamespace(reset=lambda: None, accept_waveform=lambda w: fed.append(np.array(w)),
+                                       is_speech_detected=lambda: False, empty=lambda: True)
+        recorded = []
+        self.ear.rec = SimpleNamespace(audio_in=lambda raw, pcm, opus: recorded.append(pcm), declare=lambda m: None, client_msg=lambda m: None)
+        self.ear.next_tag = 10 ** 9  # no tagging in this test
+        loud = (np.full(1024, 8000, dtype='<i2')).tobytes()
+        await self.ear.on_text('{"type":"self","sounding":true,"moving":false}')
+        await self.ear.on_audio(loud)
+        self.assertEqual(float(np.abs(self.ear.ring.read(0, 1024)).max()), 0.0)
+        self.assertLess(float(np.abs(np.concatenate(fed)).max()), 0.01)          # only the VAD dither
+        self.assertEqual(recorded[-1], loud)                                       # recording untouched
+        self.assertGreater(self.ear.tick_sq, 0)                                    # level meter still real
+        await self.ear.on_text('{"type":"self","sounding":false,"moving":false}')
+        await self.ear.on_audio(loud)
+        self.assertAlmostEqual(float(self.ear.ring.read(1024, 2048).max()), 8000 / 32768, places=4)
+        self.assertEqual(self.ear.self_history.overlap(0, 1024)['sounding'], True)
+
     async def test_close_prevents_late_results(self):
         await self.ear.close()
         before = len(self.ear.outbox)

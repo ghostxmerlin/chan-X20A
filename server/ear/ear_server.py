@@ -56,6 +56,16 @@ SOUND_MIN_DB = 15.0
 # CED calls single clicks/taps "Music / Drum machine / Percussion"; on the Mac mic those false
 # "music" events spanned at most 3 windows (2 s). Real music and singing go on. (2026-11-06)
 SUSTAIN = {"music": 5}             # 5 windows = 3 s of audio
+# Quiet sounds on the robot's own mic ("stackchan-*" sources only; the Mac mic keeps the gate above).
+# StackChan, 2026-11-09: mic ADC already at max gain, floor -42..-45 dBFS with a 100 Hz harmonic hum,
+# speech only +7..+19 dB above it. Over 127 min of its recordings CED heard typing at a median +6.7 dB
+# (p 0.2-0.66), never above the 15 dB gate; the hum itself reads as insect/appliance/bird/heartbeat,
+# so only these labels get the lower gate. Offline replay: +9 typing events, all in the two sessions
+# where the user typed, no new events elsewhere.
+DEVICE_QUIET_LABELS = {"Typing", "Typewriter", "Computer keyboard", "Clicking", "Clickety-clack",
+                       "Sigh", "Breathing", "Gasp", "Pant", "Sniff",
+                       "Cough", "Throat clearing", "Sneeze"}
+DEVICE_QUIET_MIN_DB, DEVICE_QUIET_START = 5.0, 0.30
 # Voice-likeness bands for a speech segment (CED-mini voice-label probability). User's recordings
 # (2026-11-06): real speech 0.53-0.85, misfires (clipped claps, breathing, keyboard) <= 0.06; the
 # exceptions were two sub-second Bluetooth-headset phrases (0.27, 0.09). A voiceprint match (known
@@ -213,6 +223,7 @@ class Ear:
         self.outbox = []
         self.hi, self.lo = 0.6, 0.4
         self.sound_min_db = SOUND_MIN_DB
+        self.device_profile = False   # robot mic: quiet labels use DEVICE_QUIET_* (set by the audio message)
         self.voice_hi, self.voice_lo = VOICE_HI, VOICE_LO
         self.self_flags = {"sounding": False, "moving": False}
         # speech state
@@ -370,14 +381,19 @@ class Ear:
             self.rec.audio_in(raw, data, self.opus is not None)
         x = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
         self.self_history.add(self.ring.end, self.ring.end + len(x), self.self_flags)
+        self.tick_sq += float(np.sum(x ** 2))      # level meter reports what the mic really heard
+        self.tick_n += len(x)
+        if self.self_flags.get("sounding"):
+            # While she is making sound (playback plus the robot's 1.2 s tail) the mic hears her own
+            # voice; there is no echo cancellation, so VAD, ASR and sound tags get silence instead
+            # (user's choice A, 2026-11-09). The recording above keeps the original audio.
+            x = np.zeros_like(x)
         self.ring.write(x)
         self.arr_end.append(self.ring.end)
         self.arr_mono.append(now)
         self.arr_epoch.append(int(time.time() * 1000))
         if len(self.arr_end) > 20000:                       # keep ~30 min of arrival history
             del self.arr_end[:5000], self.arr_mono[:5000], self.arr_epoch[:5000]
-        self.tick_sq += float(np.sum(x ** 2))
-        self.tick_n += len(x)
 
         dithered = x + self.rng.normal(0, VAD_DITHER, len(x)).astype(np.float32)
         buf = np.concatenate([self.carry, dithered])
@@ -490,10 +506,13 @@ class Ear:
     async def tag_window(self, a, b):
         x = self.ring.read(a, b)
         f = self.floor()
-        faint = rms(x) < QUIET_RMS if f is None else loudest_100ms(x) - f < self.sound_min_db
+        lift = None if f is None else loudest_100ms(x) - f
+        faint = rms(x) < QUIET_RMS if f is None else lift < self.sound_min_db
+        # robot mic: quiet labels (typing, breathing...) may start an event from a lower lift
+        quiet_ok = self.device_profile and lift is not None and lift >= DEVICE_QUIET_MIN_DB
         # a faint window can't start an event, but still feeds ongoing ones: a steady sound (TV, rain)
         # slowly becomes the floor itself and must not be cut off when it does
-        need = not faint or bool(self.sounds) or bool(self.pending)
+        need = not faint or quiet_ok or bool(self.sounds) or bool(self.pending)
         # always go through the single worker, even when skipping, so windows finish in order
         tags = await self.run(lambda: self.m.tags(x) if need else [])
         kinds, _ = self.m.kinds(tags)
@@ -504,7 +523,9 @@ class Ear:
             s = self.sounds.get(k)
             if s is None:
                 c = self.pending.get(k)
-                if c is None and p >= start_at and not faint:
+                quiet = (quiet_ok and not self.speaking and
+                         any(name in DEVICE_QUIET_LABELS and q >= DEVICE_QUIET_START for name, q in labs))
+                if c is None and (p >= start_at and not faint or quiet):
                     c = self.pending[k] = {"start": a, "n": 0, "peak": 0.0, "raw": labs}
                 if c is None or p < SOUND_KEEP:
                     continue
@@ -571,10 +592,12 @@ class Ear:
                 else:
                     self.opus = None
                 self.framing = framing
+                self.device_profile = str(msg.get("source") or "").startswith("stackchan")
                 if self.rec:
                     self.rec.declare(msg)
                 self.post({"type":"audio", "format":fmt, "sample_rate":SR,
-                           "input_sample_rate":rate, "framing":framing, "frame_ms":msg.get("frame_ms")})
+                           "input_sample_rate":rate, "framing":framing, "frame_ms":msg.get("frame_ms"),
+                           "sound_profile": "device" if self.device_profile else "default"})
             elif k == "config":
                 hi, lo = float(msg.get("speaker_hi", self.hi)), float(msg.get("speaker_lo", self.lo))
                 vh, vl = float(msg.get("voice_hi", self.voice_hi)), float(msg.get("voice_lo", self.voice_lo))
