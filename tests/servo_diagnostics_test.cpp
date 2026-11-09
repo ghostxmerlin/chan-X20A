@@ -272,38 +272,47 @@ int main(){
     refill_events=false;
 
     // Execute the same one-shot register query used by the HAL, through the
-    // actual parser. Distinct bytes must not be decoded as a big-endian word.
+    // actual parser. Angle words are big-endian; phase/deadband remain bytes.
     using stackchan::motion::readServoDeadbandSnapshot;
     static_assert(!stackchan::motion::ServoDeadbandSnapshot{}.supported);
     reset_wire();bus.IOTimeOut=7;
-    respond=[](const auto& q){deliver(packet(q[2],{8,10}));};
+    std::vector<uint8_t> configuration(19,0);
+    configuration[0]=0x01;configuration[1]=0x23;
+    configuration[2]=0x03;configuration[3]=0xff;
+    configuration[9]=0x20;configuration[17]=8;configuration[18]=10;
+    respond=[&](const auto& q){assert(bus.IOTimeOut==2);deliver(packet(q[2],configuration));};
     auto deadband=readServoDeadbandSnapshot(bus,1,now_us);
     assert(deadband.supported&&deadband.attempted&&deadband.valid&&deadband.timestamp_us>0);
     assert(deadband.cw_raw==8&&deadband.ccw_raw==10&&deadband.transport_error==0&&deadband.servo_status==0);
+    assert(deadband.min_angle_raw==0x123&&deadband.max_angle_raw==0x3ff&&deadband.phase_raw==0x20);
+    assert(deadband.received_bytes==19);
     assert(bus.IOTimeOut==7&&requests.size()==1);
-    const std::vector<uint8_t> deadband_request={255,255,1,4,2,26,2,220};
+    const std::vector<uint8_t> deadband_request={255,255,1,4,2,9,19,220};
     assert(requests.back()==deadband_request); // one READ, no EEPROM unlock/write
     // Valid zero settings remain distinguishable from a failed read.
-    respond=[](const auto& q){deliver(packet(q[2],{0,0}));};
+    respond=[](const auto& q){deliver(packet(q[2],std::vector<uint8_t>(19,0)));};
     deadband=readServoDeadbandSnapshot(bus,2,now_us);
     assert(deadband.valid&&deadband.cw_raw==0&&deadband.ccw_raw==0&&requests.back()[2]==2);
+    assert(deadband.min_angle_raw==0&&deadband.max_angle_raw==0&&deadband.phase_raw==0);
     for(int failure=0;failure<5;++failure){
         reset_wire();
-        respond=[failure](const auto& q){
+        respond=[failure,&configuration](const auto& q){
             if(failure==0)return;
-            if(failure==1){deliver(packet(2,{8,10}));return;}
-            if(failure==2){deliver(packet(q[2],{8}));return;}
-            auto bytes=packet(q[2],{8,10},failure==4?32:0);
+            if(failure==1){deliver(packet(2,configuration));return;}
+            if(failure==2){deliver(packet(q[2],std::vector<uint8_t>(18,0)));return;}
+            auto bytes=packet(q[2],configuration,failure==4?32:0);
             if(failure==3)bytes.back()^=1;
             deliver(bytes);
         };
         deadband=readServoDeadbandSnapshot(bus,1,now_us);
         assert(deadband.supported&&deadband.attempted&&!deadband.valid);
         assert(deadband.cw_raw==-1&&deadband.ccw_raw==-1&&requests.size()==1&&bus.IOTimeOut==7);
+        assert(deadband.min_angle_raw==-1&&deadband.max_angle_raw==-1&&deadband.phase_raw==-1);
         const int expected_errors[]={ERR_NO_REPLY,ERR_SLAVE_ID,ERR_BUFF_LEN,ERR_CRC_CMP,0};
         assert(deadband.transport_error==expected_errors[failure]);
         if(failure==4)assert(deadband.servo_status==32);
     }
+    std::puts("PASS: one read-only register 9..27 block; big-endian limits, phase/deadband bytes, zero/error separation and timeout restoration");
     bus.end();assert(!bus.getDiagnostics(1).uart_events.enabled);
     std::puts("PASS: actual FTServo UART/parser: single-byte torque read; preserved position/release commands and bounded payloads; passive bus events, possible event loss and bounded zero-wait drains; default mode has no queue; unchanged wire requests/timeouts and reproduced late-response failure");
 }

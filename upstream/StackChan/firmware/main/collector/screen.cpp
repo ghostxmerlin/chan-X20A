@@ -30,6 +30,13 @@ lv_obj_t *summary_title, *summary_rows[10], *pairing, *pairing_body;
 lv_obj_t *faces_page = nullptr, *faces_status = nullptr, *face_boxes[kScreenMaxFaces] = {};
 lv_obj_t* screen_root = nullptr;
 lv_display_t* screen_display = nullptr;
+lv_obj_t* function_ribbon = nullptr;
+lv_obj_t* function_segments[5] = {};
+constexpr uint32_t kRibbonDark = 0x080A0D;
+constexpr uint32_t kRibbonColors[] = {0xFFFFFF, 0x278BFF, 0xFF3838, 0x36E874, 0xFFBF40};
+constexpr uint8_t kExpressionFlag = 1 << 3;
+uint8_t function_flags = 0, rendered_function_flags = 0;
+bool eyes_visible = false;
 bool enabled = true, status_pending = false;
 ScreenStatus pending_status;
 char pending_version[64], pending_ip[64], pending_token[65], pending_motor[64];
@@ -133,11 +140,25 @@ void render_log()
     lv_obj_scroll_to_y(log_viewport, LV_COORD_MAX, LV_ANIM_OFF);
     log_dirty = false;
 }
+void update_ribbon()
+{
+    if (!function_ribbon) return;
+    const uint8_t flags = function_flags |
+        ((enabled && page == Page::Home && (eyes_visible || reaction != ScreenReaction::None)) ? kExpressionFlag : 0);
+    const uint8_t changed = flags ^ rendered_function_flags;
+    for (unsigned i = 0; i < 5; ++i) {
+        if (changed & (1 << i))
+            lv_obj_set_style_bg_color(function_segments[i],
+                lv_color_hex(flags & (1 << i) ? kRibbonColors[i] : kRibbonDark), 0);
+    }
+    rendered_function_flags = flags;
+}
 bool update_eyes()
 {
-    const bool visible=eyes::view_tick(page==Page::Home,enabled,reaction!=ScreenReaction::None);
-    if (portrait) lv_obj_update_flag(portrait,LV_OBJ_FLAG_HIDDEN,visible);
-    return visible;
+    eyes_visible=eyes::view_tick(page==Page::Home,enabled,reaction!=ScreenReaction::None);
+    if (portrait) lv_obj_update_flag(portrait,LV_OBJ_FLAG_HIDDEN,eyes_visible);
+    update_ribbon();
+    return eyes_visible;
 }
 void show_page(Page target, uint32_t now_ms)
 {
@@ -514,11 +535,22 @@ void screen_create(lv_obj_t* parent)
     animation_clock_ready = false;
     animation_phase_ms = 0;
     animation_frame = 0;
+    // A separate display layer keeps the strip above all full-screen pages and
+    // eye frames. Neither it nor its segments participates in touch hit-testing.
+    function_flags = rendered_function_flags = 0;
+    eyes_visible = false;
+    function_ribbon = box(lv_display_get_layer_top(screen_display), 0, 237, 320, 3, kInk);
+    lv_obj_remove_flag(function_ribbon, LV_OBJ_FLAG_CLICKABLE);
+    for (unsigned i = 0; i < 5; ++i) {
+        function_segments[i] = box(function_ribbon, i * 64, 0, i == 4 ? 64 : 63, 3, kRibbonDark);
+        lv_obj_remove_flag(function_segments[i], LV_OBJ_FLAG_CLICKABLE);
+    }
 }
 void screen_set_enabled(bool value, uint32_t now_ms)
 {
     if (!screen_display || enabled == value) return;
     enabled = value;
+    lv_obj_update_flag(function_ribbon, LV_OBJ_FLAG_HIDDEN, !enabled);
     update_eyes();
     // Neither a pending tap nor a finger held across the transition may
     // navigate. A fresh release is required before accepting another touch.
@@ -607,12 +639,15 @@ void screen_update(const ScreenStatus& s)
         return;
     }
     status_pending = false;
+    function_flags = s.function_flags & (ScreenFunctionTracking | ScreenFunctionListening |
+                                         ScreenFunctionSpeaking | ScreenFunctionRecognition);
+    update_ribbon();
     char text[160];
     const char* version = s.version ? s.version : "";
     if (std::strncmp(version, "collector-", 10) == 0) version += 10;
     std::snprintf(text, sizeof(text), "chan-X20A             %.8s", version);
     set_text(summary_title, text);
-    set_text(summary_rows[0], s.wifi_connected ? "online" : "offline");
+    set_text(summary_rows[0], s.wifi_connected ? (s.ssid && s.ssid[0] ? s.ssid : "online") : "offline");
     if (s.camera_working)
         std::snprintf(text, sizeof(text), "%4.1f fps", std::isfinite(s.camera_fps) ? s.camera_fps : 0);
     else std::snprintf(text, sizeof(text), "-- fps");

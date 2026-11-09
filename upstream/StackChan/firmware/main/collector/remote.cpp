@@ -9,6 +9,8 @@
 #include "pitch_setting.h"
 #include "pitch_motion.h"
 #include "web_control.h"
+#include "motion_trace.h"
+#include "servo_tuning.h"
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
 #include <espnow.h>
@@ -57,6 +59,13 @@ int64_t feedback_timestamp = 0, yaw_feedback_timestamp = 0;
 bool control_requested = true;
 RemoteStopLatch stop_latch;
 ManualYaw manual_yaw;
+MotionTrace yaw_trace, pitch_trace;
+// Operator tuning: one pending request, applied only by motor_task.
+ServoTuneRequest pending_tune;
+bool tune_pending = false;
+uint32_t tune_sequence = 0, tune_applied_sequence[2] = {0, 0};
+const char* tune_state[2] = {"idle", "idle"};
+stackchan::motion::ServoEepromWriteResult last_tune_result[2];
 FaceTracking tracking;
 RemoteModeInput mode_input;
 std::atomic_bool web_yaw_active{false};
@@ -64,6 +73,7 @@ std::atomic_bool ready{false}, motor_ready{false}, enabled{false};
 stackchan::motion::ServoFeedback yaw_feedback, pitch_feedback;
 stackchan::motion::ServoDiagnostics yaw_diagnostics, pitch_diagnostics;
 stackchan::motion::ServoDeadbandSnapshot yaw_deadband, pitch_deadband;
+stackchan::motion::ServoTorqueCommandProbe yaw_tracking_torque;
 int64_t diagnostics_timestamp = 0;
 bool yaw_trajectory_complete = false, pitch_trajectory_complete = false;
 bool yaw_command_started = false;
@@ -125,6 +135,41 @@ esp_err_t received(uint8_t* source, void* bytes, size_t size, wifi_pkt_rx_ctrl_t
     return ESP_OK;
 }
 
+void apply_servo_tune(stackchan::motion::Motion& motion, const ServoTuneRequest& tune)
+{
+    using Op = ServoTuneRequest::Op;
+    auto& servo = tune.axis == 0 ? motion.yawServo() : motion.pitchServo();
+    const char* state = "applied";
+    stackchan::motion::ServoEepromWriteResult result;
+    stackchan::motion::ServoDeadbandSnapshot snapshot;
+    bool have_snapshot = false;
+    switch (tune.op) {
+        case Op::Eeprom:
+        case Op::Restore:
+            result = servo.writeEepromTuning(tune.op == Op::Restore ? factory_servo_eeprom() : tune.eeprom);
+            state = (result.unlocked && result.locked && result.failed_writes == 0) ? "written" : "write_failed";
+            snapshot = result.after; have_snapshot = result.after.attempted;
+            break;
+        case Op::Runtime:
+            if (tune.has_goal) servo.setGoalProfile({tune.goal_time_ms, tune.goal_speed});
+            if (tune.has_spring) {
+                if (tune.spring_stiffness > 0) servo.setSpeedSpringOverride(tune.spring_stiffness, tune.spring_damping);
+                else servo.clearSpeedSpringOverride();
+            }
+            if (tune.has_release) servo.setReleasePolicy(tune.hold_min_ms, tune.hold_max_ms, tune.tolerance_tenths);
+            break;
+        case Op::Refresh:
+            snapshot = servo.readDeadbandSnapshot(); have_snapshot = true; state = "refreshed";
+            break;
+        default: state = "invalid";
+    }
+    ESP_LOGI("CollectorRemote", "Servo tuning %lu axis %d op %d -> %s", static_cast<unsigned long>(tune.sequence), tune.axis, static_cast<int>(tune.op), state);
+    std::lock_guard<std::mutex> lock(mutex);
+    if (have_snapshot) (tune.axis == 0 ? yaw_deadband : pitch_deadband) = snapshot;
+    if (tune.op == Op::Eeprom || tune.op == Op::Restore) last_tune_result[tune.axis] = result;
+    tune_state[tune.axis] = state; tune_applied_sequence[tune.axis] = tune.sequence;
+}
+
 void motor_task(void*)
 {
     // Boot pitch remains one-shot. Physical directions only emit mode events;
@@ -155,6 +200,7 @@ void motor_task(void*)
                 { std::lock_guard<std::mutex> lock(mutex); motor_state = "initializing"; }
                 GetHAL().initCollectorMotion();
                 configure_pitch_motion(GetStackChan().motion().pitchServo());
+                GetStackChan().motion().yawServo().setReleasePolicy(kWebYawReleaseMinHoldMs, kWebYawReleaseMaxHoldMs, kWebYawReleaseToleranceTenths);
                 motor_ready = true;
                 // Re-check the requested state and feedback before any motion.
             } else {
@@ -173,6 +219,8 @@ void motor_task(void*)
             yaw_feedback = yaw; pitch_feedback = pitch;
             yaw_feedback_timestamp = yaw_sample_us;
             feedback_timestamp = esp_timer_get_time();
+            yaw_trace.sample(yaw, yaw_sample_us);
+            pitch_trace.sample(pitch, feedback_timestamp);
             last_feedback = now;
             startup_feedback = pitch;
             sampled_yaw = yaw;
@@ -188,14 +236,33 @@ void motor_task(void*)
             pitch_cancelled = pitch_requests.cancelled(latest_pitch);
         }
         if (stop_pending) {
+            { std::lock_guard<std::mutex> lock(mutex); yaw_tracking_torque.beforeCancel(motion.yawServo()); yaw_trace.close(now); pitch_trace.close(now); }
             apply_remote_stop(startup, motion, now);
             was_enabled = false;
             yaw_command_started = false;
+        }
+        {
+            // Operator tuning runs only on an idle axis; a request that cannot run
+            // within 10 s expires instead of writing during motion.
+            ServoTuneRequest tune; bool run = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (tune_pending) {
+                    const bool idle = pending_tune.axis == 0
+                        ? (!manual_yaw.pending && !tracking.active() &&
+                           manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()))
+                        : (strcmp(startup.state(), "moving") != 0 && latest_pitch.sequence == pitch_request.sequence);
+                    if (idle) { tune = pending_tune; tune_pending = false; run = true; tune_state[tune.axis] = "applying"; }
+                    else if (now - pending_tune.requested_us > 10000000) { tune_pending = false; tune_state[pending_tune.axis] = "expired_axis_busy"; }
+                }
+            }
+            if (run) apply_servo_tune(motion, tune);
         }
         if (latest_pitch.sequence != pitch_request.sequence) {
             // Only a successfully committed, explicit request replaces pitch.
             // An intervening stop cancels earlier queued requests as well.
             motion.pitchServo().cancelMotion();
+            { std::lock_guard<std::mutex> lock(mutex); pitch_trace.close(now); }
             if (pitch_request.from_boot) {
                 std::lock_guard<std::mutex> lock(mutex); startup_state = "superseded";
             }
@@ -223,6 +290,8 @@ void motor_task(void*)
                         pitch_command_start = command_start;
                         pitch_has_command_start = true;
                     }
+                    pitch_trace.begin(pitch_request.from_boot ? "boot_pitch" : "pitch_setting", pitch_request.sequence,
+                                      pitch_request.target, startup_feedback, now);
                 }
                 ESP_LOGI("CollectorRemote", "Pitch %s %lu: measured %.1f, command-start %.1f -> target %.1f deg, speed %d",
                          pitch_request.from_boot ? "boot" : "setting", static_cast<unsigned long>(pitch_request.sequence),
@@ -233,6 +302,7 @@ void motor_task(void*)
             }
         } else if (pose_action == StartupPose::Action::Cancel) {
             motion.pitchServo().cancelMotion();
+            std::lock_guard<std::mutex> lock(mutex); pitch_trace.close(now);
         }
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -241,6 +311,7 @@ void motor_task(void*)
         }
         if (!active) {
             if (was_enabled) {
+                { std::lock_guard<std::mutex> lock(mutex); yaw_tracking_torque.beforeCancel(motion.yawServo()); yaw_trace.close(now); pitch_trace.close(now); }
                 motion.yawServo().cancelMotion();
                 motion.pitchServo().cancelMotion();
             }
@@ -282,13 +353,18 @@ void motor_task(void*)
                 const auto action = tracking.step(input);
                 if (action == FaceTracking::Action::Cancel) {
                     // cancelMotion removes torque; it is not a physical hold.
+                    yaw_tracking_torque.beforeCancel(motion.yawServo());
                     motion.yawServo().cancelMotion();
+                    yaw_trace.close(input.now_us);
                     yaw_command_started = false;
                 } else if (action == FaceTracking::Action::Move) {
                     if (apply_tracking_move(motion.yawServo(), yaw_feedback, tracking.target())) {
+                        yaw_tracking_torque.begin(motion.yawServo(), tracking.commands(), tracking.target(), yaw_feedback);
+                        yaw_trace.begin("tracking", tracking.commands(), tracking.target(), yaw_feedback, input.now_us);
                         yaw_command_started = true;
                         web_yaw_active = false;
                     } else {
+                        yaw_tracking_torque.beforeCancel(motion.yawServo());
                         motion.yawServo().cancelMotion();
                         yaw_command_started = false;
                         tracking.command_rejected(input);
@@ -299,17 +375,29 @@ void motor_task(void*)
                 std::lock_guard<std::mutex> lock(mutex);
                 // Recheck stop after feedback reads; do not move from HTTP or a second UART owner.
                 if (tracking.take_cancel()) {
+                    yaw_tracking_torque.beforeCancel(motion.yawServo());
                     motion.yawServo().cancelMotion();
+                    yaw_trace.close(esp_timer_get_time());
                     yaw_command_started = false;
                 }
                 if (control_requested && manual_yaw.take(esp_timer_get_time(), manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()))) {
                     const bool fresh = yaw_feedback.valid && yaw_feedback_timestamp > 0 &&
                         esp_timer_get_time() - yaw_feedback_timestamp < 1000000;
                     const auto limits = motion.yawServo().getAngleLimit();
-                    const bool accepted = fresh && manual_yaw.target >= limits.x && manual_yaw.target <= limits.y &&
-                        motion.yawServo().moveFromFeedbackWithSpeed(yaw_feedback, manual_yaw.target, 100);
+                    bool accepted = fresh && manual_yaw.target >= limits.x && manual_yaw.target <= limits.y;
+                    if (accepted && manual_yaw.remote_like) {
+                        // Diagnostic replay of the former physical remote entry (7700e7d
+                        // apply_remote_yaw): physical sync, then the stock spring.
+                        motion.yawServo().setAutoAngleSyncEnabled(true);
+                        motion.yawServo().moveWithSpeed(manual_yaw.target, manual_yaw.speed);
+                    } else if (accepted) {
+                        accepted = motion.yawServo().moveFromFeedbackWithSpeed(yaw_feedback, manual_yaw.target, manual_yaw.speed);
+                    }
                     manual_yaw.finish(accepted); web_yaw_active = accepted;
-                    if (accepted) yaw_command_started = true;
+                    if (accepted) {
+                        yaw_command_started = true;
+                        yaw_trace.begin(manual_yaw.remote_like ? "web_yaw_remote_like" : "web_yaw", manual_yaw.sequence, manual_yaw.target, yaw_feedback, esp_timer_get_time());
+                    }
                 }
             }
             {
@@ -318,6 +406,7 @@ void motor_task(void*)
                 std::lock_guard<std::mutex> lock(mutex);
                 if (control_requested && (tracking.active() || web_yaw_active)) {
                     motion.yawServo().update();
+                    yaw_tracking_torque.afterUpdate(motion.yawServo());
                     motor_state = tracking.active() ? "tracking" : "web_yaw";
                 } else {
                     motor_state = strcmp(startup.state(), "moving") == 0 ?
@@ -331,8 +420,10 @@ void motor_task(void*)
         // One read-only configuration probe per axis, after boot has settled and
         // a fresh valid position arrived. No retries, EEPROM writes or motion.
         // The motor task remains the sole UART owner; HTTP only reads the copy.
+        // Passive init leaves the yaw animation "not done" until its first
+        // update, so gate on the web/tracking idle predicate instead.
         if (now >= 5000000 && !yaw_deadband_attempted && sampled_yaw.valid &&
-            motion.yawServo().isTrajectoryComplete()) {
+            manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete())) {
             const auto snapshot = motion.yawServo().readDeadbandSnapshot();
             yaw_deadband_attempted = true;
             std::lock_guard<std::mutex> lock(mutex);
@@ -351,6 +442,8 @@ void motor_task(void*)
             std::lock_guard<std::mutex> lock(mutex);
             yaw_diagnostics = motion.yawServo().diagnostics();
             pitch_diagnostics = motion.pitchServo().diagnostics();
+            yaw_trace.note(yaw_diagnostics);
+            pitch_trace.note(pitch_diagnostics);
             yaw_trajectory_complete = manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete());
             if (yaw_trajectory_complete) manual_yaw.complete();
             pitch_trajectory_complete = motion.pitchServo().isTrajectoryComplete();
@@ -392,6 +485,12 @@ void add_feedback(ArduinoJson::JsonObject object, const stackchan::motion::Servo
     object["current_valid"] = feedback.current_valid;
     if (feedback.load_valid) object["load_raw"] = feedback.load_raw;
     if (feedback.current_valid) object["current_raw"] = feedback.current_raw;
+    if (feedback.voltage_raw >= 0) {
+        object["speed_raw"] = feedback.speed_raw;
+        object["voltage_raw"] = feedback.voltage_raw;   // 0.1 V units
+        object["temperature_c"] = feedback.temperature_raw;
+        object["moving"] = feedback.moving_raw;
+    }
 }
 template <typename Counter>
 void add_transaction_counter(ArduinoJson::JsonObject target, const Counter& value)
@@ -472,6 +571,13 @@ void add_servo_diagnostics(ArduinoJson::JsonObject target, const stackchan::moti
 void add_deadband_snapshot(ArduinoJson::JsonObject target, const stackchan::motion::ServoDeadbandSnapshot& value)
 {
     target["source"] = "one_time_read_only_register_probe";
+    target["register_start"] = 9;
+    target["register_bytes"] = 19;
+    target["received_bytes"] = value.received_bytes;
+    target["min_angle_register"] = 9;
+    target["max_angle_register"] = 11;
+    target["phase_register"] = 18;
+    target["word_order"] = "high_byte_first";
     target["attempted"] = value.attempted;
     target["valid"] = value.valid;
     target["timestamp_us"] = value.timestamp_us;
@@ -487,10 +593,149 @@ void add_deadband_snapshot(ArduinoJson::JsonObject target, const stackchan::moti
     if (value.valid) {
         target["cw_raw"] = value.cw_raw;
         target["ccw_raw"] = value.ccw_raw;
+        target["min_angle_raw"] = value.min_angle_raw;
+        target["max_angle_raw"] = value.max_angle_raw;
+        target["phase_raw"] = value.phase_raw;
+        target["max_temperature_raw"] = value.max_temperature_raw;
+        target["max_voltage_raw"] = value.max_voltage_raw;
+        target["min_voltage_raw"] = value.min_voltage_raw;
+        target["max_torque_raw"] = value.max_torque_raw;
+        target["unloading_raw"] = value.unloading_raw;
+        target["led_alarm_raw"] = value.led_alarm_raw;
+        target["p_raw"] = value.p_raw;
+        target["d_raw"] = value.d_raw;
+        target["i_raw"] = value.i_raw;
+        target["punch_raw"] = value.punch_raw;
     } else {
         target["cw_raw"] = nullptr;
         target["ccw_raw"] = nullptr;
+        target["min_angle_raw"] = nullptr;
+        target["max_angle_raw"] = nullptr;
+        target["phase_raw"] = nullptr;
     }
+}
+void add_torque_snapshot(ArduinoJson::JsonObject target, const stackchan::motion::ServoTorqueSnapshot& value)
+{
+    target["supported"] = value.supported;
+    target["attempted"] = value.attempted;
+    target["valid"] = value.valid;
+    target["timestamp_us"] = value.timestamp_us;
+    target["transport_error"] = value.transport_error;
+    target["received_bytes"] = value.received_bytes;
+    const bool status_valid = value.attempted && value.transport_error == 0;
+    target["status_valid"] = status_valid;
+    if (status_valid) target["servo_status"] = value.servo_status;
+    else target["servo_status"] = nullptr;
+    if (value.valid) {
+        target["raw"] = value.raw;
+        target["goal_position_raw"] = value.goal_position_raw;
+        target["goal_time_raw"] = value.goal_time_raw;
+        target["goal_speed_raw"] = value.goal_speed_raw;
+    } else {
+        target["raw"] = nullptr;
+        target["goal_position_raw"] = nullptr;
+        target["goal_time_raw"] = nullptr;
+        target["goal_speed_raw"] = nullptr;
+    }
+    if (value.valid && (value.raw == 0 || value.raw == 1)) target["enabled"] = value.raw == 1;
+    else target["enabled"] = nullptr;
+}
+void add_motion_summary(ArduinoJson::JsonObject target, const MotionTrace& value)
+{
+    target["source"] = value.source; target["request_seq"] = value.sequence; target["active"] = value.active;
+    target["samples"] = static_cast<uint32_t>(value.count);
+    if (value.count == 0) { target["target_deg"] = nullptr; target["start_deg"] = nullptr; target["last_deg"] = nullptr; target["error_deg"] = nullptr; target["peak_load_permille"] = nullptr; target["released_after_ms"] = nullptr; return; }
+    target["target_deg"] = value.target / 10.0f;
+    if (value.start.valid) target["start_deg"] = value.start.angle / 10.0f; else target["start_deg"] = nullptr;
+    int peak = 0; const MotionTrace::Sample* last = nullptr;
+    for (size_t i = 0; i < value.count; ++i) {
+        const auto& s = value.samples[i];
+        if (!s.valid) continue;
+        last = &s;
+        const int load = s.load_raw < 0 ? -s.load_raw : s.load_raw;
+        if (load > peak) peak = load;
+    }
+    if (last) {
+        target["last_deg"] = last->angle / 10.0f; target["last_raw"] = last->position_raw;
+        target["error_deg"] = (last->angle - value.target) / 10.0f;
+        target["last_sample_us"] = last->timestamp_us;
+    } else { target["last_deg"] = nullptr; target["last_raw"] = nullptr; target["error_deg"] = nullptr; }
+    target["peak_load_permille"] = peak;
+    if (value.last_goal_write.valid) target["final_goal_write_us"] = value.last_goal_write.timestamp_us; else target["final_goal_write_us"] = nullptr;
+    if (value.last_goal_write.valid && value.last_torque_disable.valid)
+        target["released_after_ms"] = static_cast<int64_t>(value.last_torque_disable.timestamp_us - value.last_goal_write.timestamp_us) / 1000;
+    else target["released_after_ms"] = nullptr;
+}
+void add_servo_tuning(ArduinoJson::JsonObject target, int axis, stackchan::motion::Servo& servo,
+                      const stackchan::motion::ServoDeadbandSnapshot& snapshot)
+{
+    target["state"] = tune_state[axis];
+    target["applied_seq"] = tune_applied_sequence[axis];
+    target["pending"] = tune_pending && pending_tune.axis == axis;
+    auto eeprom = target["eeprom"].to<ArduinoJson::JsonObject>();
+    eeprom["valid"] = snapshot.valid; eeprom["timestamp_us"] = snapshot.timestamp_us;
+    if (snapshot.valid) {
+        eeprom["p"] = snapshot.p_raw; eeprom["d"] = snapshot.d_raw; eeprom["i"] = snapshot.i_raw;
+        eeprom["punch"] = snapshot.punch_raw; eeprom["dead_cw"] = snapshot.cw_raw; eeprom["dead_ccw"] = snapshot.ccw_raw;
+        eeprom["max_torque"] = snapshot.max_torque_raw; eeprom["min_angle"] = snapshot.min_angle_raw; eeprom["max_angle"] = snapshot.max_angle_raw;
+        eeprom["phase"] = snapshot.phase_raw; eeprom["unloading"] = snapshot.unloading_raw; eeprom["led_alarm"] = snapshot.led_alarm_raw;
+        eeprom["max_temperature"] = snapshot.max_temperature_raw; eeprom["min_voltage"] = snapshot.min_voltage_raw; eeprom["max_voltage"] = snapshot.max_voltage_raw;
+    }
+    auto runtime = target["runtime"].to<ArduinoJson::JsonObject>();
+    const auto profile = servo.goalProfile();
+    runtime["goal_time_ms"] = profile.time_ms; runtime["goal_speed"] = profile.speed;
+    runtime["spring_stiffness"] = servo.speedSpringStiffness(); runtime["spring_damping"] = servo.speedSpringDamping();
+    runtime["hold_min_ms"] = servo.releaseMinHoldMs(); runtime["hold_max_ms"] = servo.releaseMaxHoldMs();
+    runtime["tolerance_deg"] = servo.releaseToleranceTenths() / 10.0f;
+    const auto& write = last_tune_result[axis];
+    auto last = target["last_write"].to<ArduinoJson::JsonObject>();
+    last["attempted"] = write.attempted; last["unlocked"] = write.unlocked; last["locked"] = write.locked;
+    last["writes"] = write.writes; last["failed_writes"] = write.failed_writes; last["failed_register"] = write.failed_register;
+    last["timestamp_us"] = write.timestamp_us;
+}
+void add_motion_trace(ArduinoJson::JsonObject target, const MotionTrace& value)
+{
+    target["source"] = value.source;
+    target["request_seq"] = value.sequence;
+    target["target_deg"] = value.target / 10.0f;
+    target["started_us"] = value.started_us;
+    target["closed_us"] = value.closed_us;
+    target["active"] = value.active;
+    target["truncated"] = value.truncated;
+    target["sample_interval_ms"] = 100;
+    target["capacity"] = static_cast<uint32_t>(MotionTrace::kCapacity);
+    target["semantics"] = "existing_100ms_feedback_reads; rows are [timestamp_us, position_raw, angle_deg, load_raw, current_raw, voltage_raw, temperature_c, moving], null when invalid";
+    add_feedback(target["start"].to<ArduinoJson::JsonObject>(), value.start);
+    auto samples = target["samples"].to<ArduinoJson::JsonArray>();
+    for (size_t i = 0; i < value.count; ++i) {
+        const auto& entry = value.samples[i];
+        auto row = samples.add<ArduinoJson::JsonArray>();
+        row.add(entry.timestamp_us);
+        if (entry.valid) {
+            row.add(entry.position_raw); row.add(entry.angle / 10.0f);
+            row.add(entry.load_raw); row.add(entry.current_raw); row.add(entry.voltage_raw);
+            row.add(entry.temperature_raw); row.add(entry.moving_raw);
+        } else { for (int i = 0; i < 7; ++i) row.add(nullptr); }
+    }
+    add_transaction_trace(target["final_goal_write"].to<ArduinoJson::JsonObject>(), value.last_goal_write);
+    add_transaction_trace(target["torque_disable"].to<ArduinoJson::JsonObject>(), value.last_torque_disable);
+}
+void add_tracking_torque(ArduinoJson::JsonObject target, const stackchan::motion::ServoTorqueCommandProbe& value)
+{
+    target["source"] = "bounded_read_only_register_probe";
+    target["semantics"] = "register_state_not_measured_physical_torque";
+    target["register_start"] = 40;target["register_bytes"] = 8;
+    target["torque_register"] = 40;target["goal_position_register"] = 42;
+    target["word_order"] = "high_byte_first";
+    target["max_reads_per_command"] = 3;
+    target["command_count"] = value.command_count;
+    if (value.command_count) target["target_deg"] = value.target / 10.0f;
+    else target["target_deg"] = nullptr;
+    add_feedback(target["start_feedback"].to<ArduinoJson::JsonObject>(), value.start_feedback);
+    add_torque_snapshot(target["before"].to<ArduinoJson::JsonObject>(), value.before);
+    add_torque_snapshot(target["after_first_write"].to<ArduinoJson::JsonObject>(), value.after_first_write);
+    add_torque_snapshot(target["before_cancel"].to<ArduinoJson::JsonObject>(), value.before_cancel);
+    add_transaction_trace(target["first_position_write"].to<ArduinoJson::JsonObject>(), value.first_position_write);
 }
 }
 
@@ -500,6 +745,7 @@ void remote_init()
     // Prepare UART synchronously on app_main, before audio and capture tasks.
     GetHAL().initCollectorMotion();
     configure_pitch_motion(GetStackChan().motion().pitchServo());
+    GetStackChan().motion().yawServo().setReleasePolicy(kWebYawReleaseMinHoldMs, kWebYawReleaseMaxHoldMs, kWebYawReleaseToleranceTenths);
     motor_ready = true;
     // Collector already owns the STA connection. Never restart Wi-Fi or force a channel here.
     espnow_config_t config = ESPNOW_INIT_CONFIG_DEFAULT();
@@ -546,7 +792,8 @@ void remote_tracking_json(ArduinoJson::JsonObject target)
     target["range_deg"] = FaceTracking::kRange / 10.0f;
     target["max_step_deg"] = FaceTracking::kMaxStep / 10.0f;
     target["min_interval_ms"] = FaceTracking::kIntervalUs / 1000;
-    target["max_command_speed_deg_s"] = 5;
+    target["slot_deg"] = FaceTracking::kSlotTenths / 10.0f;
+    target["deadband_px"] = FaceTracking::kDeadbandPx;
     target["no_progress_timeout_ms"] = FaceTracking::kProgressTimeoutUs / 1000;
     target["no_progress_time_basis"] = "cumulative_active_command_time";
     target["min_progress_deg"] = FaceTracking::kProgressQuantum / 10.0f;
@@ -562,16 +809,34 @@ void remote_tracking_json(ArduinoJson::JsonObject target)
         target["anchor_deg"] = nullptr; target["target_deg"] = nullptr;
     }
 }
-esp_err_t remote_step_yaw(int delta_tenths, uint32_t* request_seq)
+esp_err_t remote_step_yaw(int delta_tenths, int speed, bool remote_like, uint32_t* request_seq)
 {
-    if (delta_tenths != -50 && delta_tenths != 50) return ESP_ERR_INVALID_ARG;
+    if (delta_tenths == 0 || delta_tenths % 10 != 0 || delta_tenths < -kWebYawMaxDeltaTenths || delta_tenths > kWebYawMaxDeltaTenths) return ESP_ERR_INVALID_ARG;
+    if (speed < kWebYawMinSpeed || speed > kWebYawMaxSpeed) return ESP_ERR_INVALID_ARG;
     std::lock_guard<std::mutex> lock(mutex);
     // Manual yaw may take over an in-flight tracking command; motor_task first
-    // consumes tracking's cancellation and then starts this measured ±5° step.
-    if (!manual_yaw.submit(delta_tenths, control_requested && enabled && motor_ready,
-            yaw_feedback.valid, tracking.active() || yaw_trajectory_complete, yaw_feedback.angle,
-            yaw_feedback_timestamp, esp_timer_get_time())) return ESP_ERR_INVALID_STATE;
-    tracking.request(false, esp_timer_get_time(), "manual_override");
+    // consumes tracking's cancellation and then starts this measured step.
+    const bool allowed = control_requested && enabled && motor_ready;
+    const bool settled = tracking.active() || yaw_trajectory_complete;
+    const int64_t now = esp_timer_get_time();
+    const bool accepted = (delta_tenths == kWebYawStepTenths || delta_tenths == -kWebYawStepTenths)
+        ? manual_yaw.submit_step(delta_tenths, speed, remote_like, allowed, yaw_feedback.valid, settled, yaw_feedback.angle, yaw_feedback_timestamp, now)
+        : manual_yaw.submit(delta_tenths, speed, remote_like, allowed, yaw_feedback.valid, settled, yaw_feedback.angle, yaw_feedback_timestamp, now);
+    if (!accepted) return ESP_ERR_INVALID_STATE;
+    tracking.request(false, now, "manual_override");
+    if (request_seq) *request_seq = manual_yaw.sequence;
+    return ESP_OK;
+}
+
+esp_err_t remote_yaw_slot(int slot, int speed, uint32_t* request_seq)
+{
+    if (slot < -kWebYawSlots || slot > kWebYawSlots) return ESP_ERR_INVALID_ARG;
+    if (speed < kWebYawMinSpeed || speed > kWebYawMaxSpeed) return ESP_ERR_INVALID_ARG;
+    std::lock_guard<std::mutex> lock(mutex);
+    const int64_t now = esp_timer_get_time();
+    if (!manual_yaw.submit_slot(slot, speed, false, control_requested && enabled && motor_ready, yaw_feedback.valid,
+            tracking.active() || yaw_trajectory_complete, yaw_feedback.angle, yaw_feedback_timestamp, now)) return ESP_ERR_INVALID_STATE;
+    tracking.request(false, now, "manual_override");
     if (request_seq) *request_seq = manual_yaw.sequence;
     return ESP_OK;
 }
@@ -610,6 +875,18 @@ esp_err_t remote_set_pitch(int angle_tenths, uint32_t* request_seq)
     pitch_state = "queued";
     pitch_has_command_start = false;
     if (request_seq) *request_seq = accepted;
+    return ESP_OK;
+}
+
+esp_err_t remote_servo_tune(ServoTuneRequest request, uint32_t* request_seq)
+{
+    if (!servo_tune_request_valid(request)) return ESP_ERR_INVALID_ARG;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!motor_ready || tune_pending) return ESP_ERR_INVALID_STATE;
+    request.sequence = ++tune_sequence;
+    request.requested_us = esp_timer_get_time();
+    pending_tune = request; tune_pending = true; tune_state[request.axis] = "queued";
+    if (request_seq) *request_seq = request.sequence;
     return ESP_OK;
 }
 
@@ -747,6 +1024,15 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     web_yaw["target_deg"] = manual_yaw.target / 10.0f;
     web_yaw["state"] = manual_yaw.state;
     web_yaw["requested_us"] = manual_yaw.requested_us;
+    web_yaw["speed"] = manual_yaw.speed;
+    web_yaw["default_speed"] = kWebYawDefaultSpeed;
+    web_yaw["path"] = manual_yaw.remote_like ? "remote_like" : "web";
+    web_yaw["max_delta_deg"] = kWebYawMaxDeltaTenths / 10;
+    web_yaw["step_deg"] = kWebYawStepTenths / 10;
+    web_yaw["slots"] = kWebYawSlots;
+    web_yaw["range_deg"] = kWebYawRangeTenths / 10;
+    web_yaw["target_slot"] = manual_yaw.sequence ? web_yaw_slot(manual_yaw.target) : 0;
+    web_yaw["measured_slot"] = yaw_feedback.valid ? web_yaw_slot(yaw_feedback.angle) : 0;
     motor["yaw_trajectory_complete"] = yaw_trajectory_complete;
     motor["enabled"] = enabled.load();
     motor["requested"] = control_requested;
@@ -771,6 +1057,13 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     nod["low_deg"] = nullptr; nod["high_deg"] = nullptr; nod["target_deg"] = nullptr;
     add_feedback(motor["yaw"].to<ArduinoJson::JsonObject>(), yaw_feedback);
     add_feedback(motor["pitch"].to<ArduinoJson::JsonObject>(), pitch_feedback);
+    add_motion_summary(motor["yaw"]["motion_summary"].to<ArduinoJson::JsonObject>(), yaw_trace);
+    add_motion_summary(motor["pitch"]["motion_summary"].to<ArduinoJson::JsonObject>(), pitch_trace);
+    if (motor_ready) {
+        auto& motion = GetStackChan().motion();
+        add_servo_tuning(motor["yaw"]["tuning"].to<ArduinoJson::JsonObject>(), 0, motion.yawServo(), yaw_deadband);
+        add_servo_tuning(motor["pitch"]["tuning"].to<ArduinoJson::JsonObject>(), 1, motion.pitchServo(), pitch_deadband);
+    }
     if (include_servo_diagnostics) {
         add_servo_diagnostics(motor["yaw"]["diagnostics"].to<ArduinoJson::JsonObject>(), yaw_diagnostics);
         add_servo_diagnostics(motor["pitch"]["diagnostics"].to<ArduinoJson::JsonObject>(), pitch_diagnostics);
@@ -778,6 +1071,9 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
         motor["pitch"]["diagnostics"]["trajectory_complete"] = pitch_trajectory_complete;
         add_deadband_snapshot(motor["yaw"]["diagnostics"]["deadband_configuration"].to<ArduinoJson::JsonObject>(), yaw_deadband);
         add_deadband_snapshot(motor["pitch"]["diagnostics"]["deadband_configuration"].to<ArduinoJson::JsonObject>(), pitch_deadband);
+        add_tracking_torque(motor["yaw"]["diagnostics"]["tracking_torque"].to<ArduinoJson::JsonObject>(), yaw_tracking_torque);
+        add_motion_trace(motor["yaw"]["diagnostics"]["motion_trace"].to<ArduinoJson::JsonObject>(), yaw_trace);
+        add_motion_trace(motor["pitch"]["diagnostics"]["motion_trace"].to<ArduinoJson::JsonObject>(), pitch_trace);
     }
 }
 }

@@ -88,7 +88,41 @@ public:
         }
 
         check_mode(Mode::Position);
-        _scs_bus.WritePos(_config.id, mapped_angle, 20, 0);
+        _scs_bus.WritePos(_config.id, mapped_angle, _goal_profile.time_ms, _goal_profile.speed);
+    }
+
+    void setGoalProfile(const ServoGoalProfile& profile) override
+    {
+        _goal_profile.time_ms = uitk::clamp(profile.time_ms, 0, 9999);
+        _goal_profile.speed   = uitk::clamp(profile.speed, 0, 1000);
+    }
+    ServoGoalProfile goalProfile() const override { return _goal_profile; }
+
+    ServoEepromWriteResult writeEepromTuning(const ServoEepromTuning& tuning) override
+    {
+        ServoEepromWriteResult result;
+        result.supported = result.attempted = true;
+        result.timestamp_us = esp_timer_get_time();
+        result.before = readDeadbandSnapshot();
+        const auto previous_timeout = _scs_bus.IOTimeOut;
+        _scs_bus.IOTimeOut = 10;
+        auto note = [&](int reg, int ok) { ++result.writes; if (ok != 1) { ++result.failed_writes; if (result.failed_register < 0) result.failed_register = reg; } };
+        result.unlocked = _scs_bus.unLockEprom(_config.id) == 1;
+        if (result.unlocked) {
+            if (tuning.has_max_torque) note(16, _scs_bus.writeWord(_config.id, 16, uitk::clamp(tuning.max_torque, 0, 1000)));
+            if (tuning.has_p) note(21, _scs_bus.writeByte(_config.id, 21, uitk::clamp(tuning.p, 0, 254)));
+            if (tuning.has_d) note(22, _scs_bus.writeByte(_config.id, 22, uitk::clamp(tuning.d, 0, 254)));
+            if (tuning.has_i) note(23, _scs_bus.writeByte(_config.id, 23, uitk::clamp(tuning.i, 0, 254)));
+            if (tuning.has_punch) note(24, _scs_bus.writeWord(_config.id, 24, uitk::clamp(tuning.punch, 0, 1000)));
+            if (tuning.has_dead_cw) note(26, _scs_bus.writeByte(_config.id, 26, uitk::clamp(tuning.dead_cw, 0, 16)));
+            if (tuning.has_dead_ccw) note(27, _scs_bus.writeByte(_config.id, 27, uitk::clamp(tuning.dead_ccw, 0, 16)));
+            result.locked = _scs_bus.LockEprom(_config.id) == 1;
+        }
+        _scs_bus.IOTimeOut = previous_timeout;
+        result.after = readDeadbandSnapshot();
+        mclog::tagInfo(_tag, "id: {} eeprom tuning writes: {} failed: {} unlocked: {} locked: {}", _config.id,
+                       result.writes, result.failed_writes, result.unlocked, result.locked);
+        return result;
     }
 
     int getCurrentAngle() override
@@ -114,13 +148,25 @@ public:
         // factory motion loop. Keep its read timeout local to this transaction.
         const auto previous_timeout = _scs_bus.IOTimeOut;
         _scs_bus.IOTimeOut = 2;
-        result.position_raw = _scs_bus.ReadPos(_config.id);
+        // One 15-byte read of registers 56..70: position, speed, load, voltage,
+        // temperature, moving and current. Same cadence as the former 2-byte read.
+        const bool block = _scs_bus.FeedBack(_config.id) > 0;
         result.transport_error = _scs_bus.getLastError();
         result.servo_status = _scs_bus.getState();
         _scs_bus.IOTimeOut = previous_timeout;
-        result.valid = result.transport_error == 0 && result.servo_status == 0 && is_raw_pos_valid(result.position_raw);
+        if (block) {
+            result.position_raw = _scs_bus.ReadPos(-1);
+            result.speed_raw = _scs_bus.ReadSpeed(-1);
+            result.load_raw = _scs_bus.ReadLoad(-1);
+            result.voltage_raw = _scs_bus.ReadVoltage(-1);
+            result.temperature_raw = _scs_bus.ReadTemper(-1);
+            result.moving_raw = _scs_bus.ReadMove(-1);
+            result.current_raw = _scs_bus.ReadCurrent(-1);
+        }
+        result.valid = block && result.transport_error == 0 && result.servo_status == 0 && is_raw_pos_valid(result.position_raw);
         if (result.valid) {
             result.angle = raw_pos_to_angle(result.position_raw);
+            result.load_valid = result.current_valid = true;
         }
         return result;
     }
@@ -130,6 +176,11 @@ public:
     ServoDeadbandSnapshot readDeadbandSnapshot() override
     {
         return readServoDeadbandSnapshot(_scs_bus, static_cast<uint8_t>(_config.id), esp_timer_get_time());
+    }
+
+    ServoTorqueSnapshot readTorqueSnapshot() override
+    {
+        return readServoTorqueSnapshot(_scs_bus, static_cast<uint8_t>(_config.id), esp_timer_get_time());
     }
 
     bool is_moving_impl() override
@@ -201,6 +252,7 @@ private:
 
     ServoConfig_t _config;
     Vector2i _runtime_raw_pos_limit;
+    ServoGoalProfile _goal_profile;
     int _zero_pos      = 0;
     Mode _current_mode = Mode::Position;
 

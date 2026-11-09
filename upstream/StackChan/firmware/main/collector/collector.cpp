@@ -19,6 +19,7 @@
 #include "remote_protocol.h"
 #include "remote_actuation.h"
 #include "connection_protocol.h"
+#include "web_control.h"
 #include <ArduinoJson.hpp>
 #include <board.h>
 #include <audio/audio_codec.h>
@@ -49,6 +50,7 @@
 #include <freertos/task.h>
 #include <lvgl.h>
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -80,6 +82,8 @@ constexpr uint32_t kCameraTargetFps = 10;
 constexpr int64_t kCameraPeriodUs = 1000000 / kCameraTargetFps;
 std::string token, device_id, boot_id;
 std::atomic_bool wifi_connected{false}, audio_ready{false};
+// Body camera capture/JPEG/serving is off unless the saved setting enables it.
+std::atomic_bool camera_enabled{false};
 // Two independent bounded cursors share the existing capture ring: phone + Mac.
 std::atomic<unsigned> audio_clients{0};
 std::atomic<uint32_t> audio_errors{0}, camera_errors{0}, audio_sent{0}, audio_skipped{0};
@@ -166,6 +170,29 @@ std::string read_nvs_string(nvs_handle_t handle, const char* key, size_t limit =
     if (nvs_get_str(handle, key, value.data(), &size) != ESP_OK) return {};
     value.resize(size - 1);
     return value;
+}
+
+void load_camera_setting()
+{
+    nvs_handle_t handle;
+    uint8_t enabled = 0;
+    if (nvs_open("collector", NVS_READONLY, &handle) == ESP_OK) {
+        if (nvs_get_u8(handle, "camera_on", &enabled) != ESP_OK) enabled = 0;
+        nvs_close(handle);
+    }
+    camera_enabled = enabled == 1;
+    ESP_LOGI(kTag, "Body camera streaming %s (saved setting; default off)", camera_enabled ? "enabled" : "disabled");
+}
+
+esp_err_t save_camera_setting(bool enabled)
+{
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open("collector", NVS_READWRITE, &handle);
+    if (error != ESP_OK) return error;
+    error = nvs_set_u8(handle, "camera_on", enabled ? 1 : 0);
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+    return error;
 }
 
 void load_identity()
@@ -415,6 +442,12 @@ void camera_task(void*)
 {
     auto camera = hal_bridge::board_get_camera();
     while (true) {
+        if (!camera_enabled) {
+            // Disabled by default: no capture, no JPEG work, nothing to serve.
+            { std::lock_guard<std::mutex> lock(frame_mutex); latest_frame.reset(); }
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
         const int64_t start = esp_timer_get_time();
         auto frame = std::make_shared<Frame>();
         const uint32_t seq = ++frame_seq;
@@ -799,6 +832,12 @@ esp_err_t info_handler(httpd_req_t* request)
     camera["target_fps"] = face_detection_enabled() ? kFaceTargetFps : kCameraTargetFps;
     camera["base_target_fps"] = kCameraTargetFps;
     camera["timestamp_semantics"] = "capture_completion";
+    camera["enabled"] = camera_enabled.load();
+    camera["default_enabled"] = false;
+    camera["endpoint"] = "/v1/camera";
+    capabilities["camera_control"] = "supported";
+    capabilities["yaw_step_diagnostics"] = "supported"; // whole-degree steps, speed and path on /v1/motion/yaw-step
+    capabilities["servo_tuning"] = "supported"; // POST /v1/servo: EEPROM P/D/I/punch/deadband/max torque, runtime goal profile, release policy
     doc["capture_active"] = true;
     doc["transport"] = "http_lan_unencrypted";
     return send_json(request, doc);
@@ -923,6 +962,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     health["reset_reason_code"] = static_cast<int>(esp_reset_reason());
     health["psram_free"] = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     health["heap_min_free"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    health["camera_enabled"] = camera_enabled.load();
     health["camera_errors"] = camera_errors.load();
     health["camera_capture_seq"] = frame_seq.load();
     health["camera_processing_us"] = camera_processing_us.load();
@@ -990,7 +1030,16 @@ esp_err_t web_control_handler(httpd_req_t* request)
         total += n;
     }
     JsonDocument doc, result;
-    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() != 1) {
+    const bool yaw_step = strcmp(request->uri, "/v1/motion/yaw-step") == 0;
+    size_t yaw_fields = 1;
+    if (yaw_step) { if (doc.size() && doc["speed"].is<int>()) ++yaw_fields; if (doc.size() && doc["path"].is<const char*>()) ++yaw_fields; }
+    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() < 1) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected one control field"); return ESP_OK;
+    }
+    yaw_fields = 1;
+    if (yaw_step) { if (doc["speed"].is<int>()) ++yaw_fields; if (doc["path"].is<const char*>()) ++yaw_fields; }
+    const bool slot_request = yaw_step && doc["slot"].is<int>() && !doc["delta_deg"].is<int>();
+    if (doc.size() > (yaw_step ? yaw_fields : 1u)) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected one control field"); return ESP_OK;
     }
     if (strcmp(request->uri, "/v1/m12/view") == 0) {
@@ -1022,15 +1071,37 @@ esp_err_t web_control_handler(httpd_req_t* request)
         if (error!=ESP_OK) return unavailable(request,"Voice playback could not start");
         result["job_id"]=job; result["clip_id"]=selected;
     } else {
-        if (!doc["delta_deg"].is<int>() || (doc["delta_deg"].as<int>() != -5 && doc["delta_deg"].as<int>() != 5)) {
-            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected delta_deg -5 or 5"); return ESP_OK;
+        const int delta_deg = doc["delta_deg"] | 0;
+        if (!slot_request && (!doc["delta_deg"].is<int>() || delta_deg == 0 || delta_deg < -kWebYawMaxDeltaTenths / 10 || delta_deg > kWebYawMaxDeltaTenths / 10)) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected delta_deg (-30..30, buttons use ±20) or slot (-3..3)"); return ESP_OK;
+        }
+        if (slot_request && (doc["slot"].as<int>() < -kWebYawSlots || doc["slot"].as<int>() > kWebYawSlots)) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected slot -3..3"); return ESP_OK;
+        }
+        bool remote_like = false;
+        if (doc["path"].is<const char*>()) {
+            const char* path = doc["path"];
+            if (strcmp(path, "remote") == 0) remote_like = true;
+            else if (strcmp(path, "web") != 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected path web or remote"); return ESP_OK; }
+        }
+        int speed = kWebYawDefaultSpeed;
+        if (doc["speed"].is<int>()) {
+            speed = doc["speed"].as<int>();
+            if (speed < kWebYawMinSpeed || speed > kWebYawMaxSpeed) {
+                httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected speed 50..1000"); return ESP_OK;
+            }
         }
         uint32_t seq = 0;
-        if (remote_step_yaw(doc["delta_deg"].as<int>() * 10, &seq) != ESP_OK) {
+        const auto error = slot_request ? remote_yaw_slot(doc["slot"].as<int>(), speed, &seq)
+                                        : remote_step_yaw(delta_deg * 10, speed, remote_like, &seq);
+        if (error != ESP_OK) {
             httpd_resp_set_status(request, "409 Conflict");
-            return httpd_resp_sendstr(request, "Yaw unavailable: enable control, wait for valid feedback and settled motion");
+            return httpd_resp_sendstr(request, "Yaw unavailable: enable control, wait for valid settled feedback, stay within the ±60° range");
         }
         result["request_seq"] = seq;
+        result["speed"] = speed;
+        result["path"] = remote_like ? "remote_like" : "web";
+        if (slot_request) result["slot"] = doc["slot"].as<int>();
     }
     result["accepted"] = true;
     httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
@@ -1104,9 +1175,95 @@ esp_err_t pitch_handler(httpd_req_t* request)
     return send_json(request, result);
 }
 
+esp_err_t camera_handler(httpd_req_t* request)
+{
+    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
+    if (request->content_len < 1 || request->content_len > 128) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
+    }
+    char body[129]{};
+    int total = 0;
+    while (total < request->content_len) {
+        const int count = httpd_req_recv(request, body + total, request->content_len - total);
+        if (count <= 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request"); return ESP_OK; }
+        total += count;
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() != 1 || !doc["enabled"].is<bool>()) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
+    }
+    const bool enabled = doc["enabled"].as<bool>();
+    if (save_camera_setting(enabled) != ESP_OK) return unavailable(request, "Camera setting not persisted; streaming unchanged");
+    camera_enabled = enabled;
+    JsonDocument result;
+    result["accepted"] = true; result["enabled"] = enabled; result["persisted"] = true;
+    return send_json(request, result);
+}
+
+esp_err_t servo_tune_handler(httpd_req_t* request)
+{
+    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
+    if (request->content_len < 1 || request->content_len > 512) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected servo tuning JSON"); return ESP_OK;
+    }
+    char body[513]{};
+    int total = 0;
+    while (total < request->content_len) {
+        const int count = httpd_req_recv(request, body + total, request->content_len - total);
+        if (count <= 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request"); return ESP_OK; }
+        total += count;
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>()) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected servo tuning JSON"); return ESP_OK;
+    }
+    ServoTuneRequest tune;
+    const char* axis = doc["axis"] | "";
+    if (strcmp(axis, "yaw") == 0) tune.axis = 0;
+    else if (strcmp(axis, "pitch") == 0) tune.axis = 1;
+    else { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected axis yaw or pitch"); return ESP_OK; }
+    const char* op = doc["op"] | "";
+    using Op = ServoTuneRequest::Op;
+    if (strcmp(op, "eeprom") == 0) {
+        tune.op = Op::Eeprom;
+        auto take = [&](const char* key, bool& has, int& value) { if (doc[key].is<int>()) { has = true; value = doc[key].as<int>(); } };
+        take("p", tune.eeprom.has_p, tune.eeprom.p); take("d", tune.eeprom.has_d, tune.eeprom.d); take("i", tune.eeprom.has_i, tune.eeprom.i);
+        take("punch", tune.eeprom.has_punch, tune.eeprom.punch); take("dead_cw", tune.eeprom.has_dead_cw, tune.eeprom.dead_cw);
+        take("dead_ccw", tune.eeprom.has_dead_ccw, tune.eeprom.dead_ccw); take("max_torque", tune.eeprom.has_max_torque, tune.eeprom.max_torque);
+    } else if (strcmp(op, "runtime") == 0) {
+        tune.op = Op::Runtime;
+        if (doc["goal_time_ms"].is<int>() || doc["goal_speed"].is<int>()) {
+            tune.has_goal = true; tune.goal_time_ms = doc["goal_time_ms"] | 20; tune.goal_speed = doc["goal_speed"] | 0;
+        }
+        if (doc["spring_stiffness"].is<float>() || doc["spring_damping"].is<float>()) {
+            tune.has_spring = true; tune.spring_stiffness = doc["spring_stiffness"] | 0.0f; tune.spring_damping = doc["spring_damping"] | 0.0f;
+        }
+        if (doc["hold_min_ms"].is<int>() || doc["hold_max_ms"].is<int>() || doc["tolerance_deg"].is<float>()) {
+            tune.has_release = true;
+            tune.hold_min_ms = doc["hold_min_ms"] | 500; tune.hold_max_ms = doc["hold_max_ms"] | 2000;
+            tune.tolerance_tenths = static_cast<int>(std::lround((doc["tolerance_deg"] | 1.0f) * 10.0f));
+        }
+    } else if (strcmp(op, "refresh") == 0) tune.op = Op::Refresh;
+    else if (strcmp(op, "restore") == 0) tune.op = Op::Restore;
+    else { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected op eeprom, runtime, refresh or restore"); return ESP_OK; }
+    if (!servo_tune_request_valid(tune)) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Servo tuning values out of range"); return ESP_OK; }
+    uint32_t sequence = 0;
+    const auto error = remote_servo_tune(tune, &sequence);
+    if (error == ESP_ERR_INVALID_STATE) {
+        httpd_resp_set_status(request, "409 Conflict");
+        return httpd_resp_sendstr(request, "Servo tuning busy or motor not initialized");
+    }
+    if (error != ESP_OK) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Servo tuning rejected"); return ESP_OK; }
+    JsonDocument result;
+    result["accepted"] = true; result["request_seq"] = sequence; result["axis"] = axis; result["op"] = op;
+    result["semantics"] = "queued_for_motor_task_when_axis_idle; result in telemetry remote.motor.<axis>.tuning";
+    httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
+}
+
 esp_err_t frame_handler(httpd_req_t* request)
 {
     if (!authorize(request)) return ESP_OK;
+    if (!camera_enabled) return unavailable(request, "Body camera streaming disabled; POST /v1/camera {\"enabled\":true}");
     std::shared_ptr<Frame> frame;
     {
         std::lock_guard<std::mutex> lock(frame_mutex);
@@ -1269,6 +1426,12 @@ void start_server(int port, int control_port, bool audio_only)
         httpd_uri_t control{};
         control.uri = "/v1/remote"; control.method = HTTP_POST; control.handler = remote_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &control));
+        httpd_uri_t camera_control{};
+        camera_control.uri = "/v1/camera"; camera_control.method = HTTP_POST; camera_control.handler = camera_handler;
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &camera_control));
+        httpd_uri_t servo_tuning{};
+        servo_tuning.uri = "/v1/servo"; servo_tuning.method = HTTP_POST; servo_tuning.handler = servo_tune_handler;
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &servo_tuning));
         httpd_uri_t pitch{};
         pitch.uri = "/v1/settings/pitch"; pitch.method = HTTP_POST; pitch.handler = pitch_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &pitch));
@@ -1290,7 +1453,7 @@ void start_server(int port, int control_port, bool audio_only)
     }
 }
 
-void update_screen(const std::string& ip)
+void update_screen(const std::string& ip, const std::string& ssid = {})
 {
     const int64_t now = esp_timer_get_time();
     const auto remote = remote_snapshot();
@@ -1309,7 +1472,7 @@ void update_screen(const std::string& ip)
         last_frame = current_frame; last_fps_us = now;
     } else if (!last_fps_us) { last_frame = current_frame; last_fps_us = now; }
     ScreenStatus status{};
-    status.version = kVersion; status.ip = ip.c_str(); status.token = token.c_str();
+    status.version = kVersion; status.ip = ip.c_str(); status.ssid = ssid.c_str(); status.token = token.c_str();
     status.motor = remote_display_state();
     uint8_t channel = 0; wifi_second_chan_t secondary; esp_wifi_get_channel(&channel, &secondary);
     status.channel = channel; status.frame = current_frame;
@@ -1330,6 +1493,14 @@ void update_screen(const std::string& ip)
     status.yaw_valid = fresh_feedback && remote.yaw_valid;
     status.pitch_valid = fresh_feedback && remote.pitch_valid;
     status.yaw_deg = remote.yaw_angle_deg; status.pitch_deg = remote.pitch_angle_deg;
+    // Never take service mutexes under LVGL: SD/media paths can acquire the
+    // display lock in the other direction. The renderer only consumes flags.
+    const auto modes = interaction::indicators();
+    const auto listening = hearing::listening_intent();
+    status.function_flags = (modes.tracking ? ScreenFunctionTracking : 0) |
+                            (listening.requested ? ScreenFunctionListening : 0) |
+                            (playback_busy() ? ScreenFunctionSpeaking : 0) |
+                            (modes.recognition ? ScreenFunctionRecognition : 0);
     auto display = static_cast<StackChanAvatarDisplay*>(Board::GetInstance().GetDisplay());
     display->LvglLock();
     if (!screen_initialized) {
@@ -1472,6 +1643,7 @@ void run()
     ESP_ERROR_CHECK(xTaskCreate(sensor_task, "collector_sensors", 6144, nullptr, 3, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(environment_task, "collector_environment", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(audio_task, "collector_audio", 6144, nullptr, 7, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    load_camera_setting();
     // Keep JPEG work off Wi-Fi's core 0, still below sensor and audio priorities.
     ESP_ERROR_CHECK(xTaskCreatePinnedToCore(camera_task, "collector_camera", 8192, nullptr, 2, nullptr, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(serial_config_task, "collector_serial", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
@@ -1485,7 +1657,7 @@ void run()
     int64_t last_health_log = 0;
     std::string previous_ip;
     while (true) {
-        std::string ip;
+        std::string ip, ssid;
         if (wifi_connected) {
             attempt = 0; // Each reconnection starts again with the preferred profile.
             esp_netif_ip_info_t info{};
@@ -1494,7 +1666,10 @@ void run()
                 snprintf(buffer, sizeof(buffer), IPSTR, IP2STR(&info.ip));
                 ip = buffer;
             }
-            if (ip != previous_ip) ESP_LOGI(kTag, "PAIRING_URL=http://%s:8080 BOOT_ID=%s", ip.c_str(), boot_id.c_str());
+            wifi_ap_record_t ap{};
+            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+                ssid.assign(reinterpret_cast<const char*>(ap.ssid), strnlen(reinterpret_cast<const char*>(ap.ssid), sizeof(ap.ssid)));
+            if (ip != previous_ip) ESP_LOGI(kTag, "PAIRING_URL=http://%s:8080 BOOT_ID=%s SSID=%s", ip.c_str(), boot_id.c_str(), ssid.c_str());
         } else if (esp_timer_get_time() - last_attempt >= 10000000) {
             if (attempt != 0) esp_wifi_disconnect();
             connect_network(attempt++ / 3);
@@ -1502,7 +1677,7 @@ void run()
         }
         previous_ip = ip;
         interaction::tick(esp_timer_get_time());
-        update_screen(ip);
+        update_screen(ip, ssid);
         const int64_t now = esp_timer_get_time();
         // One interrupt allocation table per boot (USB log): core 0 must keep free
         // inputs for interrupts that are allocated late, e.g. Wi-Fi's AES on first connect.

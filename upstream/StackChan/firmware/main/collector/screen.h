@@ -4,9 +4,17 @@
 #include <cstdint>
 
 namespace collector {
+enum ScreenFunction : uint8_t {
+    ScreenFunctionTracking = 1 << 0,
+    ScreenFunctionListening = 1 << 1,
+    ScreenFunctionSpeaking = 1 << 2,
+    // The fourth (green) segment follows the screen's actual visible expression.
+    ScreenFunctionRecognition = 1 << 4,
+};
 struct ScreenStatus {
     const char* version = "";
     const char* ip = "";
+    const char* ssid = ""; // Connected network name; shown instead of a bare "online".
     const char* token = "";
     const char* motor = "";
     unsigned channel = 0;
@@ -30,6 +38,8 @@ struct ScreenStatus {
     bool pitch_valid = false;
     float yaw_deg = 0;
     float pitch_deg = 0;
+    // Sample before the LVGL lock; rendering does not call service accessors.
+    uint8_t function_flags = 0;
 };
 enum class ScreenReaction { None, Heart, Reject };
 // All calls run under the display's LVGL lock (or on the LVGL timer task).

@@ -57,6 +57,10 @@ esp_err_t reply(httpd_req_t* r,const char* status,const char* error) {
     std::string body;serializeJson(doc,body);return httpd_resp_send(r,body.c_str(),body.size());
 }
 }
+Indicators indicators() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return {remote_tracking_requested(),recognition};
+}
 esp_err_t set_mode(const char* mode,bool enabled) {
     std::lock_guard<std::mutex> lock(mutex);return set_locked(mode,enabled,esp_timer_get_time());
 }

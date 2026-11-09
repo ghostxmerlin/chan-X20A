@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <cstdlib>
+std::vector<uint8_t> display_pixels(320*240*3);
 namespace hal_bridge {void board_set_display_backlight_enabled(bool) {}}
 using namespace collector::eyes;
 struct Host:Backend {
@@ -25,12 +26,13 @@ Command command(unsigned id,Operation op) {
     Command c;c.op=op;snprintf(c.request_id,37,"12345678-1234-4234-8234-%012x",id);return c;
 }
 void capture(const std::string& path) {
-    auto* buf=lv_snapshot_take(lv_screen_active(),LV_COLOR_FORMAT_RGB888);assert(buf);
+    lv_refr_now(lv_display_get_default());
     std::ofstream out(path,std::ios::binary);out<<"P6\n320 240\n255\n";
-    for(int y=0;y<240;++y)for(int x=0;x<320;++x) {
-        auto* p=buf->data+y*buf->header.stride+x*3;const char rgb[]={char(p[2]),char(p[1]),char(p[0])};out.write(rgb,3);
-    }
-    lv_draw_buf_destroy(buf);
+    out.write(reinterpret_cast<const char*>(display_pixels.data()),display_pixels.size());
+    const auto* green=&display_pixels[(238*320+224)*3];
+    // Capture includes the top layer, so a full-screen eye frame cannot erase it.
+    const bool visible=snapshot().visible;
+    if(visible)assert(green[0]==0x36 && green[1]==0xe8 && green[2]==0x74);
 }
 int main(int argc,char** argv) {
     assert(argc==3);Host host;host.root=argv[1];assert(initialize(host));
@@ -38,9 +40,17 @@ int main(int argc,char** argv) {
     std::vector<uint8_t> bytes(kAssetCapacity),scratch(4096);std::vector<uint16_t> pixels(kPixels);
     Cache cache;cache.bytes=bytes.data();
     for(const auto& a:kAssets) {assert(cache.load(host,a)==Error::None);for(int f=0;f<8;++f)assert(cache.decode(f,pixels.data(),scratch.data())==Error::None);}
-    lv_init();auto* d=lv_display_create(320,240);std::vector<uint8_t> draw(320*20*2);
+    lv_init();auto* d=lv_display_create(320,240);std::vector<uint8_t> draw(320*20*3);
+    lv_display_set_color_format(d,LV_COLOR_FORMAT_RGB888);
     lv_display_set_buffers(d,draw.data(),nullptr,draw.size(),LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_display_set_flush_cb(d,[](lv_display_t* display,const lv_area_t*,uint8_t*){lv_display_flush_ready(display);});
+    lv_display_set_flush_cb(d,[](lv_display_t* display,const lv_area_t* area,uint8_t* pixels){
+        const auto stride=lv_draw_buf_width_to_stride(lv_area_get_width(area),LV_COLOR_FORMAT_RGB888);
+        for(int y=area->y1;y<=area->y2;++y)for(int x=area->x1;x<=area->x2;++x) {
+            auto* p=pixels+(y-area->y1)*stride+(x-area->x1)*3;
+            auto* out=&display_pixels[(y*320+x)*3];out[0]=p[2];out[1]=p[1];out[2]=p[0];
+        }
+        lv_display_flush_ready(display);
+    });
     collector::screen_create(lv_screen_active());collector::screen_tick(1);
     unsigned id=1;
     auto refresh=[&] {host.time+=10000;collector::screen_tick(host.time/1000);lv_refr_now(d);};

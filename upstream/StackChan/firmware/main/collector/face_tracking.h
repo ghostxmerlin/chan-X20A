@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
+#include "web_control.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -21,11 +22,23 @@ struct TrackingInput {
 class FaceTracking {
 public:
     enum class Action { None, Move, Cancel };
-    static constexpr int kRange=100,kMaxStep=10,kServoSpeed=0;
-    static constexpr int64_t kIntervalUs=250000,kFrameMaxAgeUs=700000,kFeedbackMaxAgeUs=300000;
-    // ScsServo uses 0.3125 degrees per raw encoder step (hal_servo.cpp).
-    // Its integer-tenth feedback changes by 3 or 4 per encoder step, not 1.
-    static constexpr int kProgressQuantum=3;
+    // Coarse "follow the direction" tracking: one 20-degree web slot per command
+    // (the loaded SCS0009 cannot resolve small steps), three slots per side.
+    static constexpr int kRange=600,kMaxStep=kWebYawStepTenths,kServoSpeed=kWebYawDefaultSpeed;
+    static constexpr int kSlotTenths=kWebYawStepTenths;
+    // Largest distance from measured angle to the next slot centre.
+    static constexpr int kMaxCommandTenths=kSlotTenths+kSlotTenths/2;
+    // Face must be more than 130 px (41% of half width) off centre before a slot step;
+    // a 20-degree swing then lands it well inside the band instead of hunting.
+    static constexpr int kDeadbandPx=130;
+    // Consecutive 100 ms samples may differ by many degrees while a slot move runs.
+    static constexpr int kFeedbackJumpTenths=250;
+    // A real face cannot cross more than ~40% of the image between consecutive
+    // frames; larger centre jumps are detector glitches and wait for a new frame.
+    static constexpr int kFrameJumpPx=260;
+    static constexpr int64_t kIntervalUs=2500000,kFrameMaxAgeUs=700000,kFeedbackMaxAgeUs=300000;
+    // A slot command must show at least 5 degrees of measured motion within the budget.
+    static constexpr int kProgressQuantum=50;
     static constexpr int64_t kProgressTimeoutUs=2000000;
     void request(bool enabled,int64_t now,const char* reason="disabled") {
         if(enabled==requested_) return;
@@ -71,7 +84,7 @@ public:
         if(active_&&(target_<in.lower||target_>in.upper)) return fault("fault_anchor_range",in);
         if(in.feedback_us!=last_feedback_us_) {
             if(last_feedback_us_ && in.feedback_us<last_feedback_us_) return interrupt("feedback_stale",in,true);
-            if(last_feedback_us_&&std::abs(in.measured-last_measured_)>50)
+            if(last_feedback_us_&&std::abs(in.measured-last_measured_)>kFeedbackJumpTenths)
                 return fault("fault_feedback_jump",in);
             last_feedback_us_=in.feedback_us;last_measured_=in.measured;
             if(in.feedback_us>=enabled_us_&&feedback_good_<2) ++feedback_good_;
@@ -110,14 +123,13 @@ public:
         if(in.frame_seq==last_frame_seq_||in.frame_us<=last_frame_us_) return Action::None;
         last_frame_seq_=in.frame_seq;last_frame_us_=in.frame_us;++frames_;
         const int center=in.x+in.w/2;
-        if(have_face_ && std::abs(center-last_center_)>160) {
+        if(have_face_ && std::abs(center-last_center_)>kFrameJumpPx) {
             last_center_=center;return interrupt("frame_jump",in);
         }
         have_face_=true;last_center_=center;
         if(!anchor_valid_) {anchor_=in.measured;target_=in.measured;anchor_valid_=true;}
         const int error=center-320;
-        // Total central deadband 52/640 = 8.1% of image width.
-        if(std::abs(error)<=26) return interrupt("deadband",in);
+        if(std::abs(error)<=kDeadbandPx) return interrupt("deadband",in);
         const int direction=error>0?1:-1;
         const bool reverse_pending=progress_pending_&&
             (progress_target_-progress_start_)*direction<0;
@@ -132,12 +144,12 @@ public:
         // measured baseline/direction, never the already consumed active time.
         if(progress_pending_&&active_) return Action::None;
         const int lower=std::max(in.lower,anchor_-kRange),upper=std::min(in.upper,anchor_+kRange);
+        // Next 20-degree slot beyond the slot nearest to the measured angle.
         const int target=progress_pending_&&!reverse_pending?progress_target_:
-            std::clamp(in.measured+direction*kMaxStep,lower,upper);
-        // Each actual trajectory starts from valid measured feedback and moves
-        // <=1 degree. Opposite cancelled targets may differ by 2 degrees; there
-        // is no direct old-target-to-new-target move or zero-step fake progress.
-        if(std::abs(target-in.measured)>kMaxStep) return fault("fault_feedback_jump",in);
+            std::clamp((web_yaw_slot(in.measured)+direction)*kSlotTenths,lower,upper);
+        // Each trajectory starts from valid measured feedback and moves at most
+        // one and a half slots; there is no old-target-to-new-target move.
+        if(std::abs(target-in.measured)>kMaxCommandTenths) return fault("fault_feedback_jump",in);
         if(target<lower||target>upper||(error>0&&target<=in.measured)||(error<0&&target>=in.measured))
             return interrupt("at_limit",in);
         if(!progress_pending_||reverse_pending) {
@@ -182,12 +194,11 @@ private:
     const char* state_="disabled";
 };
 
-// Speed 0 selects the factory critically damped low-speed spring. A <=1 degree
-// feedback-based step has a tested command slew <=5 deg/s; this is not a physical
-// speed measurement. No setAutoAngleSync or fallback getCurrentAngle read occurs.
+// Speed 1000 is the fastest factory spring mapping, the same as the web slot
+// buttons. No setAutoAngleSync or fallback getCurrentAngle read occurs.
 template<class Servo,class Feedback>
 bool apply_tracking_move(Servo& yaw,const Feedback& feedback,int target) {
-    if(!feedback.valid||std::abs(target-feedback.angle)>FaceTracking::kMaxStep) return false;
+    if(!feedback.valid||std::abs(target-feedback.angle)>FaceTracking::kMaxCommandTenths) return false;
     const auto limits=yaw.getAngleLimit();
     if(target<limits.x||target>limits.y) return false;
     return yaw.moveFromFeedbackWithSpeed(feedback,target,FaceTracking::kServoSpeed);

@@ -5,6 +5,9 @@
 #include <esp_http_server.h>
 #include <cstdint>
 namespace collector::interaction {
+struct Indicators { bool tracking = false, recognition = false; };
+// Read before acquiring the LVGL display lock.
+Indicators indicators();
 esp_err_t set_mode(const char* mode,bool enabled);
 void asr_command(uint8_t id,bool has_value);
 void tick(int64_t now);

@@ -20,4 +20,6 @@ bool playback_output_enabled();
 esp_err_t playback_hearing(int clip,uint32_t session);
 void playback_set_hearing_session(uint32_t session);
 bool playback_self_sounding();
+// Nonblocking atomic state: accepted job, including delay/loading, through cleanup.
+bool playback_busy();
 }

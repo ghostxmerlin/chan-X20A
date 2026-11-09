@@ -422,6 +422,7 @@ bool playback_self_sounding()
 {
     return gate.busy() || esp_timer_get_time()<self_tail_until.load();
 }
+bool playback_busy() { return gate.busy(); }
 
 void playback_asr_command(uint8_t id, bool has_value)
 {

@@ -27,6 +27,13 @@ public:
     bool torque = false;
     Axis() { set_angle_limit({50, 850}); initPassive(); reads = 0; }
     int getCurrentAngle() override { ++reads; return std::clamp(physical, _angle_limit.x, _angle_limit.y); }
+    // Ideal shaft for trajectory tests: measured angle equals the last command.
+    ServoFeedback readFeedback() override
+    {
+        ServoFeedback feedback; feedback.valid = true;
+        feedback.angle = commands.empty() ? physical : commands.back();
+        return feedback;
+    }
     void setTorqueEnabled(bool enabled) override { torque = enabled; }
     bool getTorqueEnabled() override { return torque; }
     void limits(int lower, int upper) { set_angle_limit({lower, upper}); }
@@ -145,9 +152,10 @@ static void trajectory(const std::vector<unsigned>& schedule, int target, bool e
     const auto trajectory_ms = test_tick_ms;
     if (completed) {
         assert(axis.commands.back() == target);
-        // The original update loop still performs automatic rest torque release.
-        test_tick_ms += 300;
-        axis.update();
+        // Automatic rest release still happens, after the 500ms arrival hold.
+        test_tick_ms += 300; axis.update();
+        assert(axis.torque); // held: the goal was written less than 500ms ago
+        test_tick_ms += 400; axis.update();
         assert(!axis.torque);
     } else {
         assert(std::strcmp(pose.state(), "trajectory_timeout") == 0 && !axis.torque);
@@ -188,7 +196,7 @@ static void passive_yaw_first_command()
     // Reproduce the real passive Servo state that blocked the first web command.
     assert(!axis.isTrajectoryComplete());
     collector::ManualYaw request;
-    assert(request.submit(-50, true, true, collector::manual_yaw_idle(false, axis.isTrajectoryComplete()),
+    assert(request.submit(-50, collector::kWebYawDefaultSpeed, false,  true, true, collector::manual_yaw_idle(false, axis.isTrajectoryComplete()),
                           40, 100, 100));
     assert(request.take(110, collector::manual_yaw_idle(false, axis.isTrajectoryComplete())));
     ServoFeedback feedback; feedback.valid = true; feedback.angle = 40;
@@ -218,8 +226,8 @@ static int finish_gentle(Axis& axis, int start, int target)
     assert(test_tick_ms - began < 15000);
     std::cerr << "range " << start << " -> " << target << " peak " << peak_step << " time " << test_tick_ms - began << '\n';
     assert(peak_step <= 10); // <=1 degree per 20ms, including final snap.
-    test_tick_ms += 300; axis.update();
-    assert(!axis.torque);
+    test_tick_ms += 700; axis.update();
+    assert(!axis.torque); // ideal arrival: released after the 500ms hold
     std::cout << "gentle " << start / 10.0 << " -> " << target / 10.0
               << " peak_step=" << peak_step / 10.0 << "deg elapsed_ms=" << test_tick_ms - began << '\n';
     return peak_step;

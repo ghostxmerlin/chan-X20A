@@ -6,6 +6,7 @@
 #include <vector>
 
 size_t flushed_pixels = 0, flush_calls = 0;
+std::vector<uint8_t> display_pixels(320 * 240 * 3);
 std::vector<bool> backlight_requests;
 namespace hal_bridge {
 void board_set_display_backlight_enabled(bool enabled) { backlight_requests.push_back(enabled); }
@@ -51,15 +52,40 @@ void swipe(uint32_t now, int x1, int y1, int x2, int y2)
     collector::screen_touch(true, now + 80, x2, y2);
     collector::screen_touch(false, now + 100);
 }
+// Unlike lv_snapshot_take(active_screen), the physical flush includes the top
+// layer. Keep the existing page-only snapshots too, to catch unrelated changes.
+void check_ribbon(lv_display_t* display, uint8_t flags, const std::string& path = {})
+{
+    lv_refr_now(display);
+    constexpr uint32_t colors[] = {0xFFFFFF, 0x278BFF, 0xFF3838, 0x36E874, 0xFFBF40};
+    for (int y = 237; y < 240; ++y) for (int x = 0; x < 320; ++x) {
+        const uint32_t expected = x < 319 && x % 64 == 63 ? 0 :
+            flags & (1 << (x / 64)) ? colors[x / 64] : 0x080A0D;
+        const auto* p = &display_pixels[(y * 320 + x) * 3];
+        assert(p[0] == (expected >> 16) && p[1] == ((expected >> 8) & 255) && p[2] == (expected & 255));
+    }
+    if (!path.empty()) {
+        auto* file = fopen(path.c_str(), "wb"); assert(file);
+        fprintf(file, "P6\n320 240\n255\n");
+        fwrite(display_pixels.data(), 1, display_pixels.size(), file); fclose(file);
+    }
+}
 int main(int argc, char** argv)
 {
     assert(argc == 2);
     const std::string output = argv[1];
     lv_init();
     auto display = lv_display_create(320, 240);
-    std::vector<uint8_t> framebuffer(320 * 20 * 2);
+    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB888);
+    std::vector<uint8_t> framebuffer(320 * 20 * 3);
     lv_display_set_buffers(display, framebuffer.data(), nullptr, framebuffer.size(), LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_display_set_flush_cb(display, [](lv_display_t* d, const lv_area_t* area, uint8_t*) {
+    lv_display_set_flush_cb(display, [](lv_display_t* d, const lv_area_t* area, uint8_t* pixels) {
+        const auto stride = lv_draw_buf_width_to_stride(lv_area_get_width(area), LV_COLOR_FORMAT_RGB888);
+        for (int y = area->y1; y <= area->y2; ++y) for (int x = area->x1; x <= area->x2; ++x) {
+            const auto* p = pixels + (y - area->y1) * stride + (x - area->x1) * 3;
+            auto* out = &display_pixels[(y * 320 + x) * 3];
+            out[0] = p[2]; out[1] = p[1]; out[2] = p[0];
+        }
         flushed_pixels += lv_area_get_size(area); ++flush_calls; lv_display_flush_ready(d);
     });
     collector::screen_create(lv_screen_active());
@@ -394,5 +420,44 @@ int main(int argc, char** argv)
         for (size_t pos : {size_t(0), size_t(319 * 3), size_t(239 * 320 * 3), size_t((240 * 320 - 1) * 3)})
             assert((*pixels)[pos] == 0 && (*pixels)[pos + 1] == 0 && (*pixels)[pos + 2] == 0);
     puts("PASS: 120 animation frames, summary-first, gestures/cancel, hold-to-pair, live log tail, invalid values, 1000 ms solid reactions without a ring, graphical summary, black background");
+    // Ribbon dimensions, exact colors/separators, top-layer stacking and touch
+    // pass-through are checked against the same partial flush used by hardware.
+    auto* ribbon = lv_obj_get_child(lv_display_get_layer_top(display), -1);
+    lv_obj_update_layout(ribbon);
+    assert(lv_obj_get_x(ribbon) == 0 && lv_obj_get_y(ribbon) == 237);
+    assert(lv_obj_get_width(ribbon) == 320 && lv_obj_get_height(ribbon) == 3);
+    for (auto flag : {LV_OBJ_FLAG_CLICKABLE, LV_OBJ_FLAG_SCROLLABLE}) {
+        assert(!lv_obj_has_flag(ribbon, flag));
+        for (unsigned i = 0; i < 5; ++i)
+            assert(!lv_obj_has_flag(lv_obj_get_child(ribbon, i), flag));
+    }
+    check_ribbon(display, 0, output + "/ribbon-off.ppm");
+    status.function_flags = collector::ScreenFunctionTracking | collector::ScreenFunctionListening |
+                            collector::ScreenFunctionSpeaking | collector::ScreenFunctionRecognition;
+    collector::screen_update(status);
+    check_ribbon(display, 0x17);
+    collector::screen_show_reaction(collector::ScreenReaction::Heart, 70000);
+    check_ribbon(display, 0x1f, output + "/ribbon-heart.ppm");
+    tap(70400); assert(collector::screen_showing_status());
+    check_ribbon(display, 0x17, output + "/ribbon-summary.ppm");
+    flushed_pixels = flush_calls = 0;
+    collector::screen_update(status); collector::screen_tick(70500); lv_refr_now(display);
+    assert(flushed_pixels == 0);
+    status.function_flags &= ~collector::ScreenFunctionSpeaking;
+    collector::screen_update(status); check_ribbon(display, 0x13);
+    assert(flushed_pixels > 0 && flushed_pixels <= 64 * 3);
+    swipe(70800, 270, 238, 50, 238); assert(collector::screen_showing_log());
+    check_ribbon(display, 0x13, output + "/ribbon-log.ppm");
+    collector::screen_show_faces(true, 71200);
+    collector::screen_update_faces(faces, 2, "faces 2");
+    check_ribbon(display, 0x13, output + "/ribbon-faces.ppm");
+    collector::screen_set_enabled(false, 71600);
+    assert(lv_obj_has_flag(ribbon, LV_OBJ_FLAG_HIDDEN));
+    status.function_flags = collector::ScreenFunctionListening;
+    collector::screen_update(status);
+    collector::screen_set_enabled(true, 72000);
+    assert(!lv_obj_has_flag(ribbon, LV_OBJ_FLAG_HIDDEN));
+    check_ribbon(display, 0x02);
+    puts("PASS: 320x3 top ribbon, all colors and 1px separators, home/summary/log/M12 overlay, touch pass-through, hidden while off, latest state on wake, zero unchanged redraw, one segment update <=192 pixels");
     lv_deinit();
 }

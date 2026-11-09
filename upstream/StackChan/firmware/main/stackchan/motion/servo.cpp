@@ -56,23 +56,53 @@ void Servo::update()
     if (!_angle_anim.done()) {
         _angle_anim.updateWithDelta(0.02f);  // Fixed delta time for consistency
         set_angle_impl(static_cast<int>(_angle_anim.directValue()));
+        note_goal_write();
     }
 
     // Snap to target angle when animation ends
     else if (_snap_to_target_on_rest) {
         _snap_to_target_on_rest = false;
         set_angle_impl(_angle_anim.end);
+        note_goal_write();
     }
 
-    // Auto release torque on rest
+    // Auto release torque on rest, once the measured angle has arrived or the
+    // bounded hold has elapsed. ReadMove alone cannot confirm arrival.
     else if (_auto_torque_release_enabled && !isMoving()) {
         if (GetHAL().millis() - _last_torque_check_tick > 200) {
-            if (getTorqueEnabled()) {
+            if (release_allowed(GetHAL().millis()) && getTorqueEnabled()) {
                 setTorqueEnabled(false);
             }
             _last_torque_check_tick = GetHAL().millis();
         }
     }
+}
+
+void Servo::note_goal_write()
+{
+    _last_goal_write_tick = _last_tick;
+    _hold_pending         = true;
+}
+
+bool Servo::release_allowed(uint32_t now)
+{
+    if (!_hold_pending) {
+        return true;
+    }
+    const uint32_t held = now - _last_goal_write_tick;
+    if (held < _release_min_hold_ms) {
+        return false;
+    }
+    if (held < _release_max_hold_ms) {
+        // A failed read is not arrival; keep holding until the bound.
+        const auto feedback = readFeedback();
+        const int error     = feedback.angle - static_cast<int>(_angle_anim.end);
+        if (!feedback.valid || error > _release_tolerance_tenths || error < -_release_tolerance_tenths) {
+            return false;
+        }
+    }
+    _hold_pending = false;
+    return true;
 }
 
 void Servo::move(int angle)
@@ -88,6 +118,14 @@ void Servo::moveWithSpringParams(int angle, float stiffness, float damping)
     _angle_anim.springOptions().damping        = damping;
 
     update_angle_anim_target(angle);
+}
+
+void Servo::setReleasePolicy(uint32_t min_hold_ms, uint32_t max_hold_ms, int tolerance_tenths)
+{
+    if (max_hold_ms < min_hold_ms) max_hold_ms = min_hold_ms;
+    _release_min_hold_ms      = min_hold_ms;
+    _release_max_hold_ms      = max_hold_ms;
+    _release_tolerance_tenths = tolerance_tenths < 0 ? 0 : tolerance_tenths;
 }
 
 bool Servo::setSpeedSpringOverride(float stiffness, float damping)

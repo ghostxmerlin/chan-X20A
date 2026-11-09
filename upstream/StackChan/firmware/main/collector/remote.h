@@ -4,6 +4,7 @@
 #include <esp_err.h>
 #include <cstdint>
 #include "remote_gestures.h"
+#include "servo_tuning.h"
 namespace collector {
 struct RemoteSnapshot {
     bool ready = false, requested = false, enabled = false;
@@ -31,12 +32,19 @@ bool remote_enabled();
 esp_err_t remote_set_tracking(bool enabled);
 bool remote_tracking_requested();
 void remote_tracking_json(ArduinoJson::JsonObject target);
-esp_err_t remote_step_yaw(int delta_tenths, uint32_t* request_seq);
+// speed is the spring mapping input (kWebYawMinSpeed..kWebYawMaxSpeed); out of range returns ESP_ERR_INVALID_ARG.
+esp_err_t remote_step_yaw(int delta_tenths, int speed, bool remote_like, uint32_t* request_seq);
+// Absolute 20-degree slot (-3..3; 0 = center). ESP_ERR_INVALID_STATE when not idle/enabled.
+esp_err_t remote_yaw_slot(int slot, int speed, uint32_t* request_seq);
 const char* remote_display_state();
 // Commit one collector setting, then queue one explicit pitch attempt. ESP_OK
 // confirms persistence/acceptance, not measured arrival. Disabled returns
 // ESP_ERR_INVALID_STATE without writing; invalid 0.1-degree target returns
 // ESP_ERR_INVALID_ARG. NVS errors propagate without queuing a new movement.
 esp_err_t remote_set_pitch(int angle_tenths, uint32_t* request_seq);
+// Queue one operator servo tuning request; motor_task applies it when the axis
+// is idle. ESP_ERR_INVALID_ARG on bad values, ESP_ERR_INVALID_STATE while
+// another request is pending or the motor is not initialized.
+esp_err_t remote_servo_tune(ServoTuneRequest request, uint32_t* request_seq);
 void remote_pitch_setting_json(ArduinoJson::JsonObject target);
 }
