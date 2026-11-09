@@ -1,5 +1,20 @@
 # Collector 局域网协议 v1
 
+## 0.4.41–0.4.42：步进诊断参数与舵机参数接口
+
+- `POST /v1/motion/yaw-step` 接受整数 `delta_deg`（±1…30，缺省页面仍只发 ±5）、可选 `speed`（50–1000）与可选 `path`（`web` 缺省 / `remote`）。`remote` 重放旧实体遥控的 `setAutoAngleSyncEnabled(true)+moveWithSpeed` 调用序列；两者写入舵机的位置指令相同。响应与 `remote.motor.web_yaw` 增加 `path`、`max_delta_deg`。能力 `yaw_step_diagnostics`。
+- `POST /v1/servo`（Bearer + `X-Boot-Id`，能力 `servo_tuning`）：`{"axis":"yaw"|"pitch","op":...}`。`op=eeprom` 写入给定的 `p`/`d`/`i`（0–254）、`punch`（0–1000，‰）、`dead_cw`/`dead_ccw`（0–16 步）、`max_torque`（0–1000，‰）；本体先解锁 EEPROM、写入、加锁、再读回 9..27。`op=restore` 写回出厂值 P15 D15 I0 punch30 死区1/1 最大扭矩1000。`op=refresh` 只重新读取。`op=runtime` 设置本次开机的 `goal_time_ms`（0–9999）/`goal_speed`（0–1000，随每次位置写入发送，固件默认 20/0）、`spring_stiffness`/`spring_damping`（同时为 0 清除覆盖）、`hold_min_ms`/`hold_max_ms`/`tolerance_deg`（卸力保持与到位容差）。请求排队给 motor task，轴空闲时执行，10 s 内轴持续忙则过期；同一时刻只允许一条待执行请求（409）。202 只表示已排队。
+- 遥测 `remote.motor.<axis>.tuning`：`state`（idle/queued/applying/written/write_failed/applied/refreshed/expired_axis_busy）、`applied_seq`、`pending`、`eeprom`（读回的全部 9..27 字段）、`runtime`、`last_write`（解锁/加锁/写入与失败计数）。`remote.motor.<axis>.motion_summary`：最近一条运动命令的目标/起点/最后实测/误差、峰值负载（‰）、最终目标写入与卸力时刻差。`remote.motor.<axis>` 反馈增加 `speed_raw`、`voltage_raw`（0.1 V）、`temperature_c`、`moving`，来自同一条 56..70 状态块读取。
+- 零点、角度限位、相位与保护位不可通过此接口写入。
+
+## 0.4.39：网页舵机到位保持、运动轨迹证据、机身相机开关
+
+- **自动卸力改为到位门控**（`stackchan/motion/servo.cpp`，两轴共用）：最后一次位置写入后至少保持 500 ms；期间每 200 ms 读一次实测位置，误差 ≤1.0°（约 3 个编码步）才释放扭矩；读取失败或误差过大最多保持 2000 ms 后仍按原厂逻辑释放。`ReadMove=0` 不再单独作为释放依据。显式停止/取消立即释放并清除保持。原 0.4.38 现场记录为最终目标写入后 35.4 ms 即释放，与主机复现的 20 ms 一致。
+- `POST /v1/motion/yaw-step` 增加可选整数字段 `speed`（50–1000，弹簧映射输入，不是物理速度）；缺省 600，与实体遥控已验收的 yaw 速度相同（此前固定 100，目标每 2–7 个 20 ms tick 才前进 1 个编码步）。响应增加 `speed`；`remote.motor.web_yaw` 增加 `speed` 与 `default_speed`。
+- `GET /v1/telemetry?servo_diag=1` 在 `remote.motor.{yaw,pitch}.diagnostics.motion_trace` 返回最近一条运动命令的有界轨迹：`source`（web_yaw / tracking / pitch_setting / boot_pitch）、`request_seq`、`target_deg`、`started_us`、`closed_us`、`active`、`truncated`、`start` 反馈、`samples`（最多 160 行 `[timestamp_us, position_raw, angle_deg]`，取自 motor task 既有的 100 ms 位置读，不新增 UART 流量；读取失败时后两项为 `null`）、以及属于该命令窗口的 `final_goal_write` 与 `torque_disable` 事务。轨迹是实测位置记录，`trajectory_complete` 仍不等于到位。
+- **机身相机默认关闭**：`collector` NVS 的 `camera_on` 缺省为 0；关闭时不采集、不编码 JPEG，`GET /v1/frame` 返回 503。`POST /v1/camera {"enabled":bool}`（Bearer + `X-Boot-Id`）保存并立即生效，响应 `{accepted,enabled,persisted}`。`/v1/info` 的 `camera` 增加 `enabled`、`default_enabled=false`、`endpoint`，`capabilities.camera_control="supported"`；`health.camera_enabled` 为当前状态。传感器驱动仍在开机初始化，关闭只停止取帧/编码/对外输出。Android 观察台未改，相机关闭时只会收到 503。
+- 本体摘要页第一行显示所连 Wi-Fi 名称（断开时仍显示 `offline`）；HTTP 遥测仍不返回 SSID。
+
 ## 0.4.18：芯片温度遥测
 
 `GET /v1/info` 和 `GET /v1/telemetry` 增加 `temperature`；`capabilities.chip_temperature=supported`。
