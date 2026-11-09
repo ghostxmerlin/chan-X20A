@@ -1521,7 +1521,7 @@ void start_server(int port, int control_port, bool audio_only)
     config.ctrl_port = control_port;
     config.stack_size = 8192;
     config.max_open_sockets = audio_only ? kAudioHttpSessions : kMainHttpSessions;
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = 32; // 0.4.45 added /v1/camera, /v1/servo, /v1/wifi GET+POST; 20 overflowed and aborted boot
     config.max_resp_headers = 10;
     config.recv_wait_timeout = 3;
     config.send_wait_timeout = 3;
