@@ -24,4 +24,50 @@ bool append_wifi_profile(std::vector<Profile>& profiles, const Profile& next)
     profiles.push_back(next);
     return true;
 }
+
+// Operator-managed network list stored as one collector NVS value. Index 0 is
+// tried first; the factory list stays an untouched fallback behind it.
+constexpr size_t kWifiProfileLimit = 6;
+struct WifiProfile { std::string ssid, password; };
+class WifiProfileList {
+public:
+    const std::vector<WifiProfile>& items() const { return items_; }
+    int index_of(const std::string& ssid) const
+    {
+        for (size_t i = 0; i < items_.size(); ++i) if (items_[i].ssid == ssid) return static_cast<int>(i);
+        return -1;
+    }
+    // Replace a same-named entry's password; a new entry needs a free slot.
+    // preferred moves the entry to the front.
+    bool add(const std::string& ssid, const std::string& password, bool preferred)
+    {
+        if (!wifi_credentials_valid(ssid, password)) return false;
+        const int existing = index_of(ssid);
+        if (existing < 0 && items_.size() >= kWifiProfileLimit) return false;
+        if (existing >= 0) items_.erase(items_.begin() + existing);
+        const WifiProfile profile{ssid, password};
+        if (preferred || items_.empty()) items_.insert(items_.begin(), profile);
+        else items_.push_back(profile);
+        return true;
+    }
+    bool remove(const std::string& ssid)
+    {
+        const int index = index_of(ssid);
+        if (index < 0) return false;
+        items_.erase(items_.begin() + index);
+        return true;
+    }
+    bool prefer(const std::string& ssid)
+    {
+        const int index = index_of(ssid);
+        if (index < 0) return false;
+        const WifiProfile profile = items_[index];
+        items_.erase(items_.begin() + index);
+        items_.insert(items_.begin(), profile);
+        return true;
+    }
+    void clear() { items_.clear(); }
+private:
+    std::vector<WifiProfile> items_;
+};
 }

@@ -137,6 +137,20 @@ constexpr size_t kImuHistory = 100; // 2 seconds at 50 Hz; loss after this is re
 std::array<Sensors, kImuHistory> imu_history;
 std::vector<SsidItem> networks;
 bool preferred_network_configured = false;
+// Operator network list (collector NVS "wifi_profiles"), scan results and the
+// on-device setup requests. Only the main loop touches the radio and NVS;
+// the LVGL timer copies state to/from the screen under wifi_mutex.
+std::mutex wifi_mutex;
+WifiProfileList wifi_profiles;
+bool wifi_scan_requested = false, wifi_scan_running = false, wifi_scan_fresh = false;
+std::atomic_bool wifi_scan_done{false};
+int64_t wifi_scan_us = 0;
+std::vector<ScreenWifiEntry> wifi_scan_results;
+bool wifi_join_pending = false, wifi_reconnect_requested = false;
+std::string wifi_join_ssid, wifi_join_password;
+std::string wifi_status_text, wifi_ip;
+bool wifi_status_dirty = false;
+void wifi_json(JsonObject target);
 esp_netif_t* station = nullptr;
 bool screen_initialized = false;
 // The LVGL task publishes a coherent software state for HTTP telemetry.
@@ -218,24 +232,77 @@ void wifi_event(void*, esp_event_base_t base, int32_t id, void*)
 {
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) wifi_connected = true;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) wifi_connected = false;
+    if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE) wifi_scan_done = true;
+}
+
+// Profiles persist as one JSON array; the first boot without it migrates the
+// earlier wifi_primary / wifi_ssid keys so an existing robot keeps its networks.
+void save_wifi_profiles_locked()
+{
+    JsonDocument doc;
+    auto list = doc.to<JsonArray>();
+    for (const auto& profile : wifi_profiles.items()) {
+        auto entry = list.add<JsonObject>();
+        entry["ssid"] = profile.ssid; entry["password"] = profile.password;
+    }
+    std::string encoded; serializeJson(doc, encoded);
+    nvs_handle_t handle;
+    if (nvs_open("collector", NVS_READWRITE, &handle) != ESP_OK) { ESP_LOGE(kTag, "Wi-Fi profiles: NVS open failed"); return; }
+    const auto result = nvs_set_str(handle, "wifi_profiles", encoded.c_str());
+    if (result == ESP_OK) nvs_commit(handle);
+    else ESP_LOGE(kTag, "Wi-Fi profiles save failed: %s", esp_err_to_name(result));
+    nvs_close(handle);
+}
+
+void load_wifi_profiles_locked()
+{
+    nvs_handle_t handle;
+    if (nvs_open("collector", NVS_READONLY, &handle) != ESP_OK) return;
+    const auto encoded = read_nvs_string(handle, "wifi_profiles", 1024);
+    bool migrate = encoded.empty();
+    if (!migrate) {
+        JsonDocument doc;
+        if (!deserializeJson(doc, encoded) && doc.is<JsonArray>()) {
+            for (JsonObject entry : doc.as<JsonArray>()) wifi_profiles.add(entry["ssid"] | "", entry["password"] | "", false);
+        } else migrate = true;
+    }
+    if (migrate) {
+        JsonDocument preferred;
+        const auto primary = read_nvs_string(handle, "wifi_primary", 768);
+        if (!primary.empty() && !deserializeJson(preferred, primary))
+            wifi_profiles.add(preferred["ssid"] | "", preferred["password"] | "", true);
+        const auto ssid = read_nvs_string(handle, "wifi_ssid");
+        const auto password = read_nvs_string(handle, "wifi_password");
+        if (!ssid.empty()) wifi_profiles.add(ssid, password, false);
+    }
+    nvs_close(handle);
+    if (migrate && !wifi_profiles.items().empty()) save_wifi_profiles_locked();
+    ESP_LOGI(kTag, "Wi-Fi profiles: %u saved%s", static_cast<unsigned>(wifi_profiles.items().size()), migrate ? " (migrated)" : "");
+}
+
+// Candidate order: operator profiles, then the untouched factory list.
+void rebuild_networks_locked()
+{
+    networks.clear();
+    for (const auto& profile : wifi_profiles.items()) append_wifi_profile(networks, SsidItem{profile.ssid, profile.password});
+    for (const auto& saved : SsidManager::GetInstance().GetSsidList()) append_wifi_profile(networks, saved);
+    preferred_network_configured = !wifi_profiles.items().empty();
+}
+
+void set_wifi_status(const std::string& text)
+{
+    if (wifi_status_text == text) return;
+    wifi_status_text = text; wifi_status_dirty = true;
 }
 
 void init_wifi()
 {
     // Read factory Wi-Fi credentials, never rewrite that namespace or calibration.
-    nvs_handle_t handle;
-    if (nvs_open("collector", NVS_READONLY, &handle) == ESP_OK) {
-        JsonDocument preferred;
-        const auto encoded = read_nvs_string(handle, "wifi_primary", 768);
-        if (!encoded.empty() && !deserializeJson(preferred, encoded))
-            preferred_network_configured = append_wifi_profile(networks, SsidItem{
-                preferred["ssid"] | "", preferred["password"] | ""});
-        auto ssid = read_nvs_string(handle, "wifi_ssid");
-        auto password = read_nvs_string(handle, "wifi_password");
-        append_wifi_profile(networks, SsidItem{ssid, password});
-        nvs_close(handle);
+    {
+        std::lock_guard<std::mutex> lock(wifi_mutex);
+        load_wifi_profiles_locked();
+        rebuild_networks_locked();
     }
-    for (const auto& saved : SsidManager::GetInstance().GetSsidList()) append_wifi_profile(networks, saved);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     station = esp_netif_create_default_wifi_sta();
@@ -252,8 +319,13 @@ void init_wifi()
 
 void connect_network(size_t index)
 {
-    if (networks.empty()) return;
-    const auto& saved = networks[index % networks.size()];
+    SsidItem saved;
+    {
+        std::lock_guard<std::mutex> lock(wifi_mutex);
+        if (networks.empty()) return;
+        saved = networks[index % networks.size()];
+        set_wifi_status("connecting to " + saved.ssid + " ...");
+    }
     wifi_config_t config{};
     memcpy(config.sta.ssid, saved.ssid.data(), std::min(saved.ssid.size(), sizeof(config.sta.ssid)));
     memcpy(config.sta.password, saved.password.data(), std::min(saved.password.size(), sizeof(config.sta.password)));
@@ -298,26 +370,14 @@ void serial_config_task(void*)
             ESP_LOGW(kTag, "Invalid Wi-Fi credential lengths");
             continue;
         }
-        nvs_handle_t handle;
-        esp_err_t result = nvs_open("collector", NVS_READWRITE, &handle);
-        if (result == ESP_OK) {
-            if (request["priority"] | false) {
-                JsonDocument profile;
-                profile["ssid"] = ssid; profile["password"] = password;
-                std::string encoded; serializeJson(profile, encoded);
-                result = nvs_set_str(handle, "wifi_primary", encoded.c_str());
-            } else {
-                result = nvs_set_str(handle, "wifi_ssid", ssid.c_str());
-                if (result == ESP_OK) result = nvs_set_str(handle, "wifi_password", password.c_str());
-            }
-            if (result == ESP_OK) result = nvs_commit(handle);
-            nvs_close(handle);
+        bool stored;
+        {
+            std::lock_guard<std::mutex> lock(wifi_mutex);
+            stored = wifi_profiles.add(ssid, password, request["priority"] | true);
+            if (stored) { save_wifi_profiles_locked(); rebuild_networks_locked(); wifi_reconnect_requested = true; }
         }
-        if (result == ESP_OK) {
-            ESP_LOGI(kTag, "Collector Wi-Fi configuration saved%s; rebooting silently", (request["priority"] | false) ? " (preferred; fallback retained)" : "");
-            vTaskDelay(pdMS_TO_TICKS(200));
-            esp_restart();
-        } else ESP_LOGE(kTag, "Wi-Fi configuration save failed: %s", esp_err_to_name(result));
+        if (stored) ESP_LOGI(kTag, "Collector Wi-Fi profile saved (%u total); reconnecting", static_cast<unsigned>(wifi_profiles.items().size()));
+        else ESP_LOGE(kTag, "Wi-Fi profile rejected (limit %u or invalid)", static_cast<unsigned>(kWifiProfileLimit));
     }
 }
 
@@ -838,6 +898,7 @@ esp_err_t info_handler(httpd_req_t* request)
     capabilities["camera_control"] = "supported";
     capabilities["yaw_step_diagnostics"] = "supported"; // whole-degree steps, speed and path on /v1/motion/yaw-step
     capabilities["servo_tuning"] = "supported"; // POST /v1/servo: EEPROM P/D/I/punch/deadband/max torque, runtime goal profile, release policy
+    capabilities["wifi_profiles"] = "supported"; // GET/POST /v1/wifi: saved networks, scan, on-device setup page
     doc["capture_active"] = true;
     doc["transport"] = "http_lan_unencrypted";
     return send_json(request, doc);
@@ -920,6 +981,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     environment_json(doc, false);
     temperature_json(doc["temperature"].to<JsonObject>());
     remote_json(doc["remote"].to<JsonObject>(), remote_after, remote_requested, servo_diag_requested && servo_diag == 1);
+    wifi_json(doc["wifi"].to<JsonObject>());
     remote_pitch_setting_json(doc["pitch_setting"].to<JsonObject>());
     face_detection_json(doc["face_detection"].to<JsonObject>());
     {
@@ -1175,6 +1237,86 @@ esp_err_t pitch_handler(httpd_req_t* request)
     return send_json(request, result);
 }
 
+void wifi_json(JsonObject target)
+{
+    std::lock_guard<std::mutex> lock(wifi_mutex);
+    target["connected"] = wifi_connected.load();
+    if (wifi_connected) {
+        wifi_ap_record_t ap{};
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            target["ssid"] = reinterpret_cast<const char*>(ap.ssid); target["rssi_dbm"] = ap.rssi; target["channel"] = ap.primary;
+        }
+        target["ip"] = wifi_ip;
+    } else { target["ssid"] = nullptr; target["ip"] = nullptr; }
+    target["status"] = wifi_status_text;
+    target["profile_limit"] = static_cast<uint32_t>(kWifiProfileLimit);
+    auto profiles = target["profiles"].to<JsonArray>();
+    for (size_t i = 0; i < wifi_profiles.items().size(); ++i) {
+        auto entry = profiles.add<JsonObject>();
+        entry["ssid"] = wifi_profiles.items()[i].ssid; entry["preferred"] = i == 0;
+    }
+    target["factory_count"] = static_cast<uint32_t>(SsidManager::GetInstance().GetSsidList().size());
+    target["scanning"] = wifi_scan_running;
+    target["scan_age_ms"] = wifi_scan_us ? (esp_timer_get_time() - wifi_scan_us) / 1000 : -1;
+    auto scan = target["scan"].to<JsonArray>();
+    for (const auto& e : wifi_scan_results) {
+        auto entry = scan.add<JsonObject>();
+        entry["ssid"] = e.ssid; entry["rssi_dbm"] = e.rssi; entry["secure"] = e.secure; entry["saved"] = e.saved;
+    }
+    target["semantics"] = "profiles are tried in order, then the untouched factory list; passwords are never returned";
+}
+
+esp_err_t wifi_get_handler(httpd_req_t* request)
+{
+    if (!authorize(request)) return ESP_OK;
+    JsonDocument doc;
+    wifi_json(doc.to<JsonObject>());
+    return send_json(request, doc);
+}
+
+esp_err_t wifi_handler(httpd_req_t* request)
+{
+    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
+    if (request->content_len < 1 || request->content_len > 256) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected Wi-Fi JSON"); return ESP_OK;
+    }
+    char body[257]{};
+    int total = 0;
+    while (total < request->content_len) {
+        const int count = httpd_req_recv(request, body + total, request->content_len - total);
+        if (count <= 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request"); return ESP_OK; }
+        total += count;
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>()) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected Wi-Fi JSON"); return ESP_OK;
+    }
+    const char* op = doc["op"] | "";
+    const std::string ssid = doc["ssid"] | "";
+    const std::string password = doc["password"] | "";
+    const char* error = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(wifi_mutex);
+        if (strcmp(op, "scan") == 0) wifi_scan_requested = true;
+        else if (strcmp(op, "reconnect") == 0) wifi_reconnect_requested = true;
+        else if (strcmp(op, "add") == 0) {
+            if (!wifi_profiles.add(ssid, password, doc["preferred"] | true)) error = "Invalid SSID/password or profile limit reached";
+            else { save_wifi_profiles_locked(); rebuild_networks_locked(); if (doc["connect"] | true) wifi_reconnect_requested = true; set_wifi_status("saved " + ssid); }
+        } else if (strcmp(op, "remove") == 0) {
+            if (!wifi_profiles.remove(ssid)) error = "Unknown profile";
+            else { save_wifi_profiles_locked(); rebuild_networks_locked(); }
+        } else if (strcmp(op, "prefer") == 0) {
+            if (!wifi_profiles.prefer(ssid)) error = "Unknown profile";
+            else { save_wifi_profiles_locked(); rebuild_networks_locked(); if (doc["connect"] | false) wifi_reconnect_requested = true; }
+        } else error = "Expected op scan, reconnect, add, remove or prefer";
+    }
+    if (error) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, error); return ESP_OK; }
+    JsonDocument result;
+    result["accepted"] = true; result["op"] = op;
+    wifi_json(result["wifi"].to<JsonObject>());
+    httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
+}
+
 esp_err_t camera_handler(httpd_req_t* request)
 {
     if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
@@ -1399,6 +1541,7 @@ void start_server(int port, int control_port, bool audio_only)
         register_get("/v1/info", info_handler);
         register_get("/v1/telemetry", telemetry_handler);
         register_get("/v1/frame", frame_handler);
+        register_get("/v1/wifi", wifi_get_handler);
         register_get("/v1/eyes", [](httpd_req_t* r)->esp_err_t {if(!authorize(r))return ESP_FAIL;return eyes::catalog_handler(r);});
         register_get("/v1/eyes/status", [](httpd_req_t* r)->esp_err_t {if(!authorize(r))return ESP_FAIL;return eyes::status_handler(r);});
         for(const char* uri:{"/v1/eyes","/v1/eyes/assets","/v1/voice/assets"}) {
@@ -1432,6 +1575,9 @@ void start_server(int port, int control_port, bool audio_only)
         httpd_uri_t servo_tuning{};
         servo_tuning.uri = "/v1/servo"; servo_tuning.method = HTTP_POST; servo_tuning.handler = servo_tune_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &servo_tuning));
+        httpd_uri_t wifi_control{};
+        wifi_control.uri = "/v1/wifi"; wifi_control.method = HTTP_POST; wifi_control.handler = wifi_handler;
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &wifi_control));
         httpd_uri_t pitch{};
         pitch.uri = "/v1/settings/pitch"; pitch.method = HTTP_POST; pitch.handler = pitch_handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &pitch));
@@ -1519,6 +1665,18 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
                 display_state.applied_center_event_seq = remote.center_event_seq;
             }
             screen_tick(static_cast<uint32_t>(now / 1000));
+            {
+                // On-device Wi-Fi page: hand requests to the main loop, copy results back.
+                if (screen_wifi_take_scan_request()) { std::lock_guard<std::mutex> lock(wifi_mutex); wifi_scan_requested = true; }
+                char typed_ssid[33], typed_password[kScreenWifiPasswordMax + 1];
+                if (screen_wifi_take_credentials(typed_ssid, sizeof(typed_ssid), typed_password, sizeof(typed_password))) {
+                    std::lock_guard<std::mutex> lock(wifi_mutex);
+                    wifi_join_ssid = typed_ssid; wifi_join_password = typed_password; wifi_join_pending = true;
+                }
+                std::lock_guard<std::mutex> lock(wifi_mutex);
+                if (wifi_scan_fresh) { screen_update_wifi_scan(wifi_scan_results.data(), wifi_scan_results.size(), wifi_scan_running); wifi_scan_fresh = false; }
+                if (wifi_status_dirty) { screen_update_wifi_status(wifi_status_text.c_str()); wifi_status_dirty = false; }
+            }
             if (touch.valid && now - touch.timestampUs < 100000)
                 screen_touch(touch.num > 0, static_cast<uint32_t>(now / 1000),
                              touch.num > 0 ? touch.x : -1, touch.num > 0 ? touch.y : -1);
@@ -1674,6 +1832,59 @@ void run()
             if (attempt != 0) esp_wifi_disconnect();
             connect_network(attempt++ / 3);
             last_attempt = esp_timer_get_time();
+        }
+        {
+            bool reconnect = false, join = false, start_scan = false;
+            std::string join_ssid, join_password;
+            {
+                std::lock_guard<std::mutex> lock(wifi_mutex);
+                wifi_ip = ip;
+                if (wifi_connected) set_wifi_status("connected: " + ssid + "  " + ip);
+                if (wifi_join_pending) { join = true; join_ssid = wifi_join_ssid; join_password = wifi_join_password; wifi_join_pending = false; }
+                if (wifi_reconnect_requested) { reconnect = true; wifi_reconnect_requested = false; }
+                start_scan = wifi_scan_requested && !wifi_scan_running;
+            }
+            if (join) {
+                std::lock_guard<std::mutex> lock(wifi_mutex);
+                if (wifi_profiles.add(join_ssid, join_password, true)) {
+                    save_wifi_profiles_locked(); rebuild_networks_locked(); reconnect = true;
+                    set_wifi_status("saved " + join_ssid + "; connecting ...");
+                } else set_wifi_status("rejected: bad password or list full");
+            }
+            if (reconnect) { esp_wifi_disconnect(); wifi_connected = false; attempt = 0; last_attempt = -10000000; }
+            if (start_scan) {
+                wifi_scan_config_t config{};
+                config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+                config.scan_time.active.min = 100; config.scan_time.active.max = 300;
+                const auto result = esp_wifi_scan_start(&config, false);
+                std::lock_guard<std::mutex> lock(wifi_mutex);
+                if (result == ESP_OK) { wifi_scan_requested = false; wifi_scan_running = true; wifi_scan_done = false; }
+                else if (result != ESP_ERR_WIFI_STATE) { wifi_scan_requested = false; set_wifi_status(std::string("scan failed: ") + esp_err_to_name(result)); }
+            }
+            if (wifi_scan_done) {
+                wifi_scan_done = false;
+                static wifi_ap_record_t records[16];
+                uint16_t count = 16;
+                if (esp_wifi_scan_get_ap_records(&count, records) != ESP_OK) count = 0;
+                std::lock_guard<std::mutex> lock(wifi_mutex);
+                wifi_scan_results.clear();
+                for (uint16_t i = 0; i < count; ++i) {
+                    const char* name = reinterpret_cast<const char*>(records[i].ssid);
+                    if (!name[0]) continue;
+                    bool duplicate = false;
+                    for (auto& e : wifi_scan_results) if (std::strncmp(e.ssid, name, sizeof(e.ssid)) == 0) { duplicate = true; e.rssi = std::max<int>(e.rssi, records[i].rssi); break; }
+                    if (duplicate) continue;
+                    ScreenWifiEntry entry;
+                    std::snprintf(entry.ssid, sizeof(entry.ssid), "%s", name);
+                    entry.rssi = records[i].rssi;
+                    entry.secure = records[i].authmode != WIFI_AUTH_OPEN;
+                    entry.saved = std::any_of(networks.begin(), networks.end(), [&](const SsidItem& n) { return n.ssid == name; });
+                    wifi_scan_results.push_back(entry);
+                }
+                std::sort(wifi_scan_results.begin(), wifi_scan_results.end(), [](const ScreenWifiEntry& a, const ScreenWifiEntry& b) { return a.rssi > b.rssi; });
+                if (wifi_scan_results.size() > kScreenWifiEntries) wifi_scan_results.resize(kScreenWifiEntries);
+                wifi_scan_running = false; wifi_scan_fresh = true; wifi_scan_us = esp_timer_get_time();
+            }
         }
         previous_ip = ip;
         interaction::tick(esp_timer_get_time());

@@ -3,6 +3,7 @@ import { VoicePanel } from '/voice-ui.js';
 import { EyesPanel } from '/eyes-ui.js';
 import { HearingPanel } from '/hearing-ui.js';
 import { ServoTuningPanel } from '/servo-tuning-ui.js';
+import { WifiPanel } from '/wifi-ui.js';
 import { renderM12, renderThermal } from '/m12-ui.js';
 const $ = id => document.getElementById(id);
 const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) { el.textContent = next; el.title = next; } };
@@ -16,6 +17,7 @@ const voices = new VoicePanel(document);
 const eyes = new EyesPanel(document);
 const hearing = new HearingPanel(document);
 const servoTuning = new ServoTuningPanel(document);
+const wifi = new WifiPanel(document);
 for (const button of document.querySelectorAll('[data-open]')) {
   button.addEventListener('click', () => $(button.dataset.open).showModal());
 }
@@ -97,7 +99,7 @@ function render() {
   void updateFrame(state, cameraFresh);
   text('uptime', fresh ? '运行 ' + duration(t.timestamp_us / 1e6) : '—');
   text('battery', t.power?.valid ? `${num(t.power.battery_percent, 0)}% · ${bool(t.power.charging, '充电中', '未充电')}` : '—');
-  text('wifi', t.health ? `${num(t.health.wifi_rssi_dbm, 0)} dBm · CH ${t.health.wifi_channel ?? '—'}` : '—');
+  text('wifi', t.wifi?.connected ? `${t.wifi.ssid || '—'} · ${num(t.wifi.rssi_dbm, 0)} dBm · CH ${t.wifi.channel ?? '—'}` : t.health ? `${num(t.health.wifi_rssi_dbm, 0)} dBm · CH ${t.health.wifi_channel ?? '—'}` : '—');
   text('light', t.light?.valid ? `${num(t.light.lux)} lux` : '—');
   text('proximity', t.proximity?.valid ? `${t.proximity.raw} raw` : '—');
   text('heap', t.health ? `${num(t.health.heap_free / 1024, 1)} KiB` : '—');
@@ -145,6 +147,7 @@ function render() {
   eyes.render(state, fresh && !document.hidden);
   hearing.render(state, fresh && !document.hidden);
   servoTuning.render(state, fresh && !document.hidden);
+  wifi.render(state, fresh && !document.hidden);
   for (const mirror of document.querySelectorAll('[data-mirror]')) {
     const value = $(mirror.dataset.mirror).textContent;
     if (mirror.textContent !== value) mirror.textContent = value;

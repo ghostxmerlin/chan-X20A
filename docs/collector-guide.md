@@ -208,7 +208,7 @@ python3 android/Collector/tests/verify-session.py /path/to/session.zip
 
 **不要直接将完整默认 flash 命令当作后续部署步骤**：重新识别设备、读取当前分区、核对镜像大小与摘要后再写应用。机器人与遥控器的应用偏移不同，也不能用于其他设备。
 
-固件优先使用独立 `collector` 配网覆盖项，否则读取原机保存的 Wi-Fi。需要换网时，可在正确机器人 USB 串口（115200）发送一行 JSON：
+固件按已保存网络列表（0.4.45 起，最多 6 个，首项最先）再回落到原机保存的 Wi-Fi。换网可用网页"网络"面板、机器人屏幕 Wi-Fi 页，或在正确机器人 USB 串口（115200）发送一行 JSON（保存为首选并立即重连，不再重启）：
 
 ```json
 {"cmd":"wifi","ssid":"YOUR_2_4_GHZ_SSID","password":"YOUR_PASSWORD"}

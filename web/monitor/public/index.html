@@ -20,7 +20,7 @@
           <div><dt>芯片温度</dt><dd id="chip-temperature">—</dd></div><div><dt>电量</dt><dd id="battery">—</dd></div>
           <div><dt>内部 RAM 余</dt><dd id="heap">—</dd></div><div><dt>最大连续块</dt><dd id="heap-largest">—</dd></div>
           <div><dt>PSRAM 余</dt><dd id="psram">—</dd></div><div title="各内部堆区域历史最低空闲之和，不是同时发生的最低总空闲，也不是 DMA 空闲。"><dt>各堆最低之和 ⓘ</dt><dd id="heap-minimum">—</dd></div>
-          <div><dt>Wi-Fi</dt><dd id="wifi">—</dd></div><div><dt>遥控器</dt><dd id="remote">—</dd></div>
+          <div><dt>Wi-Fi <button data-open="wifi-config" class="inline-button">网络</button></dt><dd id="wifi">—</dd></div><div><dt>遥控器</dt><dd id="remote">—</dd></div>
           <div><dt>光照</dt><dd id="light">—</dd></div><div><dt>接近</dt><dd id="proximity">—</dd></div><div><dt>显示</dt><dd id="display">—</dd></div>
         </dl>
         <div class="thermal-caption"><span id="chip-temperature-note">ESP32-S3 · 等待读数</span><span>2 min</span></div><canvas id="chip-thermal" aria-label="StackChan 芯片温度趋势"></canvas>
@@ -116,6 +116,17 @@
   <p class="note">回应所有人，声纹只显示身份。后端情绪标签选择相近台词与眼睛；平静或未确定时不回应。自身播放声音不参与触发，回应至少间隔 10 秒。</p>
 </dialog>
 <dialog id="servo-settings" aria-labelledby="servo-heading"><div class="dialog-head"><h2 id="servo-heading">舵机反馈 / 仰角设置</h2><form method="dialog"><button>关闭</button></form></div><dl class="metrics"><div><dt>保存仰角</dt><dd id="pitch-saved">—</dd></div><div><dt>启动姿态</dt><dd id="startup-pose">—</dd></div></dl><p>俯仰实测：<strong data-mirror="pitch">—</strong> · <span data-mirror="motor-status">—</span></p><p data-mirror="servo-command" role="status">目标与实测分别显示。</p><label for="pitch-input">仰角设置（5–85°）</label><div class="pitch-controls"><input id="pitch-input" type="number" min="5" max="85" step="0.1" inputmode="decimal" disabled><button id="pitch-apply" disabled>保存并应用</button></div><p class="note">此操作立即尝试调整，并保存为下次开机角度。新模式固件的实体遥控四向只切换功能；网页调角会退出追踪。</p><p class="control-note">仰角动作：<span id="pitch-command-state">—</span></p><h2 id="yaw-diagnostics-heading">左右步进诊断</h2><div class="tune-grid diag-grid"><label>步进角度（° 1–30）<input id="yaw-step-input" type="number" min="1" max="30" step="1" inputmode="numeric" value="5" placeholder="5" disabled></label><label>速度（50–1000）<input id="yaw-speed-input" type="number" min="50" max="1000" step="10" inputmode="numeric" value="600" placeholder="600" disabled></label><label>调用路径<select id="yaw-path-select" disabled><option value="web">网页路径</option><option value="remote">遥控同款路径</option></select></label></div><div class="control-buttons"><button id="yaw-step-left" disabled>← 按输入左转</button><button id="yaw-step-right" disabled>按输入右转 →</button></div><p class="note">诊断用：角度为整数度（最多 30°），速度是弹簧映射输入不是物理速度；"遥控同款路径"重放旧实体遥控的调用方式。实测位置、负载轨迹见 <code>/v1/telemetry?servo_diag=1</code>。</p></dialog>
+<dialog id="wifi-config" aria-labelledby="wifi-heading"><div class="dialog-head"><h2 id="wifi-heading">网络 / 已保存热点</h2><form method="dialog"><button>关闭</button></form></div>
+  <p id="wifi-status" class="note">—</p>
+  <ul id="wifi-profiles" class="wifi-list"></ul><p id="wifi-profiles-note" class="note">—</p>
+  <label for="wifi-ssid">网络名（SSID）</label><input id="wifi-ssid" maxlength="32" autocomplete="off" placeholder="点击下方扫描结果可填入" disabled>
+  <label for="wifi-password">密码（数字）</label><input id="wifi-password" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="63" autocomplete="new-password" placeholder="开放网络留空" disabled>
+  <label class="hearing-check"><input id="wifi-preferred" type="checkbox" checked disabled>设为首选（最先尝试）</label>
+  <div class="control-buttons"><button id="wifi-add" disabled>保存并连接</button><button id="wifi-scan" disabled>扫描附近热点</button><button id="wifi-reconnect" disabled>按优先级重连</button></div>
+  <p id="wifi-scan-note" class="note">—</p><ul id="wifi-scan-list" class="wifi-list"></ul>
+  <p id="wifi-command" class="command-result" role="status">只在点击时发送。机器人屏幕上也可设置：摘要页长按进入配对页，向左滑到 Wi-Fi 页，点选热点后用数字键盘输入密码。</p>
+  <p class="note">密码只发送到机器人并保存在其 NVS，不会在页面或遥测中回显。到了新环境若没有已保存的网络，请用机器人屏幕上的 Wi-Fi 页加入。</p>
+</dialog>
 <dialog id="servo-tuning" aria-labelledby="tune-heading"><div class="dialog-head"><h2 id="tune-heading">舵机参数（诊断）</h2><form method="dialog"><button>关闭</button></form></div>
   <div class="select-row"><label for="tune-axis">轴</label><select id="tune-axis"><option value="yaw">yaw（左右，ID1）</option><option value="pitch">pitch（俯仰，ID2）</option></select></div>
   <p id="tune-status" class="note">—</p><p id="tune-feedback" class="note">—</p><p id="tune-summary" class="note">—</p>

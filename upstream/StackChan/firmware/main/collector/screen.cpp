@@ -28,6 +28,18 @@ constexpr uint32_t kMuted = 0x72A980, kSignal = 0x79FF97;
 lv_obj_t *home, *summary, *terminal, *log_viewport, *log_body, *portrait, *reaction_overlay;
 lv_obj_t *summary_title, *summary_rows[10], *pairing, *pairing_body;
 lv_obj_t *faces_page = nullptr, *faces_status = nullptr, *face_boxes[kScreenMaxFaces] = {};
+// Wi-Fi setup pages. Row/key geometry is shared by drawing and hit testing.
+lv_obj_t *wifi_page = nullptr, *wifi_status = nullptr, *wifi_rows[kScreenWifiEntries] = {};
+lv_obj_t *key_page = nullptr, *key_title = nullptr, *key_entry = nullptr, *key_hint = nullptr, *key_labels[12] = {};
+ScreenWifiEntry wifi_entries[kScreenWifiEntries];
+size_t wifi_count = 0;
+bool wifi_scanning = false, wifi_scan_request = false, wifi_credentials_ready = false;
+char wifi_selected[33] = "", wifi_password[kScreenWifiPasswordMax + 1] = "";
+bool wifi_selected_secure = true;
+char wifi_status_text[64] = "";
+constexpr int kWifiRowY0 = 56, kWifiRowH = 22;
+constexpr int kKeyX[3] = {12, 116, 220}, kKeyY[4] = {78, 118, 158, 198}, kKeyW = 96, kKeyH = 36;
+const char* const kKeyText[12] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "<", "0", "OK"};
 lv_obj_t* screen_root = nullptr;
 lv_display_t* screen_display = nullptr;
 lv_obj_t* function_ribbon = nullptr;
@@ -43,7 +55,7 @@ char pending_version[64], pending_ip[64], pending_token[65], pending_motor[64];
 enum class IconKind { Wifi, Camera, Remote, Battery, Axes, Yaw, Pitch, Mic };
 struct Icon { lv_obj_t* obj = nullptr; IconKind kind; bool valid = false; int value = 0; };
 Icon icons[8];
-enum class Page { Home, Summary, Log, Pairing, Faces };
+enum class Page { Home, Summary, Log, Pairing, Faces, Wifi, WifiKey };
 Page page = Page::Home;
 ScreenReaction reaction = ScreenReaction::None;
 uint32_t reaction_at = 0;
@@ -168,6 +180,8 @@ void show_page(Page target, uint32_t now_ms)
     lv_obj_update_flag(terminal, LV_OBJ_FLAG_HIDDEN, page != Page::Log);
     lv_obj_update_flag(pairing, LV_OBJ_FLAG_HIDDEN, page != Page::Pairing);
     lv_obj_update_flag(faces_page, LV_OBJ_FLAG_HIDDEN, page != Page::Faces);
+    if (wifi_page) lv_obj_update_flag(wifi_page, LV_OBJ_FLAG_HIDDEN, page != Page::Wifi);
+    if (key_page) lv_obj_update_flag(key_page, LV_OBJ_FLAG_HIDDEN, page != Page::WifiKey);
     if (page != Page::Home) {
         reaction = ScreenReaction::None;
         cancel_transition();
@@ -499,8 +513,45 @@ void screen_create(lv_obj_t* parent)
     lv_obj_set_width(pairing_body, 296);
     lv_obj_set_style_text_line_space(pairing_body, 6, 0);
     box(pairing, 12, 212, 296, 1, kRule);
-    label(pairing, 12, 219, "Tap: summary", kMuted);
+    label(pairing, 12, 219, "Tap: summary   Swipe <: Wi-Fi", kMuted);
     lv_obj_add_flag(pairing, LV_OBJ_FLAG_HIDDEN);
+
+    wifi_page = box(parent, 0, 0, 320, 240, kInk);
+    label(wifi_page, 12, 7, "Wi-Fi", kSignal);
+    label(wifi_page, 254, 7, "Rescan", kMuted);
+    box(wifi_page, 12, 28, 296, 1, kRule);
+    wifi_status = label(wifi_page, 12, 34, "scanning...", kMuted);
+    lv_obj_set_width(wifi_status, 296);
+    lv_label_set_long_mode(wifi_status, LV_LABEL_LONG_CLIP);
+    for (size_t i = 0; i < kScreenWifiEntries; ++i) {
+        wifi_rows[i] = label(wifi_page, 12, kWifiRowY0 + static_cast<int>(i) * kWifiRowH, "", kSignal);
+        lv_obj_set_width(wifi_rows[i], 296);
+        lv_label_set_long_mode(wifi_rows[i], LV_LABEL_LONG_CLIP);
+    }
+    box(wifi_page, 12, 212, 296, 1, kRule);
+    label(wifi_page, 12, 219, "Tap network   Title: back", kMuted);
+    lv_obj_add_flag(wifi_page, LV_OBJ_FLAG_HIDDEN);
+
+    key_page = box(parent, 0, 0, 320, 240, kInk);
+    key_title = label(key_page, 12, 7, "", kSignal);
+    lv_obj_set_width(key_title, 230);
+    lv_label_set_long_mode(key_title, LV_LABEL_LONG_CLIP);
+    label(key_page, 254, 7, "Back", kMuted);
+    box(key_page, 12, 28, 296, 1, kRule);
+    key_entry = label(key_page, 12, 34, "", kSignal);
+    lv_obj_set_width(key_entry, 296);
+    lv_label_set_long_mode(key_entry, LV_LABEL_LONG_CLIP);
+    key_hint = label(key_page, 12, 56, "digits only  <: delete  OK: join", kMuted);
+    lv_obj_set_width(key_hint, 296);
+    lv_label_set_long_mode(key_hint, LV_LABEL_LONG_CLIP);
+    for (int i = 0; i < 12; ++i) {
+        const int col = i % 3, row = i / 3;
+        auto key = box(key_page, kKeyX[col], kKeyY[row], kKeyW, kKeyH, kChrome);
+        lv_obj_set_style_border_color(key, lv_color_hex(kRule), 0);
+        lv_obj_set_style_border_width(key, 1, 0);
+        key_labels[i] = label(key, kKeyW / 2 - (i == 11 ? 9 : 4), kKeyH / 2 - 8, kKeyText[i], kSignal);
+    }
+    lv_obj_add_flag(key_page, LV_OBJ_FLAG_HIDDEN);
 
     // M12 face view: the M12's 640x480 frame scaled to the whole screen, boxes only.
     faces_page = box(parent, 0, 0, 320, 240, kInk);
@@ -722,6 +773,79 @@ void screen_show_reaction(ScreenReaction value, uint32_t now_ms)
     lv_obj_update_flag(reaction_overlay, LV_OBJ_FLAG_HIDDEN, value == ScreenReaction::None);
     lv_obj_invalidate(reaction_overlay);
 }
+void render_wifi_rows()
+{
+    char text[64];
+    for (size_t i = 0; i < kScreenWifiEntries; ++i) {
+        if (i >= wifi_count) { set_text(wifi_rows[i], ""); continue; }
+        const auto& e = wifi_entries[i];
+        std::snprintf(text, sizeof(text), "%c %-22.22s %4d%s", e.saved ? '*' : ' ', e.ssid, e.rssi, e.secure ? " #" : "  ");
+        set_text(wifi_rows[i], text);
+    }
+    if (wifi_status_text[0]) set_text(wifi_status, wifi_status_text);
+    else if (wifi_scanning) set_text(wifi_status, "scanning...");
+    else {
+        std::snprintf(text, sizeof(text), "%u networks  * saved  # secured", static_cast<unsigned>(wifi_count));
+        set_text(wifi_status, wifi_count ? text : "no networks found; tap Rescan");
+    }
+}
+void render_key_entry()
+{
+    char text[80];
+    std::snprintf(text, sizeof(text), "Password: %s_", wifi_password);
+    set_text(key_entry, text);
+}
+void open_wifi_page(uint32_t now_ms)
+{
+    wifi_status_text[0] = '\0';
+    wifi_scan_request = true;
+    wifi_scanning = true;
+    render_wifi_rows();
+    show_page(Page::Wifi, now_ms);
+}
+void wifi_page_tap(int x, int y, uint32_t now_ms)
+{
+    if (y < 28) {
+        if (x >= 220) { wifi_scan_request = true; wifi_scanning = true; wifi_status_text[0] = '\0'; render_wifi_rows(); }
+        else show_page(Page::Pairing, now_ms);
+        return;
+    }
+    for (size_t i = 0; i < wifi_count; ++i) {
+        const int top = kWifiRowY0 + static_cast<int>(i) * kWifiRowH - 2;
+        if (y < top || y >= top + kWifiRowH) continue;
+        std::snprintf(wifi_selected, sizeof(wifi_selected), "%s", wifi_entries[i].ssid);
+        wifi_selected_secure = wifi_entries[i].secure;
+        wifi_password[0] = '\0';
+        set_text(key_title, wifi_selected);
+        set_text(key_hint, wifi_selected_secure ? "digits only  <: delete  OK: join" : "open network: OK joins without password");
+        render_key_entry();
+        show_page(Page::WifiKey, now_ms);
+        return;
+    }
+}
+void key_page_tap(int x, int y, uint32_t now_ms)
+{
+    if (y < 28) { show_page(Page::Wifi, now_ms); return; }
+    for (int i = 0; i < 12; ++i) {
+        const int col = i % 3, row = i / 3;
+        if (x < kKeyX[col] || x >= kKeyX[col] + kKeyW || y < kKeyY[row] || y >= kKeyY[row] + kKeyH) continue;
+        const size_t length = std::strlen(wifi_password);
+        if (i == 9) { if (length) wifi_password[length - 1] = '\0'; }
+        else if (i == 11) {
+            if (wifi_selected_secure && length < 8) { set_text(key_hint, "need at least 8 digits"); return; }
+            wifi_credentials_ready = true;
+            std::snprintf(wifi_status_text, sizeof(wifi_status_text), "joining %.20s ...", wifi_selected);
+            render_wifi_rows();
+            show_page(Page::Wifi, now_ms);
+            return;
+        } else if (length < kScreenWifiPasswordMax) {
+            wifi_password[length] = kKeyText[i][0];
+            wifi_password[length + 1] = '\0';
+        }
+        render_key_entry();
+        return;
+    }
+}
 void screen_touch(bool down, uint32_t now_ms, int x, int y)
 {
     if (!home) return;
@@ -760,9 +884,13 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
         if (held >= 30 && held <= 1000 && horizontal) {
             if (page == Page::Summary && dx < 0) show_page(Page::Log, now_ms);
             else if (page == Page::Log && dx > 0) show_page(Page::Summary, now_ms);
+            else if (page == Page::Pairing && dx < 0) open_wifi_page(now_ms);
+            else if (page == Page::Wifi && dx > 0) show_page(Page::Pairing, now_ms);
             last_release = now_ms;
         } else if (held >= 30 && held <= 700 && touch_max_dx <= 18 && touch_max_dy <= 18) {
-            show_page(page == Page::Home || page == Page::Pairing ? Page::Summary : Page::Home, now_ms);
+            if (page == Page::Wifi) wifi_page_tap(touch_last_x, touch_last_y, now_ms);
+            else if (page == Page::WifiKey) key_page_tap(touch_last_x, touch_last_y, now_ms);
+            else show_page(page == Page::Home || page == Page::Pairing ? Page::Summary : Page::Home, now_ms);
             last_release = now_ms;
         }
     }
@@ -803,4 +931,34 @@ bool screen_showing_faces() { return page == Page::Faces; }
 bool screen_showing_status() { return page != Page::Home; }
 bool screen_showing_log() { return page == Page::Log; }
 bool screen_showing_pairing() { return page == Page::Pairing; }
+void screen_update_wifi_scan(const ScreenWifiEntry* entries, size_t count, bool scanning)
+{
+    if (!wifi_page) return;
+    wifi_count = std::min(count, kScreenWifiEntries);
+    for (size_t i = 0; i < wifi_count; ++i) wifi_entries[i] = entries[i];
+    wifi_scanning = scanning;
+    render_wifi_rows();
+}
+void screen_update_wifi_status(const char* text)
+{
+    if (!wifi_page) return;
+    std::snprintf(wifi_status_text, sizeof(wifi_status_text), "%s", text ? text : "");
+    render_wifi_rows();
+}
+bool screen_wifi_take_scan_request()
+{
+    const bool pending = wifi_scan_request;
+    wifi_scan_request = false;
+    return pending;
+}
+bool screen_wifi_take_credentials(char* ssid, size_t ssid_size, char* password, size_t password_size)
+{
+    if (!wifi_credentials_ready) return false;
+    wifi_credentials_ready = false;
+    std::snprintf(ssid, ssid_size, "%s", wifi_selected);
+    std::snprintf(password, password_size, "%s", wifi_password);
+    wifi_password[0] = '\0';
+    return true;
+}
+bool screen_showing_wifi() { return page == Page::Wifi || page == Page::WifiKey; }
 }

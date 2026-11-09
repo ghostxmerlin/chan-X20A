@@ -30,6 +30,20 @@ test('yaw buttons send one 20-degree slot and center sends slot 0',async()=>{
  for(const bad of [{action:'yaw',delta_deg:5,boot:'boot-a'},{action:'yaw',delta_deg:-10,boot:'boot-a'},{action:'yaw_center',slot:1,boot:'boot-a'}]) await assert.rejects(c.execute(bad));
  assert.equal(calls.length,2);
 });
+test('wifi profile actions require the capability and validate ssid/password shapes',async()=>{
+ const {m,c,calls}=fixture();
+ const add={action:'wifi_add',ssid:'office-example',password:'placeholder-1',preferred:true,boot:'boot-a'};
+ await assert.rejects(c.execute(add));
+ m.info.capabilities.wifi_profiles='supported';
+ await c.execute(add);assert.equal(calls[0][0],'/v1/wifi');assert.deepEqual(calls[0][1],{op:'add',ssid:'office-example',password:'placeholder-1',preferred:true});
+ await c.execute({action:'wifi_add',ssid:'open-example',password:'',preferred:false,boot:'boot-a'});assert.deepEqual(calls[1][1],{op:'add',ssid:'open-example',password:'',preferred:false});
+ await c.execute({action:'wifi_remove',ssid:'office-example',boot:'boot-a'});assert.deepEqual(calls[2][1],{op:'remove',ssid:'office-example'});
+ await c.execute({action:'wifi_prefer',ssid:'open-example',boot:'boot-a'});assert.deepEqual(calls[3][1],{op:'prefer',ssid:'open-example'});
+ await c.execute({action:'wifi_scan',boot:'boot-a'});assert.deepEqual(calls[4][1],{op:'scan'});
+ await c.execute({action:'wifi_reconnect',boot:'boot-a'});assert.deepEqual(calls[5][1],{op:'reconnect'});
+ for(const bad of [{...add,ssid:''},{...add,ssid:'x'.repeat(33)},{...add,password:'short'},{...add,preferred:'yes'},{action:'wifi_remove',boot:'boot-a'},{action:'wifi_scan',extra:1,boot:'boot-a'}]) await assert.rejects(c.execute(bad));
+ assert.equal(calls.length,6);
+});
 test('servo tuning actions require the capability, an axis and in-range values',async()=>{
  const {m,c,calls}=fixture();
  const eeprom={action:'servo_eeprom',axis:'yaw',p:30,d:15,i:0,punch:200,dead_cw:2,dead_ccw:2,max_torque:1000,boot:'boot-a'};

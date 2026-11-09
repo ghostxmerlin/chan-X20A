@@ -93,7 +93,7 @@ export class DeviceClient {
   async control(path, body, boot, check) {
     return this.serialRequest(async () => {
       check();
-      if (!this.verified || this.info?.boot_id !== boot || !['/v1/interaction','/v1/hearing','/v1/eyes','/v1/voice/play','/v1/m12/view','/v1/m12/mode','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch','/v1/camera','/v1/servo'].includes(path)) throw new Error('控制状态已变化');
+      if (!this.verified || this.info?.boot_id !== boot || !['/v1/interaction','/v1/hearing','/v1/eyes','/v1/voice/play','/v1/m12/view','/v1/m12/mode','/v1/remote','/v1/motion/yaw-step','/v1/settings/pitch','/v1/camera','/v1/servo','/v1/wifi'].includes(path)) throw new Error('控制状态已变化');
       return JSON.parse((await deviceRequest(this.binding.address+path, {token:this.binding.token, method:'POST', body, boot, maxBytes:16384})).body);
     });
   }

@@ -76,4 +76,16 @@ void screen_cancel_touch();
 bool screen_showing_status();
 bool screen_showing_log();
 bool screen_showing_pairing();
+// On-device Wi-Fi setup: a scan list page (swipe left from pairing) and a
+// digits-only password keypad. The collector owns the radio and NVS; the screen
+// only shows results and hands back one request at a time.
+struct ScreenWifiEntry { char ssid[33] = ""; int rssi = -100; bool secure = true; bool saved = false; };
+constexpr size_t kScreenWifiEntries = 8;
+constexpr size_t kScreenWifiPasswordMax = 32;
+void screen_update_wifi_scan(const ScreenWifiEntry* entries, size_t count, bool scanning);
+void screen_update_wifi_status(const char* text);
+// Each returns true once per user action and clears the request.
+bool screen_wifi_take_scan_request();
+bool screen_wifi_take_credentials(char* ssid, size_t ssid_size, char* password, size_t password_size);
+bool screen_showing_wifi();
 }
