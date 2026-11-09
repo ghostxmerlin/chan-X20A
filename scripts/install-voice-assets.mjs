@@ -28,7 +28,7 @@ async function main() {
   const client=new DeviceClient(JSON.parse(await fs.readFile(process.argv[2]||path.join(root,'.private/stackchan-monitor.json'))));
   const info=await client.connect();
   if(info.voice_library?.storage!=='sd'||!info.voice_library.asset_install)throw Error('Firmware does not support SD voice installation');
-  if(!(await client.json('/v1/eyes/status')).storage_ready)throw Error('SD unavailable; no files written');
+  if(!(await client.json('/v1/telemetry')).eyes?.storage_ready)throw Error('SD unavailable; no files written');
   for(const a of list) {
     await waitForAssetSlot(client);
     const result=await uploadVoice(client.binding,info.boot_id,a.id,a.bytes);

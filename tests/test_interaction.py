@@ -27,7 +27,7 @@ esp_err_t httpd_resp_set_status(httpd_req_t*,const char*);
 esp_err_t httpd_resp_set_type(httpd_req_t*,const char*);
 esp_err_t httpd_resp_send(httpd_req_t*,const char*,size_t);
 ''')
-            args=['c++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(d),'-I'+str(main),'-I'+str(root/'upstream/StackChan/firmware/components/ArduinoJson/src'),str(root/'tests'/test)]
+            args=['c++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(d),'-I'+str(main),'-isystem',str(root/'upstream/StackChan/firmware/components/smooth_ui_toolkit/src'),'-DSMOOTH_UI_TOOLKIT_ENABLE_DEFAULT_HAL=0','-Wno-mismatched-tags','-Wno-unused-parameter','-I'+str(root/'upstream/StackChan/firmware/components/ArduinoJson/src'),str(root/'tests'/test)]
             if service: args.append(str(main/'collector/interaction.cpp'))
             args += ['-o',str(d/'test')]
             subprocess.run(args,check=True)

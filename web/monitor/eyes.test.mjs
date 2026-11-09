@@ -10,12 +10,12 @@ test('eyes controls validate catalog, UUID, boot and fields through real client 
  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
  const client=new DeviceClient({address:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(32),device_id:'test'});
  client.verified=true;client.info={boot_id:'b'};const m=new Monitor(client);m.online=m.running=true;m.telemetryAt=Date.now();m.telemetry={eyes:{enabled:true}};
- m.info={boot_id:'b',capabilities:{web_control:'supported',eyes:'supported'},eyes:{styles:[{id:'v05'}],states:[{id:'happy'}]}};
+ m.info={boot_id:'b',capabilities:{web_control:'supported',unified_control:'supported',eyes:'supported'},eyes:{styles:[{id:'v05'}],states:[{id:'happy'}]}};
  const c=new Controls(m);const request={action:'eyes_play',request_id:id,state:'happy',boot:'b'};
- await c.execute(request);assert.deepEqual(seen[0].body,{op:'play',request_id:id,state:'happy',mode:'once'});assert.equal(seen[0].url,'/v1/eyes');assert.equal(seen[0].headers['x-boot-id'],'b');
+ await c.execute(request);assert.deepEqual(seen[0].body,{target:'eyes',op:'play',request_id:id,state:'happy',mode:'once'});assert.equal(seen[0].url,'/v1/control');assert.equal(seen[0].headers['x-boot-id'],'b');
  for(const bad of [{...request,state:'../happy'},{...request,request_id:'bad'},{...request,mode:'loop'},{...request,boot:'old'}])await assert.rejects(c.execute(bad));
  await c.execute({action:'eyes_configure',request_id:id,enabled:false,style:'v05',boot:'b'});
- assert.deepEqual(seen[1].body,{op:'configure',request_id:id,enabled:false,style:'v05'});
+ assert.deepEqual(seen[1].body,{target:'eyes',op:'configure',request_id:id,enabled:false,style:'v05'});
  await c.execute({action:'eyes_stop',request_id:id,boot:'b'});assert.equal(seen[2].body.op,'stop');
  m.info.capabilities.eyes='unsupported';await assert.rejects(c.execute(request));assert.equal(seen.length,3);
 });

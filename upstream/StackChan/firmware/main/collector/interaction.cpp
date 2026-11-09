@@ -125,17 +125,8 @@ void json(ArduinoJson::JsonObject out) {
     out["dialogue"]["state"]=dialogue;out["dialogue"]["owned"]=owner_token&&intent.revision==owner_token;
     out["advanced"]["requested"]=advanced;out["advanced"]["supported"]=false;out["advanced"]["state"]="not_implemented";
 }
-esp_err_t handle(httpd_req_t* request) {
-    if(request->content_len<1||request->content_len>128){reply(request,"400 Bad Request","invalid_body");return ESP_FAIL;}
-    char body[129]{};int n=0;const auto deadline=esp_timer_get_time()+3000000;
-    while(n<request->content_len) {
-        const int got=httpd_req_recv(request,body+n,request->content_len-n);
-        if(got<=0||esp_timer_get_time()>deadline){reply(request,"400 Bad Request","incomplete_body");return ESP_FAIL;}
-        n+=got;
-    }
-    ArduinoJson::JsonDocument doc;
-    if(deserializeJson(doc,body,n)||!doc.is<ArduinoJson::JsonObject>()||doc.size()!=2||
-       !doc["mode"].is<const char*>()||!doc["enabled"].is<bool>())return reply(request,"400 Bad Request","invalid_command");
+esp_err_t handle(httpd_req_t* request,ArduinoJson::JsonObject doc) {
+    if(doc.size()!=2||!doc["mode"].is<const char*>()||!doc["enabled"].is<bool>())return reply(request,"400 Bad Request","invalid_command");
     const auto result=set_mode(doc["mode"],doc["enabled"]);
     return result==ESP_OK?reply(request,"202 Accepted",nullptr):
         reply(request,result==ESP_ERR_INVALID_ARG?"400 Bad Request":"409 Conflict",result==ESP_ERR_INVALID_ARG?"invalid_mode":"mode_unavailable");

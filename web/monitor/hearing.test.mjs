@@ -7,17 +7,17 @@ import {Controls} from './control.mjs';
 
 function fixture(){
  const calls=[],m=new Monitor({binding:{},verified:true,control:async(...args)=>{calls.push(args);return {accepted:true};}});
- m.running=m.online=true;m.info={boot_id:'current',capabilities:{web_control:'supported',hearing:'supported'}};
+ m.running=m.online=true;m.info={boot_id:'current',capabilities:{web_control:'supported',unified_control:'supported',hearing:'supported'}};
  m.telemetryAt=Date.now();m.telemetry={hearing:{ready:true,token_configured:true},health:{audio_ready:true}};
  return {m,calls,c:new Controls(m,{loadHearingConfig:()=>({url:'ws://127.0.0.1:8765/',token:'private-key'})})};
 }
 test('hearing routes strict config, everyone listening and explicit enrollment',async()=>{
  const {c,calls,m}=fixture();
  await c.execute({action:'hearing_config',boot:'current',url:'ws://127.0.0.1:8765/',token:''});
- assert.deepEqual(calls.at(-1).slice(0,2),['/v1/hearing',{op:'config',url:'ws://127.0.0.1:8765/',token:''}]);
+ assert.deepEqual(calls.at(-1).slice(0,2),['/v1/control',{target:'hearing',op:'config',url:'ws://127.0.0.1:8765/',token:''}]);
  await c.execute({action:'hearing_listen',boot:'current',enabled:true});
  await c.execute({action:'hearing_enroll',boot:'current',name:'爸爸',replace:false});
- assert.deepEqual(calls.at(-1)[1],{op:'enroll',name:'爸爸',replace:false});
+ assert.deepEqual(calls.at(-1)[1],{target:'hearing',op:'enroll',name:'爸爸',replace:false});
  await c.execute({action:'hearing_cancel',boot:'current'});
  for(const url of ['http://ear/','ws://user:pass@ear/','ws://127.0.0.1/?token=secret','ws://ear:70000/','ws://127.1/','ws://01.2.3.4/'])
   await assert.rejects(c.execute({action:'hearing_config',boot:'current',url,token:'x'}));

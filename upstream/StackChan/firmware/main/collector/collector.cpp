@@ -55,6 +55,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -151,6 +152,7 @@ std::string wifi_join_ssid, wifi_join_password;
 std::string wifi_status_text, wifi_ip;
 bool wifi_status_dirty = false;
 void wifi_json(JsonObject target);
+void control_info_json(JsonObject target);
 esp_netif_t* station = nullptr;
 bool screen_initialized = false;
 // The LVGL task publishes a coherent software state for HTTP telemetry.
@@ -823,7 +825,8 @@ esp_err_t info_handler(httpd_req_t* request)
     temperature_json(doc["temperature"].to<JsonObject>());
     remote_pitch_setting_json(doc["pitch_setting"].to<JsonObject>());
     face_detection_json(doc["face_detection"].to<JsonObject>());
-    doc["pitch_setting"]["endpoint"] = "/v1/settings/pitch";
+    doc["pitch_setting"]["endpoint"] = "/v1/control";
+    doc["pitch_setting"]["target"] = "pitch";
     doc["pitch_setting"]["min_deg"] = 5;
     doc["pitch_setting"]["max_deg"] = 85;
     doc["pitch_setting"]["step_deg"] = 0.1;
@@ -894,11 +897,16 @@ esp_err_t info_handler(httpd_req_t* request)
     camera["timestamp_semantics"] = "capture_completion";
     camera["enabled"] = camera_enabled.load();
     camera["default_enabled"] = false;
-    camera["endpoint"] = "/v1/camera";
+    camera["endpoint"] = "/v1/control";
+    camera["target"] = "camera";
     capabilities["camera_control"] = "supported";
-    capabilities["yaw_step_diagnostics"] = "supported"; // whole-degree steps, speed and path on /v1/motion/yaw-step
-    capabilities["servo_tuning"] = "supported"; // POST /v1/servo: EEPROM P/D/I/punch/deadband/max torque, runtime goal profile, release policy
-    capabilities["wifi_profiles"] = "supported"; // GET/POST /v1/wifi: saved networks, scan, on-device setup page
+    capabilities["yaw_step_diagnostics"] = "supported"; // target yaw_step: whole-degree steps, speed and path
+    capabilities["servo_tuning"] = "supported"; // target servo: EEPROM P/D/I/punch/deadband/max torque, runtime goal profile, release policy
+    capabilities["wifi_profiles"] = "supported"; // target wifi: saved networks, scan; telemetry wifi carries the state
+    capabilities["unified_control"] = "supported"; // 0.4.46: every JSON control/config goes through POST /v1/control {target,...}
+    control_info_json(doc["control"].to<JsonObject>());
+    doc["assets"]["endpoint"] = "/v1/assets";
+    doc["assets"]["selector"] = "X-Voice-Id, or X-Eyes-Style + X-Eyes-State";
     doc["capture_active"] = true;
     doc["transport"] = "http_lan_unencrypted";
     return send_json(request, doc);
@@ -1076,41 +1084,30 @@ bool control_boot_matches(httpd_req_t* request, bool required = false)
     return true;
 }
 
-esp_err_t web_control_handler(httpd_req_t* request)
+// All JSON configuration and control arrives through POST /v1/control as
+// {"target": <name>, ...}. The dispatcher authenticates, requires the current
+// X-Boot-Id, reads one bounded body and hands the target-free object to the
+// handler named in kControlTargets; each handler keeps its own field checks.
+using ControlHandler = esp_err_t (*)(httpd_req_t*, JsonObject, const char* target);
+constexpr size_t kControlBodyMax = 768;
+
+esp_err_t web_control(httpd_req_t* request, JsonObject doc, const char* target)
 {
-    if (!authorize(request) || !control_boot_matches(request, true)) return ESP_FAIL;
-    if (request->content_len < 1 || request->content_len > 128) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid control body"); return ESP_FAIL;
-    }
-    char body[129]{}; int total = 0;
-    const int64_t deadline = esp_timer_get_time() + 3000000;
-    while (total < request->content_len) {
-        const int n = httpd_req_recv(request, body + total, request->content_len - total);
-        if (n <= 0 || esp_timer_get_time() > deadline) {
-            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete control body"); return ESP_FAIL;
-        }
-        total += n;
-    }
-    JsonDocument doc, result;
-    const bool yaw_step = strcmp(request->uri, "/v1/motion/yaw-step") == 0;
+    JsonDocument result;
+    const bool yaw_step = strcmp(target, "yaw_step") == 0;
     size_t yaw_fields = 1;
-    if (yaw_step) { if (doc.size() && doc["speed"].is<int>()) ++yaw_fields; if (doc.size() && doc["path"].is<const char*>()) ++yaw_fields; }
-    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() < 1) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected one control field"); return ESP_OK;
-    }
-    yaw_fields = 1;
     if (yaw_step) { if (doc["speed"].is<int>()) ++yaw_fields; if (doc["path"].is<const char*>()) ++yaw_fields; }
     const bool slot_request = yaw_step && doc["slot"].is<int>() && !doc["delta_deg"].is<int>();
-    if (doc.size() > (yaw_step ? yaw_fields : 1u)) {
+    if (doc.size() < 1 || doc.size() > (yaw_step ? yaw_fields : 1u)) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected one control field"); return ESP_OK;
     }
-    if (strcmp(request->uri, "/v1/m12/view") == 0) {
+    if (strcmp(target, "m12_view") == 0) {
         if (!doc["enabled"].is<bool>()) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK; }
         if (doc["enabled"].as<bool>() && !m12_snapshot().valid) return unavailable(request, "M12 serial unavailable");
         interaction::release_for_manual_m12();
         m12_set_view(doc["enabled"].as<bool>());
         result["request_seq"] = m12_view_request() >> 2;
-    } else if (strcmp(request->uri, "/v1/m12/mode") == 0) {
+    } else if (strcmp(target, "m12_mode") == 0) {
         const char* mode = doc["mode"] | "";
         M12Function function = strcmp(mode, "face_detector") == 0 ? M12Function::detect :
             strcmp(mode, "face_recognition") == 0 ? M12Function::recognize :
@@ -1120,7 +1117,7 @@ esp_err_t web_control_handler(httpd_req_t* request)
         interaction::release_for_manual_m12();
         m12_set_mode(function);
         result["request_seq"] = m12_view_request() >> 2;
-    } else if (strcmp(request->uri, "/v1/voice/play") == 0) {
+    } else if (strcmp(target, "voice_play") == 0) {
         if (!doc["clip_id"].is<int>() || doc["clip_id"].as<int>()<0 || doc["clip_id"].as<int>()>kVoiceCount) {
             httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected clip_id 0..40"); return ESP_OK;
         }
@@ -1169,21 +1166,9 @@ esp_err_t web_control_handler(httpd_req_t* request)
     httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
 }
 
-esp_err_t remote_handler(httpd_req_t* request)
+esp_err_t remote_control(httpd_req_t* request, JsonObject doc, const char*)
 {
-    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
-    if (request->content_len < 1 || request->content_len > 128) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
-    }
-    char body[129]{};
-    int total = 0;
-    while (total < request->content_len) {
-        const int count = httpd_req_recv(request, body + total, request->content_len - total);
-        if (count <= 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request"); return ESP_OK; }
-        total += count;
-    }
-    JsonDocument doc;
-    if (deserializeJson(doc, body) || !doc["enabled"].is<bool>()) {
+    if (doc.size() != 1 || !doc["enabled"].is<bool>()) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
     }
     if (!remote_arm(doc["enabled"].as<bool>())) return unavailable(request, "Remote or servo feedback unavailable");
@@ -1191,33 +1176,10 @@ esp_err_t remote_handler(httpd_req_t* request)
     return send_json(request, result);
 }
 
-esp_err_t pitch_handler(httpd_req_t* request)
+esp_err_t pitch_control(httpd_req_t* request, JsonObject doc, const char*)
 {
-    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
-    if (request->content_len < 1 || request->content_len > 128) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected angle_deg number from 5 to 85");
-        return ESP_FAIL; // Do not leave oversized/unknown body bytes to HTTP purge.
-    }
-    char body[129]{};
-    int total = 0;
-    const int64_t deadline_us = esp_timer_get_time() + 3000000;
-    while (total < request->content_len) {
-        if (esp_timer_get_time() >= deadline_us) {
-            httpd_resp_send_err(request, HTTPD_408_REQ_TIMEOUT, "Pitch request deadline exceeded");
-            return ESP_FAIL;
-        }
-        const int count = httpd_req_recv(request, body + total, request->content_len - total);
-        if (count <= 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request"); return ESP_FAIL; }
-        total += count;
-    }
-    if (esp_timer_get_time() >= deadline_us) {
-        httpd_resp_send_err(request, HTTPD_408_REQ_TIMEOUT, "Pitch request deadline exceeded");
-        return ESP_FAIL;
-    }
-    JsonDocument doc;
     int angle_tenths = 0;
-    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() != 1 ||
-            !doc["angle_deg"].is<double>() || !pitch_request_tenths(doc["angle_deg"].as<double>(), angle_tenths)) {
+    if (doc.size() != 1 || !doc["angle_deg"].is<double>() || !pitch_request_tenths(doc["angle_deg"].as<double>(), angle_tenths)) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected angle_deg from 5 to 85 in 0.1 degree steps");
         return ESP_OK;
     }
@@ -1266,31 +1228,9 @@ void wifi_json(JsonObject target)
     target["semantics"] = "profiles are tried in order, then the untouched factory list; passwords are never returned";
 }
 
-esp_err_t wifi_get_handler(httpd_req_t* request)
-{
-    if (!authorize(request)) return ESP_OK;
-    JsonDocument doc;
-    wifi_json(doc.to<JsonObject>());
-    return send_json(request, doc);
-}
 
-esp_err_t wifi_handler(httpd_req_t* request)
+esp_err_t wifi_control(httpd_req_t* request, JsonObject doc, const char*)
 {
-    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
-    if (request->content_len < 1 || request->content_len > 256) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected Wi-Fi JSON"); return ESP_OK;
-    }
-    char body[257]{};
-    int total = 0;
-    while (total < request->content_len) {
-        const int count = httpd_req_recv(request, body + total, request->content_len - total);
-        if (count <= 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request"); return ESP_OK; }
-        total += count;
-    }
-    JsonDocument doc;
-    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>()) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected Wi-Fi JSON"); return ESP_OK;
-    }
     const char* op = doc["op"] | "";
     const std::string ssid = doc["ssid"] | "";
     const std::string password = doc["password"] | "";
@@ -1317,21 +1257,9 @@ esp_err_t wifi_handler(httpd_req_t* request)
     httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
 }
 
-esp_err_t camera_handler(httpd_req_t* request)
+esp_err_t camera_control(httpd_req_t* request, JsonObject doc, const char*)
 {
-    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
-    if (request->content_len < 1 || request->content_len > 128) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
-    }
-    char body[129]{};
-    int total = 0;
-    while (total < request->content_len) {
-        const int count = httpd_req_recv(request, body + total, request->content_len - total);
-        if (count <= 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request"); return ESP_OK; }
-        total += count;
-    }
-    JsonDocument doc;
-    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || doc.size() != 1 || !doc["enabled"].is<bool>()) {
+    if (doc.size() != 1 || !doc["enabled"].is<bool>()) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
     }
     const bool enabled = doc["enabled"].as<bool>();
@@ -1342,23 +1270,8 @@ esp_err_t camera_handler(httpd_req_t* request)
     return send_json(request, result);
 }
 
-esp_err_t servo_tune_handler(httpd_req_t* request)
+esp_err_t servo_control(httpd_req_t* request, JsonObject doc, const char*)
 {
-    if (!authorize(request) || !control_boot_matches(request)) return ESP_FAIL;
-    if (request->content_len < 1 || request->content_len > 512) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected servo tuning JSON"); return ESP_OK;
-    }
-    char body[513]{};
-    int total = 0;
-    while (total < request->content_len) {
-        const int count = httpd_req_recv(request, body + total, request->content_len - total);
-        if (count <= 0) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request"); return ESP_OK; }
-        total += count;
-    }
-    JsonDocument doc;
-    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>()) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected servo tuning JSON"); return ESP_OK;
-    }
     ServoTuneRequest tune;
     const char* axis = doc["axis"] | "";
     if (strcmp(axis, "yaw") == 0) tune.axis = 0;
@@ -1402,10 +1315,58 @@ esp_err_t servo_tune_handler(httpd_req_t* request)
     httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
 }
 
+struct ControlTarget { const char* name; ControlHandler handle; };
+const ControlTarget kControlTargets[] = {
+    {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control},
+    {"servo", servo_control}, {"wifi", wifi_control},
+    {"m12_view", web_control}, {"m12_mode", web_control}, {"yaw_step", web_control}, {"voice_play", web_control},
+    {"interaction", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return interaction::handle(r, body); }},
+    {"hearing", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return hearing::handle(r, body); }},
+    {"eyes", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return eyes::command_handler(r, body); }},
+};
+
+void control_info_json(JsonObject target)
+{
+    target["endpoint"] = "/v1/control";
+    target["method"] = "POST";
+    target["body_max_bytes"] = static_cast<uint32_t>(kControlBodyMax);
+    target["headers"] = "Authorization: Bearer <token>; X-Boot-Id: <current boot_id>";
+    auto names = target["targets"].to<JsonArray>();
+    for (const auto& entry : kControlTargets) names.add(entry.name);
+}
+
+esp_err_t control_handler(httpd_req_t* request)
+{
+    if (!authorize(request) || !control_boot_matches(request, true)) return ESP_FAIL;
+    if (request->content_len < 1 || request->content_len > static_cast<int>(kControlBodyMax)) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected a JSON object of at most 768 bytes");
+        return ESP_FAIL; // Close instead of purging an oversized untrusted body.
+    }
+    char body[kControlBodyMax + 1]{};
+    int total = 0;
+    const int64_t deadline = esp_timer_get_time() + 3000000;
+    while (total < request->content_len) {
+        const int n = httpd_req_recv(request, body + total, request->content_len - total);
+        if (n <= 0 || esp_timer_get_time() > deadline) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete control body"); return ESP_FAIL;
+        }
+        total += n;
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || !doc["target"].is<const char*>()) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected a JSON object with a target string"); return ESP_OK;
+    }
+    const std::string target = doc["target"].as<const char*>();
+    doc.remove("target");
+    for (const auto& entry : kControlTargets)
+        if (target == entry.name) return entry.handle(request, doc.as<JsonObject>(), entry.name);
+    httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Unknown control target"); return ESP_OK;
+}
+
 esp_err_t frame_handler(httpd_req_t* request)
 {
     if (!authorize(request)) return ESP_OK;
-    if (!camera_enabled) return unavailable(request, "Body camera streaming disabled; POST /v1/camera {\"enabled\":true}");
+    if (!camera_enabled) return unavailable(request, "Body camera streaming disabled; POST /v1/control {\"target\":\"camera\",\"enabled\":true}");
     std::shared_ptr<Frame> frame;
     {
         std::lock_guard<std::mutex> lock(frame_mutex);
@@ -1514,88 +1475,49 @@ esp_err_t audio_handler(httpd_req_t* request)
     return ESP_OK;
 }
 
+struct Route { const char* uri; httpd_method_t method; esp_err_t (*handler)(httpd_req_t*); };
+// The handler limit is sized from these tables, so adding a route can never
+// again overflow it and abort boot (the first 0.4.45 image did at 20 handlers).
+const Route kMainRoutes[] = {
+    {"/v1/discovery", HTTP_GET, discovery_handler},
+    {"/v1/info", HTTP_GET, info_handler},
+    {"/v1/telemetry", HTTP_GET, telemetry_handler},
+    {"/v1/frame", HTTP_GET, frame_handler},
+    {"/v1/control", HTTP_POST, control_handler},
+    {"/v1/assets", HTTP_POST, +[](httpd_req_t* r) -> esp_err_t {
+        if (!authorize(r) || !control_boot_matches(r, true)) return ESP_FAIL;
+        return eyes::install_handler(r);
+    }},
+    {"/v1/playback", HTTP_POST, +[](httpd_req_t* r) -> esp_err_t {
+        if (!authorize(r)) return ESP_FAIL;
+        if (!audio_ready) { unavailable(r, "Audio initialization incomplete"); return ESP_FAIL; }
+        return playback_handle(r);
+    }},
+};
+const Route kAudioRoutes[] = {{"/v1/audio", HTTP_GET, audio_handler}};
+
 void start_server(int port, int control_port, bool audio_only)
 {
+    const Route* routes = audio_only ? kAudioRoutes : kMainRoutes;
+    const size_t route_count = audio_only ? std::size(kAudioRoutes) : std::size(kMainRoutes);
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port;
     config.ctrl_port = control_port;
     config.stack_size = 8192;
     config.max_open_sockets = audio_only ? kAudioHttpSessions : kMainHttpSessions;
-    config.max_uri_handlers = 32; // 0.4.45 added /v1/camera, /v1/servo, /v1/wifi GET+POST; 20 overflowed and aborted boot
+    config.max_uri_handlers = static_cast<uint16_t>(route_count);
     config.max_resp_headers = 10;
     config.recv_wait_timeout = 3;
     config.send_wait_timeout = 3;
     config.lru_purge_enable = !audio_only;
     httpd_handle_t server = nullptr;
     ESP_ERROR_CHECK(httpd_start(&server, &config));
-    auto register_get = [server](const char* uri, esp_err_t (*handler)(httpd_req_t*)) {
+    for (size_t i = 0; i < route_count; ++i) {
         httpd_uri_t endpoint{};
-        endpoint.uri = uri;
-        endpoint.method = HTTP_GET;
-        endpoint.handler = handler;
+        endpoint.uri = routes[i].uri;
+        endpoint.method = routes[i].method;
+        endpoint.handler = routes[i].handler;
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &endpoint));
-    };
-    if (audio_only) register_get("/v1/audio", audio_handler);
-    else {
-        register_get("/v1/discovery", discovery_handler);
-        register_get("/v1/info", info_handler);
-        register_get("/v1/telemetry", telemetry_handler);
-        register_get("/v1/frame", frame_handler);
-        register_get("/v1/wifi", wifi_get_handler);
-        register_get("/v1/eyes", [](httpd_req_t* r)->esp_err_t {if(!authorize(r))return ESP_FAIL;return eyes::catalog_handler(r);});
-        register_get("/v1/eyes/status", [](httpd_req_t* r)->esp_err_t {if(!authorize(r))return ESP_FAIL;return eyes::status_handler(r);});
-        for(const char* uri:{"/v1/eyes","/v1/eyes/assets","/v1/voice/assets"}) {
-            httpd_uri_t endpoint{};endpoint.uri=uri;endpoint.method=HTTP_POST;
-            endpoint.handler=[](httpd_req_t* r)->esp_err_t {
-                if(!authorize(r)||!control_boot_matches(r,true))return ESP_FAIL;
-                return !std::strcmp(r->uri,"/v1/eyes")?eyes::command_handler(r):eyes::install_handler(r);
-            };
-            ESP_ERROR_CHECK(httpd_register_uri_handler(server,&endpoint));
-        }
-        httpd_uri_t interaction_control{};
-        interaction_control.uri="/v1/interaction";interaction_control.method=HTTP_POST;
-        interaction_control.handler=[](httpd_req_t* r)->esp_err_t {
-            if(!authorize(r)||!control_boot_matches(r,true))return ESP_FAIL;
-            return interaction::handle(r);
-        };
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server,&interaction_control));
-        httpd_uri_t hearing_control{};
-        hearing_control.uri="/v1/hearing";hearing_control.method=HTTP_POST;
-        hearing_control.handler=[](httpd_req_t* r)->esp_err_t {
-            if(!authorize(r)||!control_boot_matches(r,true))return ESP_FAIL;
-            return hearing::handle(r);
-        };
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server,&hearing_control));
-        httpd_uri_t control{};
-        control.uri = "/v1/remote"; control.method = HTTP_POST; control.handler = remote_handler;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &control));
-        httpd_uri_t camera_control{};
-        camera_control.uri = "/v1/camera"; camera_control.method = HTTP_POST; camera_control.handler = camera_handler;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &camera_control));
-        httpd_uri_t servo_tuning{};
-        servo_tuning.uri = "/v1/servo"; servo_tuning.method = HTTP_POST; servo_tuning.handler = servo_tune_handler;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &servo_tuning));
-        httpd_uri_t wifi_control{};
-        wifi_control.uri = "/v1/wifi"; wifi_control.method = HTTP_POST; wifi_control.handler = wifi_handler;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &wifi_control));
-        httpd_uri_t pitch{};
-        pitch.uri = "/v1/settings/pitch"; pitch.method = HTTP_POST; pitch.handler = pitch_handler;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &pitch));
-        for (const char* uri : {"/v1/m12/view", "/v1/m12/mode", "/v1/motion/yaw-step"}) {
-            httpd_uri_t endpoint{}; endpoint.uri = uri; endpoint.method = HTTP_POST; endpoint.handler = web_control_handler;
-            ESP_ERROR_CHECK(httpd_register_uri_handler(server, &endpoint));
-        }
-        httpd_uri_t voice{};
-        voice.uri="/v1/voice/play"; voice.method=HTTP_POST; voice.handler=web_control_handler;
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server,&voice));
-        httpd_uri_t playback{};
-        playback.uri = "/v1/playback"; playback.method = HTTP_POST;
-        playback.handler = [](httpd_req_t* request) -> esp_err_t {
-            if (!authorize(request)) return ESP_FAIL;
-            if (!audio_ready) { unavailable(request, "Audio initialization incomplete"); return ESP_FAIL; }
-            return playback_handle(request);
-        };
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &playback));
     }
 }
 

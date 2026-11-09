@@ -32,7 +32,7 @@ async function main() {
   const config=JSON.parse(await fs.readFile(process.argv[2]||path.join(root,'.private/stackchan-monitor.json')));
   const client=new DeviceClient(config);const info=await client.connect();
   if(info.capabilities?.eyes!=='supported'||!info.eyes?.asset_install)throw Error('Firmware does not support eye resource installation');
-  const status=await client.json('/v1/eyes/status');
+  const status=(await client.json('/v1/telemetry')).eyes||{};
   if(!status.storage_ready)throw Error('SD storage unavailable; no files written, card was not formatted');
   let count=0;
   for(const a of assets) {

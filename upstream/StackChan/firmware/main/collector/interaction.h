@@ -15,5 +15,6 @@ void tick(int64_t now);
 // modes selecting it back. Does not issue the replacement M12 command itself.
 void release_for_manual_m12();
 void json(ArduinoJson::JsonObject out);
-esp_err_t handle(httpd_req_t* request);
+// Body of POST /v1/control {"target":"interaction",mode,enabled}; auth and boot checked by the caller.
+esp_err_t handle(httpd_req_t* request,ArduinoJson::JsonObject body);
 }

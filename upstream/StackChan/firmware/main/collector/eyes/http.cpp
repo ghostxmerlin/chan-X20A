@@ -109,31 +109,13 @@ void status_json(JsonObject out) {
     storage["mount_error"]=sd.mount_error;storage["reads"]=sd.reads;storage["installs"]=sd.installs;
     storage["failures"]=sd.failures;storage["read_us"]=sd.read_us;storage["write_us"]=sd.write_us;storage["installing"]=installing.load();
 }
-esp_err_t catalog_handler(httpd_req_t* r) {JsonDocument doc;catalog_json(doc.to<JsonObject>());return send(r,doc);}
-esp_err_t status_handler(httpd_req_t* r) {
-    JsonDocument doc;status_json(doc.to<JsonObject>());
-    const size_t length=httpd_req_get_url_query_len(r);
-    if(length) {
-        char query_string[64],id[37];
-        if(length>=sizeof(query_string) || httpd_req_get_url_query_str(r,query_string,sizeof(query_string))!=ESP_OK ||
-           std::strncmp(query_string,"request_id=",11) || std::strlen(query_string)!=47 ||
-           httpd_query_key_value(query_string,"request_id",id,sizeof(id))!=ESP_OK || !valid_request_id(id))
-            return reject(r,"400 Bad Request","invalid_argument");
-        request_json(doc["request"].to<JsonObject>(),query(id));
-    }
-    return send(r,doc);
-}
-esp_err_t command_handler(httpd_req_t* r) {
-    if(r->content_len>384)return reject(r,"413 Payload Too Large","body_too_large");
-    if(!r->content_len)return reject(r,"400 Bad Request","invalid_argument");
-    char body[385];size_t at=0;const int64_t deadline=esp_timer_get_time()+3000000;
-    while(at<r->content_len) {
-        if(esp_timer_get_time()>=deadline)return reject(r,"408 Request Timeout","body_timeout");
-        const int got=httpd_req_recv(r,body+at,r->content_len-at);
-        if(got<=0)return reject(r,"400 Bad Request","incomplete_body");
-        at+=got;
-    }
-    Command c;if(!parse_command(body,at,c))return reject(r,"400 Bad Request","invalid_argument");
+esp_err_t command_handler(httpd_req_t* r,JsonObject body) {
+    // /v1/control already parsed the request; re-serialize the target-free object so
+    // the strict flat-ASCII command grammar below still gates every field.
+    char text[512];const size_t size=serializeJson(body,text,sizeof(text));
+    if(size>384)return reject(r,"413 Payload Too Large","body_too_large");
+    if(!size)return reject(r,"400 Bad Request","invalid_argument");
+    Command c;if(!parse_command(text,size,c))return reject(r,"400 Bad Request","invalid_argument");
     const auto result=submit(c,Source::Manual);
     if(!result.accepted) return reject(r,result.error==Error::StorageUnavailable||result.error==Error::NoMemory?"503 Service Unavailable":"409 Conflict",name(result.error));
     JsonDocument doc;request_json(doc.to<JsonObject>(),query(c.request_id));doc["accepted"]=true;doc["duplicate"]=result.duplicate;
@@ -142,7 +124,7 @@ esp_err_t command_handler(httpd_req_t* r) {
 esp_err_t install_handler(httpd_req_t* r) {
     if(!upload_queue)return reject(r,"503 Service Unavailable","installer_unavailable");
     const Asset* a=nullptr;const VoiceClip* voice=nullptr;size_t length=0;
-    if(!std::strcmp(r->uri,"/v1/voice/assets")) {
+    if(httpd_req_get_hdr_value_len(r,"X-Voice-Id")) { // one /v1/assets route; the header selects the kind
         char id[3];
         if(httpd_req_get_hdr_value_str(r,"X-Voice-Id",id,sizeof(id))!=ESP_OK || id[0]<'1'||id[0]>'9' ||
             (id[1] && (id[1]<'0'||id[1]>'9')))return reject(r,"400 Bad Request","invalid_argument");

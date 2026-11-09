@@ -71,9 +71,9 @@ int main(){
     interaction::asr_command(0x12,false);assert(face.function==M12Function::standby);
     interaction::asr_command(0x14,false);assert(!tracking&&face.function==M12Function::detect);
     interaction::asr_command(0x10,false);tick();assert(tracking&&face.function==M12Function::detect);
-    httpd_req_t request;request.body="{\"mode\":\"advanced\",\"enabled\":false}";request.content_len=request.body.size();
-    assert(interaction::handle(&request)==ESP_OK&&request.status=="202 Accepted");
-    for(const std::string body:{"{\"mode\":\"advanced\",\"enabled\":1}","{\"mode\":\"bad\",\"enabled\":false}","{\"mode\":\"advanced\",\"enabled\":false,\"extra\":1}"}) {
-        httpd_req_t r;r.body=body;r.content_len=body.size();interaction::handle(&r);assert(r.status=="400 Bad Request");
-    }
+    // 0.4.46: /v1/control parses the body and hands the target-free object to the module.
+    auto handle=[](const std::string& body){httpd_req_t r;ArduinoJson::JsonDocument d;deserializeJson(d,body);interaction::handle(&r,d.as<ArduinoJson::JsonObject>());return r.status;};
+    assert(handle("{\"mode\":\"advanced\",\"enabled\":false}")=="202 Accepted");
+    for(const std::string body:{"{\"mode\":\"advanced\",\"enabled\":1}","{\"mode\":\"bad\",\"enabled\":false}","{\"mode\":\"advanced\",\"enabled\":false,\"extra\":1}"})
+        assert(handle(body)=="400 Bad Request");
 }

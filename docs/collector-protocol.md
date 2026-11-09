@@ -1,5 +1,30 @@
 # Collector 局域网协议 v1
 
+## 0.4.46：单一配置端 `POST /v1/control`
+
+- 主端口 8080 只剩 7 条路由：`GET /v1/discovery`、`GET /v1/info`、`GET /v1/telemetry`、`GET /v1/frame`、`POST /v1/control`、`POST /v1/assets`、`POST /v1/playback`；8081 仍只有 `GET /v1/audio`。HTTP 处理器上限由路由表长度决定（`kMainRoutes`），新增路由不会再像首个 0.4.45 镜像那样溢出而重启循环。
+- `POST /v1/control`（Bearer + 必带当前 `X-Boot-Id`，JSON 对象 ≤ 768 B）：`{"target": <名称>, ...}`。除 `target` 外，字段、校验、状态码和响应 JSON 与被替换的各接口完全相同；缺少/未知 `target` 返回 400。对照：
+
+| target | 替换的接口 | 字段 |
+| --- | --- | --- |
+| `remote` | `POST /v1/remote` | `enabled` |
+| `pitch` | `POST /v1/settings/pitch` | `angle_deg` |
+| `camera` | `POST /v1/camera` | `enabled` |
+| `servo` | `POST /v1/servo` | `axis`、`op`、EEPROM/运行时字段 |
+| `wifi` | `POST /v1/wifi` | `op`、`ssid`、`password`、`preferred`、`connect` |
+| `m12_view` | `POST /v1/m12/view` | `enabled` |
+| `m12_mode` | `POST /v1/m12/mode` | `mode` |
+| `yaw_step` | `POST /v1/motion/yaw-step` | `delta_deg` 或 `slot`，可选 `speed`、`path` |
+| `voice_play` | `POST /v1/voice/play` | `clip_id` |
+| `interaction` | `POST /v1/interaction` | `mode`、`enabled` |
+| `hearing` | `POST /v1/hearing` | `op` 及各操作字段 |
+| `eyes` | `POST /v1/eyes` | `op`、`request_id` 及各操作字段 |
+
+- 删除的 GET：`/v1/wifi`（遥测 `wifi` 为同一对象）、`/v1/eyes`（目录在 `/v1/info` 的 `eyes`）、`/v1/eyes/status`（状态在遥测 `eyes`，含 `storage.installing` 与 `last_request`；`?request_id=` 单条查询随之取消）。
+- `POST /v1/assets` 合并原 `/v1/eyes/assets` 与 `/v1/voice/assets`：带 `X-Voice-Id` 头为语音片段，否则需 `X-Eyes-Style` + `X-Eyes-State`；长度校验、SD 安装与单任务门控不变。`POST /v1/playback`（PCM 上传，服务端使用）不变。
+- `/v1/info`：`capabilities.unified_control="supported"`；新增 `control{endpoint,method,body_max_bytes,headers,targets[]}` 与 `assets{endpoint,selector}`；`pitch_setting.endpoint`、`camera.endpoint` 改为 `/v1/control` 并附 `target`。
+- 旧 Android 观察台使用的 `/v1/remote`、`/v1/settings/pitch` 等已移除（用户决定：Android 之后按网页重做，不再兼容）。观察台 `control.mjs` 在固件缺少 `unified_control` 能力时拒绝控制并提示固件过旧。
+
 ## 0.4.45：已保存网络、扫描与本体 Wi-Fi 设置页
 
 - 网络列表改为单个 collector NVS 值 `wifi_profiles`（JSON 数组，最多 6 个，首项最先尝试）；首次启动自动从旧 `wifi_primary` / `wifi_ssid` 迁移。候选顺序：已保存网络 → 未改动的出厂列表。断线/重连总从首项开始，每项最多 3 次、间隔 10 s。

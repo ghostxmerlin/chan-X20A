@@ -1,11 +1,11 @@
 import {hearingBody} from './hearing.mjs';
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
 const fields = {interaction:['mode','enabled'],voice:['clip_id'],m12_mode:['mode'],m12:['enabled'],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
-const routes = {interaction:'/v1/interaction',voice:'/v1/voice/play',m12_mode:'/v1/m12/mode',m12:'/v1/m12/view',motor:'/v1/remote',yaw:'/v1/motion/yaw-step',yaw_center:'/v1/motion/yaw-step',yaw_step:'/v1/motion/yaw-step',pitch:'/v1/settings/pitch',camera:'/v1/camera',servo_refresh:'/v1/servo',servo_restore:'/v1/servo',servo_eeprom:'/v1/servo',servo_runtime:'/v1/servo',wifi_scan:'/v1/wifi',wifi_reconnect:'/v1/wifi',wifi_add:'/v1/wifi',wifi_remove:'/v1/wifi',wifi_prefer:'/v1/wifi'};
+// Every JSON control reaches the robot through one endpoint; `target` selects the feature.
+const targets = {interaction:'interaction',voice:'voice_play',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_step:'yaw_step',pitch:'pitch',camera:'camera'};
+const route = '/v1/control';
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
-Object.assign(routes,{eyes_configure:'/v1/eyes',eyes_play:'/v1/eyes',eyes_stop:'/v1/eyes'});
 Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[]});
-for(const action of Object.keys(fields).filter(x=>x.startsWith('hearing_')))routes[action]='/v1/hearing';
 export class Controls {
   constructor(monitor,{loadHearingConfig=()=>{throw new Error('not configured');}}={}) { this.monitor=monitor; this.busy=false; this.loadHearingConfig=loadHearingConfig; }
   validate(input) {
@@ -38,9 +38,10 @@ export class Controls {
     if (!m.running || !s.online || !s.fresh.telemetry || !m.client.verified) fail(409,'请恢复监控并等待新的机器人状态');
     if (typeof input.boot!=='string' || input.boot !== s.boot) fail(409,'机器人已重启，请根据新状态重新操作');
     if (m.info?.capabilities?.web_control!=='supported') fail(409,'当前固件尚未支持网页控制');
+    if (m.info?.capabilities?.unified_control!=='supported') fail(409,'固件过旧：需要 collector-0.4.46 或更新（单一 /v1/control 配置端）');
     if(input.action.startsWith('hearing_')) {
       if(m.info?.capabilities?.hearing!=='supported')fail(409,'当前固件尚未支持连续听觉');
-      return hearingBody(input,this.loadHearingConfig);
+      return {target:'hearing',...hearingBody(input,this.loadHearingConfig)};
     }
     if(input.action.startsWith('eyes_')) {
       if(m.info?.capabilities?.eyes!=='supported')fail(409,'当前固件尚未支持眼睛动画');
@@ -48,7 +49,7 @@ export class Controls {
       if(input.action==='eyes_configure' && (typeof input.enabled!=='boolean'||!m.info.eyes?.styles?.some(s=>s.id===input.style)))fail(400,'请选择有效款式');
       if(input.action==='eyes_play' && !m.info.eyes?.states?.some(s=>s.id===input.state))fail(400,'请选择有效表情');
       const body=Object.fromEntries(fields[input.action].map(k=>[k,input[k]]));
-      return {op:input.action.slice(5),...body,...(input.action==='eyes_play'?{mode:'once'}:{})};
+      return {target:'eyes',op:input.action.slice(5),...body,...(input.action==='eyes_play'?{mode:'once'}:{})};
     }
     if (input.action==='m12_mode' && m.info?.capabilities?.m12_recognition!=='supported') fail(409,'当前固件尚未支持手动认人');
     if (input.action==='camera' && m.info?.capabilities?.camera_control!=='supported') fail(409,'当前固件尚未支持相机开关');
@@ -67,16 +68,16 @@ export class Controls {
     if (['yaw','yaw_center','yaw_step','pitch'].includes(input.action) && (!motor?.enabled || !motor?.requested)) fail(409,'请先启用舵机');
     if (['yaw','yaw_center','yaw_step'].includes(input.action) && (!motor.yaw?.valid || t.timestamp_us-motor.timestamp_us<0 || t.timestamp_us-motor.timestamp_us>=1000000 || !motor.yaw_trajectory_complete || ['queued','moving'].includes(motor.web_yaw?.state))) fail(409,'等待有效左右角度反馈和动作结束');
     if (input.action==='pitch' && (!pitch?.feedback_valid || t.timestamp_us-pitch.feedback_timestamp_us<0 || t.timestamp_us-pitch.feedback_timestamp_us>=1000000 || ['queued','moving','waiting_feedback'].includes(pitch.state))) fail(409,'等待有效仰角反馈和动作结束');
-    if(input.action.startsWith('servo_')) return {op:input.action.slice(6),...Object.fromEntries(fields[input.action].map(k=>[k,input[k]]))};
-    if(input.action.startsWith('wifi_')) return {op:input.action.slice(5),...Object.fromEntries(fields[input.action].map(k=>[k,input[k]]))};
-    return Object.fromEntries(fields[input.action].map(k=>[k,input[k]]));
+    if(input.action.startsWith('servo_')) return {target:'servo',op:input.action.slice(6),...Object.fromEntries(fields[input.action].map(k=>[k,input[k]]))};
+    if(input.action.startsWith('wifi_')) return {target:'wifi',op:input.action.slice(5),...Object.fromEntries(fields[input.action].map(k=>[k,input[k]]))};
+    return {target:targets[input.action],...Object.fromEntries(fields[input.action].map(k=>[k,input[k]]))};
   }
   async execute(input) {
     const body=this.validate(input);
     if(this.busy) fail(409,'另一条控制请求正在发送，请稍候');
     this.busy=true;
     try {
-      const result=await this.monitor.client.control(routes[input.action],body,input.boot,()=>this.validate(input));
+      const result=await this.monitor.client.control(route,body,input.boot,()=>this.validate(input));
       if(result.accepted!==true) fail(502,'设备没有确认接收请求');
       this.monitor.event('control',`网页 ${input.action} 请求已接收，执行状态以遥测为准`);
       return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':'设备已接收请求，执行状态见下方'};

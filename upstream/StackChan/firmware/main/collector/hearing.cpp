@@ -333,15 +333,7 @@ void json(JsonObject out) {
     enrollment["phase"]=enroll_phase;enrollment["n"]=enroll_n;enrollment["count"]=5;
 }
 
-esp_err_t handle(httpd_req_t* request) {
-    if(request->content_len<1||request->content_len>768){respond(request,"400 Bad Request","invalid_body");return ESP_FAIL;}
-    char buffer[769]{};int received=0;const int64_t deadline=esp_timer_get_time()+3000000;
-    while(received<request->content_len) {
-        int n=httpd_req_recv(request,buffer+received,request->content_len-received);
-        if(n<=0||esp_timer_get_time()>deadline){respond(request,"400 Bad Request","incomplete_body");return ESP_FAIL;}received+=n;
-    }
-    JsonDocument doc;
-    if(deserializeJson(doc,buffer,received)||!doc.is<JsonObject>())return respond(request,"400 Bad Request","expected_object");
+esp_err_t handle(httpd_req_t* request,JsonObject doc) {
     const std::string op=doc["op"]|"";
     if(op=="listen"&&doc.size()==2&&doc["enabled"].is<bool>())
         return set_listening(doc["enabled"])?respond(request,"202 Accepted","listen_updated"):respond(request,"409 Conflict","configure_backend_first");

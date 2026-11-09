@@ -5,9 +5,9 @@ import { uploadAsset,verifiedAssets } from '../../scripts/install-eyes-assets.mj
 import {waitForAssetSlot} from '../../scripts/device-asset-upload.mjs';
 test('installer waits for asynchronous cleanup before the next upload',async()=>{
  let calls=0;
- await waitForAssetSlot({json:async path=>{assert.equal(path,'/v1/eyes/status');return {storage_ready:true,storage:{installing:++calls<3}};}});
+ await waitForAssetSlot({json:async path=>{assert.equal(path,'/v1/telemetry');return {eyes:{storage_ready:true,storage:{installing:++calls<3}}};}});
  assert.equal(calls,3);
- await assert.rejects(waitForAssetSlot({json:async()=>({storage_ready:false})}),/SD unavailable/);
+ await assert.rejects(waitForAssetSlot({json:async()=>({eyes:{storage_ready:false}})}),/SD unavailable/);
 });
 test('installer sends exact binary and authenticated boot headers',async()=>{
  const bytes=Buffer.from([0,10,13,255,128,1]);let requests=0;

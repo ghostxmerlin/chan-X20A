@@ -4,7 +4,7 @@ import {validateBinding} from '../web/monitor/core.mjs';
 // Only poll status here; never replay a POST whose result was not confirmed.
 export async function waitForAssetSlot(client) {
   for(let n=0;n<50;n++) {
-    const status=await client.json('/v1/eyes/status');
+    const status=(await client.json('/v1/telemetry')).eyes||{};
     if(!status.storage_ready)throw Error('SD unavailable');
     if(status.storage?.installing===false)return;
     await new Promise(resolve=>setTimeout(resolve,100));
@@ -22,7 +22,7 @@ export async function uploadResource(binding,boot,resource,bytes) {
     const child=spawn('/usr/bin/curl',['-q','--noproxy','*','--proto','=http',
       '--connect-timeout','3','--max-time','30','--silent','--show-error',
       '--include','--header','@-','--request','POST','--data-binary','@/dev/fd/3',
-      new URL(`/v1/${voice?'voice':'eyes'}/assets`,b.address).href],{stdio:['pipe','pipe','pipe','pipe']});
+      new URL('/v1/assets',b.address).href],{stdio:['pipe','pipe','pipe','pipe']});
     child.stdin.on('error',()=>{});child.stdio[3].on('error',()=>{});
     child.stdin.end(`Authorization: Bearer ${b.token}\nX-Boot-Id: ${boot}\n${headers}Content-Type: application/octet-stream\nConnection: close\nExpect:\n`);
     child.stdio[3].end(bytes);child.stderr.resume();

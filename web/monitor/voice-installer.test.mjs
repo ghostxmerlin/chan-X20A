@@ -29,7 +29,7 @@ test('voice verification rejects modified files and paths before upload',async t
 test('voice uploads bind clip, boot and binary; reject unknown IDs and redirect',async t=>{
  let count=0;const data=Buffer.from([0,255,10,13,1]);
  const server=http.createServer(async(req,res)=>{
-  count++;assert.equal(req.url,'/v1/voice/assets');assert.equal(req.headers['x-voice-id'],'40');
+  count++;assert.equal(req.url,'/v1/assets');assert.equal(req.headers['x-voice-id'],'40');
   assert.equal(req.headers['x-boot-id'],'test-boot');assert.equal(req.headers.authorization,'Bearer '+'b'.repeat(32));
   const chunks=[];for await(const b of req)chunks.push(b);assert.deepEqual(Buffer.concat(chunks),data);
   res.writeHead(count===1?200:302,{'Content-Type':'application/json',Location:'/wrong'});
