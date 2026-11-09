@@ -148,7 +148,9 @@ void Servo::moveWithSpeed(int angle, int speed)
 
 bool Servo::canStartFromFeedback(const ServoFeedback& feedback, int angle, int lower_margin) const
 {
-    if (lower_margin < 0 || lower_margin > 20 || !feedback.valid || feedback.angle > _angle_limit.y) return false;
+    // Up to 10° of inward recovery: an unpowered/released head can rest well below
+    // the lower limit (pitch seen at -3.4° against a 5° limit on 2026-11-09).
+    if (lower_margin < 0 || lower_margin > 100 || !feedback.valid || feedback.angle > _angle_limit.y) return false;
     // Preserve the original default helper: the target is clamped by move().
     if (!lower_margin) return feedback.angle >= _angle_limit.x;
     // Recovery is explicit and inward only; it cannot bypass a dynamic limit.

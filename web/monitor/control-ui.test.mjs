@@ -52,3 +52,12 @@ test('mode firmware explains four-way remote toggles while preserving explicit w
  await el('yaw-left').click();await el('pitch-apply').click();
  assert.deepEqual(calls,[{action:'yaw',delta_deg:-20,boot:'a'},{action:'pitch',angle_deg:10,boot:'a'}]);
 });
+test('servo feedback sampled a few ms after the telemetry stamp still counts as fresh',()=>{
+ // Firmware stamps telemetry before copying the servo snapshot; observed skew up to 24 ms.
+ const {ui,s,el}=harness();
+ s.telemetry.remote.motor.timestamp_us=2024125;s.telemetry.pitch_setting.feedback_timestamp_us=2022038;ui.render(s,true);
+ assert.equal(el('yaw-left').disabled,false);assert.equal(el('pitch-apply').disabled,false);
+ // A feedback stamp far in the future is still rejected.
+ s.telemetry.remote.motor.timestamp_us=3000000;s.telemetry.pitch_setting.feedback_timestamp_us=3000000;ui.render(s,true);
+ assert.equal(el('yaw-left').disabled,true);assert.equal(el('pitch-apply').disabled,true);
+});

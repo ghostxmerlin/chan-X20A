@@ -6,7 +6,10 @@ namespace collector {
 constexpr int kPitchSettingDefault = 130;
 constexpr int kPitchSettingMinimum = 50;
 constexpr int kPitchSettingMaximum = 850;
-constexpr int kPitchSettingLowerMargin = 20;
+// Inward recovery for boot pose and web pitch: start from feedback up to 10°
+// below the lower limit (the command still starts at the limit). 2° refused a
+// head resting at -3.4° (2026-11-09), so pitch requests silently did nothing.
+constexpr int kPitchSettingLowerMargin = 100;
 inline bool valid_pitch_setting(int angle)
 {
     return angle >= kPitchSettingMinimum && angle <= kPitchSettingMaximum;

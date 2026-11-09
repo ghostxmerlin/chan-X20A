@@ -1,5 +1,28 @@
 # 会话交接记录
 
+## 2026-11-09：抬头（俯仰）无效修复（0.4.50，Claude）
+
+现象：网页调角、开机姿态都不动。遥测 `pitch_setting.state=feedback_unavailable`、`request_seq=0`、反馈有效、实测 −3.4°（raw 631），保存 15°。根因：俯仰软件下限 5°，`canStartFromFeedback` 只允许从下限以下 2°（`kPitchSettingLowerMargin=20`）向内恢复；头卸力/断电后靠在 −3.4°，每次判不能起步，5 s 后放弃。修复：余量改 10°（`kPitchSettingLowerMargin=100`，`Servo::canStartFromFeedback` 上限 20→100），目标仍须在 5–85°、命令仍从限位起（首个目标即 5°，约 8.4° 向上阶跃）。`tests/pitch_setting_test.cpp` 加 −3.4°/−5.0° 可起、−5.1° 拒绝，先失败后通过；全量 Python 仅已知 `test_ear_protocol` 13 项失败。产物 `artifacts/collector-0.4.50-pitch-recovery/`（3,548,032 B，SHA256 `43828ae4915081c43fef02e46e17ca01e1b9235328624afd9f79d605336a4ee1`），备份 `backups/ota_1-collector-0.4.49-before-pitch-recovery-20261109.bin`，只写 ota_1 并独立 verify。重启后开机姿态 −3.4°→14.0°（目标 15°，误差 −1.0°，峰值负载 135‰，最终目标后 575 ms 卸力）。网页调角待用户确认。未提交。
+
+## 2026-11-09：追踪混合观察（0.4.49，Claude）
+
+用户指出 M12 只有 6–7 帧/秒，人在走时按单帧去追会追在半路，选择“混合”方案。每次观察用连续两帧（头静止时）：两帧间移动 ≤2° 视为静止，直接一次转到人脸；在移动则提前 速度×600 ms（最多 10°）；带提前量时预测会自己回到中央 8° 内则不转；两帧相隔 >600 ms 时第二帧只作新参照。头静止且人脸一直在画面中时，上一帧就是参照，离开死区当帧即可决定；只有转完后需多看一帧（约 0.15 s）。像素标定只取无提前量的转头。遥测 `last_turn` 加 `lead_deg/face_motion_deg/face_motion_dt_ms`，参数 `look_frames/still_deg/lead_ms/max_lead_deg`。14 组追踪测试与 Node 73 通过。产物 `artifacts/collector-0.4.49-tracking-hybrid/`（3,548,016 B，SHA256 `a8b3be9fece94b15754c4188d549ca074b0e83feab5471791f2885ba235675e2`），备份 `backups/ota_1-collector-0.4.48-before-tracking-hybrid-20261109.bin`，只写 ota_1 并独立 verify，在线确认。待用户实测；提前时间 600 ms 与上限 10° 为初值。未提交。
+
+## 2026-11-09：追踪视场标定与死区收窄（0.4.48，Claude）
+
+用户实测 0.4.47“还行，人走动时头跟得晚”。0.4.47 的 22 次转头无保护锁存，逐次标定 20 个样本，最近一次 10.3 px/°（假设 12.8），最后一转误差 −0.9°。原因：视场假设 50° 偏窄，128 px 死区实际约 12.4°，且每次只转到约 80%。0.4.48：`kFovTenths` 620（10.3 px/°）、死区 8°（82 px）、遥测加 `calibration.mean_px_per_deg`；网页文字同步；13 组追踪测试与 Node 73 通过。产物 `artifacts/collector-0.4.48-tracking-fov62/`（3,547,328 B，SHA256 `255795fa85ccc0bb90315fca94d3ae4edacef2f82ae8aa8dac4d20e89c7a4762`），备份 `backups/ota_1-collector-0.4.47-before-tracking-fov62-20261109.bin`，只写 ota_1 并独立 verify，重启在线确认参数。待用户再试手感与 `mean_px_per_deg`。未提交。
+
+## 2026-11-09：追踪改为“看一次、一口气转到位”（0.4.47，Claude）
+
+用户决定：追踪按人类转头的方式，看一次就一条命令转到人脸，确认到位后再看；人脸偏离中心一定角度后才启动；丢脸回中；放开单条命令 30° 上限；无进展预算按距离放宽；预补偿舵机停在目标前 3–4°。
+
+- **策略**（`collector/face_tracking.h` 重写）：新鲜人脸偏离 >10°（按假设视场 50°＝12.8 px/°，128 px）→ 瞄准 = 实测 + 像素换算角度，命令再多给 3°；夹在锚点 ±60° 与舵机限位内，被夹到不足 5° 视为 at_limit 不发（审阅发现：边缘 3° 小命令会误触发无进展锁存）。转动中忽略画面；轨迹结束后实测 1° 内稳定 250 ms 判到位（或 1 s + 30 ms/° 截止），只用到位 300 ms 之后收到的帧做下一次观察，无固定 2.5 s 间隔。丢脸（num 0 或 700 ms 无帧）1.5 s 后回锚点一次（已在 5° 内不动），人脸回来继续。速度：20° 内 1000，更远按 1000×20°/距离（最低 300），峰值命令速率不超过已验证的 20° 档（弹簧模型任何距离约 0.6 s 走完，43° 全速峰值约 390°/s）。保留：反馈过期/无效取消、单样本跳变 >25° 锁存、锚点范围锁存、无进展（2 s + 20 ms/° 累计活动时间内走不到 min(5°, 距离)，跨观察保留，关开才清）、快速关开不丢取消、手动接管。
+- **遥测** `interaction.tracking`：`policy=one_look_one_turn`、`moving`、`deadband_deg/px`、`assumed_fov_deg`、`precomp_deg`、`last_turn{start/aim/command/arrived/error_deg, settle=stable|deadline, speed, returning}`、`calibration{px_per_deg, samples, assumed_px_per_deg}`（每次转头后首帧实测像素位移/角度，用来标定视场）。去掉 `max_step_deg/min_interval_ms/slot_deg`。
+- **网页**：追踪状态名、按钮提示、M12 诊断说明同步；舵机反馈“新鲜”判断允许反馈时间戳比遥测晚 ≤100 ms（固件先记遥测时间再取舵机快照，实测最多晚 24 ms，曾导致左右/仰角按钮每 1–2 s 闪灰；不是 Wi-Fi 断）。
+- **测试**：`tests/face_tracking_test.cpp` 重写为 13 组（含 20 ms 节奏/140 ms 帧的真实节拍、两种丢脸回中、截止、无进展、边缘、真实 Servo 斜率/堵转/反向），全部通过；Node 73 通过。全量 Python 中 `test_ear_protocol` 13 项因听觉协议实现缺失失败，与本次无关。
+- **部署**：`artifacts/collector-0.4.47-one-shot-tracking/`（3,547,088 B，SHA256 `b308c582de5a73caba774b1f2cea4173b17255b81c941fc0377563d7547573d7`）；备份 `backups/ota_1-collector-0.4.46-before-one-shot-tracking-20261109.bin`（与归档一致）；只写 ota_1/0x510000 并独立 verify，重启后在线 FreedomX20A 192.168.88.5，遥测确认新策略。机器人此次在 `/dev/cu.usbmodem101`，同机另有两块 Espressif 设备，按序列号核对后未触碰。构建日志 `logs/tracking-v0447/build.log`。
+- **待实机验收**：人脸实测转头手感、`last_turn.error_deg`、长距离低速转动是否中途停住（跟随误差变小可能触发根因所述的小误差停转）、`calibration.px_per_deg` 与假设 12.8 的差距（据此改 `kFovTenths`）。未提交。
+
 ## 2026-11-08：网页舵机根因确认（0.4.39–0.4.42，Claude 接手）
 
 本轮由 Claude 接手 codex 的交接。四次只写活动 ota_1 的刷机均先完整备份上一版并独立 verify（备份在 `backups/ota_1-collector-0.4.38/39/40/41-before-*.bin`）；一次 `write_flash` 因 USB 中途掉线失败，设备回落到 ota_0 原厂固件，降速 460800 重写并校验后恢复。当前设备 **collector-0.4.42**，应用 3,536,272 B，SHA256 `c0839580e94891400b88df188f9ca4f273ba7a8183b7e04256290a8068dc1501`。

@@ -39,8 +39,10 @@ export class ControlPanel {
     this.ready=!!fresh && supported;
     const t=state?.telemetry||{},m=t.remote?.motor||{},p=t.pitch_setting||{};
     const active=m.enabled && m.requested;
-    const yawFresh=m.yaw?.valid && t.timestamp_us>=m.timestamp_us && t.timestamp_us-m.timestamp_us<1000000;
-    const pitchFresh=p.feedback_valid && t.timestamp_us>=p.feedback_timestamp_us && t.timestamp_us-p.feedback_timestamp_us<1000000;
+    // Firmware stamps telemetry before copying servo snapshots, so feedback may be a few ms newer (seen: 24 ms).
+    const feedbackFresh=(at)=>Number.isFinite(at)&&t.timestamp_us-at>-100000&&t.timestamp_us-at<1000000;
+    const yawFresh=m.yaw?.valid && feedbackFresh(m.timestamp_us);
+    const pitchFresh=p.feedback_valid && feedbackFresh(p.feedback_timestamp_us);
     const yawReady=active && yawFresh && m.yaw_trajectory_complete && !['queued','moving'].includes(m.web_yaw?.state);
     const pitchReady=active && pitchFresh && !['queued','moving','waiting_feedback'].includes(p.state);
     const cameraKnown=typeof t.health?.camera_enabled==='boolean', cameraOn=t.health?.camera_enabled===true;
@@ -63,7 +65,7 @@ export class ControlPanel {
   }
 }
 
-const trackingStates={off:'已关闭',disabled:'已关闭',waiting_frame:'等待新鲜人脸',waiting_feedback:'等待反馈',recovering_feedback:'反馈恢复中',tracking:'追踪中',deadband:'中央死区，保持',at_limit:'已达追踪边界',mode_changed:'视觉模式已改变',direction_changed:'方向改变，等待新帧',face_lost:'丢脸，停止输出',frame_stale:'人脸结果过期',feedback_invalid:'反馈无效，停止输出',feedback_stale:'反馈过期，停止输出',fault_no_progress:'舵机未移动保护，请关闭后重开',frame_jump:'人脸跳变，等待稳定',fault_feedback_jump:'反馈跳变保护，请关闭后重开',fault_anchor_range:'超出锚点保护，请关闭后重开',manual_override:'手动接管，停止追踪',command_rejected:'动作被拒绝'};
+const trackingStates={observing:'确认人脸位置（第 1 帧）',turning:'转头中',settling:'等待停稳',looking:'观察中',returning:'丢脸，回中',returned:'已回中，等待人脸',off:'已关闭',disabled:'已关闭',waiting_frame:'等待新鲜人脸',waiting_feedback:'等待反馈',recovering_feedback:'反馈恢复中',tracking:'追踪中',at_limit:'已达追踪边界',mode_changed:'视觉模式已改变',face_lost:'丢脸，停止输出',frame_stale:'人脸结果过期',feedback_invalid:'反馈无效，停止输出',feedback_stale:'反馈过期，停止输出',fault_no_progress:'舵机未移动保护，请关闭后重开',frame_jump:'人脸跳变，等待稳定',deadband:'人脸在中央 ±8° 内，保持',fault_feedback_jump:'反馈跳变保护，请关闭后重开',fault_anchor_range:'超出锚点保护，请关闭后重开',manual_override:'手动接管，停止追踪',command_rejected:'动作被拒绝'};
 const recognitionStates={off:'已关闭',waiting_face:'等待已登记人脸',confirming:'正在确认主人',owner_confirmed:'已确认主人',external_mode:'手动视觉接管'};
 const dialogueStates={off:'听觉会话关闭',waiting_owner:'等待主人后开始听觉',listening:'听觉情绪回应中',shared_listening:'沿用手动听觉',stopped_by_user:'手动停止，等待重新开启',backend_unavailable:'听觉后端未就绪',enrolling:'声纹录入中'};
 const degrees=value=>Number.isFinite(value)?`${value.toFixed(1)}°`:'—';
@@ -97,12 +99,12 @@ export class InteractionPanel {
       button.textContent=`${requested?'关闭':'开启'}${name}`;button.setAttribute('aria-pressed',String(requested));
       const allowed=mode==='tracking'?trackingSupported&&(requested||(motorReady&&t.m12?.valid)):mode==='recognition'?requested||t.m12?.valid:true;
       button.disabled=!this.ready||this.pending||typeof data?.requested!=='boolean'||!allowed;
-      button.title=mode==='advanced'?'只记录预留意图；高级语音尚未实现，不会启动新的语音后端。':mode==='tracking'?'只水平追踪方向：人脸偏离中心超过约 40% 半宽才动，一次一档 20°，间隔 2.5 s，范围 ±60°；开启需舵机启用和 M12 串口就绪。': '任意已登记人脸视为主人，确认后启动现有听觉与情绪回应；真正问答尚未实现。';
+      button.title=mode==='advanced'?'只记录预留意图；高级语音尚未实现，不会启动新的语音后端。':mode==='tracking'?'看两帧、一口气转到位：人脸偏离中心超过 8° 才动；两帧间基本没动就直接转到人脸，在移动就按速度提前（最多 10°），正走向中央就不转；一条命令（多给 3° 预补偿），实测停稳后再看下一帧；丢脸 1.5 s 回到锚点；范围为开启时角度 ±60°。开启需舵机启用和 M12 串口就绪。': '任意已登记人脸视为主人，确认后启动现有听觉与情绪回应；真正问答尚未实现。';
     }
     const unavailable=!fresh?'连接或状态已过期':!supported?'等待支持模式的新固件':!interaction.tracking?'等待模式遥测':'';
     const trackingState=trackingStates[tracking.state]||tracking.state||'等待设备状态';
     this.label('tracking-state',unavailable||(!trackingSupported?'当前固件不支持追踪':`${tracking.requested?'已请求 · ':''}${trackingState}`));
-    this.label('tracking-detail',unavailable?'锚点 / 目标：—':`锚 ${degrees(tracking.anchor_deg)} / 目标 ${degrees(tracking.target_deg)}`,unavailable||`锚点 ${degrees(tracking.anchor_deg)}；目标 ${degrees(tracking.target_deg)}（不是实测位置）；范围 ±${Number.isFinite(tracking.range_deg)?tracking.range_deg:60}°，一档 ${Number.isFinite(tracking.slot_deg)?tracking.slot_deg:20}°。${tracking.active?'追踪输出已激活':'当前未激活追踪输出'}。`);
+    this.label('tracking-detail',unavailable?'锚点 / 目标：—':`锚 ${degrees(tracking.anchor_deg)} / 目标 ${degrees(tracking.target_deg)}`,unavailable||`锚点 ${degrees(tracking.anchor_deg)}；目标 ${degrees(tracking.target_deg)}（不是实测位置）；范围 ±${Number.isFinite(tracking.range_deg)?tracking.range_deg:60}°，死区 ${Number.isFinite(tracking.deadband_deg)?tracking.deadband_deg:8}°。${tracking.last_turn?.settled?`上次转头：${tracking.last_turn.lead_deg?`人在移动，提前 ${degrees(tracking.last_turn.lead_deg)}，`:''}瞄准 ${degrees(tracking.last_turn.aim_deg)}，停在 ${degrees(tracking.last_turn.arrived_deg)}（差 ${degrees(tracking.last_turn.error_deg)}，${tracking.last_turn.settle==='stable'?'停稳':'超时'}）。`:''}${tracking.calibration?.samples?`实测 ${Number.isFinite(tracking.calibration.mean_px_per_deg)?tracking.calibration.mean_px_per_deg.toFixed(1):tracking.calibration.px_per_deg} px/°（平均，样本 ${tracking.calibration.samples}；最近 ${tracking.calibration.px_per_deg}；假设 ${tracking.calibration.assumed_px_per_deg}）。`:''}${tracking.active?'追踪输出已激活':'当前未激活追踪输出'}。`);
     this.label('recognition-state',unavailable||recognitionStates[recognition.state]||recognition.state||'等待设备状态');
     const hearing=dialogueStates[dialogue.state]||dialogue.state||'等待听觉状态',owner=recognition.owner_seen&&recognition.owner_name?`${recognition.owner_name} · `:'';
     this.label('recognition-detail',unavailable?'身份 / 听觉：—':owner+hearing,unavailable||`${owner}${hearing}。${dialogue.owned?'认人模式持有听觉意图':'认人模式未持有听觉意图'}；使用现有听觉/情绪回应，真正问答后续实现。`);

@@ -25,7 +25,8 @@ struct Scenario {
         if(frame){++in.frame_seq;in.frame_us=in.now_us;}
         return p.step(in);
     }
-    A start(){assert(p.step(in)==A::None);return tick();}
+    // First step builds feedback confidence; the first frame is the look's reference.
+    A start(){assert(p.step(in)==A::None);assert(tick()==A::None);return tick();}
 };
 class Axis:public stackchan::motion::Servo {
 public:
@@ -91,236 +92,6 @@ static void quantized_command_submission(){
         command_run(start,start+direction*200,cadence);
     std::cout<<"PASS: slot command submits raw525 within 1s at 20ms and 1.8s at 60ms; bidirectional bounds and 2s stop retained\n";
 }
-static void guards(){
-    Scenario s; assert(s.start()==A::Move);assert(s.p.anchor()==0&&s.p.target()==200);
-    assert(s.tick(100000)==A::None); // interval
-    assert(s.tick(150000,false)==A::None); // repeated frame cannot make another step
-    s.in.measured=60;assert(s.tick(1000000)==A::None); // progress credited inside the budget
-    assert(s.tick(1500000)==A::Move); // interval elapsed: next slot command
-    s.in.settled=false;assert(s.tick(250000)==A::None);
-    s.in.face_count=0;assert(s.tick()==A::Cancel);assert(!s.p.active()&&s.p.requested());
-    assert(s.tick()==A::None); // no repeated cancel
-    s.in.face_count=1;s.in.settled=true;assert(s.tick(2500000)==A::Move);assert(s.p.anchor()==0);
-    s.p.request(false,s.in.now_us);s.p.request(true,s.in.now_us+1);
-    assert(s.tick()==A::Cancel); // quick off/on cannot erase pending stop
-    assert(s.p.step(s.in)==A::None); // same frame cannot revive
-    assert(s.tick()==A::Move);
-    Scenario old; old.in.frame_us=900000;assert(old.p.step(old.in)==A::None);
-    assert(old.tick(100000,false)==A::None);assert(old.tick()==A::Move);
-    Scenario stale;assert(stale.start()==A::Move);
-    stale.in.now_us+=700000;stale.in.feedback_us=stale.in.now_us;
-    assert(stale.p.step(stale.in)==A::Cancel);assert(!strcmp(stale.p.state(),"frame_stale"));
-    Scenario invalid;assert(invalid.start()==A::Move);
-    invalid.in.feedback_valid=false;assert(invalid.tick()==A::Cancel);
-    invalid.in.feedback_valid=true;assert(invalid.tick()==A::None);
-    assert(invalid.tick(2500000)==A::Move);assert(invalid.p.anchor()==0);
-    Scenario jump;assert(jump.start()==A::Move);jump.in.measured=300;
-    assert(jump.tick()==A::Cancel);assert(!strcmp(jump.p.state(),"fault_feedback_jump"));
-    jump.in.measured=0;assert(jump.tick()==A::None);assert(jump.tick()==A::None);
-    Scenario mode;assert(mode.start()==A::Move);mode.in.mode=2;mode.in.requested_mode=2;mode.in.mode_requested_us=mode.in.now_us;
-    assert(mode.tick()==A::Cancel);assert(mode.p.anchor()==0);
-    mode.in.frame_mode=2;assert(mode.tick(2500000)==A::Move);assert(mode.p.anchor()==0);
-    Scenario bound;bound.in.measured=1277;assert(bound.start()==A::Move);assert(bound.p.target()==1280);
-    bound.in.measured=1280;assert(bound.tick(1000000)==A::None); // progress credited
-    assert(bound.tick(1500000)==A::Cancel); // at_limit once a new command is allowed
-    Scenario dead;dead.in.x=280;assert(dead.start()==A::None);assert(!strcmp(dead.p.state(),"deadband"));
-    Scenario range;assert(range.start()==A::Move);range.in.measured=601;
-    assert(range.tick()==A::Cancel);assert(!strcmp(range.p.state(),"fault_anchor_range"));
-    Scenario outside;assert(outside.start()==A::Move);outside.in.measured=2000;
-    assert(outside.tick()==A::Cancel);assert(outside.p.faulted());
-    Scenario bad;bad.in.feedback_valid=false;assert(bad.p.step(bad.in)==A::None);assert(!bad.p.has_anchor());
-    Scenario coordinates;coordinates.in.x=620;assert(coordinates.start()==A::None);assert(!coordinates.p.has_anchor());
-    Scenario revision;assert(revision.start()==A::Move);
-    ++revision.in.mode_revision;assert(revision.tick()==A::Cancel);
-    assert(revision.tick(250000)==A::None); // same function request still pending
-    revision.in.applied_mode_revision=revision.in.mode_revision;
-    assert(revision.tick()==A::None); // retire the old applied generation
-    assert(revision.tick(2500000)==A::Move); // same function, new explicit request
-    Scenario pending;assert(pending.start()==A::Move);
-    pending.in.requested_mode=2;assert(pending.tick()==A::Cancel);
-    assert(pending.tick(300000)==A::None); // UART still has detector result
-    Scenario stale_feedback;assert(stale_feedback.start()==A::Move);
-    stale_feedback.in.now_us+=300000;
-    assert(stale_feedback.p.step(stale_feedback.in)==A::Cancel);
-    assert(!strcmp(stale_feedback.p.state(),"feedback_stale"));
-    Scenario step;assert(step.start()==A::Move);
-    step.in.measured=60;assert(step.tick(1000000)==A::None);assert(step.tick(1500000)==A::Move);
-    assert(step.p.target()==200); // still below the first slot centre: aim at it again
-    Scenario drift;assert(drift.start()==A::Move);drift.in.measured=-30;
-    assert(drift.tick(300000)==A::None); // no new command while progress remains unresolved
-    assert(drift.tick(1700000)==A::Cancel);assert(drift.p.faulted());
-    Scenario manual;assert(manual.start()==A::Move);
-    manual.p.request(false,manual.in.now_us,"manual_override");
-    assert(!manual.p.requested()&&!manual.p.active());
-    assert(manual.tick()==A::Cancel);assert(manual.tick()==A::None);
-    assert(!strcmp(manual.p.state(),"manual_override"));
-    Scenario broken;assert(broken.start()==A::Move);broken.in.feedback_valid=false;
-    assert(broken.tick()==A::Cancel);broken.in.feedback_valid=true;broken.in.measured=300;
-    assert(broken.tick()==A::None);assert(broken.p.faulted()); // loss must not erase jump history
-    Scenario race;assert(race.start()==A::Move);
-    ManualYaw queued;
-    assert(queued.submit(50,kWebYawDefaultSpeed,false,true,true,race.p.active(),0,race.in.now_us,race.in.now_us));
-    race.p.request(false,race.in.now_us,"manual_override");
-    assert(race.p.take_cancel()); // motor's second check after policy evaluation
-    assert(queued.take(race.in.now_us,true));assert(!race.p.take_cancel());
-}
-static void real_servo(){
-    Axis yaw;Scenario s;assert(s.start()==A::Move);
-    stackchan::motion::ServoFeedback feedback;feedback.valid=true;feedback.angle=0;
-    assert(apply_tracking_move(yaw,feedback,s.p.target()));assert(yaw.reads==0);
-    int previous=0;int max_delta=0;
-    for(unsigned i=1;i<=300;++i){test_tick_ms=i*20;yaw.update();if(!yaw.writes.empty()){
-        int value=yaw.writes.back();assert(value>=0&&value<=200);
-        max_delta=std::max(max_delta,std::abs(value-previous));previous=value;
-    }}
-    assert(max_delta<=40); // bounded slew per 20 ms tick at speed 1000
-    assert(previous==200&&yaw.isTrajectoryComplete());
-    assert(!yaw.torque); // factory release, not an active position hold
-    feedback.angle=200;assert(apply_tracking_move(yaw,feedback,400));
-    for(unsigned i=301;i<320;++i){test_tick_ms=i*20;yaw.update();}
-    yaw.cancelMotion();const auto count=yaw.writes.size();
-    for(unsigned i=320;i<400;++i){test_tick_ms=i*20;yaw.update();}
-    assert(yaw.writes.size()==count&&!yaw.torque&&yaw.reads==0);
-    feedback.valid=false;assert(!apply_tracking_move(yaw,feedback,30));
-    std::cout<<"PASS: actual Servo bounded step/speed, fresh feedback only, cancel clears torque and emits no later position writes\n";
-}
-static void no_progress(){
-    // Software completion is not evidence that the physical encoder moved.
-    Scenario stalled;assert(stalled.start()==A::Move);
-    for(int i=0;i<9;++i) assert(stalled.tick(200000)==A::None);
-    assert(stalled.p.commands()==1);
-    assert(stalled.tick(200000)==A::Cancel);
-    assert(stalled.p.faulted()&&!strcmp(stalled.p.state(),"fault_no_progress"));
-    const auto commands=stalled.p.commands(),cancels=stalled.p.cancels();
-    for(int i=0;i<20;++i) assert(stalled.tick(200000)==A::None);
-    assert(stalled.p.commands()==commands&&stalled.p.cancels()==cancels);
-    stalled.p.request(true,stalled.in.now_us); // idempotent enable cannot clear the fault
-    assert(stalled.tick()==A::None&&stalled.p.faulted());
-    stalled.p.request(false,stalled.in.now_us);stalled.p.request(true,stalled.in.now_us+1);
-    assert(stalled.tick()==A::None);assert(stalled.tick()==A::Move);
-
-    Scenario unsettled;assert(unsettled.start()==A::Move);unsettled.in.settled=false;
-    assert(unsettled.tick(1000000)==A::None);
-    assert(unsettled.tick(1000000)==A::Cancel); // checked before !settled gate
-    Scenario subquantum;assert(subquantum.start()==A::Move);subquantum.in.measured=2;
-    assert(subquantum.tick(1000000)==A::None);
-    assert(subquantum.tick(1000000)==A::Cancel); // < one encoder step cannot clear a full-size command
-
-    Scenario normal;assert(normal.start()==A::Move);normal.in.settled=false;
-    normal.in.measured=60;assert(normal.tick(1000000)==A::None); // five degrees of real progress
-    assert(normal.tick(1500000)==A::None&&!normal.p.faulted());
-    normal.in.settled=true;assert(normal.tick()==A::Move);
-    normal.in.measured=120;assert(normal.tick(1000000)==A::None); // progress credited inside the budget; interval not yet elapsed
-    assert(normal.tick(1500000)==A::Move);
-    assert(!normal.p.faulted()&&normal.p.anchor()==0);
-
-    Scenario tiny;tiny.in.upper=2;assert(tiny.start()==A::Move);assert(tiny.p.target()==2);
-    tiny.in.measured=2;assert(tiny.tick(1000000)==A::None); // threshold capped at 0.2 degree: progress credited
-    assert(tiny.tick(1500000)==A::Cancel); // at_limit once the interval allows a new command
-    assert(tiny.tick(1500000)==A::None&&!tiny.p.faulted());
-
-    // Reproduce the live short command followed by intentional central stop.
-    Scenario center_stop;center_stop.in.x=520;assert(center_stop.start()==A::Move);
-    center_stop.in.x=280;assert(center_stop.tick(290000)==A::Cancel);
-    assert(!strcmp(center_stop.p.state(),"deadband"));
-    for(int i=0;i<30;++i) assert(center_stop.tick(100000)==A::None&&!center_stop.p.faulted());
-    center_stop.in.x=520;assert(center_stop.tick(100000)==A::Move);
-    assert(center_stop.p.target()==200&&center_stop.p.anchor()==0);
-    assert(center_stop.tick(1700000)==A::None);
-    assert(center_stop.tick(10000)==A::Cancel); // 0.29 + 1.71 active seconds
-    assert(center_stop.p.faulted()&&!strcmp(center_stop.p.state(),"fault_no_progress"));
-
-    Scenario gap;assert(gap.start()==A::Move);gap.in.face_count=0;
-    assert(gap.tick(100000)==A::Cancel);gap.in.face_count=1;
-    assert(gap.tick(2500000)==A::Move);assert(gap.p.target()==200);
-    assert(gap.tick(1500000)==A::None);
-    assert(gap.tick(150000)==A::None);
-    assert(gap.tick(250000)==A::Cancel); // 0.1 + 1.9 active seconds; pause adds no budget
-    assert(gap.p.commands()==2&&gap.p.faulted()&&gap.p.anchor()==0);
-
-    Scenario mode_gap;assert(mode_gap.start()==A::Move);mode_gap.in.requested_mode=2;
-    assert(mode_gap.tick(100000)==A::Cancel);
-    assert(mode_gap.tick(2400000)==A::None&&!mode_gap.p.faulted());
-    mode_gap.in.requested_mode=1;assert(mode_gap.tick(100000)==A::Move);
-    assert(mode_gap.tick(1900000)==A::Cancel);
-    assert(mode_gap.p.faulted()&&!strcmp(mode_gap.p.state(),"fault_no_progress"));
-
-    Scenario feedback_gap;assert(feedback_gap.start()==A::Move);feedback_gap.in.feedback_valid=false;
-    assert(feedback_gap.tick(100000)==A::Cancel);
-    for(int i=0;i<30;++i) assert(feedback_gap.tick(100000)==A::None&&!feedback_gap.p.faulted());
-    feedback_gap.in.feedback_valid=true;assert(feedback_gap.tick(100000)==A::None);
-    assert(feedback_gap.tick(100000)==A::Move);
-    assert(feedback_gap.tick(1900000)==A::Cancel); // invalid samples cannot reset accumulated budget
-    std::cout<<"PASS: physical no-progress deadline, software completion rejection, encoder quantum, gap retention and latched stop\n";
-}
-static void direction_recovery(){
-    for(int direction:{-1,1}) {
-        Scenario s;s.in.x=direction>0?520:120;assert(s.start()==A::Move);
-        assert(s.p.target()==direction*200);
-        s.in.x=280;assert(s.tick(290000)==A::Cancel);
-        for(int i=0;i<30;++i) assert(s.tick(100000)==A::None&&!s.p.faulted());
-        s.in.x=direction>0?120:520;
-        assert(s.tick(100000)==A::Move); // resume toward the face, not the cancelled target
-        assert(s.p.target()==-direction*200&&s.p.anchor()==0);
-        assert(s.tick(1700000)==A::None);
-        assert(s.tick(10000)==A::Cancel&&s.p.faulted()); // reversal preserves 0.29s consumed
-    }
-    Scenario repeated;repeated.in.x=520;assert(repeated.start()==A::Move);
-    for(int i=0;i<8;++i) {
-        repeated.in.x=(i%2==0)?120:520;
-        assert(repeated.tick(250000)==A::Cancel); // cancel before reversing an active trajectory
-        if(i==7) break;
-        assert(!repeated.p.faulted());
-        assert(repeated.tick(2500000)==A::Move);
-        assert(repeated.p.target()==((i%2==0)?-200:200));
-    }
-    assert(repeated.p.faulted()&&repeated.p.commands()==8);
-    assert(!strcmp(repeated.p.state(),"fault_no_progress"));
-    std::cout<<"PASS: both-direction resume, active reversal cancellation, repeated reversals retain 2s budget\n";
-}
-static void real_stall(){
-    Axis yaw;yaw.frozen=true;Scenario s;assert(s.start()==A::Move);
-    stackchan::motion::ServoFeedback feedback;feedback.valid=true;feedback.angle=0;
-    assert(apply_tracking_move(yaw,feedback,s.p.target()));
-    int cancelled_at=0;size_t writes_at_cancel=0;
-    for(int tick=1;tick<=200;++tick){
-        test_tick_ms+=20;s.in.measured=yaw.physical;s.in.settled=yaw.isTrajectoryComplete();
-        const auto action=s.tick(20000);
-        assert(action!=A::Move); // valid but fixed encoder must not invite another trajectory
-        if(action==A::Cancel){
-            assert(!cancelled_at);cancelled_at=tick*20;
-            yaw.cancelMotion();writes_at_cancel=yaw.writes.size();
-        }
-        if(s.p.active()) yaw.update();
-    }
-    assert(cancelled_at==2000&&s.p.faulted()&&!yaw.torque&&yaw.physical==0);
-    assert(writes_at_cancel>0&&yaw.writes.size()==writes_at_cancel&&s.p.commands()==1);
-    std::cout<<"PASS: actual Servo with frozen physical feedback cancels at 2s and emits no later position writes\n";
-}
-static void real_paused_stall(bool reverse=false){
-    Axis yaw;yaw.frozen=true;Scenario s;s.in.x=520;assert(s.start()==A::Move);
-    stackchan::motion::ServoFeedback feedback;feedback.valid=true;feedback.angle=0;
-    assert(apply_tracking_move(yaw,feedback,s.p.target()));
-    size_t paused_writes=0,final_writes=0;int cancels=0;
-    for(int tick=1;tick<=600;++tick){
-        test_tick_ms+=10;s.in.measured=yaw.physical;s.in.settled=yaw.isTrajectoryComplete();
-        if(tick==29) s.in.x=280; // intentional central cancellation at 0.29s
-        if(tick==329) s.in.x=reverse?120:520; // resume after 3s with no encoder progress
-        const auto action=s.tick(10000);
-        if(action==A::Cancel){
-            ++cancels;yaw.cancelMotion();
-            if(cancels==1){assert(tick==29);paused_writes=yaw.writes.size();}
-            else {assert(cancels==2&&tick==500);final_writes=yaw.writes.size();}
-        } else if(action==A::Move){
-            assert(tick==329&&s.p.target()==(reverse?-200:200));assert(apply_tracking_move(yaw,feedback,s.p.target()));
-        }
-        if(s.p.active()) yaw.update();
-        if(tick>=29&&tick<329) assert(!s.p.faulted()&&yaw.writes.size()==paused_writes&&!yaw.torque);
-    }
-    assert(cancels==2&&s.p.faulted()&&s.p.commands()==2&&s.p.anchor()==0);
-    assert(final_writes>paused_writes&&yaw.writes.size()==final_writes&&!yaw.torque);
-    std::cout<<"PASS: actual Servo pauses 3s without a false stall; 0.29s + 1.71s active time latches once\n";
-}
 static void real_reversal(){
     for(int direction:{-1,1}) {
         Axis yaw;stackchan::motion::ServoFeedback feedback;feedback.valid=true;feedback.angle=0;
@@ -343,4 +114,306 @@ static void real_reversal(){
     }
     std::cout<<"PASS: actual Servo reversals start at feedback, travel one slot and retain bounded command slew\n";
 }
-int main(){quantized_command_submission();direction_recovery();no_progress();guards();real_servo();real_stall();real_paused_stall();real_paused_stall(true);real_reversal();}
+// Default face: x=500,w=80 → centre 540, 220 px right of centre.
+// 220 px × 62°/640 px = 21.3° to the face; the command adds 3° precompensation.
+static constexpr int kAim=213,kCommand=243;
+// Feed a still, measured arrival (trajectory complete) until the turn counts as finished.
+static int arrive(Scenario& s,int angle){
+    s.in.settled=true;s.in.measured=angle;int ticks=0;
+    while(s.p.moving()){assert(++ticks<40);assert(s.tick(100000,false)==A::None);}
+    return ticks;
+}
+static void one_turn(){
+    Scenario s;assert(s.start()==A::Move);
+    assert(s.p.target()==kCommand&&s.p.anchor()==0&&s.p.last_turn().aim==kAim&&!strcmp(s.p.state(),"turning"));
+    // The camera is moving: lost faces, faces on the other side and glitches are ignored.
+    s.in.settled=false;s.in.measured=80;s.in.face_count=0;assert(s.tick()==A::None);
+    s.in.face_count=1;s.in.x=40;assert(s.tick()==A::None);
+    s.in.x=600;s.in.w=40;assert(s.tick()==A::None);
+    assert(s.p.moving()&&s.p.commands()==1&&s.p.cancels()==0);
+    s.in.x=280;s.in.w=80; // the face is now centred in the view
+    assert(!strcmp(s.p.state(),"turning"));
+    const int ticks=arrive(s,kAim);
+    assert(ticks==4); // first stable sample, then 300 ms ≥ 250 ms at 100 ms feedback
+    assert(!strcmp(s.p.state(),"looking")&&s.p.last_turn().settled&&!s.p.last_turn().by_deadline);
+    assert(s.p.last_turn().arrived==kAim&&s.p.last_turn().command==kCommand&&!s.p.last_turn().returning);
+    // Frames received within 300 ms of arrival may still show the moving view.
+    s.in.x=500;assert(s.tick(100000)==A::None);assert(s.tick(100000)==A::None);assert(s.p.commands()==1);
+    // First frame after the look delay: face centred → release, no further turn.
+    s.in.x=280;assert(s.tick(200000)==A::Cancel);assert(!strcmp(s.p.state(),"deadband"));
+    for(int i=0;i<30;++i) assert(s.tick()==A::None);
+    assert(s.p.commands()==1&&!s.p.faulted());
+    // Calibration: the face moved 220 px for 21.3° → 10.3 px/deg (assumed 10.3).
+    assert(s.p.calibration().samples==1&&s.p.calibration().last_px_per_deg_x10==103&&s.p.calibration().sum_px_per_deg_x10==103);
+    std::cout<<"PASS: one look → one turn; vision ignored while turning; arrival by stable feedback; look delay; calibration\n";
+}
+static void continues_without_interval(){
+    Scenario s;assert(s.start()==A::Move);
+    s.in.settled=false;s.in.measured=60;assert(s.tick()==A::None);
+    arrive(s,131); // stopped 4° short of the face estimate
+    // The face is still off centre at the next look: one reference frame, then turn.
+    assert(s.tick(400000)==A::None);assert(!strcmp(s.p.state(),"observing"));assert(s.tick()==A::Move);
+    assert(s.p.target()==131+kAim+30&&s.p.commands()==2&&s.p.anchor()==0);
+    // A large single correction is not split into 20° slots.
+    Scenario wide;wide.in.x=0;wide.in.w=40; // centre 20 → 300 px left = 29.0°
+    assert(wide.start()==A::Move);assert(wide.p.target()==-290-30);
+    std::cout<<"PASS: next turn follows arrival immediately; a whole correction is one command\n";
+}
+static void deadband(){
+    Scenario inside;inside.in.x=362; // centre 402: 82 px ≤ 82 px (8°)
+    assert(inside.start()==A::None);assert(!strcmp(inside.p.state(),"deadband"));
+    for(int i=0;i<20;++i) assert(inside.tick()==A::None);
+    assert(inside.p.commands()==0&&inside.p.has_anchor());
+    Scenario outside;outside.in.x=363; // centre 403: 83 px
+    assert(outside.start()==A::Move);assert(outside.p.target()==80+30);
+    Scenario left;left.in.x=197; // centre 237: 83 px left
+    assert(left.start()==A::Move);assert(left.p.target()==-80-30);
+    std::cout<<"PASS: 8° deadband (82 px) both sides\n";
+}
+static void lost_returns_to_anchor(bool frames_stop){
+    Scenario s;assert(s.start()==A::Move);
+    s.in.settled=false;s.in.measured=120;assert(s.tick()==A::None);
+    arrive(s,200);assert(s.tick(400000)==A::None);assert(s.tick()==A::Move); // person still off to the right
+    s.in.settled=false;s.in.measured=300;assert(s.tick()==A::None);
+    arrive(s,400);
+    // Face gone: release now, return only after 1.5 s.
+    s.in.face_count=0;
+    if(frames_stop) {
+        int cancels=0;int64_t elapsed=0;
+        while(!s.p.moving()){
+            const auto a=s.tick(100000,false);elapsed+=100000;assert(elapsed<3500000);
+            if(a==A::Cancel)++cancels;else assert(a==A::None||a==A::Move);
+        }
+        // 300 ms look delay + 700 ms frame lifetime + 1.5 s return delay.
+        assert(cancels==1&&elapsed>=2500000&&elapsed<=2600000);
+    } else {
+        assert(s.tick(400000)==A::Cancel);assert(!strcmp(s.p.state(),"face_lost"));
+        for(int i=0;i<14;++i) assert(s.tick()==A::None);
+        assert(s.tick()==A::Move);
+    }
+    assert(!strcmp(s.p.state(),"returning")&&s.p.last_turn().returning);
+    assert(s.p.target()==-30); // anchor 0, 3° beyond
+    assert(std::abs(s.p.target()-400)>kWebYawMaxDeltaTenths); // more than the old 30° cap
+    // The real Servo accepts the whole return and slews within bounds.
+    Axis yaw;yaw.physical=400;stackchan::motion::ServoFeedback fb;fb.valid=true;fb.angle=400;
+    assert(apply_tracking_move(yaw,fb,s.p.target()));
+    int previous=400;
+    for(unsigned i=1;i<=200;++i){test_tick_ms=100000+i*20;yaw.update();if(!yaw.writes.empty()){
+        const int v=yaw.writes.back();assert(v<=400&&v>=-30&&std::abs(v-previous)<=40);previous=v;}}
+    assert(previous==-30);
+    // Longer turns slow down so the peak command rate stays at the 20° slot's.
+    assert(FaceTracking::turn_speed(200)==1000&&FaceTracking::turn_speed(-430)==465&&FaceTracking::turn_speed(1200)==300);
+    s.in.settled=false;
+    for(int angle=300;angle>=0;angle-=100){s.in.measured=angle;assert(s.tick(100000,false)==A::None);}
+    arrive(s,0);assert(!strcmp(s.p.state(),"returned"));
+    for(int i=0;i<50;++i){const auto a=s.tick(100000,!frames_stop);assert(a!=A::Move);}
+    assert(s.p.commands()==3&&!s.p.faulted());
+    // The face comes back: tracking resumes from the same anchor.
+    s.in.face_count=1;s.in.x=500;assert(s.tick()==A::None);assert(s.tick()==A::Move);assert(s.p.anchor()==0&&s.p.target()==kCommand);
+    // Near the anchor already: no return turn.
+    Scenario near;assert(near.start()==A::Move);near.in.settled=false;near.in.measured=30;assert(near.tick()==A::None);
+    arrive(near,40);near.in.face_count=0;
+    for(int i=0;i<40;++i) assert(near.tick()!=A::Move);
+    assert(near.p.commands()==1);
+    std::cout<<"PASS: face lost "<<(frames_stop?"(no frames)":"(num 0)")<<" → back to anchor once after 1.5 s; >30° single return; resume on face\n";
+}
+static void settle_deadline(){
+    Scenario s;assert(s.start()==A::Move);
+    s.in.settled=true;int ticks=0;
+    while(s.p.moving()){
+        s.in.measured=(ticks%2)?150:190; // still hunting: never within 1° for 250 ms
+        assert(s.tick(100000,false)==A::None);assert(++ticks<40);
+    }
+    // First sample marks the trajectory end; 1 s + 30 ms × 24.3° = 1.729 s later is the 19th.
+    assert(ticks==19&&s.p.last_turn().by_deadline&&!strcmp(s.p.state(),"looking")&&!s.p.faulted());
+    std::cout<<"PASS: arrival deadline scales with distance when feedback never settles\n";
+}
+static void no_progress(){
+    // Software completion is not evidence that the physical encoder moved.
+    Scenario s;assert(s.start()==A::Move);
+    s.in.settled=true;int64_t elapsed=0;int moves=1;
+    while(!s.p.faulted()){
+        const auto a=s.tick(100000);elapsed+=100000;assert(elapsed<4000000);
+        if(a==A::Move)++moves;
+    }
+    // 2 s + 20 ms × 24.3° = 2.486 s of active command time; a fresh look cannot reset it.
+    assert(elapsed==2500000&&!strcmp(s.p.state(),"fault_no_progress"));
+    assert(moves<=2&&s.p.commands()==static_cast<uint32_t>(moves));
+    const auto commands=s.p.commands(),cancels=s.p.cancels();
+    for(int i=0;i<20;++i) assert(s.tick()==A::None);
+    assert(s.p.commands()==commands&&s.p.cancels()==cancels);
+    s.p.request(true,s.in.now_us); // idempotent enable cannot clear the fault
+    assert(s.tick()==A::None&&s.p.faulted());
+    s.p.request(false,s.in.now_us);s.p.request(true,s.in.now_us+1);
+    assert(s.tick()==A::None);assert(s.tick()==A::None);assert(s.tick()==A::Move);
+    // Five degrees of real progress inside the budget clear it.
+    Scenario normal;assert(normal.start()==A::Move);normal.in.settled=false;
+    normal.in.measured=60;assert(normal.tick(1000000)==A::None);
+    arrive(normal,171);assert(!normal.p.faulted());
+    // A long return gets a longer budget: 2 s + 20 ms × 43° = 2.86 s.
+    assert(FaceTracking::progress_budget_us(-430)==2860000);
+    std::cout<<"PASS: distance-scaled no-progress deadline, retained across looks, latched until off/on\n";
+}
+static void guards(){
+    Scenario s;assert(s.start()==A::Move);
+    s.p.request(false,s.in.now_us);s.p.request(true,s.in.now_us+1);
+    assert(s.tick()==A::Cancel); // quick off/on cannot erase pending stop
+    assert(s.p.step(s.in)==A::None); // same frame cannot revive
+    assert(s.tick()==A::None);assert(s.tick()==A::Move);
+    Scenario old;old.in.frame_us=900000;assert(old.p.step(old.in)==A::None);
+    assert(old.tick(100000,false)==A::None);assert(old.tick()==A::None);assert(old.tick()==A::Move);
+    Scenario stale_feedback;assert(stale_feedback.start()==A::Move);
+    stale_feedback.in.now_us+=300000;
+    assert(stale_feedback.p.step(stale_feedback.in)==A::Cancel);
+    assert(!strcmp(stale_feedback.p.state(),"feedback_stale"));
+    Scenario invalid;assert(invalid.start()==A::Move);
+    invalid.in.feedback_valid=false;assert(invalid.tick()==A::Cancel);
+    invalid.in.feedback_valid=true;assert(invalid.tick()==A::None);
+    assert(invalid.tick()==A::None); // inside the post-turn look delay
+    assert(invalid.tick(300000)==A::None);assert(invalid.tick()==A::Move);assert(invalid.p.anchor()==0);
+    Scenario jump;assert(jump.start()==A::Move);jump.in.measured=300;
+    assert(jump.tick()==A::Cancel);assert(!strcmp(jump.p.state(),"fault_feedback_jump"));
+    jump.in.measured=0;assert(jump.tick()==A::None);assert(jump.tick()==A::None);
+    Scenario mode;assert(mode.start()==A::Move);mode.in.mode=2;mode.in.requested_mode=2;mode.in.mode_requested_us=mode.in.now_us;
+    assert(mode.tick()==A::Cancel);assert(mode.p.anchor()==0&&!strcmp(mode.p.state(),"mode_changed"));
+    mode.in.frame_mode=2;assert(mode.tick(500000)==A::None);assert(mode.tick()==A::Move);assert(mode.p.anchor()==0);
+    Scenario bound;bound.in.measured=1230;assert(bound.start()==A::Move);assert(bound.p.target()==1280);
+    bound.in.settled=false;bound.in.measured=1260;assert(bound.tick()==A::None);
+    arrive(bound,1270);assert(bound.tick(400000)==A::None);assert(bound.tick()==A::Cancel);assert(!strcmp(bound.p.state(),"at_limit"));
+    // Clamped to a turn below 5° at the edge: no command, so no false stall latch.
+    Scenario edge;edge.in.measured=1240;assert(edge.start()==A::None);assert(!strcmp(edge.p.state(),"at_limit"));
+    for(int i=0;i<40;++i) assert(edge.tick()==A::None);
+    assert(edge.p.commands()==0&&!edge.p.faulted());
+    edge.p.request(false,edge.in.now_us);edge.p.request(true,edge.in.now_us+1);assert(!edge.p.last_turn().valid);
+    Scenario range;assert(range.start()==A::Move);range.in.measured=601;
+    assert(range.tick()==A::Cancel);assert(!strcmp(range.p.state(),"fault_anchor_range"));
+    Scenario outside;assert(outside.start()==A::Move);outside.in.measured=2000;
+    assert(outside.tick()==A::Cancel);assert(outside.p.faulted());
+    Scenario bad;bad.in.feedback_valid=false;assert(bad.p.step(bad.in)==A::None);assert(!bad.p.has_anchor());
+    Scenario coordinates;coordinates.in.x=620;assert(coordinates.start()==A::None);assert(!coordinates.p.has_anchor());
+    Scenario revision;assert(revision.start()==A::Move);
+    ++revision.in.mode_revision;assert(revision.tick()==A::Cancel);
+    assert(revision.tick(250000)==A::None); // same function request still pending
+    revision.in.applied_mode_revision=revision.in.mode_revision;
+    assert(revision.tick()==A::None); // retire the old applied generation
+    assert(revision.tick(500000)==A::None);assert(revision.tick()==A::Move); // same function, new explicit request
+    Scenario pending;assert(pending.start()==A::Move);
+    pending.in.requested_mode=2;assert(pending.tick()==A::Cancel);
+    assert(pending.tick(300000)==A::None); // UART still has detector result
+    Scenario manual;assert(manual.start()==A::Move);
+    manual.p.request(false,manual.in.now_us,"manual_override");
+    assert(!manual.p.requested()&&!manual.p.active()&&!manual.p.moving());
+    assert(manual.tick()==A::Cancel);assert(manual.tick()==A::None);
+    assert(!strcmp(manual.p.state(),"manual_override"));
+    Scenario broken;assert(broken.start()==A::Move);broken.in.feedback_valid=false;
+    assert(broken.tick()==A::Cancel);broken.in.feedback_valid=true;broken.in.measured=300;
+    assert(broken.tick()==A::None);assert(broken.p.faulted()); // loss must not erase jump history
+    Scenario glitch;glitch.in.x=280;assert(glitch.start()==A::None); // centred, still camera
+    glitch.in.x=0;glitch.in.w=40;assert(glitch.tick()==A::None);assert(!strcmp(glitch.p.state(),"frame_jump"));
+    assert(glitch.tick()==A::Move); // a second consistent frame is believed
+    Scenario race;assert(race.start()==A::Move);
+    ManualYaw queued;
+    assert(queued.submit(50,kWebYawDefaultSpeed,false,true,true,race.p.active(),0,race.in.now_us,race.in.now_us));
+    race.p.request(false,race.in.now_us,"manual_override");
+    assert(race.p.take_cancel()); // motor's second check after policy evaluation
+    assert(queued.take(race.in.now_us,true));assert(!race.p.take_cancel());
+    std::cout<<"PASS: stop races, stale/invalid/jump feedback, mode changes, limits, anchor range, glitches\n";
+}
+static void real_servo(){
+    Axis yaw;Scenario s;assert(s.start()==A::Move);
+    stackchan::motion::ServoFeedback feedback;feedback.valid=true;feedback.angle=0;
+    test_tick_ms=0;assert(apply_tracking_move(yaw,feedback,s.p.target()));assert(yaw.reads==0);
+    int previous=0;int max_delta=0;
+    for(unsigned i=1;i<=300;++i){test_tick_ms=i*20;yaw.update();if(!yaw.writes.empty()){
+        int value=yaw.writes.back();assert(value>=0&&value<=kCommand);
+        max_delta=std::max(max_delta,std::abs(value-previous));previous=value;
+    }}
+    assert(max_delta<=40); // bounded slew per 20 ms tick at speed 1000
+    assert(previous==kCommand&&yaw.isTrajectoryComplete());
+    assert(!yaw.torque); // factory release, not an active position hold
+    feedback.angle=kCommand;assert(apply_tracking_move(yaw,feedback,600));
+    for(unsigned i=301;i<320;++i){test_tick_ms=i*20;yaw.update();}
+    yaw.cancelMotion();const auto count=yaw.writes.size();
+    for(unsigned i=320;i<400;++i){test_tick_ms=i*20;yaw.update();}
+    assert(yaw.writes.size()==count&&!yaw.torque&&yaw.reads==0);
+    feedback.valid=false;assert(!apply_tracking_move(yaw,feedback,30));
+    feedback.valid=true;feedback.angle=0;assert(!apply_tracking_move(yaw,feedback,FaceTracking::kMaxCommandTenths+1));
+    std::cout<<"PASS: actual Servo bounded slew, fresh feedback only, cancel clears torque and emits no later position writes\n";
+}
+static void real_stall(){
+    Axis yaw;yaw.frozen=true;Scenario s;test_tick_ms=0;assert(s.start()==A::Move);
+    stackchan::motion::ServoFeedback feedback;feedback.valid=true;feedback.angle=0;
+    assert(apply_tracking_move(yaw,feedback,s.p.target()));
+    int cancelled_at=0;size_t writes_at_cancel=0;
+    for(int tick=1;tick<=250;++tick){
+        test_tick_ms+=20;s.in.measured=yaw.physical;s.in.settled=yaw.isTrajectoryComplete();
+        const auto action=s.tick(20000);
+        if(action==A::Move) {assert(!cancelled_at);assert(apply_tracking_move(yaw,feedback,s.p.target()));}
+        if(action==A::Cancel){
+            assert(!cancelled_at);cancelled_at=tick*20;
+            yaw.cancelMotion();writes_at_cancel=yaw.writes.size();
+        }
+        if(s.p.active()) yaw.update();
+    }
+    assert(cancelled_at>=2480&&cancelled_at<=2520&&s.p.faulted()&&!yaw.torque&&yaw.physical==0);
+    assert(writes_at_cancel>0&&yaw.writes.size()==writes_at_cancel&&s.p.commands()<=2);
+    std::cout<<"PASS: actual Servo with frozen feedback latches at 2.5 s and emits no later position writes\n";
+}
+static void realistic_cadence(){
+    // motor_task runs every 20 ms, servo feedback every 100 ms, M12 frames every ~140 ms.
+    Scenario s;s.in.now_us=1000000;s.in.feedback_us=s.in.now_us;
+    int64_t next_frame=s.in.now_us+140000,next_feedback=s.in.now_us+100000;
+    int moves=0,cancels=0,stale_states=0;int64_t first_move=0,cancel_at=0;
+    s.in.settled=true;
+    for(int tick=0;tick<250;++tick){
+        s.in.now_us+=20000;
+        if(s.in.now_us>=next_feedback){
+            s.in.feedback_us=s.in.now_us;next_feedback+=100000;
+            // After the first command the head reaches the face estimate within ~0.6 s and stays.
+            if(moves&&s.in.now_us-first_move>=100000) s.in.measured=std::min(kAim,s.in.measured+60);
+        }
+        if(s.in.now_us>=next_frame){
+            ++s.in.frame_seq;s.in.frame_us=s.in.now_us;next_frame+=140000;
+            // Once arrived, the face sits at the centre of the view.
+            if(moves&&s.in.measured==kAim) s.in.x=280;
+        }
+        s.in.settled=!moves||s.in.now_us-first_move>=600000;
+        const auto a=s.p.step(s.in);
+        if(a==A::Move){++moves;if(!first_move)first_move=s.in.now_us;}
+        if(a==A::Cancel){++cancels;cancel_at=s.in.now_us;}
+        if(!strcmp(s.p.state(),"frame_stale")||!strcmp(s.p.state(),"face_lost")) ++stale_states;
+    }
+    assert(moves==1&&stale_states==0);
+    // Exactly one release, when the first post-arrival frame shows the face centred.
+    assert(cancels==1&&cancel_at>first_move+600000&&!strcmp(s.p.state(),"deadband"));
+    std::cout<<"PASS: 20 ms policy ticks between 140 ms frames never read as a lost face\n";
+}
+static void hybrid_look(){
+    // Still face: two frames within 2° → turn straight to it, no lead.
+    Scenario still;assert(still.start()==A::Move);assert(still.p.last_turn().lead==0&&still.p.target()==kCommand);
+    // Moving face, not clamped: 540 → 566 px in 200 ms = 2.5° → 12.5°/s × 0.6 s = 7.5° lead.
+    Scenario walk;assert(walk.p.step(walk.in)==A::None);assert(walk.tick(100000)==A::None);
+    walk.in.x=526;assert(walk.tick(200000)==A::Move);
+    assert(walk.p.last_turn().motion==25&&walk.p.last_turn().lead==75&&walk.p.last_turn().motion_dt_us==200000);
+    assert(walk.p.last_turn().aim==238+75&&walk.p.target()==238+75+30);
+    // Fast face: the lead is capped at 10°.
+    Scenario fast;assert(fast.p.step(fast.in)==A::None);assert(fast.tick()==A::None);
+    fast.in.x=540;assert(fast.tick()==A::Move);assert(fast.p.last_turn().lead==100);
+    // Walking towards the centre: will be inside the band by itself → no turn.
+    Scenario back;back.in.x=400;assert(back.p.step(back.in)==A::None);assert(back.tick()==A::None);
+    back.in.x=370;assert(back.tick()==A::None);assert(!strcmp(back.p.state(),"deadband")&&back.p.commands()==0);
+    // Leading turns do not feed the calibration.
+    walk.in.settled=false;walk.in.measured=150;assert(walk.tick()==A::None);arrive(walk,313);
+    walk.in.x=280;assert(walk.tick(400000)==A::Cancel);assert(walk.p.calibration().samples==0);
+    // Frames more than 600 ms apart: the second is only a new reference.
+    Scenario gap;assert(gap.p.step(gap.in)==A::None);assert(gap.tick()==A::None);
+    assert(gap.tick(650000)==A::None);assert(!strcmp(gap.p.state(),"observing"));
+    assert(gap.tick(100000)==A::Move);
+    // At rest with the face already tracked, leaving the band needs no extra frame.
+    Scenario rest;rest.in.x=280;assert(rest.start()==A::None);
+    rest.in.x=500;assert(rest.tick()==A::Move);assert(rest.p.last_turn().lead==100); // 220 px in one frame: fast
+    std::cout<<"PASS: hybrid two-frame look: still → direct, moving → bounded lead, inbound → wait, gap → new reference\n";
+}
+int main(){quantized_command_submission();hybrid_look();realistic_cadence();one_turn();continues_without_interval();deadband();
+    lost_returns_to_anchor(false);lost_returns_to_anchor(true);settle_deadline();no_progress();guards();
+    real_servo();real_stall();real_reversal();}

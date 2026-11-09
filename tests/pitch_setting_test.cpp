@@ -106,8 +106,19 @@ static void feedback_boundary()
         feedback.angle = actual;
         assert(!axis.moveFromFeedbackWithSpeed(feedback, 130, 250, 20));
     }
+    // 2026-11-09: the head rested at -3.4° (raw 631), 8.4° below the 5° limit, so
+    // the boot pose and every web pitch request were refused. The robot margin
+    // allows inward recovery from up to 10° below; the command still starts at the limit.
+    for (int actual : {-34, -50}) {
+        feedback.angle = actual;
+        assert(axis.canStartFromFeedback(feedback, 150, collector::kPitchSettingLowerMargin));
+        assert(axis.moveFromFeedbackWithSpeed(feedback, 150, 250, collector::kPitchSettingLowerMargin));
+        assert(axis.command_start() == 50 && feedback.angle == actual);
+    }
+    feedback.angle = -51;
+    assert(!axis.moveFromFeedbackWithSpeed(feedback, 150, 250, collector::kPitchSettingLowerMargin));
     feedback.angle = 40;
-    for (int margin : {-1, 21}) assert(!axis.moveFromFeedbackWithSpeed(feedback, 130, 250, margin));
+    for (int margin : {-1, 101}) assert(!axis.moveFromFeedbackWithSpeed(feedback, 130, 250, margin));
     for (int target : {49, 851}) assert(!axis.moveFromFeedbackWithSpeed(feedback, target, 250, 20));
     feedback.valid = false;
     assert(!axis.moveFromFeedbackWithSpeed(feedback, 130, 250, 20));

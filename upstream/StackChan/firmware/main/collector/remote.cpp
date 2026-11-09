@@ -789,12 +789,24 @@ void remote_tracking_json(ArduinoJson::JsonObject target)
     target["active"] = tracking.active();
     target["state"] = tracking.state();
     target["fault_latched"] = tracking.faulted();
+    target["policy"] = "one_look_one_turn";
+    target["moving"] = tracking.moving();
     target["range_deg"] = FaceTracking::kRange / 10.0f;
-    target["max_step_deg"] = FaceTracking::kMaxStep / 10.0f;
-    target["min_interval_ms"] = FaceTracking::kIntervalUs / 1000;
-    target["slot_deg"] = FaceTracking::kSlotTenths / 10.0f;
+    target["max_command_deg"] = FaceTracking::kMaxCommandTenths / 10.0f;
+    target["full_speed_up_to_deg"] = FaceTracking::kRateRefTenths / 10.0f;
+    target["min_turn_speed"] = FaceTracking::kMinTurnSpeed;
+    target["deadband_deg"] = FaceTracking::kDeadbandTenths / 10.0f;
     target["deadband_px"] = FaceTracking::kDeadbandPx;
-    target["no_progress_timeout_ms"] = FaceTracking::kProgressTimeoutUs / 1000;
+    target["assumed_fov_deg"] = FaceTracking::kFovTenths / 10.0f;
+    target["precomp_deg"] = FaceTracking::kPrecompTenths / 10.0f;
+    target["look_delay_ms"] = FaceTracking::kLookDelayUs / 1000;
+    target["look_frames"] = 2;
+    target["still_deg"] = FaceTracking::kStillTenths / 10.0f;
+    target["lead_ms"] = FaceTracking::kLeadUs / 1000;
+    target["max_lead_deg"] = FaceTracking::kMaxLeadTenths / 10.0f;
+    target["return_delay_ms"] = FaceTracking::kReturnDelayUs / 1000;
+    target["no_progress_timeout_ms"] = FaceTracking::kProgressBaseUs / 1000;
+    target["no_progress_per_deg_ms"] = FaceTracking::kProgressPerDegUs / 1000;
     target["no_progress_time_basis"] = "cumulative_active_command_time";
     target["min_progress_deg"] = FaceTracking::kProgressQuantum / 10.0f;
     target["speed_semantics"] = "bounded_command_model_not_measured_physical_speed";
@@ -808,6 +820,37 @@ void remote_tracking_json(ArduinoJson::JsonObject target)
     } else {
         target["anchor_deg"] = nullptr; target["target_deg"] = nullptr;
     }
+    // Last turn: aim is the face estimate, command adds the precompensation,
+    // arrived is the measured angle when the turn counted as finished.
+    const auto& turn = tracking.last_turn();
+    auto last = target["last_turn"].to<ArduinoJson::JsonObject>();
+    last["valid"] = turn.valid;
+    if (turn.valid) {
+        last["returning"] = turn.returning;
+        last["start_deg"] = turn.start / 10.0f;
+        last["aim_deg"] = turn.aim / 10.0f;
+        last["command_deg"] = turn.command / 10.0f;
+        last["speed"] = FaceTracking::turn_speed(turn.command - turn.start);
+        last["lead_deg"] = turn.lead / 10.0f;
+        last["face_motion_deg"] = turn.motion / 10.0f; // between the two frames of the look
+        last["face_motion_dt_ms"] = static_cast<int>(turn.motion_dt_us / 1000);
+        last["settled"] = turn.settled;
+        if (turn.settled) {
+            last["arrived_deg"] = turn.arrived / 10.0f;
+            last["error_deg"] = (turn.arrived - turn.aim) / 10.0f;
+            last["settle"] = turn.by_deadline ? "deadline" : "stable";
+        }
+    }
+    // Measured image shift per degree of head turn (first look after each turn).
+    const auto& calibration = tracking.calibration();
+    target["calibration"]["samples"] = calibration.samples;
+    if (calibration.samples) {
+        target["calibration"]["px_per_deg"] = calibration.last_px_per_deg_x10 / 10.0f;
+        target["calibration"]["mean_px_per_deg"] = static_cast<float>(calibration.sum_px_per_deg_x10) / calibration.samples / 10.0f;
+    } else {
+        target["calibration"]["px_per_deg"] = nullptr; target["calibration"]["mean_px_per_deg"] = nullptr;
+    }
+    target["calibration"]["assumed_px_per_deg"] = FaceTracking::kFrameWidth * 10.0f / FaceTracking::kFovTenths;
 }
 esp_err_t remote_step_yaw(int delta_tenths, int speed, bool remote_like, uint32_t* request_seq)
 {
