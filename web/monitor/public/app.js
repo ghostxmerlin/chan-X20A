@@ -33,8 +33,8 @@ tooltipObserver.observe(document.querySelector('.dashboard'), { subtree: true, c
 let source, state, received = 0, paused = false, generation = 0, frameSeq = null, frameURL = null, framePending = false;
 let lastBoot = '', lastEvent = -1, lastFiltered = 0, logFilter = 'all';
 // Combined log: ASR commands, hearing (speech / link / gaps), sound events and system state changes.
-const LOG_GROUPS = { asr: ['asr'], hearing: ['hearing', 'response'], response: ['response'], sound: ['sound'] };
-const LOG_TAGS = { asr: 'ASR', hearing: '听觉', sound: '声音', response: '回应' };
+const LOG_GROUPS = { asr: ['asr'], hearing: ['hearing', 'response'], response: ['response'], sound: ['sound'], tingwu: ['tingwu'] };
+const LOG_TAGS = { asr: 'ASR', hearing: '听觉', sound: '声音', response: '回应', tingwu: '听悟' };
 const inGroup = (kind, filter) => filter === 'all' || (filter === 'system' ? !Object.values(LOG_GROUPS).flat().includes(kind) : (LOG_GROUPS[filter] || []).includes(kind));
 for (const button of document.querySelectorAll('[data-log-filter]')) button.addEventListener('click', () => {
   logFilter = button.dataset.logFilter; lastEvent = -1;
@@ -124,7 +124,7 @@ function render() {
     for (const e of shown) {
       const li = document.createElement('li'), time = document.createElement('time'), tag = document.createElement('b'), message = document.createElement('span');
       time.textContent = new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false }); time.dateTime = new Date(e.at).toISOString();
-      tag.textContent = LOG_TAGS[e.kind] || '系统'; tag.className = e.kind; li.className = 'log-' + e.kind; message.textContent = e.text; li.append(time, tag, message); list.append(li);
+      tag.textContent = LOG_TAGS[e.kind] || '系统'; tag.className = e.kind; li.className = 'log-' + e.kind + (e.known ? ' log-known' : ''); message.textContent = e.text; li.append(time, tag, message); list.append(li);
     }
     if (!shown.length) { const li = document.createElement('li'); li.className = 'muted'; li.textContent = '暂无此类事件'; list.append(li); }
     text('event-count', `${shown.length} / ${events.length} 条${state?.filteredSpeech ? ` · 已过滤 ${state.filteredSpeech} 条无字/非人声` : ''}`);

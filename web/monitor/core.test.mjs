@@ -210,3 +210,10 @@ test('speech with no words or no voice stays out of the log and is only counted'
   assert.equal(monitor.snapshot().filteredSpeech, 3);
   monitor.acceptInfo({ boot_id: 'b' }); assert.equal(monitor.snapshot().filteredSpeech, 0);
 });
+test('tingwu sentences get their own log kind and known speakers are marked',()=>{
+  assert.deepEqual(hearingEvent({kind:'tingwu',label:'今天开会',detail:''}),{kind:'tingwu',text:'听悟「今天开会」'});
+  assert.match(hearingEvent({kind:'tingwu',label:'你好',detail:'self'}).text,/hello 自己的声音/);
+  assert.deepEqual(hearingEvent({kind:'tingwu',label:'',detail:'error: TimeoutError'}),{kind:'tingwu',text:'听悟出错：TimeoutError'});
+  assert.equal(hearingEvent({kind:'speech',label:'你好',detail:'neutral/known/me',p:.5}).known,true);
+  assert.equal(hearingEvent({kind:'speech',label:'你好',detail:'neutral/unsure',p:.5}).known,false);
+});

@@ -70,6 +70,13 @@ std::string last_end_reason,last_end_error;int64_t last_end_us=0;uint32_t last_e
 constexpr size_t kEvents=32;
 struct HearingEvent {uint32_t seq=0;int64_t us=0;const char* kind="";std::string label,detail;int p=-1;};
 std::array<HearingEvent,kEvents> events;uint32_t event_seq=0;
+// At most `bytes` bytes without cutting a UTF-8 character (a cut one made telemetry JSON invalid).
+std::string utf8_prefix(const std::string& text,size_t bytes) {
+    if(text.size()<=bytes)return text;
+    size_t n=bytes;
+    while(n>0&&(static_cast<unsigned char>(text[n])&0xC0)==0x80)--n;
+    return text.substr(0,n);
+}
 void record_locked(const char* kind,std::string label,std::string detail={},int p=-1) {
     auto& e=events[++event_seq%kEvents];
     e.seq=event_seq;e.us=esp_timer_get_time();e.kind=kind;e.label=std::move(label);e.detail=std::move(detail);e.p=p;
@@ -140,7 +147,7 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             read_speakers(event["speakers"]);
             if(forget_name==(event["name"]|"")){forget_state=(event["ok"]|false)?"done":"error";forget_error=event["error"]|"";}
             const bool ok=event["ok"]|false;
-            record_locked("link",std::string(ok?"voiceprint deleted: ":"voiceprint delete failed: ")+forget_name.substr(0,48));
+            record_locked("link",std::string(ok?"voiceprint deleted: ":"voiceprint delete failed: ")+utf8_prefix(forget_name,48));
         }
         else if(!std::strcmp(type,"audio")) {
             audio_ack=!std::strcmp(event["format"]|"","opus")&&!std::strcmp(event["framing"]|"","sea1")&&event["input_sample_rate"].as<int>()==24000;
@@ -157,10 +164,17 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             } else if(!std::strcmp(phase,"error")||!std::strcmp(phase,"cancelled")) {
                 finish_enroll_locked(phase,event["error"]|"enrollment_cancelled");return;
             }
+        } else if(!std::strcmp(type,"tingwu")) {
+            // 听悟 realtime (server, 2026-11-10): shown in the monitor's combined log under its own tag.
+            const char* phase=event["phase"]|"";
+            if(!std::strcmp(phase,"sentence"))
+                record_locked("tingwu",utf8_prefix(event["text"]|"",240),(event["self"]["sounding"]|false)?"self":"");
+            else if(!std::strcmp(phase,"error"))
+                record_locked("tingwu","",std::string("error: ")+utf8_prefix(event["error"]|"",120));
         } else if(!std::strcmp(type,"audio_gap")) {
             record_locked("gap","",std::to_string(event["missing_packets"]|0));
         } else if(!std::strcmp(type,"sound")&&!std::strcmp(event["phase"]|"","start")) {
-            record_locked("sound",std::string(event["label"]|"").substr(0,48),std::string(event["kind"]|"").substr(0,24),
+            record_locked("sound",utf8_prefix(event["label"]|"",48),std::string(event["kind"]|"").substr(0,24),
                           static_cast<int>(std::lround((event["p"]|0.0f)*100)));
         } else if(!std::strcmp(type,"error")) {
             error=std::string(event["error"]|"backend_error").substr(0,160);
@@ -169,9 +183,9 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
         } else if(!std::strcmp(type,"speech")&&!std::strcmp(event["phase"]|"","end")) {
             // No identity gate: known, unsure and unknown speakers all use the same response policy.
             band=std::string(event["speaker"]["band"]|"none").substr(0,16);
-            speaker=band=="known"?std::string(event["speaker"]["name"]|"").substr(0,144):"";
-            text=std::string(event["text"]|"").substr(0,768);emotion=std::string(event["emotion"]|"unknown").substr(0,24);last_speech=now;
-            record_locked("speech",text.substr(0,160),emotion+"/"+band+(speaker.empty()?"":"/"+speaker.substr(0,48)),
+            speaker=band=="known"?utf8_prefix(event["speaker"]["name"]|"",144):"";
+            text=utf8_prefix(event["text"]|"",768);emotion=std::string(event["emotion"]|"unknown").substr(0,24);last_speech=now;
+            record_locked("speech",utf8_prefix(text,160),emotion+"/"+band+(speaker.empty()?"":"/"+utf8_prefix(speaker,48)),
                           static_cast<int>(std::lround((event["voice"]["p"]|-0.01f)*100)));
             if(!control.requested()||control.enrolling())continue;
             const char* id=event["id"]|"";unsigned seq=0;char extra;
@@ -185,7 +199,7 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             if(quiet.pending())continue; // one response at a time; this utterance is not considered
             const int clip=policy.consider(seq,emotion.c_str(),valid,self,valid?static_cast<int>(processing):-1,now,esp_random(),
                 kVoiceCount,[](int clip_id){return voice_emotion(clip_id);});
-            if(clip)quiet.hold(clip,now,text.substr(0,120),emotion);
+            if(clip)quiet.hold(clip,now,utf8_prefix(text,120),emotion);
             // Normal eye mode: no response for this utterance → show its emotion once (vision on only;
             // with the eyes disabled the request is refused and the home page stays).
             else if(!self&&!text.empty())show_emotion_eyes(emotion.c_str());

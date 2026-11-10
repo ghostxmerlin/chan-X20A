@@ -1,5 +1,15 @@
 # 会话交接记录
 
+## 2026-11-10 傍晚：hello 数据库与听悟实时转写（0.4.72，Claude）
+
+- **数据库 `hello`**（服务器本机 MongoDB；连接 `MONGO_URI` 运行时从 hubmix `~/aidea/agent/.env` 读，不进仓库）：`sessions`（每连接：来源、起止、录音路径、模型、听悟统计）、`speech`（SenseVoice 每句，已识别的熟人带 `speaker.name`）、`sounds`、`tingwu`（实时句 `kind=sentence`、会话后带说话人的 `kind=paragraph`）。键为 `session`=录音文件夹名（`YYYYMMDD/HHMMSS-source-cN`）+ id，可回到原声；**音频不进库**（录音文件永久保留，库里存路径和采样位置）。`server/ear/hello_db.py` 单后台线程 + 有界队列，库不可用只丢行（计数）不影响耳朵。
+- **补录**：`server/ear/hello_db_import.py`（可重复运行，按 session+id upsert）；已导入 273 会话 / 1513 句 / 708 声音，重跑数量不变。
+- **听悟实时**（`server/ear/tingwu.py`）：只对 stackchan 来源，每连接一个任务，送原始 16 kHz 声音（不降噪、不屏蔽）；实时句时间取 `words[].beginTime/endTime`；会话结束后 createTask(dataId) 结束任务、getTask 轮询取 `transcriptionPath` 段落。密钥 `DASHSCOPE_API_KEY/APP_ID` 同样从 hubmix 读。`--tingwu off` 可关，计费约 0.9 元/小时。服务端测过 30 s 真实片段。
+- **到前端**：耳朵发 `{"type":"tingwu","phase":"sentence"|"error"}`；0.4.72 记入听觉事件环（kind `tingwu`）；监控页总 log 加“听悟”标签（橙色），声纹认出熟人的句子绿底绿字。固件把听觉文字截断改为不切断 UTF-8 字符。
+- **实测**（16:36）：SenseVoice「不检查了，怎么看病啊？」（身份 me，绿色）→ 约 5 s 后听悟「不检查的，怎么看病，你没有检查报告***那。」；与 hello 播台词重叠的句子会标出。
+- **部署**：服务器 ear venv 装了 pymongo 4.17.0；`deploy.sh` 文件列表加了三个新文件；用户授权后部署，日志 `hello db: on; tingwu realtime: on`。
+
+
 ## 2026-11-10 傍晚：正常眼睛模式、声纹录入/删除、降噪可控评估（0.4.68–0.4.71，Claude）
 
 - **正常眼睛模式**（`collector/eye_mode.h`）：没开视觉一直笑脸男（台词也不切，`set_voice_auto_enable(false)`）；M12 被请求检测（追踪 / 认人 / 开启检测 / turn on）时 v14 机甲眼睛，自然循环只在 idle↔sleepy/thinking/curious（`set_natural_pool`）；听到有情绪的话且没有台词回应时按情绪播一次（新来源 `Source::Hearing`，台词表情优先、手动最优先）；41–80 号台词按台词情绪切表情（原来被忽略）。0.4.71 起开启视觉不再切到全屏人脸框页面。主循环每 250 ms 跟随 `m12_requested_function`，失败 2 s 重试。实测：认人模式下 v14 显示并循环 curious/sleepy；开启检测时主页显示 v14。

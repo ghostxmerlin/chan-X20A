@@ -162,8 +162,13 @@ export function hearingEvent(e, clips = []) {
   }
   if (e.kind === 'speech') {
     const [emotion, band, speaker] = String(e.detail || '').split('/');
-    return { kind: 'hearing', text: `听到「${e.label || '（无文字）'}」· 情绪 ${emotion || '—'} · ${speaker ? '身份 ' + speaker : '声纹 ' + (band || '—')}${Number.isFinite(e.p) ? ' · 人声' + pct(e.p) : ''}` };
+    // known: the voiceprint recognised a registered person (shown green in the log).
+    return { kind: 'hearing', known: band === 'known' && !!speaker, text: `听到「${e.label || '（无文字）'}」· 情绪 ${emotion || '—'} · ${speaker ? '身份 ' + speaker : '声纹 ' + (band || '—')}${Number.isFinite(e.p) ? ' · 人声' + pct(e.p) : ''}` };
   }
+  // 听悟 realtime sentence from the server (collector-0.4.72+), or a 听悟 error.
+  if (e.kind === 'tingwu') return String(e.detail || '').startsWith('error: ')
+    ? { kind: 'tingwu', text: `听悟出错：${String(e.detail).slice(7)}` }
+    : { kind: 'tingwu', text: `听悟「${e.label || '（无文字）'}」${e.detail === 'self' ? ' · 与 hello 自己的声音重叠' : ''}` };
   if (e.kind === 'sound') return { kind: 'sound', text: `声音 ${e.label || e.detail}（${e.detail || '—'}）${pct(e.p)}` };
   if (e.kind === 'gap') return { kind: 'hearing', text: `听觉丢包 ${e.detail || '?'} 个（服务端发现序号缺口）` };
   if (e.kind === 'error') return { kind: 'hearing', text: `听觉后端错误 ${e.label}` };
@@ -234,6 +239,7 @@ export class Monitor extends EventEmitter {
         continue;
       }
       this.event(formatted.kind, formatted.text, at);
+      if (formatted.known) this.events.at(-1).known = true;
       if (event.kind === 'gap') Object.assign(this.events.at(-1), { gap: { total: Number(event.detail) || 0, times: 1 }, gapAt: at });
     }
     if (data.m12?.online !== previous?.m12?.online && previous)
