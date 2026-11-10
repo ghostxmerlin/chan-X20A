@@ -68,6 +68,19 @@ class SettingsStoreTest(unittest.TestCase):
         s2 = copy.deepcopy(s); s2["place"]["default"] = "家里"; self.st.save(s2, "")
         self.assertEqual(self.st.get(0)["place"]["default"], s["place"]["default"])
 
+    def test_owner_alias_is_one_per_day_and_stable(self):
+        s = settings.load(None)
+        s["owner"]["aliases"] = ["Kira", "Dave", "无限", "劳埃德"]
+        day = 1794300000000
+        a = settings.owner_name(s, day)
+        self.assertIn(a, s["owner"]["aliases"])
+        self.assertEqual(settings.owner_name(s, day + 3 * 3600_000), a)                        # same day
+        names = {settings.owner_name(s, day + k * 86400_000) for k in range(30)}
+        self.assertGreater(len(names), 1)                                                     # rotates over days
+        s["owner"]["aliases"] = []
+        self.assertEqual(settings.owner_name(s, day), s["owner"]["display"])
+        self.assertTrue(any("aliases" in e for e in validate({**s, "owner": {**s["owner"], "aliases": ["x" * 30]}})))
+
     def test_defaults_have_phase1_fields(self):
         s = settings.load(None)
         self.assertEqual(s["sources"]["speech_text"], True)

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 DEFAULTS = {
     "tz": "Asia/Shanghai",
-    "owner": {"display": "主人", "voice_names": ["me"], "face_names": ["me"]},
+    "owner": {"display": "主人", "aliases": [], "voice_names": ["me"], "face_names": ["me"]},   # aliases: one per day
     "people": [],                 # [{"display", "voice_names", "face_names"}]
     "work": {"days": [1, 2, 3, 4, 5], "start": "09:00", "end": "19:00"},
     "thresholds": {"just_left_min": 2, "voice_recent_min": 5, "face_recent_min": 10, "absent_after_min": 20,
@@ -72,6 +72,17 @@ def load_env(path):
     except OSError:
         pass
     return cfg
+
+
+def owner_name(s, ms):
+    """How the owner is called on the local day of ms: one of owner.aliases, the same all day, rotating
+    from day to day (stable within a day so the model does not read it as a new person); else display."""
+    aliases = [a for a in (s.get("owner") or {}).get("aliases") or [] if a]
+    if not aliases:
+        return s["owner"]["display"]
+    day = local_time(ms, s["tz"]).date()
+    import hashlib
+    return aliases[int(hashlib.sha1(day.isoformat().encode()).hexdigest(), 16) % len(aliases)]
 
 
 def minute_floor(ms):

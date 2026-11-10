@@ -53,6 +53,9 @@ def validate(s):
     o = s.get("owner") or {}
     _text(errs, "owner.display", o.get("display"), 1, 24)
     _names(errs, "owner.voice_names", o.get("voice_names"), 1, 8)
+    aliases = o.get("aliases", [])
+    if not isinstance(aliases, list) or len(aliases) > 20 or not all(isinstance(a, str) and 1 <= len(a) <= 24 for a in aliases):
+        errs.append("owner.aliases: at most 20 names of 1–24 characters")
     _names(errs, "owner.face_names", o.get("face_names"), 1, 8)
     people = s.get("people", [])
     if not isinstance(people, list) or len(people) > 30:

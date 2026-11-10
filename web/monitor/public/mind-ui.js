@@ -103,7 +103,7 @@ export function sceneHtml(rec,run){
 }
 const list=v=>String(v||'').split(/[,，\s]+/).map(x=>x.trim()).filter(Boolean);
 export function formFromSettings(s){
- return {self_facts:s.self_facts||'',place:s.place?.default||'',owner_display:s.owner?.display||'',owner_voice:[...(s.owner?.voice_names||[])],owner_face:[...(s.owner?.face_names||[])],
+ return {self_facts:s.self_facts||'',place:s.place?.default||'',owner_display:s.owner?.display||'',owner_aliases:(s.owner?.aliases||[]).join(','),owner_voice:[...(s.owner?.voice_names||[])],owner_face:[...(s.owner?.face_names||[])],
   people:(s.people||[]).map(p=>({display:p.display,voice:(p.voice_names||[]).join(','),face:(p.face_names||[]).join(',')})),
   work_days:(s.work?.days||[]).join(','),work_start:s.work?.start||'09:00',work_end:s.work?.end||'19:00',
   speech_text:!!s.sources?.speech_text,tingwu:!!s.sources?.tingwu,sounds:!!s.sources?.sounds,vision:!!s.sources?.vision,
@@ -112,7 +112,7 @@ export function formFromSettings(s){
 export function settingsFromForm(v,base){
  const s=JSON.parse(JSON.stringify(base||{}));
  s.self_facts=v.self_facts;s.place={...(s.place||{}),default:v.place};s.persona=v.persona;
- s.owner={...(s.owner||{}),display:v.owner_display,voice_names:[...v.owner_voice],face_names:[...v.owner_face]};
+ s.owner={...(s.owner||{}),display:v.owner_display,aliases:list(v.owner_aliases),voice_names:[...v.owner_voice],face_names:[...v.owner_face]};
  s.people=v.people.filter(p=>p.display.trim()).map(p=>({display:p.display.trim(),voice_names:list(p.voice),face_names:list(p.face)}));
  s.work={...(s.work||{}),days:list(v.work_days).map(Number),start:v.work_start,end:v.work_end};
  s.sources={...(s.sources||{}),speech_text:v.speech_text,tingwu:v.tingwu,sounds:v.sounds,vision:v.vision};
@@ -126,7 +126,8 @@ export function settingsHtml(v,names){
  const people=[...v.people,{display:'',voice:'',face:''}].map((p,i)=>`<div class="person" data-i="${i}"><input name="p_display" placeholder="显示名" value="${escapeHtml(p.display)}"><input name="p_voice" placeholder="声纹名，逗号分隔" value="${escapeHtml(p.voice)}"><input name="p_face" placeholder="人脸名，逗号分隔" value="${escapeHtml(p.face)}"></div>`).join('');
  return `<label>关于 hello（自我事实）<textarea name="self_facts" rows="3">${escapeHtml(v.self_facts)}</textarea></label>
  <label>默认地点<input name="place" value="${escapeHtml(v.place)}"></label>
- <fieldset><legend>主人</legend><label>显示名<input name="owner_display" value="${escapeHtml(v.owner_display)}"></label>
+ <fieldset><legend>主人</legend><label>显示名（没有称呼时用）<input name="owner_display" value="${escapeHtml(v.owner_display)}"></label>
+ <label>称呼（逗号分隔，每天随机用一个）<input name="owner_aliases" value="${escapeHtml(v.owner_aliases??'')}"></label>
  <div>声纹名：${pick('owner_voice',v.owner_voice,names?.voice||[])}</div><div>人脸名：${pick('owner_face',v.owner_face,names?.face||[])}</div></fieldset>
  <fieldset><legend>认识的人（留空的行不保存）</legend>${people}</fieldset>
  <fieldset><legend>工作时段</legend><label>工作日（1=周一）<input name="work_days" value="${escapeHtml(v.work_days)}"></label><label>从<input name="work_start" value="${escapeHtml(v.work_start)}"></label><label>到<input name="work_end" value="${escapeHtml(v.work_end)}"></label></fieldset>
@@ -138,7 +139,7 @@ export function settingsHtml(v,names){
 function readForm(root){
  const val=n=>root.querySelector(`[name="${n}"]`)?.value??'',on=n=>!!root.querySelector(`[name="${n}"]`)?.checked;
  const checked=n=>[...root.querySelectorAll(`[name="${n}"]`)].filter(e=>e.checked).map(e=>e.value);
- return {self_facts:val('self_facts'),place:val('place'),owner_display:val('owner_display'),owner_voice:checked('owner_voice'),owner_face:checked('owner_face'),
+ return {self_facts:val('self_facts'),place:val('place'),owner_display:val('owner_display'),owner_aliases:val('owner_aliases'),owner_voice:checked('owner_voice'),owner_face:checked('owner_face'),
   people:[...root.querySelectorAll('.person')].map(p=>({display:p.querySelector('[name=p_display]').value,voice:p.querySelector('[name=p_voice]').value,face:p.querySelector('[name=p_face]').value})),
   work_days:val('work_days'),work_start:val('work_start'),work_end:val('work_end'),speech_text:on('speech_text'),tingwu:on('tingwu'),sounds:on('sounds'),vision:on('vision'),
   fusion_enabled:on('fusion_enabled'),model:val('model'),budget:val('budget'),persona:val('persona'),note:val('note')};

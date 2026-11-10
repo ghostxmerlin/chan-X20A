@@ -49,6 +49,12 @@ class PromptsTest(unittest.TestCase):
         self.assertIn("今天下午开会", u)
         self.assertNotIn("voice_names", u)
 
+    def test_owner_alias_used_in_the_prompt(self):
+        s2 = copy.deepcopy(S); s2["owner"]["aliases"] = ["Dave"]
+        u = render("v1", s2, self.pkg, self.strong, None, [], {})[1]["content"]
+        self.assertIn("主人：Dave", u)
+        self.assertIn("主人（Dave）", u)
+
     def test_speech_text_off_hides_words(self):
         s2 = deep(S, sources={"speech_text": False})
         u = render("v1", s2, self.pkg, self.strong, None, [], {})[1]["content"]

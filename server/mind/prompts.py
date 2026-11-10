@@ -89,7 +89,8 @@ def _overlaps(a, b):
 
 
 def render(version, s, pkg, strong, prev_scene, segments, neighbours):
-    tz, owner, people, src = s["tz"], s["owner"], s.get("people", []), s["sources"]
+    tz, people, src = s["tz"], s.get("people", []), s["sources"]
+    owner = {**s["owner"], "display": settings_mod.owner_name(s, pkg["minute"])}
     system = VERSIONS[version]["system"]
     L = ["【设置】", f"关于我：{s['self_facts']}", f"默认地点：{s['place']['default']}", f"主人：{owner['display']}"]
     if people:
