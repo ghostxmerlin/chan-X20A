@@ -1,0 +1,70 @@
+"""mind settings and time helpers.
+
+The real settings file (with real names) lives only on the server, ~/soul-mind/settings.json;
+settings.example.json in the repository uses placeholders. Missing fields take DEFAULTS.
+"""
+import copy
+import datetime
+import json
+from zoneinfo import ZoneInfo
+
+DEFAULTS = {
+    "tz": "Asia/Shanghai",
+    "owner": {"display": "主人", "voice_names": ["me"], "face_names": ["me"]},
+    "people": [],                 # [{"display", "voice_names", "face_names"}]
+    "work": {"days": [1, 2, 3, 4, 5], "start": "09:00", "end": "19:00"},
+    "thresholds": {"just_left_min": 2, "voice_recent_min": 5, "face_recent_min": 10, "absent_after_min": 20,
+                   "coverage_min_s": 30, "open_session_tail_s": 120, "face_tail_s": 120, "drift_warn_s": 5},
+}
+MINUTE_MS = 60_000
+
+
+def _merge(base, extra):
+    out = copy.deepcopy(base)
+    for k, v in (extra or {}).items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else copy.deepcopy(v)
+    return out
+
+
+def load(path):
+    """Settings from a JSON file merged over DEFAULTS; a missing or unreadable file gives DEFAULTS."""
+    data = {}
+    if path:
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+    return _merge(DEFAULTS, data if isinstance(data, dict) else {})
+
+
+def load_env(path):
+    """KEY=VALUE lines (quotes stripped, # lines ignored); missing file → {}."""
+    cfg = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if "=" in line and not line.lstrip().startswith("#"):
+                    k, v = line.strip().split("=", 1)
+                    cfg[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return cfg
+
+
+def minute_floor(ms):
+    return ms - ms % MINUTE_MS
+
+
+def local_time(ms, tz):
+    return datetime.datetime.fromtimestamp(ms / 1000, ZoneInfo(tz))
+
+
+def local_label(ms, tz):
+    return local_time(ms, tz).strftime("%m-%d %H:%M")
+
+
+def in_work_hours(ms, s):
+    t = local_time(ms, s["tz"])
+    hm = t.strftime("%H:%M")
+    return t.isoweekday() in s["work"]["days"] and s["work"]["start"] <= hm < s["work"]["end"]

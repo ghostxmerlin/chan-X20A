@@ -1,0 +1,8 @@
+{
+  "tz": "Asia/Shanghai",
+  "owner": {"display": "主人", "voice_names": ["me"], "face_names": ["me"]},
+  "people": [{"display": "同事A", "voice_names": ["colleague-a"], "face_names": ["colleague-a"]}],
+  "work": {"days": [1, 2, 3, 4, 5], "start": "09:00", "end": "19:00"},
+  "thresholds": {"just_left_min": 2, "voice_recent_min": 5, "face_recent_min": 10, "absent_after_min": 20,
+                 "coverage_min_s": 30, "open_session_tail_s": 120, "face_tail_s": 120, "drift_warn_s": 5}
+}
