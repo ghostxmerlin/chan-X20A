@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: MIT */
-#include "m12_unit.h"
 #include "eye_mode.h"
 #include "eyes/eyes.h"
 #include "hearing.h"
@@ -318,26 +317,6 @@ void worker(void*) {
                 {std::lock_guard<std::mutex> lock(mutex);forget.swap(forget_pending);}
                 if(ok&&!forget.empty()){JsonDocument msg;msg["type"]="forget";msg["name"]=forget;ok=send_json(*socket,msg);}
             }
-            // Vision change events from the M12 (2026-11-10): uploaded on this session, a few per chunk.
-            {
-                M12VisionEvent seen[4];
-                const size_t n=ok?m12_take_vision_events(seen,4):0;
-                for(size_t i=0;ok&&i<n;++i){
-                    const auto& v=seen[i];JsonDocument msg;
-                    msg["type"]="vision";msg["event"]=m12_vision_kind_name(v.kind);msg["t_us"]=v.t_us;msg["now_us"]=esp_timer_get_time();
-                    if(v.f)msg["f"]=v.f;
-                    if(v.face>=0)msg["face"]=v.face;
-                    if(v.person>=0)msg["person"]=v.person;
-                    if(v.w>0){auto box=msg["box"].to<JsonArray>();box.add(v.x);box.add(v.y);box.add(v.w);box.add(v.h);msg["prob"]=v.prob;}
-                    if(v.sim>=0)msg["sim"]=v.sim;
-                    if(v.gender)msg["gender"]=std::string(1,v.gender);
-                    if(v.age>=0)msg["age"]=v.age;
-                    if(v.age_group!=M12AgeGroup::none)msg["age_group"]=m12_age_group_name(v.age_group);
-                    if(v.name[0])msg["name"]=std::string(v.name);
-                    if(v.reason[0])msg["reason"]=std::string(v.reason);
-                    ok=send_json(*socket,msg);
-                }
-            }
             std::memcpy(encoded.data(),"SEA1",4);
             for(unsigned i=0;i<4;++i)encoded[4+i]=(wire_seq>>(i*8))&255;
             for(unsigned i=0;i<8;++i)encoded[8+i]=(static_cast<uint64_t>(first_us)>>(i*8))&255;
@@ -385,6 +364,7 @@ esp_err_t respond(httpd_req_t* request,const char* status,const char* message) {
 }
 }
 
+bool backend(std::string& endpoint,std::string& token){std::lock_guard<std::mutex> lock(mutex);if(!configured_locked())return false;endpoint=url;token=secret;return true;}
 void init(const std::string& device_id,const std::string& boot_id) {
     device=device_id;boot=boot_id;
     nvs_handle_t nvs;

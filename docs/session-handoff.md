@@ -1,5 +1,13 @@
 # 会话交接记录
 
+## 2026-11-10 傍晚：视觉独立通道（0.4.74，Claude）
+
+- 用户指出视觉不该借听觉的连接。改为独立 WebSocket `ws://<耳朵服务>/vision`（同主机、端口、令牌，地址由 `vision_url()` 从听觉 URL 推出，`hearing::backend()` 提供）。
+- **hello 端** `collector/vision_uplink.cpp`：独立任务 `vision_up`（PSRAM 栈 8 KB），M12 在线或队列有事件就连，断线退避 2→30 s 重连，M12 离线且队列空 30 s 后断开；首条 `{"type":"hello","source","device"}`，每 15 s `ping`。M12 队列改为 peek → 发送 → commit（带 `seq`），只有发出去的才删除。遥测 `m12.uplink`（state/connects/failures/sent/last_error）。听觉会话里的视觉上传已删除。
+- **服务器** `server/ear/vision_link.py`：路径 `/vision` 走单独处理（最多 4 条），`sessions` 记一条 `kind=vision`（键 `YYYYMMDD/HHMMSS-source-vN`），事件进 `hello.vision`，60 s 无消息关闭。0.4.73 在听觉会话里发的 `vision` 仍兼容。
+- **实测**：听觉关、视觉开，独立通道连上，30 条事件全部入库（found → named me 约 0.6 s）。注意：年龄估计跳动（23→50→26 岁）会让 face_attrs 频繁出现，未过滤；同帧事件按 `seq` 排序，`at` 可能差几毫秒。
+
+
 ## 2026-11-10 傍晚：视觉变化事件入库（0.4.73，Claude）
 
 - **hello 端**（`m12_protocol.h` `M12ChangeTracker`，`m12_unit.cpp`）：按 m12d 的 face/person id 跟踪，变化即生成事件：`face_found`、`face_attrs`（性别/年龄段一出现就报，用户要求“认到信息要尽快报”）、`face_named`（名字出现或变化）、`face_unknown`（who 回复无人匹配，带 sim）、`face_lost`（1.5 s 未见，带最后的框、名字、属性；`reason` timeout/vision_off/m12_offline/evicted）、`person_found/lost`、`vision_on/off`（以 cfg 回复为准）、`m12_online/offline`。事件进 PSRAM 64 条队列（满了丢最旧并计数，遥测 `m12.vision_events`），由听觉会话每块音频顺带上传 `{"type":"vision",...,"t_us","now_us"}`；听觉关着时先存着，连上再补发。

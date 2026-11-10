@@ -73,6 +73,7 @@ struct Shared {
     static constexpr size_t kVision = 64;
     M12ChangeTracker tracker;
     M12VisionEvent vision[kVision];
+    uint32_t vision_seq[kVision] = {};
     size_t vision_head = 0, vision_count = 0;
     uint32_t vision_total = 0, vision_dropped = 0;
     // tx side (tx_mutex)
@@ -113,8 +114,10 @@ void push_vision_locked(const M12VisionEvent& e)
 {
     auto& s = *shared;
     if (s.vision_count == Shared::kVision) { s.vision_head = (s.vision_head + 1) % Shared::kVision; --s.vision_count; ++s.vision_dropped; }
-    s.vision[(s.vision_head + s.vision_count) % Shared::kVision] = e;
-    ++s.vision_count; ++s.vision_total;
+    const size_t at = (s.vision_head + s.vision_count) % Shared::kVision;
+    s.vision[at] = e;
+    s.vision_seq[at] = ++s.vision_total;
+    ++s.vision_count;
 }
 void status_event_locked(M12VisionKind kind, int64_t now)
 {
@@ -495,17 +498,34 @@ int32_t m12_request(M12Op op, const M12RequestArgs& args, M12Callback callback, 
     return send_request(op, args, 0, callback, context, true, false);
 }
 
-size_t m12_take_vision_events(M12VisionEvent* out, size_t max)
+size_t m12_peek_vision_events(M12VisionEvent* out, uint32_t* seq, size_t max)
 {
     if (!shared) return 0;
     std::lock_guard<std::mutex> lock(state_mutex);
     auto& s = *shared;
     size_t n = 0;
-    while (n < max && s.vision_count) {
-        out[n++] = s.vision[s.vision_head];
-        s.vision_head = (s.vision_head + 1) % Shared::kVision; --s.vision_count;
+    for (; n < max && n < s.vision_count; ++n) {
+        const size_t at = (s.vision_head + n) % Shared::kVision;
+        out[n] = s.vision[at]; seq[n] = s.vision_seq[at];
     }
     return n;
+}
+
+void m12_commit_vision_events(uint32_t through_seq)
+{
+    if (!shared) return;
+    std::lock_guard<std::mutex> lock(state_mutex);
+    auto& s = *shared;
+    while (s.vision_count && static_cast<int32_t>(through_seq - s.vision_seq[s.vision_head]) >= 0) {
+        s.vision_head = (s.vision_head + 1) % Shared::kVision; --s.vision_count;
+    }
+}
+
+size_t m12_vision_pending()
+{
+    if (!shared) return 0;
+    std::lock_guard<std::mutex> lock(state_mutex);
+    return shared->vision_count;
 }
 
 const char* m12_request_error(int32_t code)

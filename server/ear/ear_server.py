@@ -11,7 +11,7 @@ Protocol (v1):
                              "sound_min_db":15,"voice_hi":0.4,"voice_lo":0.2}
                             {"type":"self","sounding":false,"moving":false}
                             {"type":"forget","name":"..."}   (delete a voiceprint; answered by a "speakers" event)
-                            {"type":"vision","event":"face_found",...}   (M12 change event; stored in hello.vision)
+                            {"type":"vision","event":"face_found",...}   (0.4.73 only; 0.4.74+ uses ws://.../vision, vision_link.py)
   server -> client  text  : exactly one frame every 100 ms, a "tick":
       {"v":1,"type":"tick","seq":n,"t":<server epoch ms>,
        "rx":<samples received so far>,"rx_idle_ms":..,"rx_gap_ms":..,"rx_bytes":<audio bytes so far>,
@@ -35,6 +35,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit
 
 import numpy as np
 import sherpa_onnx as so
@@ -42,6 +43,7 @@ from websockets.asyncio.server import serve
 
 import recorder
 import hello_db
+import vision_link
 import tingwu as tingwu_rt
 import sound_kinds
 import hearing_protocol as hp
@@ -873,12 +875,28 @@ def main():
     ex = ThreadPoolExecutor(max_workers=1)
 
     active = set()
+    vision_active = set()
+    vision_no = [0]
 
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
         header = ws.request.headers.get("Authorization", "") if getattr(ws, "request", None) else ""
         if not hp.authenticate(path, header, token_value):
             await ws.close(code=4401, reason="bad token")
+            return
+        if urlsplit(path).path == "/vision":           # vision uplink: its own connection (collector-0.4.74+)
+            if len(vision_active) >= 4:
+                await ws.close(code=1013, reason="server busy")
+                return
+            vision_active.add(ws)
+            vision_no[0] += 1
+            peer = ws.remote_address
+            print(f"+ {peer} vision v{vision_no[0]}", flush=True)
+            try:
+                link = await vision_link.serve_link(ws, database, vision_no[0], f"{peer[0]}:{peer[1]}")
+            finally:
+                vision_active.discard(ws)
+            print(f"- {peer} vision v{vision_no[0]}: {link.events} events ({link.session})", flush=True)
             return
         if len(active) >= 4:
             await ws.close(code=1013, reason="server busy")

@@ -1,6 +1,7 @@
 // Host tests for the m12d protocol layer (collector/m12_protocol.h). Example lines are the
 // ones in m12d docs/protocol.md; names are placeholders.
 #include "../upstream/StackChan/firmware/main/collector/m12_protocol.h"
+#include "../upstream/StackChan/firmware/main/collector/vision_uplink.h"
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -255,6 +256,11 @@ int main()
         assert(evicted == 1 && tr.faces_in_view() == M12ChangeTracker::kFaces);
         assert(!std::strcmp(m12_vision_kind_name(M12VisionKind::m12_offline), "m12_offline"));
     }
+    // --- vision uplink endpoint ---
+    assert(collector::vision_url("ws://10.0.0.2:52732/ear") == "ws://10.0.0.2:52732/vision");
+    assert(collector::vision_url("ws://10.0.0.2:52732") == "ws://10.0.0.2:52732/vision");
+    assert(collector::vision_url("wss://10.0.0.2/a/b") == "wss://10.0.0.2/vision");
+    assert(collector::vision_url("http://10.0.0.2/") == "");
     // --- explicit modes and screen mapping ---
     {
         uint32_t r = next_m12_request(0, M12Function::detect);

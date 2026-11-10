@@ -51,9 +51,11 @@ using M12Callback = void (*)(const M12Reply& reply, const char* err, void* conte
 int32_t m12_request(M12Op op, const M12RequestArgs& args, M12Callback callback = nullptr, void* context = nullptr);
 const char* m12_request_error(int32_t code);
 // Vision change events (face/person found, named, attrs, unknown, lost; vision on/off; M12
-// online/offline), oldest first. The hearing session uploads them to the server; while it is
-// down the newest 64 wait here (older ones are dropped and counted).
-size_t m12_take_vision_events(M12VisionEvent* out, size_t max);
+// online/offline), oldest first, each with a sequence number. The vision uplink peeks, sends,
+// then commits what was sent; meanwhile the newest 64 wait here (older ones dropped, counted).
+size_t m12_peek_vision_events(M12VisionEvent* out, uint32_t* seq, size_t max);
+void m12_commit_vision_events(uint32_t through_seq);
+size_t m12_vision_pending();
 
 void m12_json(ArduinoJson::JsonObject out);
 void m12_info_json(ArduinoJson::JsonObject out);

@@ -8,6 +8,8 @@
 #include <string>
 namespace collector::hearing {
 void init(const std::string& device_id,const std::string& boot_id);
+// The configured ear backend (URL and token); false while none is set. Other uplinks reuse it.
+bool backend(std::string& url,std::string& token);
 void feed_audio(const int16_t* interleaved,size_t frames,uint32_t seq,int64_t timestamp_us);
 ListeningIntent listening_intent();
 // Explicit requests revoke any automatic owner, including idempotent starts.

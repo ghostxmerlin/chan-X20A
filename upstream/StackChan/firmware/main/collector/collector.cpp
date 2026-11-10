@@ -8,6 +8,7 @@
 #include "runtime_log.h"
 #include "playback.h"
 #include "hearing.h"
+#include "vision_uplink.h"
 #include "interaction.h"
 #include "eyes/eyes.h"
 #include "eyes/http.h"
@@ -1114,6 +1115,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     eyes::status_json(doc["eyes"].to<JsonObject>());
     asr_json(doc["asr"].to<JsonObject>());
     m12_json(doc["m12"].to<JsonObject>());
+    vision_uplink_json(doc["m12"]["uplink"].to<JsonObject>());
     interaction::json(doc["interaction"].to<JsonObject>());
     health["servo_commands_enabled"] = remote_enabled();
     wifi_ap_record_t ap{};
@@ -1825,6 +1827,7 @@ void run()
     eyes::start_asset_installer();
     playback_init();
     hearing::init(device_id,boot_id);
+    vision_uplink_init(device_id, boot_id);
     update_screen({});
     ESP_ERROR_CHECK(create_psram_task(sensor_task, "collector_sensors", 6144, nullptr, 3) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(create_psram_task(environment_task, "collector_environment", 4096, nullptr, 2) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
