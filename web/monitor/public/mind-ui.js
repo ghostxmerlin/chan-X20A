@@ -2,7 +2,7 @@
 const COLOURS={seen:'#2e9d4f',just_left:'#8fd19e',likely_present:'#3b7dd8',unknown:'#9aa0a6',likely_absent:'#e8912d',sensors_off:'#555555'};
 const LABELS={seen:'看到',just_left:'刚离开',likely_present:'很可能在',unknown:'不知道',likely_absent:'很可能不在',sensors_off:'感官全关'};
 export const stateColour=s=>COLOURS[s]||COLOURS.unknown;
-export const stateLabel=s=>LABELS[s]||s;
+export const stateLabel=s=>LABELS[s]||escapeHtml(s);
 export const escapeHtml=t=>String(t??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 export const coverageTitle=c=>`听觉 ${c.hearing_s} 秒 · 视觉 ${c.vision_s} 秒 · M12 ${c.m12_s} 秒${c.estimated?'（估计）':''}`;
 export function whoLabel(w){
@@ -56,7 +56,7 @@ const BASIS={seen:'看到',heard:'听到',inferred:'推断',assumed:'猜测'};
 const CONF={high:'高',mid:'中',low:'低'};
 const CLASS_COLOURS={present:'#2e9d4f',absent:'#e8912d',unknown:'#9aa0a6',off:'#555555',gap:'#333338'};
 const CLASS_LABEL={present:'主人在',absent:'主人不在',unknown:'不确定',off:'感官关',gap:'mind 没在运行'};
-export const basisLabel=b=>BASIS[b]||b||'';
+export const basisLabel=b=>BASIS[b]||escapeHtml(b||'');
 export function groupEntries(entries){
  const out={};
  for(const d of [...DIM_ORDER,'other'])for(const e of entries||[]){const k=DIM_ORDER.includes(e.dimension)?e.dimension:'other';if(k===d)(out[d]??=[]).push(e);}
@@ -69,10 +69,11 @@ export function sourceLabel(rec){
  if(rec.source==='failed')return rec.carried_from?`调用失败，沿用自 ${hhmm(rec.carried_from)}`:'调用失败';
  return '仅规则';
 }
-const answer=(label,a)=>a?`<p class="answer"><b>${label}</b> ${escapeHtml(a.text)} <span class="conf">把握${CONF[a.confidence]||''}</span></p>`:'';
+const confLabel=c=>CONF[c]||escapeHtml(c||'');
+const answer=(label,a)=>a?`<p class="answer"><b>${label}</b> ${escapeHtml(a.text)} <span class="conf">把握${confLabel(a.confidence)}</span></p>`:'';
 function entriesHtml(entries){
  const g=groupEntries(entries);
- return Object.entries(g).map(([d,list])=>`<div class="dim"><h4>${DIM_LABEL[d]}</h4><ul>${list.map(e=>`<li>${escapeHtml(e.text)} <span class="basis">${basisLabel(e.basis)}·${CONF[e.confidence]||''}</span> ${(e.evidence||[]).map(c=>`<span class="code">${escapeHtml(c)}</span>`).join('')}</li>`).join('')}</ul></div>`).join('');
+ return Object.entries(g).map(([d,list])=>`<div class="dim"><h4>${DIM_LABEL[d]}</h4><ul>${list.map(e=>`<li>${escapeHtml(e.text)} <span class="basis">${basisLabel(e.basis)}·${confLabel(e.confidence)}</span> ${(e.evidence||[]).map(c=>`<span class="code">${escapeHtml(c)}</span>`).join('')}</li>`).join('')}</ul></div>`).join('');
 }
 export function nowHtml(now){
  const rec=now?.scene,sc=rec?.scene,st=now?.strong;
@@ -89,15 +90,16 @@ export function nowHtml(now){
 export function segmentsHtml(segs){
  const list=(segs||[]).slice().reverse();
  if(!list.length)return '<p class="alt">今天还没有情景段</p>';
- return list.map(g=>`<div class="seg" data-start="${g.start}"><span class="dot" data-c="${CLASS_COLOURS[g.cls]||CLASS_COLOURS.unknown}"></span><span class="t">${hhmm(g.start)}–${g.end?hhmm(g.end):'现在'}</span><b>${escapeHtml(g.summary?.title||CLASS_LABEL[g.cls]||g.cls)}</b><span class="alt">${escapeHtml(g.summary?.text||'')}</span></div>`).join('');
+ return list.map(g=>`<div class="seg" data-start="${escapeHtml(g.start)}"><span class="dot" data-c="${CLASS_COLOURS[g.cls]||CLASS_COLOURS.unknown}"></span><span class="t">${escapeHtml(hhmm(g.start))}–${g.end?escapeHtml(hhmm(g.end)):'现在'}</span><b>${escapeHtml(g.summary?.title||CLASS_LABEL[g.cls]||g.cls)}</b><span class="alt">${escapeHtml(g.summary?.text||'')}</span></div>`).join('');
 }
 export function sceneHtml(rec,run){
  if(!rec)return '';
  const sc=rec.scene,c=rec.checks||{};
- const checks=rec.source==='model'?`<p class="alt">校验：无效代号 ${c.invalid_refs||0} · 降级 ${c.downgraded||0} · 拦下的提高 ${c.raise_blocked||0} · 规则冲突 ${c.rule_conflict?'有':'无'} · 只凭语言 ${Math.round((c.language_only||0)*100)}%</p>`:'';
- const r=run?`<p class="alt">${escapeHtml(run.model)} · ${run.latency_ms} ms · 输入 ${run.usage?.prompt_tokens??'—'} / 输出 ${run.usage?.completion_tokens??'—'} token · $${(run.cost_usd??0).toFixed(5)}${run.error?` · 错误：${escapeHtml(run.error)}`:''}</p><details><summary>完整提示和回复</summary><pre>${escapeHtml(JSON.stringify(run.request?.messages,null,1))}</pre><pre>${escapeHtml(JSON.stringify(run.response,null,1))}</pre></details>`:'';
+ const checks=rec.source==='model'?`<p class="alt">校验：无效代号 ${Number(c.invalid_refs)||0} · 降级 ${Number(c.downgraded)||0} · 拦下的提高 ${Number(c.raise_blocked)||0} · 规则冲突 ${c.rule_conflict?'有':'无'} · 只凭语言 ${Math.round((Number(c.language_only)||0)*100)}%</p>`:'';
+ const num=v=>escapeHtml(v??'—');
+ const r=run?`<p class="alt">${escapeHtml(run.model)} · ${num(run.latency_ms)} ms · 输入 ${num(run.usage?.prompt_tokens)} / 输出 ${num(run.usage?.completion_tokens)} token · $${Number(run.cost_usd||0).toFixed(5)}${run.error?` · 错误：${escapeHtml(run.error)}`:''}</p><details><summary>完整提示和回复</summary><pre>${escapeHtml(JSON.stringify(run.request?.messages,null,1))}</pre><pre>${escapeHtml(JSON.stringify(run.response,null,1))}</pre></details>`:'';
  const body=sc?`${answer('我是谁',sc.who_am_i)}${answer('我在哪',sc.where_am_i)}${answer('旁边的人在干什么',sc.people_doing)}<div class="dims">${entriesHtml(sc.entries)}</div>`:'<p class="alt">没有模型情景</p>';
- return `<div class="scene"><p class="meta">${escapeHtml(rec.lane==='rerun'?'重跑':'正式')} · ${escapeHtml(sourceLabel(rec))} · ${escapeHtml(rec.reason||'')} · ${escapeHtml(rec.prompt||'')} · 第 ${rec.version} 版</p>${body}${checks}${r}</div>`;
+ return `<div class="scene"><p class="meta">${escapeHtml(rec.lane==='rerun'?'重跑':'正式')} · ${escapeHtml(sourceLabel(rec))} · ${escapeHtml(rec.reason||'')} · ${escapeHtml(rec.prompt||'')} · 第 ${escapeHtml(rec.version)} 版</p>${body}${checks}${r}</div>`;
 }
 const list=v=>String(v||'').split(/[,，\s]+/).map(x=>x.trim()).filter(Boolean);
 export function formFromSettings(s){
@@ -147,7 +149,7 @@ async function postJson(path,obj){
 }
 function statsHtml(st){
  if(!st?.rows?.length)return '<p class="alt">还没有模型调用</p>';
- return `<table><tr><th>日期</th><th>步骤</th><th>模型</th><th>泳道</th><th>调用</th><th>失败</th><th>输入 token</th><th>输出 token</th><th>花费</th></tr>${st.rows.map(r=>`<tr><td>${escapeHtml(r.day)}</td><td>${escapeHtml(r.step)}</td><td>${escapeHtml(r.model)}</td><td>${escapeHtml(r.lane)}</td><td>${r.calls}</td><td>${r.failures}</td><td>${r.prompt_tokens}</td><td>${r.completion_tokens}</td><td>$${r.cost_usd.toFixed(4)}</td></tr>`).join('')}</table>`;
+ return `<table><tr><th>日期</th><th>步骤</th><th>模型</th><th>泳道</th><th>调用</th><th>失败</th><th>输入 token</th><th>输出 token</th><th>花费</th></tr>${st.rows.map(r=>`<tr><td>${escapeHtml(r.day)}</td><td>${escapeHtml(r.step)}</td><td>${escapeHtml(r.model)}</td><td>${escapeHtml(r.lane)}</td><td>${Number(r.calls)}</td><td>${Number(r.failures)}</td><td>${Number(r.prompt_tokens)}</td><td>${Number(r.completion_tokens)}</td><td>$${Number(r.cost_usd).toFixed(4)}</td></tr>`).join('')}</table>`;
 }
 export function start(doc){
  const el=id=>doc.getElementById(id);
@@ -190,7 +192,7 @@ export function start(doc){
     <span>这一分钟：</span>${['right','wrong','unsure'].map(v=>`<button data-verdict="${v}">${{right:'对',wrong:'错',unsure:'说不清'}[v]}</button>`).join('')}
     <select name="field">${[['owner','主人在不在'],['people','人'],['activity','在做什么'],['topic','话题'],['summary','摘要'],['other','其他']].map(([k,t])=>`<option value="${k}">${t}</option>`).join('')}</select>
     <input name="correct" placeholder="正确的是"><input name="note" placeholder="备注"><span class="label-msg alt"></span>
-    <span class="sep">｜重跑：</span><select name="prompt">${prompts.versions.map(v=>`<option>${v}</option>`).join('')}</select><select name="model">${prompts.models.map(v=>`<option>${v}</option>`).join('')}</select><button data-rerun="1">重跑这一分钟</button></div>
+    <span class="sep">｜重跑：</span><select name="prompt">${prompts.versions.map(v=>`<option>${escapeHtml(v)}</option>`).join('')}</select><select name="model">${prompts.models.map(v=>`<option>${escapeHtml(v)}</option>`).join('')}</select><button data-rerun="1">重跑这一分钟</button></div>
     <div class="compare"><div>${scene}</div><div class="rerun-out"></div></div>`;
    row.insertAdjacentHTML('afterend',`<div class="detail">${tools}${detailHtml(pkg)}</div>`);paint(row.nextElementSibling);
   }catch(e){row.insertAdjacentHTML('afterend',`<div class="detail">读取失败：${escapeHtml(e.message)}</div>`);}

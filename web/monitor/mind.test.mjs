@@ -117,3 +117,9 @@ test('new markup carries no style attributes (CSP)', ()=>{
  const html=ui.nowHtml({scene,strong:{owner:{state:'seen',why:'w'},coverage:{hearing_s:60,vision_s:60,m12_s:60}},segment:null})+ui.segmentsHtml([{start:0,end:null,cls:'present',summary:{title:'t',text:'x'}}])+ui.settingsHtml(ui.formFromSettings({owner:{display:'a',voice_names:[],face_names:[]},people:[],work:{days:[],start:'09:00',end:'19:00'},sources:{},fusion:{},place:{}}),{voice:['me'],face:[]});
  assert.doesNotMatch(html,/style="/);assert.match(html,/data-c=/);
 });
+test('model fields are escaped even when they are not known values', ()=>{
+ const scene={minute:0,source:'model',scene:{who_am_i:{text:'a',confidence:'<qi>'},where_am_i:{text:'b',confidence:'mid'},people_doing:{text:'c',confidence:'low'},owner_view:'present',
+  entries:[{key:'k',dimension:'people',text:'t',basis:'<img src=x onerror=alert(1)>',confidence:'<qb>',evidence:['<qx>']}],changes:[],summary:'s',want_to_know:''},checks:{},prompt:'<qp>',reason:'<qr>',version:'<qv>'};
+ const html=ui.nowHtml({scene,strong:{owner:{state:'<qs>',why:'w'},coverage:{hearing_s:1,vision_s:0,m12_s:0}},segment:null})+ui.sceneHtml(scene,{model:'<qm>',latency_ms:'<ql>',usage:{},cost_usd:0})+ui.segmentsHtml([{start:'<qz>',end:null,cls:'<qc>',summary:null}]);
+ assert.doesNotMatch(html,/<img|<q[a-z]>/);
+});

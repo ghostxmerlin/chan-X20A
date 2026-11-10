@@ -81,6 +81,13 @@ class ValidateTest(unittest.TestCase):
         scene2, _ = apply(out([entry("people.owner", op="update", evidence=["s1"])]), [prev("people.owner")], PKG, STRONG, T)
         self.assertEqual(scene2["entries"][0]["last_evidence"], T)
 
+    def test_enums_enforced_whatever_the_model_sends(self):
+        bad = entry("people.x", dimension="<img onerror=x>", basis="<b>", confidence="<i>")
+        scene, _ = apply(dict(out([bad]), owner_view="<svg>", who_am_i={"text": "a", "confidence": "<x>"}), [], PKG, STRONG, T)
+        e = scene["entries"][0]
+        self.assertEqual((e["dimension"], e["basis"], e["confidence"]), ("other", "assumed", "low"))
+        self.assertEqual((scene["owner_view"], scene["who_am_i"]["confidence"]), ("unknown", "low"))
+
     def test_lengths_capped(self):
         scene, _ = apply(out([entry(f"k{i}", text="x" * 500) for i in range(25)], summary="一" * 40), [], PKG, STRONG, T)
         self.assertEqual((len(scene["entries"]), len(scene["entries"][0]["text"]), len(scene["summary"])), (20, 200, 20))
