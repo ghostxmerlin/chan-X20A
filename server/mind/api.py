@@ -181,10 +181,19 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if not doc:
                 raise NotFound("no package for this minute")
             s, v = current_settings()
+            live = store.latest_scene(LANE, minute)
+            ss = ctx.get("settings_store")
+            if live and ss and live.get("settings_version") is not None and ss.get(live["settings_version"]):
+                v = live["settings_version"]          # same inputs as the live run: only prompt / model differ
+                s = ss.get(v)
+            segs = segments.update(None, store, s, minute - 12 * 3600_000, minute, LANE, summarize_now=False)
+            titled = [{"start": g["start"], "end": g["end"], "cls": g["cls"], "title": (g.get("summary") or {}).get("title")}
+                      for g in segs if g["cls"] != "gap" and g["start"] < minute]
             prev = store.latest(LANE, minute - 60_000)
             return fusion.run_minute(ctx["env"], store, s, v, minute, doc["package"], doc["strong"],
                                      {"prev": prev["package"] if prev else None}, lane="rerun",
-                                     force_prompt=prompt, force_model=model, now_ms=now)
+                                     force_prompt=prompt, force_model=model, now_ms=now, segments=titled,
+                                     package_version=doc["version"])
         raise NotFound("not found")
 
     class Handler(BaseHTTPRequestHandler):

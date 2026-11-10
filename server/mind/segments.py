@@ -14,6 +14,7 @@ MIN_MS = 60_000
 CLASS = {"seen": "present", "just_left": "present", "likely_present": "present", "likely_absent": "absent",
          "unknown": "unknown", "sensors_off": "off"}
 REFRESH_MS = 5 * MIN_MS
+RETRY_FAILED_MS = 10 * MIN_MS
 SUMMARY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["title", "text", "confidence"],
                   "properties": {"title": {"type": "string"}, "text": {"type": "string"},
                                  "confidence": {"type": "string", "enum": ["high", "mid", "low"]}}}
@@ -76,28 +77,37 @@ def summarize(env, store, s, seg, scenes, lane, now_ms):
                             "request": body, "response": resp, "parsed": out, "error": err, "latency_ms": ms, "usage": usage,
                             "cost_usd": llm.cost_usd(model, usage), "retries": 0, "at": now_ms})
     if out is None:
+        fails = dict(store.state().get("segment_fail") or {})
+        fails[str(seg["start"])] = now_ms
+        store.set_state(segment_fail={k: v for k, v in fails.items() if now_ms - v < 86400_000})
         return None
     store.put_segment_summary(lane, seg["start"], seg["end"], out, run_id, len(scenes), now_ms)
     return out
 
 
 def update(env, store, s, day_start_ms, now_ms, lane="live", summarize_now=True):
-    rows = [{"minute": r["minute"], "owner_state": r["owner_state"], "hearing_s": r["coverage"]["hearing_s"],
-             "vision_s": r["coverage"]["vision_s"]} for r in store.timeline(lane, day_start_ms, now_ms)]
-    segs = cut(rows)
+    segs = cut(store.segment_rows(lane, day_start_ms, now_ms))
+    state = store.state() if summarize_now and env is not None else {}
+    backoff = (state.get("fusion_backoff_until") or 0) >= now_ms        # the model is failing: do not pile on
+    fails = state.get("segment_fail") or {}
     for seg in segs:
         existing = store.segment_summary(lane, seg["start"])
         seg["summary"] = existing["summary"] if existing else None
-        if seg["cls"] == "gap" or not summarize_now or env is None or not s["fusion"]["enabled"]:
+        if seg["cls"] == "gap" or not summarize_now or env is None or not s["fusion"]["enabled"] or backoff:
             continue
-        scenes = [d for d in store.scenes_range(lane, seg["start"], seg["end"] or now_ms) if d.get("scene")]
-        if not scenes:
+        if now_ms - fails.get(str(seg["start"]), -RETRY_FAILED_MS) < RETRY_FAILED_MS:
+            continue
+        if existing is not None and seg["end"] is None and now_ms - existing["at"] < REFRESH_MS:
+            continue
+        n = store.count_model_scenes(lane, seg["start"], seg["end"] or now_ms)
+        if not n:
             continue
         if seg["end"] is not None:
-            need = existing is None or existing["scenes_count"] < len(scenes) or existing.get("end") != seg["end"]
+            need = existing is None or existing["scenes_count"] < n or existing.get("end") != seg["end"]
         else:
-            need = existing is None or (now_ms - existing["at"] >= REFRESH_MS and existing["scenes_count"] < len(scenes))
+            need = existing is None or existing["scenes_count"] < n
         if need:
+            scenes = [d for d in store.scenes_range(lane, seg["start"], seg["end"] or now_ms) if d.get("scene")]
             got = summarize(env, store, s, seg, scenes, lane, now_ms)
             if got:
                 seg["summary"] = got

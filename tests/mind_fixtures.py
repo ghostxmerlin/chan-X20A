@@ -116,7 +116,8 @@ class FakeCollection:
             new.update(copy.deepcopy(update.get("$set", {})))
             self.docs.append(new)
 
-    def create_index(self, *a, **k):
+    def create_index(self, keys, unique=False, **k):
+        self.__dict__.setdefault("indexes", []).append((list(keys), unique))
         return "ok"
 
 

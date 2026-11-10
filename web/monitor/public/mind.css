@@ -59,3 +59,4 @@ dialog fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 8px
 .dialog-buttons { display: flex; gap: 8px; }
 .error { color: #d24b3c; }
 @media (max-width: 640px) { .compare { grid-template-columns: 1fr; } .seg { grid-template-columns: 14px 84px 1fr; } .seg .alt { grid-column: 2 / -1; } }
+.stale { opacity: .55; }

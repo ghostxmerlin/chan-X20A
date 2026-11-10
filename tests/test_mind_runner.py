@@ -39,6 +39,12 @@ class RunnerTest(unittest.TestCase):
     def process(self, minute):
         return runner.process_minute(self.rec, self.store, minute, S, minute + 10 * MIN)
 
+    def test_indexes_for_every_mind_table(self):
+        made = {name: c.indexes for name, c in self.db.collections.items() if getattr(c, "indexes", None)}
+        for name in ("mind_packages", "mind_scenes", "mind_runs", "mind_segments", "mind_labels", "mind_settings"):
+            self.assertIn(name, made)
+        self.assertIn(([("run_id", 1)], True), made["mind_runs"])
+
     def test_unchanged_minute_is_not_rewritten(self):
         self.assertEqual(self.process(T0), "written")
         self.assertEqual(self.process(T0), "same")

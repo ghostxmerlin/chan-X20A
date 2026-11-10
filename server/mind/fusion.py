@@ -18,9 +18,17 @@ def _bin(seconds):
 
 
 def content_fp(pkg, strong):
+    """What the model would see, in bins (spec 3.3): owner state, coverage, who is in view, which kinds
+    of sound, whether a person shape was seen, and the new sentences themselves (new words are new
+    evidence). Record ids and face end times are left out, so a quiet minute matches the last one."""
     c = strong["coverage"]
-    raw = [pkg["fingerprint"], strong["owner"]["state"], _bin(c["hearing_s"]), _bin(c["vision_s"])]
-    return hashlib.sha1(json.dumps(raw).encode()).hexdigest()[:16]
+    raw = [strong["owner"]["state"], _bin(c["hearing_s"]), _bin(c["vision_s"]),
+           sorted((f.get("name") or "?") for f in pkg.get("faces", [])),
+           sorted({g.get("kind") for g in pkg.get("sounds", [])}),
+           (pkg.get("persons") or {}).get("seconds", 0) > 0,
+           sorted([x["ref"].get("session"), x["ref"].get("id")] for x in pkg.get("speech", [])),
+           bool(pkg.get("tingwu_only"))]
+    return hashlib.sha1(json.dumps(raw, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
 def decide(prev, pkg, strong, s, minute_ms, review_level):
@@ -62,7 +70,7 @@ def _parse(resp):
 
 
 def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbours, lane="live",
-               force_prompt=None, force_model=None, now_ms=None, segments=None):
+               force_prompt=None, force_model=None, now_ms=None, segments=None, package_version=None):
     now_ms = now_ms if now_ms is not None else minute_ms + 2 * MIN_MS
     forced = force_prompt is not None or force_model is not None
     prev = store.last_scene_before("live" if lane == "rerun" else lane, minute_ms)
@@ -74,7 +82,7 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
             "coverage_sum": strong["coverage"]["hearing_s"] + strong["coverage"]["vision_s"],
             "content_fp": content_fp(pkg, strong), "last_call_minute": prev.get("last_call_minute") if prev else None,
             "last_call_fp": prev.get("last_call_fp") if prev else None, "review_level": level,
-            "scene": None, "checks": None}
+            "scene": None, "checks": None, "package_version": package_version, "package_fingerprint": pkg.get("fingerprint")}
 
     def carry(source, reason):
         rec = dict(base, source=source, reason=reason)
@@ -82,8 +90,8 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
             rec.update(scene=prev["scene"], carried_from=prev["minute"] if prev.get("source") == "model" else (prev.get("carried_from") or prev["minute"]))
         else:
             rec.update(source="rules_only")
-        store.put_scene(lane, minute_ms, rec)
-        return {**rec, "lane": lane, "minute": minute_ms}
+        version = store.put_scene(lane, minute_ms, rec)
+        return {**rec, "lane": lane, "minute": minute_ms, "version": version}
 
     if forced:
         action, reason = "call", "rerun"
@@ -131,5 +139,5 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
     new_level = level + 1 if reason == "review" else 0
     rec = dict(base, source="model", reason=reason, run_id=run_id, scene=scene, checks=checks,
                last_call_minute=minute_ms, last_call_fp=base["content_fp"], review_level=new_level)
-    store.put_scene(lane, minute_ms, rec)
-    return {**rec, "lane": lane, "minute": minute_ms}
+    version = store.put_scene(lane, minute_ms, rec)
+    return {**rec, "lane": lane, "minute": minute_ms, "version": version}

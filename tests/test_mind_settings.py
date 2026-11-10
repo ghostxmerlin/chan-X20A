@@ -54,6 +54,20 @@ class SettingsStoreTest(unittest.TestCase):
         self.assertTrue(any("display" in e for e in validate({**s, "people": [{"display": "", "voice_names": [], "face_names": []}]})))
         self.assertTrue(any("budget" in e for e in validate({**s, "budget_usd_per_day": "a"})))
 
+    def test_validate_types_tz_and_bools(self):
+        s = settings.load(None)
+        self.assertTrue(any("tz" in e for e in validate({**s, "tz": "Mars/X"})))
+        self.assertTrue(any("tz" in e for e in validate({**s, "tz": 5})))
+        for k in ("owner", "place", "sources", "work", "fusion", "thresholds"):
+            self.assertTrue(any(k in e for e in validate({**s, k: "x"})), k)
+        self.assertTrue(any("max_age_min" in e for e in validate({**s, "fusion": {**s["fusion"], "max_age_min": True}})))
+        self.assertTrue(any("review_after_min" in e for e in validate({**s, "fusion": {**s["fusion"], "review_after_min": [True, 1, 2, 3]}})))
+
+    def test_get_returns_an_old_version(self):
+        s, _ = self.st.current()
+        s2 = copy.deepcopy(s); s2["place"]["default"] = "家里"; self.st.save(s2, "")
+        self.assertEqual(self.st.get(0)["place"]["default"], s["place"]["default"])
+
     def test_defaults_have_phase1_fields(self):
         s = settings.load(None)
         self.assertEqual(s["sources"]["speech_text"], True)

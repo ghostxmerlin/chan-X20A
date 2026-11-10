@@ -83,6 +83,21 @@ class UpdateTest(unittest.TestCase):
         self.update(T + 11 * MIN)
         self.assertEqual(len(self.fake.calls), n + 1)
 
+    def test_backoff_skips_summaries(self):
+        self.add(T, ["seen"] * 3)
+        self.store.set_state(fusion_backoff_until=T + 10 * MIN)
+        segments.update(ENV, self.store, S, T, T + 5 * MIN)
+        self.assertEqual(len(self.fake.calls), 0)
+
+    def test_failed_summary_waits_10_minutes(self):
+        self.add(T, ["seen"] * 3)
+        self.fake.queue = [("not json", None)] * 5
+        segments.update(ENV, self.store, S, T, T + 5 * MIN)
+        segments.update(ENV, self.store, S, T, T + 6 * MIN)
+        self.assertEqual(len(self.fake.calls), 1)
+        segments.update(ENV, self.store, S, T, T + 16 * MIN)
+        self.assertEqual(len(self.fake.calls), 2)
+
     def test_no_env_means_no_summaries(self):
         self.add(T, ["seen"] * 3)
         segs = segments.update(None, self.store, S, T, T + 5 * MIN)

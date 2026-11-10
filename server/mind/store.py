@@ -42,6 +42,14 @@ class Store:
         from_pymongo = getattr(self.packages, "create_index")
         from_pymongo([("lane", 1), ("minute", 1), ("version", 1)], unique=True)
         from_pymongo([("lane", 1), ("minute", 1)])
+        db = self.db
+        db["mind_scenes"].create_index([("lane", 1), ("minute", 1), ("version", 1)], unique=True)
+        db["mind_runs"].create_index([("run_id", 1)], unique=True)
+        db["mind_runs"].create_index([("at", 1)])
+        db["mind_runs"].create_index([("lane", 1), ("minute", 1), ("step", 1)])
+        db["mind_segments"].create_index([("lane", 1), ("start", 1), ("version", 1)], unique=True)
+        db["mind_labels"].create_index([("at", 1)])
+        db["mind_settings"].create_index([("lane", 1), ("version", 1)], unique=True)
 
     def latest(self, lane, minute):
         return self.packages.find_one({"lane": lane, "minute": minute}, {"_id": 0}, sort=[("version", -1)])
@@ -64,9 +72,28 @@ class Store:
                                   "summary": summarize(pkg), "built_at": int(time.time() * 1000)})
         return version
 
+    def segment_rows(self, lane, from_ms, to_ms):
+        """Light rows for cutting segments: latest version per minute, owner state and coverage only."""
+        latest = {}
+        for d in self.packages.find({"lane": lane, "minute": {"$gte": from_ms, "$lt": to_ms}},
+                                    {"_id": 0, "minute": 1, "version": 1, "strong.owner.state": 1, "strong.coverage": 1}):
+            if d["minute"] not in latest or d["version"] > latest[d["minute"]]["version"]:
+                latest[d["minute"]] = d
+        return [{"minute": m, "owner_state": latest[m]["strong"]["owner"]["state"],
+                 "hearing_s": latest[m]["strong"]["coverage"]["hearing_s"], "vision_s": latest[m]["strong"]["coverage"]["vision_s"]}
+                for m in sorted(latest)]
+
+    def count_model_scenes(self, lane, from_ms, to_ms):
+        return len({d["minute"] for d in self.db["mind_scenes"].find(
+            {"lane": lane, "minute": {"$gte": from_ms, "$lt": to_ms}, "source": "model"}, {"minute": 1})})
+
+    TIMELINE_FIELDS = {"_id": 0, "minute": 1, "version": 1, "summary": 1, "strong.owner.state": 1, "strong.coverage": 1,
+                       "package.speech.code": 1, "package.tingwu_only.code": 1, "package.self_speech.code": 1,
+                       "package.sounds.count": 1, "package.faces.name": 1}
+
     def timeline(self, lane, from_ms, to_ms):
         latest = {}
-        for d in self.packages.find({"lane": lane, "minute": {"$gte": from_ms, "$lt": to_ms}}, {"_id": 0}):
+        for d in self.packages.find({"lane": lane, "minute": {"$gte": from_ms, "$lt": to_ms}}, self.TIMELINE_FIELDS):
             if d["minute"] not in latest or d["version"] > latest[d["minute"]]["version"]:
                 latest[d["minute"]] = d
         rows = []

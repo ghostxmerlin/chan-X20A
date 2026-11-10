@@ -73,7 +73,7 @@ const confLabel=c=>CONF[c]||escapeHtml(c||'');
 const answer=(label,a)=>a?`<p class="answer"><b>${label}</b> ${escapeHtml(a.text)} <span class="conf">把握${confLabel(a.confidence)}</span></p>`:'';
 function entriesHtml(entries){
  const g=groupEntries(entries);
- return Object.entries(g).map(([d,list])=>`<div class="dim"><h4>${DIM_LABEL[d]}</h4><ul>${list.map(e=>`<li>${escapeHtml(e.text)} <span class="basis">${basisLabel(e.basis)}·${confLabel(e.confidence)}</span> ${(e.evidence||[]).map(c=>`<span class="code">${escapeHtml(c)}</span>`).join('')}</li>`).join('')}</ul></div>`).join('');
+ return Object.entries(g).map(([d,list])=>`<div class="dim"><h4>${DIM_LABEL[d]}</h4><ul>${list.map(e=>`<li${e.stale?' class="stale"':''}>${escapeHtml(e.text)}${e.stale?' <span class="alt">（陈旧）</span>':''} <span class="basis">${basisLabel(e.basis)}·${confLabel(e.confidence)}</span> ${(e.evidence||[]).map(c=>`<span class="code">${escapeHtml(c)}</span>`).join('')}</li>`).join('')}</ul></div>`).join('');
 }
 export function nowHtml(now){
  const rec=now?.scene,sc=rec?.scene,st=now?.strong;
@@ -151,6 +151,8 @@ function statsHtml(st){
  if(!st?.rows?.length)return '<p class="alt">还没有模型调用</p>';
  return `<table><tr><th>日期</th><th>步骤</th><th>模型</th><th>泳道</th><th>调用</th><th>失败</th><th>输入 token</th><th>输出 token</th><th>花费</th></tr>${st.rows.map(r=>`<tr><td>${escapeHtml(r.day)}</td><td>${escapeHtml(r.step)}</td><td>${escapeHtml(r.model)}</td><td>${escapeHtml(r.lane)}</td><td>${Number(r.calls)}</td><td>${Number(r.failures)}</td><td>${Number(r.prompt_tokens)}</td><td>${Number(r.completion_tokens)}</td><td>$${Number(r.cost_usd).toFixed(4)}</td></tr>`).join('')}</table>`;
 }
+// While a minute is open (labels being typed, a rerun running), the timer must not rebuild the list.
+export const refreshPlan=open=>({timeline:open==null,detail:false});
 export function start(doc){
  const el=id=>doc.getElementById(id);
  const today=new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
@@ -173,9 +175,10 @@ export function start(doc){
    if(r.day===today){el('mind-now').innerHTML=nowHtml(now);paint(el('mind-now'));}
    else el('mind-now').innerHTML='<p class="alt">看的是历史日期；“此刻”只显示今天</p>';
    el('mind-segments').innerHTML=segmentsHtml(segs);paint(el('mind-segments'));
-   el('mind-timeline').innerHTML=rows.slice().reverse().map(rowHtml).join('')||'<p class="alt">这段时间没有记录</p>';
-   paint(el('mind-timeline'));
-   if(open)await toggle(open,true);
+   if(refreshPlan(open).timeline){
+    el('mind-timeline').innerHTML=rows.slice().reverse().map(rowHtml).join('')||'<p class="alt">这段时间没有记录</p>';
+    paint(el('mind-timeline'));
+   }
   }catch(e){el('mind-status').textContent='情景服务不可用：'+e.message;el('mind-status').className='error';}
  }
  async function toggle(minute,keep=false){
@@ -185,9 +188,10 @@ export function start(doc){
   doc.querySelectorAll('.detail').forEach(d=>d.remove());
   open=minute;
   try{
-   const pkg=await getJson(`/minute?t=${minute}`);
-   let scene='';
-   try{const sc=await getJson(`/scene?t=${minute}`);const rec=sc.versions.at(-1);scene=sceneHtml(rec,sc.runs.find(r=>r.run_id===rec.run_id));}catch{scene='<p class="alt">这一分钟没有模型情景</p>';}
+   let scene='',pkgVersion=null;
+   try{const sc=await getJson(`/scene?t=${minute}`);const rec=sc.versions.at(-1);pkgVersion=rec.package_version;scene=sceneHtml(rec,sc.runs.find(r=>r.run_id===rec.run_id));}catch{scene='<p class="alt">这一分钟没有模型情景</p>';}
+   // the package version the scene was built from, so evidence codes point at the right sentences
+   const pkg=await getJson(`/minute?t=${minute}${pkgVersion?`&version=${pkgVersion}`:''}`);
    const tools=`<div class="tools" data-minute="${minute}">
     <span>这一分钟：</span>${['right','wrong','unsure'].map(v=>`<button data-verdict="${v}">${{right:'对',wrong:'错',unsure:'说不清'}[v]}</button>`).join('')}
     <select name="field">${[['owner','主人在不在'],['people','人'],['activity','在做什么'],['topic','话题'],['summary','摘要'],['other','其他']].map(([k,t])=>`<option value="${k}">${t}</option>`).join('')}</select>

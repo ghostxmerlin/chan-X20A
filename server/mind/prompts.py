@@ -104,10 +104,11 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
         L.append("（还没有）")
     L.append("")
     if prev_scene:
-        L.append("【上一分钟的判断，可能有错】")
+        gap = round((pkg["minute"] - prev_scene.get("minute", pkg["minute"])) / 60000)
+        L.append("【上一分钟的判断，可能有错】" if gap <= 1 else f"【上一次的判断（{gap} 分钟前），可能有错】")
         for e in (prev_scene.get("scene") or {}).get("entries", []):
             age = max(0, round((pkg["minute"] - e.get("last_evidence", pkg["minute"])) / 60000))
-            L.append(f"{e['key']}（{e.get('dimension', '')}，{e.get('basis', '')}，{e.get('confidence', '')}，最后有证据：{age} 分钟前）：{e['text']}")
+            L.append(f"{e['key']}（{e.get('dimension', '')}，{e.get('basis', '')}，{e.get('confidence', '')}，最后有证据：{age} 分钟前{'，已陈旧' if e.get('stale') else ''}）：{e['text']}")
         L.append("")
     st, cov = strong, strong["coverage"]
     L.append("【本分钟】")

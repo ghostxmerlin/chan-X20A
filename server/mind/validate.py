@@ -10,6 +10,7 @@ RANK = {"low": 0, "mid": 1, "high": 2}
 OWNER_CLASS = {"seen": "present", "just_left": "present", "likely_present": "present", "likely_absent": "absent",
                "unknown": "unknown", "sensors_off": "unknown"}
 MAX_ENTRIES, MAX_TEXT, MAX_SUMMARY = 20, 200, 20
+STALE_MS, EXPIRE_MS = 15 * 60_000, 60 * 60_000      # spec 3.6.3: entries without new evidence fade, then go
 
 
 def _is_pkg_code(code, pkg):
@@ -17,7 +18,7 @@ def _is_pkg_code(code, pkg):
 
 
 def apply(out, prev_entries, pkg, strong, minute_ms):
-    checks = {"invalid_refs": 0, "downgraded": 0, "raise_blocked": 0, "ended": 0, "omitted": 0,
+    checks = {"invalid_refs": 0, "downgraded": 0, "raise_blocked": 0, "ended": 0, "omitted": 0, "expired": 0,
               "rule_conflict": False, "language_only": 0.0}
     prev = {e["key"]: e for e in prev_entries or []}
     merged, seen = [], set()
@@ -55,8 +56,13 @@ def apply(out, prev_entries, pkg, strong, minute_ms):
                        "last_evidence": minute_ms if fresh else (old.get("last_evidence", minute_ms) if old else minute_ms)})
     for key, old in prev.items():
         if key not in seen:
+            if minute_ms - old.get("last_evidence", minute_ms) > EXPIRE_MS:
+                checks["expired"] += 1
+                continue
             merged.append(dict(old))
             checks["omitted"] += 1
+    for e in merged:
+        e["stale"] = minute_ms - e.get("last_evidence", minute_ms) > STALE_MS
     merged = merged[:MAX_ENTRIES]
 
     rule = OWNER_CLASS.get((strong.get("owner") or {}).get("state"), "unknown")

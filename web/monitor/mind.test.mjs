@@ -123,3 +123,7 @@ test('model fields are escaped even when they are not known values', ()=>{
  const html=ui.nowHtml({scene,strong:{owner:{state:'<qs>',why:'w'},coverage:{hearing_s:1,vision_s:0,m12_s:0}},segment:null})+ui.sceneHtml(scene,{model:'<qm>',latency_ms:'<ql>',usage:{},cost_usd:0})+ui.segmentsHtml([{start:'<qz>',end:null,cls:'<qc>',summary:null}]);
  assert.doesNotMatch(html,/<img|<q[a-z]>/);
 });
+test('refresh leaves an open minute alone', ()=>{
+ assert.deepEqual(ui.refreshPlan(null),{timeline:true,detail:false});
+ assert.deepEqual(ui.refreshPlan(123),{timeline:false,detail:false});
+});

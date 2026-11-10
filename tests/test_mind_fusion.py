@@ -42,12 +42,31 @@ class FakeChat:
 
 
 def minute_input(minute, same=False, owner="likely_present", coverage=(60, 0)):
-    pkg = {"minute": minute, "fingerprint": "same" if same else f"fp{minute}", "codes": {"s1": {}}, "speech": [], "tingwu_only": [],
+    words = [] if same else [{"code": "s1", "ref": {"c": "speech", "session": "S", "id": f"s-{minute}"}, "at": minute, "text": "话",
+                              "who": {"kind": "unknown", "name": None, "best": None, "score": None}, "loud_db": 10, "tingwu": [], "pos": None}]
+    pkg = {"minute": minute, "fingerprint": "same" if same else f"fp{minute}", "codes": {"s1": {}}, "speech": words, "tingwu_only": [],
            "self_speech": [], "sounds": [], "faces": [], "persons": {"seconds": 0, "ids": 0}, "unknown_faces": 0, "events": {}, "warnings": []}
     strong = {"owner": {"state": owner, "why": "w", "codes": []}, "contradictions": [],
               "coverage": {"hearing_s": coverage[0], "vision_s": coverage[1], "m12_s": 0, "estimated": False},
               "time": {"label": "11-10 16:30", "weekday": 2, "work_hours": True}, "place": {"label": None}}
     return pkg, strong
+
+
+from mind_build import build, speech, vision   # noqa: E402
+
+
+class FingerprintTest(unittest.TestCase):
+    def test_content_fp_is_stable_across_quiet_minutes_with_someone_in_view(self):
+        face = [("vision", vision("V", "face_found", T0 - 20 * MIN, face=4)), ("vision", vision("V", "face_named", T0 - 20 * MIN + 500, face=4, name="me"))]
+        a = build(face, minute=T0)
+        b = build(face, minute=T0 + MIN)
+        self.assertEqual(fusion.content_fp(*a), fusion.content_fp(*b))
+
+    def test_new_speech_changes_the_content_fp(self):
+        face = [("vision", vision("V", "face_found", T0 - 20 * MIN, face=4))]
+        a = build(face + [("speech", speech("S", "s-1", T0 + 1000))], minute=T0)
+        b = build(face + [("speech", speech("S", "s-2", T0 + MIN + 1000))], minute=T0 + MIN)
+        self.assertNotEqual(fusion.content_fp(*a), fusion.content_fp(*b))
 
 
 class FusionTest(unittest.TestCase):
@@ -124,6 +143,12 @@ class FusionTest(unittest.TestCase):
         rec = fusion.run_minute(ENV, self.store, S, 3, T, pkg, strong, {}, lane="rerun", force_prompt="v1", force_model="gpt-6.1-terra", now_ms=T + 5 * MIN)
         self.assertEqual((rec["lane"], rec["source"], rec["model"]), ("rerun", "model", "gpt-6.1-terra"))
         self.assertEqual([d["lane"] for d in self.db["mind_scenes"].docs], ["live", "rerun"])
+
+    def test_scene_records_the_package_version_it_was_built_from(self):
+        pkg, strong = minute_input(T)
+        rec = fusion.run_minute(ENV, self.store, S, 3, T, pkg, strong, {}, now_ms=T + 2 * MIN, package_version=4)
+        self.assertEqual((rec["package_version"], rec["package_fingerprint"]), (4, pkg["fingerprint"]))
+        self.assertEqual(rec["version"], 1)
 
     def test_probe_uses_llm_module(self):
         self.assertIs(probe.cost_usd, llm.cost_usd)

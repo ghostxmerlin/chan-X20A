@@ -88,6 +88,15 @@ class ValidateTest(unittest.TestCase):
         self.assertEqual((e["dimension"], e["basis"], e["confidence"]), ("other", "assumed", "low"))
         self.assertEqual((scene["owner_view"], scene["who_am_i"]["confidence"]), ("unknown", "low"))
 
+    def test_omitted_entries_go_stale_then_drop(self):
+        old = prev("people.others", last_evidence=T - 20 * 60_000)
+        scene, _ = apply(out([]), [old], PKG, STRONG, T)
+        self.assertTrue(scene["entries"][0]["stale"])
+        fresh = prev("people.owner", last_evidence=T - 60_000)
+        self.assertFalse(apply(out([]), [fresh], PKG, STRONG, T)[0]["entries"][0].get("stale"))
+        gone, c = apply(out([]), [prev("people.x", last_evidence=T - 61 * 60_000)], PKG, STRONG, T)
+        self.assertEqual((gone["entries"], c["expired"]), ([], 1))
+
     def test_lengths_capped(self):
         scene, _ = apply(out([entry(f"k{i}", text="x" * 500) for i in range(25)], summary="一" * 40), [], PKG, STRONG, T)
         self.assertEqual((len(scene["entries"]), len(scene["entries"][0]["text"]), len(scene["summary"])), (20, 200, 20))

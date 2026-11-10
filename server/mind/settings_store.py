@@ -2,6 +2,7 @@
 With no version stored yet, the settings file (phase 0) becomes version 0."""
 import re
 import time
+from zoneinfo import ZoneInfo
 
 from . import settings as settings_mod
 
@@ -38,6 +39,17 @@ def validate(s):
     for k in s:
         if k not in settings_mod.DEFAULTS:
             errs.append(f"unknown setting {k}")
+    s = dict(s)
+    for k in ("owner", "place", "sources", "work", "fusion", "thresholds"):
+        if k in s and not isinstance(s[k], dict):
+            errs.append(f"{k}: must be an object")
+            s[k] = {}
+    try:
+        if not isinstance(s.get("tz"), str):
+            raise ValueError
+        ZoneInfo(s["tz"])
+    except Exception:                            # noqa: BLE001 - any failure means an unusable zone
+        errs.append("tz: an IANA time zone such as Asia/Shanghai")
     o = s.get("owner") or {}
     _text(errs, "owner.display", o.get("display"), 1, 24)
     _names(errs, "owner.voice_names", o.get("voice_names"), 1, 8)
@@ -67,10 +79,10 @@ def validate(s):
         errs.append("fusion.prompt: unknown prompt version")
     if not isinstance(f.get("enabled"), bool):
         errs.append("fusion.enabled: true or false")
-    if not (isinstance(f.get("max_age_min"), (int, float)) and f["max_age_min"] > 0):
+    if isinstance(f.get("max_age_min"), bool) or not (isinstance(f.get("max_age_min"), (int, float)) and f["max_age_min"] > 0):
         errs.append("fusion.max_age_min: positive number")
     r = f.get("review_after_min")
-    if not (isinstance(r, list) and len(r) == 4 and all(isinstance(x, (int, float)) and x > 0 for x in r)):
+    if not (isinstance(r, list) and len(r) == 4 and all(isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0 for x in r)):
         errs.append("fusion.review_after_min: four positive numbers")
     src = s.get("sources") or {}
     for k in ("speech_text", "tingwu", "sounds", "vision"):
@@ -111,6 +123,10 @@ class SettingsStore:
         self.coll.insert_one({"lane": "live", "version": version + 1, "settings": merged, "note": str(note)[:200],
                               "saved_at": int(time.time() * 1000)})
         return version + 1
+
+    def get(self, version):
+        doc = self.coll.find_one({"lane": "live", "version": version}, {"_id": 0})
+        return settings_mod._merge(settings_mod.DEFAULTS, doc["settings"]) if doc else None
 
     def history(self, limit=20):
         return [{"version": d["version"], "note": d.get("note", ""), "saved_at": d.get("saved_at")}

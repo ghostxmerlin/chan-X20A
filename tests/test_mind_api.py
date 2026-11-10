@@ -171,6 +171,15 @@ class ApiV1Test(unittest.TestCase):
         self.assertEqual(self.post_json("/rerun", {"minute": T0, "prompt": "v9", "model": "gpt-6-luna"}).status, 400)
         self.assertEqual(self.call(f"/scene?t={T0}&lane=rerun").json()["versions"][0]["lane"], "rerun")
 
+    def test_rerun_uses_the_live_scenes_settings_version(self):
+        live = self.store.latest_scene("live", T0)
+        cur = self.call("/settings").json()
+        new = copy.deepcopy(cur["settings"]); new["place"]["default"] = "别处"
+        self.post_json("/settings", {"settings": new, "note": ""})
+        r = self.post_json("/rerun", {"minute": T0, "prompt": "v1", "model": "gpt-6-luna"}).json()
+        self.assertEqual(r["settings_version"], live["settings_version"])
+        self.assertNotIn("别处", self.fake.calls[-1]["messages"][1]["content"])
+
     def test_now_and_names(self):
         now = self.call("/now").json()
         self.assertEqual(now["scene"]["source"], "model")
