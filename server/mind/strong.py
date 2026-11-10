@@ -37,24 +37,20 @@ def _is_hearing(sess):
             and not VISION_SESSION.search(str(sess.get("session", ""))))
 
 
-def _hearing_spans(lookback, s, now_ms):
-    tail = s["thresholds"]["open_session_tail_s"] * 1000
-    sessions = [x for x in lookback.get("sessions", []) if _is_hearing(x)]
-    last = {}
-    for name in ("speech", "sounds", "tingwu"):
-        for d in lookback.get(name, []):
-            last[d.get("session")] = max(last.get(d.get("session"), 0), d["_wall"])
+def _hearing_spans(lookback, now_ms, m0, m1):
+    """Hearing session intervals. The newest open session of a source runs until now (the ear writes
+    nothing in a silent room, so silence is not a dead link); replaced open sessions already carry an
+    estimated end from Records.sessions. `estimated` only if such a session overlaps this minute."""
     spans, estimated = [], False
-    for x in sessions:
+    for x in lookback.get("sessions", []):
+        if not _is_hearing(x):
+            continue
         start = x.get("start_ms", 0)
-        if x.get("end_ms") is not None:
-            end = x["end_ms"]
-        else:
+        end = x["end_ms"] if x.get("end_ms") is not None else now_ms
+        end = min(end, now_ms)
+        if (x.get("end_ms") is None or x.get("end_estimated")) and start < m1 and end > m0:
             estimated = True
-            nexts = [o["start_ms"] for o in sessions if o is not x and o.get("source") == x.get("source")
-                     and o.get("start_ms", 0) > start]
-            end = min([last.get(x["session"], start) + tail, now_ms] + nexts)
-        spans.append((start, min(end, now_ms)))
+        spans.append((start, end))
     return spans, estimated
 
 
@@ -106,7 +102,7 @@ def evaluate(pkg, lookback, minute_ms, s, now_ms):
                          + [m0 - 30 * MIN_MS])
 
     # --- coverage ---
-    hear_spans, estimated = _hearing_spans(lookback, s, now_ms)
+    hear_spans, estimated = _hearing_spans(lookback, now_ms, m0, m1)
     hearing_s = round(_union_overlap(hear_spans, m0, m1) / 1000)
     vis_events = lookback.get("vision", [])
     detections_in_minute = any(str(e.get("event", "")).startswith(("face_", "person_")) and m0 <= e["_wall"] < m1

@@ -66,6 +66,18 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(runner.tick(self.rec, self.store, S, T0 + 140_000), 60)
         self.assertEqual(self.store.state()["cursor_minute"], T0)
 
+    def test_tick_without_a_new_minute_reprocesses_nothing(self):
+        calls = []
+        real = runner.process_minute
+        runner.process_minute = lambda *a: calls.append(a[2]) or real(*a)
+        try:
+            runner.tick(self.rec, self.store, S, T0 + 10 * MIN + 80_000)
+            n = len(calls)
+            runner.tick(self.rec, self.store, S, T0 + 10 * MIN + 85_000)
+            self.assertEqual(len(calls), n)                      # same last ready minute: no work
+        finally:
+            runner.process_minute = real
+
     def test_minute_is_not_processed_before_delay(self):
         self.store.set_state(cursor_minute=T0)
         self.assertEqual(runner.tick(self.rec, self.store, S, T0 + MIN + 79_000), 0)

@@ -42,14 +42,18 @@ def keep_alive(until):
 
 
 class StrongTest(unittest.TestCase):
-    def test_open_session_coverage_stops_at_last_record_plus_tail(self):
+    def test_newest_open_session_counts_through_a_quiet_room(self):
+        # the ear writes nothing while the room is silent: a live session must not read as "sensors off"
         sess = [session("C", T0 - 300_000, source=SRC)]
-        docs = [("speech", speech("C", "s-1", T0 + 10_000))]
-        st = evaluate(docs, sess, minute=T0)
+        docs = [("speech", speech("C", "s-1", T0 - 250_000))]
+        st = evaluate(docs, sess, minute=T0 + 10 * MIN, now=T0 + 20 * MIN)
         self.assertEqual(st["coverage"]["hearing_s"], 60)
         self.assertTrue(st["coverage"]["estimated"])
-        self.assertEqual(evaluate(docs, sess, minute=T0 + 3 * MIN)["coverage"]["hearing_s"], 0)
-        self.assertEqual(evaluate(docs, sess, minute=T0 + 2 * MIN)["coverage"]["hearing_s"], 10)   # T0+130 s
+        self.assertNotEqual(st["owner"]["state"], "sensors_off")
+
+    def test_estimated_only_when_an_open_session_overlaps_the_minute(self):
+        sess = [session("C", T0 - 3 * 86400_000, T0 - 2 * 86400_000, source=SRC), session("D", T0 - 600_000, T0 + 600_000, source=SRC)]
+        self.assertFalse(evaluate([], sess)["coverage"]["estimated"])
 
     def test_open_session_coverage_stops_at_next_session(self):
         sess = [session("C", T0 - 300_000, source=SRC), session("D", T0 + 20_000, T0 + 100_000, source=SRC)]
@@ -86,6 +90,13 @@ class StrongTest(unittest.TestCase):
         self.assertEqual(evaluate(docs, [HEAR, VIS])["owner"]["state"], "seen")
         self.assertEqual(evaluate(docs, [HEAR, VIS], minute=T0 + MIN)["owner"]["state"], "just_left")
         self.assertEqual(evaluate(docs, [HEAR, VIS], minute=T0 + 4 * MIN)["owner"]["state"], "unknown")
+
+    def test_face_refound_with_same_id_after_vision_toggle_is_seen(self):
+        docs = owner_face(T0 - 20 * MIN) + [("vision", vision("V", "vision_off", T0 - 10 * MIN)),
+                                            ("vision", vision("V", "vision_on", T0 - 9 * MIN))] + \
+            [("vision", vision("V", "face_found", T0 - 8 * MIN, face=4)), ("vision", vision("V", "face_named", T0 - 8 * MIN + 500, face=4, name="me"))]
+        st = evaluate(docs + keep_alive(T0 + MIN), [HEAR, VIS])
+        self.assertEqual(st["owner"]["state"], "seen")
 
     def test_owner_face_fields(self):
         st = evaluate(owner_face(T0 - 20_000, T0 + 30_000) + keep_alive(T0 + MIN), [HEAR, VIS])

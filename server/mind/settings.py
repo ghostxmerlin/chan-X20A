@@ -38,6 +38,21 @@ def load(path):
     return _merge(DEFAULTS, data if isinstance(data, dict) else {})
 
 
+def load_checked(path, last_good):
+    """(settings, error). A missing file gives DEFAULTS with no error; a file that does not parse keeps
+    the last good settings (or DEFAULTS) and returns the error, so a typo never silently resets names."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return _merge(DEFAULTS, {}), ""
+    except (OSError, ValueError) as e:
+        return (last_good if last_good is not None else _merge(DEFAULTS, {})), f"{type(e).__name__} (JSON): {str(e)[:160]}"
+    if not isinstance(data, dict):
+        return (last_good if last_good is not None else _merge(DEFAULTS, {})), "settings must be a JSON object"
+    return _merge(DEFAULTS, data), ""
+
+
 def load_env(path):
     """KEY=VALUE lines (quotes stripped, # lines ignored); missing file → {}."""
     cfg = {}

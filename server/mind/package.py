@@ -66,14 +66,16 @@ def _intervals(lookback, end_ms, id_field, prefix):
                             lambda d: (d.get("session"), d.get("t_us"), d.get("event"), d.get("face"), d.get("person"))),
                     key=lambda d: d["_wall"])
     ends = _session_ends(lookback.get("sessions", []))
-    closers = {}
-    for e in events:
-        if e.get("event") in CLOSERS:
-            closers.setdefault(e.get("session"), []).append((e["_wall"], CLOSERS[e["event"]]))
     lost_event = prefix + "_lost"
     out, live = [], {}
     for e in events:
         ev = e.get("event", "")
+        if ev in CLOSERS:                        # vision off / M12 offline ends everything open in that session now,
+            for key in [k for k in live if k[0] == e.get("session")]:     # so a later found opens a new interval
+                cur = live.pop(key)
+                cur["to"], cur["closed_by"] = e["_wall"], CLOSERS[ev]
+                out.append(cur)
+            continue
         if not ev.startswith(prefix + "_") or e.get(id_field) is None:
             continue
         key = (e.get("session"), e[id_field])
@@ -86,7 +88,7 @@ def _intervals(lookback, end_ms, id_field, prefix):
             cur["to"], cur["closed_by"] = e["_wall"], "lost"
             out.append(live.pop(key))
     for cur in live.values():
-        options = [(t, how) for t, how in closers.get(cur["session"], []) if t >= cur["from"]]
+        options = []
         if cur["session"] in ends and ends[cur["session"]][0] >= cur["from"]:
             options.append(ends[cur["session"]])
         if options:

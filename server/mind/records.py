@@ -27,8 +27,22 @@ class Records:
         self.db = db
 
     def sessions(self, start_ms, end_ms):
+        """Sessions overlapping the window. An open session (no end_ms: the ear restarted without closing
+        it) that a newer session of the same source and kind replaced ends where the newer one starts
+        (end_estimated); only the newest open one per source and kind may still be running."""
         flt = {"start_ms": {"$lt": end_ms}, "$or": [{"end_ms": {"$exists": False}}, {"end_ms": {"$gt": start_ms}}]}
-        return list(self.db["sessions"].find(flt, {"_id": 0}).sort("start_ms", 1))
+        out = []
+        for s in self.db["sessions"].find(flt, {"_id": 0}).sort("start_ms", 1):
+            if s.get("end_ms") is None:
+                newer = [o for o in self.db["sessions"].find({"source": s.get("source"), "start_ms": {"$gt": s.get("start_ms", 0)}},
+                                                              {"_id": 0, "start_ms": 1, "kind": 1})
+                         if o.get("kind") == s.get("kind")]
+                if newer:
+                    s["end_ms"], s["end_estimated"] = min(o["start_ms"] for o in newer), True
+                    if s["end_ms"] <= start_ms:
+                        continue
+            out.append(s)
+        return out
 
     def window(self, start_ms, end_ms, vision_start_ms=None):
         """Records in [start_ms, end_ms); vision (and sessions) may reach further back."""

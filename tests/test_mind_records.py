@@ -39,6 +39,14 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(settings.load(None)["tz"], "Asia/Shanghai")
         self.assertEqual(settings.load("/nonexistent/x.json")["work"]["start"], "09:00")
 
+    def test_load_checked_reports_bad_json_and_keeps_last_good(self):
+        good = settings.load_checked(path_with('{"owner": {"display": "X"}}'), None)
+        self.assertEqual((good[0]["owner"]["display"], good[1]), ("X", ""))
+        bad = settings.load_checked(path_with('{"owner": '), good[0])
+        self.assertEqual(bad[0]["owner"]["display"], "X")
+        self.assertIn("JSON", bad[1])
+        self.assertEqual(settings.load_checked("/nonexistent.json", None)[1], "")     # missing file is fine: defaults
+
     def test_load_env(self):
         env = settings.load_env(path_with('# c\nA=1\nB="two"\n'))
         self.assertEqual(env, {"A": "1", "B": "two"})
@@ -49,6 +57,16 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(settings.local_label(T0, "Asia/Shanghai"), "11-10 16:40")
         self.assertTrue(settings.in_work_hours(T0, s))                       # Tuesday 16:40
         self.assertFalse(settings.in_work_hours(T0 + 3 * 3600_000, s))       # 19:40
+
+    def test_open_session_superseded_by_a_newer_one_ends_where_the_newer_starts(self):
+        db = FakeDB()
+        db.add("sessions", session("OLD", T0 - 3 * 86400_000), session("NEW", T0 - 86400_000, T0 - 3600_000),
+               session("VOLD", T0 - 3 * 86400_000, kind="vision"), session("VNEW", T0 - 600_000, kind="vision"))
+        got = {x["session"]: x for x in Records(db).sessions(T0, T0 + 60_000)}
+        self.assertEqual(set(got), {"VNEW"})                       # both old open sessions ended long ago
+        old = {x["session"]: x for x in Records(db).sessions(T0 - 2 * 86400_000, T0 - 2 * 86400_000 + 60_000)}
+        self.assertEqual(old["OLD"]["end_ms"], T0 - 86400_000)
+        self.assertTrue(old["OLD"]["end_estimated"])
 
     def test_sounds_are_found_by_t_since_they_have_no_at(self):
         db = FakeDB()
@@ -65,7 +83,7 @@ class RecordsTest(unittest.TestCase):
                speech("C", "s-1", T0 + 59_000))
         db.add("vision", vision("C", "face_found", T0 + 5_000, face=3), vision("C", "face_lost", T0 + 61_000, face=3))
         w = Records(db).window(T0, T0 + 60_000)
-        self.assertEqual({s["session"] for s in w["sessions"]}, {"A", "C"})
+        self.assertEqual({s["session"] for s in w["sessions"]}, {"C"})      # open A was replaced by C at T0 − 120 s
         self.assertEqual(sorted((d["session"], d["id"]) for d in w["speech"]), [("A", "s-1"), ("C", "s-1")])
         self.assertTrue(all("_wall" in d for d in w["speech"]))
         self.assertEqual([v["event"] for v in w["vision"]], ["face_found"])
