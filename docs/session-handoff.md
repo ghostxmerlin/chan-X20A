@@ -1,5 +1,47 @@
 # 会话交接记录
 
+## 2026-11-10 上午：网络栈失联根因与修复（0.4.61–0.4.64，Claude）
+
+**用户要求**：断网最优先；尽量多用 PSRAM，内部 RAM 只留给真正必须的地方；噪声输入（+12 dB 后只有标点的空结果）等断网解决后再看。
+**复现**：0.4.59/0.4.60 上开连续听觉后 30 s–3 min 内反复出现（ping 先通 TCP 先坏，随后 ping 也断，屏幕正常；0.4.59 一次 30–40 s 自恢复）。
+**诊断版**：0.4.61 `main/collector/mem_diag.cpp`：USB 每 5 s `MEM`（内部/DMA/PSRAM 空闲、最大块、最低、分配失败数）、每 60 s `TASKS`（每个任务栈在 INTERNAL/psram 及余量）、`heap_caps_register_failed_alloc_callback` 打 `ALLOCFAIL`；遥测 `health.alloc_failures(_internal)`。0.4.62 加每 5 s ping 网关（`NET`），连续 2 次不通时打 `STUCK`：lwIP 线程能否执行回调、各任务状态与 CPU 增量、`esp_wifi_statis_dump(ALL)`。
+**证据**（`logs/wedge-v0461/`、`logs/wedge-v0462/usb-continuous.log`）：失联时 Wi-Fi 关联一直在（无断开/信标超时），lwIP 线程活着（tcpip_alive=1），**Wi-Fi 动态 RX 缓冲 6/6 全被占住、RX 申请内存失败 378 次**；1630 B DMA 内部内存分配失败数十次，内部空闲最低 6 KB、DMA 空闲最低约 2 KB。0.4.61 那次失联时内部空闲约 30 KB、分配失败 0——说明主因不是总量耗尽，而是 RX 缓冲被占住。
+**根因**：未开 `LWIP_L2_TO_L3_COPY` 时，收到的每帧（哪怕 100 字节的服务端 tick）都以零拷贝方式挂在 1.6 KB 的 Wi-Fi DMA RX 缓冲上，直到应用读走；`TCP_RECVMBOX_SIZE=6` 恰好等于 6 个动态 RX 缓冲。听觉 worker 在发送上卡住（发送时限 1 s）时，未读的 tick 占满全部 RX 缓冲 → 收不到 ACK/ping → 发送更卡，形成死锁；内部 RAM 太少（24/29 个任务栈在内部）又让 Wi-Fi 申请不到新缓冲，放大问题。
+**修复**：
+- 0.4.63：`sdkconfig(.defaults)` 加 `CONFIG_LWIP_L2_TO_L3_COPY=y`（帧复制进 lwIP pbuf，>512 B 走 PSRAM，RX DMA 缓冲立即归还）。10 min 无失联（ping 125/125、HTTP 122/122），但听觉仍有 3 次 send_0、内部最低 2.2 KB、分配失败 416。未开 `SPIRAM_TRY_ALLOCATE_WIFI_LWIP`（会强制 Static TX 缓冲，可能更占内部 RAM）。
+- 0.4.64：`main/collector/psram_task.h` `create_psram_task()`（栈+TCB 在 PSRAM；任务内不得访问 flash/NVS、不得把栈上缓冲交给 DMA、用 `vTaskDeleteWithCaps` 结束）。搬到 PSRAM：sensors、environment、audio、camera、discovery、motor、m12、temp（约 44 KB）；麦克风增益 NVS 读取移到建任务前 `load_mic_gain_setting()`。留在内部：httpd×2、main、collector_serial（存 Wi-Fi）、collector_asr（存音量）、audio_stream（每客户端自删，现未使用）、系统任务。结果：内部空闲 18–22 KB → **约 66.8 KB**，最低 2.2 KB → **45 KB**，最大块 7.7 KB → 36.9 KB，分配失败 0；内部栈任务 25 → 17。
+**构建**：`IDF_PYTHON_ENV_PATH=$PWD/.tools/espressif/python_env/idf5.5_py3.13_env ./scripts/idf.sh build`。每版只写 ota_1 并独立 verify，备份 `backups/ota_1-collector-0.4.6{0,1,2,3}-before-*-20261110.bin`；产物 `artifacts/collector-0.4.6{1,2,3,4}-*`。0.4.64：3,583,136 B，SHA256 `8449811b9f4419448597...`（完整值见 manifest）。
+**0.4.64 实测（11:12–11:33，连续听觉开着，21 min）**：失联 0 次；网关 ping 253/253；Mac 读遥测 247/247；分配失败 0；内部空闲 55.7–66.8 KB、开机以来最低 39.5 KB。听觉仍有 2 次 send_0 + 1 次 connect_failed（自动重连）；当时网关 ping 1–8 ms 正常，所以是到后端的公网路径 RTT 尖峰撞上 1 s 发送时限（11-09 已知问题），不是设备失联。
+**待办**：听觉公网 send_0（每次丢约 3 s 音频）；诊断 ping 任务占约 2.5 KB 内部栈，验证完可去掉或改 PSRAM；噪声输入问题。
+
+
+## 2026-11-10 上午：麦克风数字增益 + 限幅（0.4.60，Claude）
+
+**起因**：用户回到办公室实测采音（hello 的办公室 DHCP 地址会变，按设备 MAC（`.private/stackchan-monitor.json` 的 device_id）在 `arp -a -i en10` 里找；监控配置已改，备份 `.private/stackchan-monitor.json.bak-20261110`）。底噪约 −55 dBFS（比昨天 −43 低约 12 dB）；用户确认 **100 Hz 嗡嗡声是 M12 风扇**，不追底噪，**先把设备端声量调到合理区间**。
+**实测（11-10 09:25 会话 c23，0.1 s RMS 有效语音电平）**：一臂远用户说话 −40…−44 dBFS，近处对话 −22…−28，个别峰值接近 0 dBFS；ES7210 模拟增益已在上限 37.5 dB（代码写 60 被截断），驱动没有用芯片数字音量寄存器。
+**修改**：`main/collector/mic_gain.h`（新）——麦克风通道（交错 PCM 第 0 路；第 1 路扬声器参考不动）固定数字增益 + 块峰值限幅（−1 dBFS 上限，整块峰值已知故无需预读、不削顶；恢复 0.6 dB/块 = 30 dB/s，线性渐变）。`audio_task` 在读到每块后、写环形缓冲与送听觉之前处理，所以录音、耳朵、HTTP 音频流拿到同一音量。默认 **+12 dB**，范围 0–24，NVS `collector/mic_gain`；`POST /v1/control {"target":"mic_gain","value":dB}`；能力 `mic_gain`；遥测 `health.mic_gain_db/mic_gain_applied_db/mic_gain_source/mic_gain_saved/mic_gain_min_db/mic_gain_max_db/mic_limited_blocks`。**注意：`mic_level_dbfs/mic_peak_dbfs` 从 0.4.60 起是增益后的电平**，与之前的数不能直接比。监控页“连续听觉”面板加“麦克风增益”滑块。
+**测试**：`tests/mic_gain_test.cpp`（`test_mic_gain.py`）：−40 dBFS→−28.0、0 dB 原样、−6 dBFS 正弦与满幅方波不过上限、0.34 s 恢复、降增益一块内生效、参考声道不动。Node 83、Python 85（4 跳过）通过。
+**构建环境提示**：系统 python3 是 3.14，IDF 环境只有 py3.13，需 `IDF_PYTHON_ENV_PATH=$PWD/.tools/espressif/python_env/idf5.5_py3.13_env ./scripts/idf.sh build`。
+**产物**：`artifacts/collector-0.4.60-mic-gain/`（3,572,672 B，SHA256 `c2c051942de3c025015c3475d62fb252395a0abd129ab545593d7dc8b9ba6dce`）。
+
+## 2026-11-09 晚间：思考后端 mind 讨论与听悟实测（Claude）
+
+**没有改设备，也没有改耳朵服务**；没有提交。完整记录见 [思考后端讨论记录](soul-mind.md)。
+
+- **命名**：机器人叫 **hello**（用户定，暂定）；思考后端模块暂定 mind。
+- **用户定**：
+  - 情景用结构化条目，内容是自然语言；强力元素作为条目，听到的谈话不断积累；
+  - 约一分钟更新一次；第一阶段只在服务器上做；
+  - 假定 hello 每分钟至少送 1 张照片或一份分析；M12 认人已稳定可用（旧数据过期）；
+  - 要区分角色的转写，并和 sherpa-onnx 对照。
+- **听悟实时实测**（修正前的两段录音，约 3.5 分钟，约 5 分钱）：
+  - 每句话出来时没有说话人编号，结束任务后的最终结果里才有，而且和 sherpa 一致；
+  - 但漏字严重，比 SenseVoice 差很多；放大音量、滤掉嗡嗡声都没有解决。
+  - 18 点以后的录音底噪低了约 10 dB，但修正后没有录到人说话，还没能测。
+- **脚本和结果**：本机 `.private/mind-tingwu-test/`，服务器 `~/soul-mind-test/`。
+- **hubmix 附带发现（未修改）**：`tingwu.py` 的 `query_task` 用 GET，DashScope 返回 400，应改为 POST 加 `getTask`。
+- **明早**：用修正后的固件录一段真人说话，并排比较 SenseVoice、听悟实时、听悟离线、gpt-4o-transcribe-diarize，然后定转写方案、写设计文档。
+
 ## 2026-11-09 收工状态（Claude）
 
 **设备**：collector-0.4.59，办公室 FreedomX20A，连续听觉开着，音量 80，舵机空闲；SD 台词 80 条已装齐。耳朵服务端已部署（机器人轻声门槛 + 她说话时不听）。代码已提交并推送 `codex/continuous-hearing`（78437c8、a206e98、4c8bb6a）。

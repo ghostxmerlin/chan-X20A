@@ -39,7 +39,7 @@
 | 眼睛资源 v2-front | 已入库 | 共 90 段动画，还没接入首页，见 [soul-eyes.md](soul-eyes.md) |
 | M12 摄像头 | 接顶部蓝色口，由 StackChan 控制（实测） | 唤醒后说 turn on，M12 做人脸检测（约 7.5 条/秒），StackChan 屏幕画框；说 turn off，M12 待机。人脸识别 2–3 fps；跑识别时 92–93°C，离 95°C 保护线很近。Mac 面板仍可经 WiFi 调试，见 [m12-unitv2.md](m12-unitv2.md) |
 | ASR 模组（CI-03T） | 接顶部黑色口，StackChan 已读取（实测） | 出厂英文词表（用户决定先不定制）。forward 显示爱心，backward 显示叉号，turn on / turn off 开关 M12 人脸视图。模块 TX 在 GPIO8 |
-| 大脑 | 未开始 | 已定放在公网服务器，LLM 经 aihubmix 中转；状态机放在哪里待定（见第 6 节） |
+| 大脑 | 讨论中 | 已定放在公网服务器，LLM 经 aihubmix 中转；状态机放在哪里待定（见第 6 节）。2026-11-09 起先做思考后端 mind（情景识别：我是谁、我在哪、旁边的人在干什么），见 [思考后端讨论记录](soul-mind.md) |
 
 ## 4. 耳朵已经做到的（实测）
 
