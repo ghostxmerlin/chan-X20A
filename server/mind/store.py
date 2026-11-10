@@ -51,9 +51,10 @@ class Store:
         return self.packages.find_one({"lane": lane, "minute": minute, "version": version}, {"_id": 0})
 
     def put(self, lane, minute, pkg, strong):
-        """Write a new version unless the latest one has the same fingerprint; returns the version or None."""
+        """Write a new version unless the latest one has the same package fingerprint and the same strong
+        elements (settings or rule changes alter only the latter); returns the version or None."""
         prev = self.latest(lane, minute)
-        if prev and prev["fingerprint"] == pkg["fingerprint"]:
+        if prev and prev["fingerprint"] == pkg["fingerprint"] and prev.get("strong") == strong:
             return None
         version = (prev["version"] + 1) if prev else 1
         self.packages.insert_one({"lane": lane, "minute": minute, "version": version, "builder": pkg["builder"],

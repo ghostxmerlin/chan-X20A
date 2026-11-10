@@ -58,6 +58,20 @@ def _hearing_spans(lookback, s, now_ms):
     return spans, estimated
 
 
+def _vision_link_spans(lookback, now_ms):
+    """Open intervals of the robot's vision link (sessions of kind "vision")."""
+    links = [x for x in lookback.get("sessions", []) if x.get("kind") == "vision"]
+    spans = []
+    for x in links:
+        end = x.get("end_ms")
+        if end is None:
+            later = [o["start_ms"] for o in links if o is not x and o.get("source") == x.get("source")
+                     and o.get("start_ms", 0) > x.get("start_ms", 0)]
+            end = min(later + [now_ms])
+        spans.append((x.get("start_ms", 0), min(end, now_ms)))
+    return spans
+
+
 def _toggle_spans(events, on_name, off_name, window_start, end_ms):
     """On-intervals from on/off events; an off seen first means it was on since the window start."""
     marks = sorted((e["_wall"], e["event"]) for e in events if e.get("event") in (on_name, off_name))
@@ -97,12 +111,19 @@ def evaluate(pkg, lookback, minute_ms, s, now_ms):
     vis_events = lookback.get("vision", [])
     detections_in_minute = any(str(e.get("event", "")).startswith(("face_", "person_")) and m0 <= e["_wall"] < m1
                                for e in vis_events)
-    cover = {}
+    link_spans = _vision_link_spans(lookback, now_ms)
+    cover, vision_spans = {}, None
     for key, on, off in (("vision_s", "vision_on", "vision_off"), ("m12_s", "m12_online", "m12_offline")):
         spans = _toggle_spans(vis_events, on, off, lookback_start, horizon)
+        if spans is None and key == "m12_s" and vision_spans is not None:
+            spans = vision_spans                 # vision on means m12d confirmed it: the M12 was online
+        if spans is None and link_spans:
+            spans, estimated = link_spans, True  # the 0.4.74 link only exists while the M12 is online
         if spans is None:
             spans = [(m0, horizon)] if detections_in_minute else []
             estimated = estimated or bool(spans)
+        if key == "vision_s":
+            vision_spans = spans
         cover[key] = round(_union_overlap(spans, m0, horizon) / 1000)
 
     # --- owner face / voice ---

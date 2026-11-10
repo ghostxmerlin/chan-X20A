@@ -66,8 +66,18 @@ class StrongTest(unittest.TestCase):
         st = evaluate(docs, [VIS])
         self.assertEqual((st["coverage"]["vision_s"], st["coverage"]["m12_s"]), (15, 60))
 
+    def test_open_vision_link_counts_as_vision_and_m12_on(self):
+        st = evaluate([], [VIS])
+        self.assertEqual((st["coverage"]["vision_s"], st["coverage"]["m12_s"]), (60, 60))
+        ended = [session("V", T0 - 3600_000, T0 + 20_000, source=SRC, kind="vision")]
+        self.assertEqual(evaluate([], ended)["coverage"]["m12_s"], 20)
+
+    def test_m12_follows_vision_toggles_without_its_own_events(self):
+        docs = [("vision", vision("V", "vision_on", T0 - 5 * MIN)), ("vision", vision("V", "vision_off", T0 + 15_000))]
+        self.assertEqual(evaluate(docs, [VIS])["coverage"]["m12_s"], 15)
+
     def test_vision_assumed_on_when_only_detections_seen(self):
-        st = evaluate([("vision", vision("V", "person_found", T0 + 1000, person=1))], [VIS])
+        st = evaluate([("vision", vision("C4", "person_found", T0 + 1000, person=1))], [HEAR])   # 0.4.73: events in the hearing session
         self.assertEqual(st["coverage"]["vision_s"], 60)
         self.assertTrue(st["coverage"]["estimated"])
 
@@ -104,8 +114,9 @@ class StrongTest(unittest.TestCase):
     def test_likely_absent_needs_coverage_and_20_minutes_without_owner(self):
         docs = owner_face(T0 - 26 * MIN, T0 - 25 * MIN)
         self.assertEqual(evaluate(docs + keep_alive(T0 + MIN), [HEAR, VIS])["owner"]["state"], "likely_absent")
-        short = [session("C", T0 - 600_000, T0 + 10_000, source=SRC)]
-        self.assertEqual(evaluate(docs, short + [VIS])["owner"]["state"], "unknown")   # 10 s of hearing only
+        short = [session("C", T0 - 600_000, T0 + 10_000, source=SRC),
+                 session("V", T0 - 3600_000, T0 - 20 * MIN, source=SRC, kind="vision")]
+        self.assertEqual(evaluate(docs, short)["owner"]["state"], "unknown")   # 10 s of hearing, vision link closed
 
     def test_sensors_off(self):
         st = evaluate([], [])

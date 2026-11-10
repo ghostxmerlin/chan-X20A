@@ -93,6 +93,7 @@ def main():
     if a.rebuild:
         s = settings.load(a.settings)
         lo, hi = (_parse_local(t, s["tz"]) for t in a.rebuild)
+        hi = min(hi, settings.minute_floor(int(time.time() * 1000) - MIN_MS - PROCESS_DELAY_MS) + MIN_MS)   # never the future
         written = sum(process_minute(records, store, m, s, int(time.time() * 1000)) == "written"
                       for m in range(settings.minute_floor(lo), hi, MIN_MS))
         print(f"rebuilt {a.rebuild[0]}–{a.rebuild[1]}: {written} new versions", flush=True)

@@ -17,12 +17,15 @@ def path_with(text):
 
 
 class RecordsTest(unittest.TestCase):
-    def test_wall_time_prefers_session_start_plus_pos(self):
-        doc = {"pos": [16000 * 30, 16000 * 31], "at": 1_000_000 + 30_000 + 7_000}
-        self.assertEqual(records.wall_ms(doc, 1_000_000), (1_030_000, 7_000))
+    def test_speech_is_filed_by_the_ear_clock_and_pos_gives_the_drift(self):
+        doc = {"pos": [16000 * 30, 16000 * 31], "t": 1_037_000, "at": 1_037_000}
+        self.assertEqual(records.wall_ms(doc, 1_000_000, "speech"), (1_037_000, 7_000))
+        self.assertEqual(records.wall_ms({"t": 5}, None, "sounds"), (5, None))
 
-    def test_wall_time_falls_back_to_at(self):
-        self.assertEqual(records.wall_ms({"at": 5}, None), (5, None))
+    def test_tingwu_is_filed_by_pos_since_its_at_is_arrival(self):
+        doc = {"pos": [16000 * 30, 16000 * 33], "at": 1_000_000 + 45_000}
+        self.assertEqual(records.wall_ms(doc, 1_000_000, "tingwu"), (1_030_000, None))
+        self.assertEqual(records.wall_ms({"at": 9}, None, "tingwu"), (9, None))
 
     def test_minute_boundary_belongs_to_new_minute(self):
         self.assertEqual(settings.minute_floor(120_000), 120_000)
@@ -57,9 +60,9 @@ class RecordsTest(unittest.TestCase):
         db = FakeDB()
         db.add("sessions", session("A", T0 - 600_000), session("B", T0 - 900_000, T0 - 300_000),
                session("C", T0 - 120_000, T0 + 600_000))
-        db.add("speech", speech("A", "s-1", T0 + 10_000, pos=[16000 * 610, 16000 * 611]),     # wall T0+10s
-               speech("A", "s-2", T0 + 70_000, pos=[16000 * 670, 16000 * 671]),               # next minute
-               speech("C", "s-1", T0 + 59_000))                                                # no pos: at
+        db.add("speech", speech("A", "s-1", T0 + 10_000, pos=[16000 * 610, 16000 * 611]),     # T0+10s
+               speech("A", "s-2", T0 + 70_000, pos=[16000 * 600, 16000 * 601]),               # t: next minute
+               speech("C", "s-1", T0 + 59_000))
         db.add("vision", vision("C", "face_found", T0 + 5_000, face=3), vision("C", "face_lost", T0 + 61_000, face=3))
         w = Records(db).window(T0, T0 + 60_000)
         self.assertEqual({s["session"] for s in w["sessions"]}, {"A", "C"})

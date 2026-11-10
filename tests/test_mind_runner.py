@@ -47,6 +47,15 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(self.store.latest("live", T0)["version"], 2)
         self.assertEqual(self.store.latest("live", T0)["package"]["speech"][-1]["ref"]["id"], "s-9")
 
+    def test_changed_settings_create_a_new_version(self):
+        import copy
+        self.process(T0)
+        s2 = copy.deepcopy(S); s2["tz"] = "UTC"          # same package, different strong elements (time label)
+        self.assertEqual(runner.process_minute(self.rec, self.store, T0 + 30 * MIN, S, T0 + 40 * MIN), "written")
+        self.assertEqual(runner.process_minute(self.rec, self.store, T0 + 30 * MIN, s2, T0 + 40 * MIN), "written")
+        self.assertEqual(self.store.latest("live", T0 + 30 * MIN)["version"], 2)
+        self.assertEqual(runner.process_minute(self.rec, self.store, T0 + 30 * MIN, s2, T0 + 40 * MIN), "same")
+
     def test_tick_catches_up_after_downtime(self):
         self.store.set_state(cursor_minute=T0)
         self.assertEqual(runner.tick(self.rec, self.store, S, T0 + 10 * MIN + 80_000), 9)

@@ -1,21 +1,25 @@
 """Raw records for a time window, read-only, with the wall time each record is filed under.
 
-speech / tingwu / sounds carry `pos` (16 kHz sample offsets in the session audio): their wall time
-is session start + pos[0] / 16 ms, cross-checked against `at`. vision rows carry `at` already.
+speech and sounds are filed by the ear's own clock (`t`, ≈ start of the utterance); session start +
+pos[0] / 16 ms is only a cross-check, since pos falls behind real time when the robot's audio had
+gaps (the drift warning then means "audio gaps before this point"). tingwu rows are filed by pos:
+their `at` is when the result arrived, seconds after the sentence. vision rows carry `at` already.
 """
 AUDIO_COLLECTIONS = ("speech", "tingwu", "sounds")
 TIME_FIELD = {"speech": "t", "tingwu": "at", "sounds": "t"}   # indexed epoch-ms fields; sounds rows have no `at`
-SLACK_MS = 300_000            # `at` may differ from the wall time by seconds; query wider, then filter
+SLACK_MS = 300_000            # pos-filed rows may sit up to minutes from `at`; query wider, then filter
 
 
-def wall_ms(doc, session_start_ms):
-    """(wall time used to file the record, at − wall in ms or None)."""
+def wall_ms(doc, session_start_ms, collection="speech"):
+    """(wall time used to file the record, clock − pos time in ms, or None)."""
     pos = doc.get("pos")
-    at = doc.get("at", doc.get("t"))
+    clock = doc.get(TIME_FIELD.get(collection, "at"), doc.get("at", doc.get("t")))
+    pos_wall = None
     if session_start_ms is not None and isinstance(pos, (list, tuple)) and pos and isinstance(pos[0], (int, float)):
-        wall = int(session_start_ms + pos[0] / 16)
-        return wall, (int(at - wall) if isinstance(at, (int, float)) else None)
-    return int(at), None
+        pos_wall = int(session_start_ms + pos[0] / 16)
+    if collection == "tingwu":
+        return (pos_wall if pos_wall is not None else int(clock)), None
+    return int(clock), (int(clock - pos_wall) if pos_wall is not None else None)
 
 
 class Records:
@@ -40,7 +44,7 @@ class Records:
                     starts[s["session"]] = s.get("start_ms")
             kept = []
             for d in docs:
-                d["_wall"], d["_drift"] = wall_ms(d, starts.get(d.get("session")))
+                d["_wall"], d["_drift"] = wall_ms(d, starts.get(d.get("session")), name)
                 if start_ms <= d["_wall"] < end_ms:
                     kept.append(d)
             kept.sort(key=lambda d: d["_wall"])
