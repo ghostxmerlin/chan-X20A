@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from . import package, settings, strong
 from .records import Records
+from .settings_store import SettingsStore
 from .store import LANE, Store
 
 MIN_MS = 60_000
@@ -92,10 +93,9 @@ def main():
     db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
     records, store = Records(db), Store(db)
     store.ensure_indexes()
+    settings_store = SettingsStore(db, a.settings)
     if a.rebuild:
-        s, err = settings.load_checked(a.settings, None)
-        if err:
-            raise SystemExit(f"settings file does not parse: {err}")
+        s, _ = settings_store.current()
         lo, hi = (_parse_local(t, s["tz"]) for t in a.rebuild)
         hi = min(hi, settings.minute_floor(int(time.time() * 1000) - MIN_MS - PROCESS_DELAY_MS) + MIN_MS)   # never the future
         written = sum(process_minute(records, store, m, s, int(time.time() * 1000)) == "written"
@@ -107,11 +107,10 @@ def main():
     threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}", flush=True)
-    good = None
     while True:
         try:
-            good, err = settings.load_checked(a.settings, good)
-            store.set_state(settings_error=err)
+            good, version = settings_store.current()      # settings are versioned in the database (phase 1)
+            store.set_state(settings_version=version)
             n = tick(records, store, good, int(time.time() * 1000), int(a.catch_up_max_hours * 3600_000))
             if n:
                 print(f"processed {n} minute(s), cursor {store.state().get('cursor_minute')}", flush=True)

@@ -15,6 +15,13 @@ DEFAULTS = {
     "work": {"days": [1, 2, 3, 4, 5], "start": "09:00", "end": "19:00"},
     "thresholds": {"just_left_min": 2, "voice_recent_min": 5, "face_recent_min": 10, "absent_after_min": 20,
                    "coverage_min_s": 30, "open_session_tail_s": 120, "face_tail_s": 120, "drift_warn_s": 5},
+    # phase 1
+    "self_facts": "我叫 hello，是主人放在办公桌上的桌面宠物机器人。我有一个麦克风和一个会认人脸的摄像头（M12），头会转向看到的脸。",
+    "place": {"default": "办公室，主人的办公桌上"},
+    "persona": "",                # stored only, never sent to the perception prompt
+    "sources": {"speech_text": True, "tingwu": True, "sounds": True, "vision": True},
+    "fusion": {"enabled": True, "model": "gpt-6-luna", "prompt": "v1", "max_age_min": 60, "review_after_min": [5, 10, 20, 30]},
+    "budget_usd_per_day": 20.0,   # runaway guard only (user: cost is not a concern, but keep statistics)
 }
 MINUTE_MS = 60_000
 
