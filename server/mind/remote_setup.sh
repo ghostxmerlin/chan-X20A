@@ -14,8 +14,8 @@ TOKEN_FILE=$(systemctl show "$EAR_UNIT" -p Environment --value | tr ' ' '\n' | s
 [ -n "$TOKEN_FILE" ] && [ -s "$TOKEN_FILE" ] || { echo "cannot find the ear token file from $EAR_UNIT" >&2; exit 1; }
 "$PY" -c "import pymongo" || { echo "pymongo missing in $PY" >&2; exit 1; }
 since=$(date '+%Y-%m-%d %H:%M:%S')
-if systemctl is-active --quiet "$UNIT"; then
-  sudo systemctl restart "$UNIT"
+if [ "$(systemctl show "$UNIT" -p LoadState --value 2>/dev/null)" = "loaded" ]; then
+  sudo systemctl restart "$UNIT"          # running, or failing in its restart loop: restart with the new code
 else
   sudo systemctl reset-failed "$UNIT" 2>/dev/null || true
   sudo systemd-run --unit "$UNIT" --description "hello mind (minute timeline)" \

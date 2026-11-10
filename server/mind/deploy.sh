@@ -12,8 +12,7 @@ need SOUL_SERVER_SSH
 MIND_DIR=${SOUL_MIND_DIR:-soul-mind}
 UNIT=${SOUL_MIND_UNIT:-soul-mind}
 cd "$HERE"
-FILES="__init__.py settings.py records.py package.py strong.py store.py runner.py api.py probe.py settings.example.json"
-FILES=$(for f in $FILES; do [ -e "$f" ] && printf '%s ' "$f"; done)
+FILES="$(ls ./*.py | sed 's#^\./##' | tr '\n' ' ')settings.example.json"   # every module, so new ones are never left behind
 $SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$MIND_DIR/mind"
 if [ "${1:-}" = "--dry-run" ]; then
   # shellcheck disable=SC2086
