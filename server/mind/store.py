@@ -128,3 +128,19 @@ class Store:
         start = int(day.timestamp() * 1000)
         return sum(d.get("cost_usd") or 0 for d in self.db["mind_runs"].find({"at": {"$gte": start, "$lt": start + 86400_000}},
                                                                                {"cost_usd": 1}))
+
+    def scenes_range(self, lane, from_ms, to_ms):
+        latest = {}
+        for d in self.db["mind_scenes"].find({"lane": lane, "minute": {"$gte": from_ms, "$lt": to_ms}}, {"_id": 0}):
+            if d["minute"] not in latest or d["version"] > latest[d["minute"]]["version"]:
+                latest[d["minute"]] = d
+        return [latest[m] for m in sorted(latest)]
+
+    # ---- segments ----
+    def segment_summary(self, lane, start):
+        return self.db["mind_segments"].find_one({"lane": lane, "start": start}, {"_id": 0}, sort=[("version", -1)])
+
+    def put_segment_summary(self, lane, start, end, summary, run_id, scenes_count, at):
+        prev = self.segment_summary(lane, start)
+        self.db["mind_segments"].insert_one({"lane": lane, "start": start, "end": end, "version": (prev["version"] + 1) if prev else 1,
+                                             "summary": summary, "run_id": run_id, "scenes_count": scenes_count, "at": at})
