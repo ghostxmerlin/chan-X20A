@@ -11,7 +11,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 
-from . import package, settings, strong
+from . import fusion, package, segments, settings, strong
 from .records import Records
 from .settings_store import SettingsStore
 from .store import LANE, Store
@@ -42,8 +42,36 @@ def process_minute(records, store, minute_ms, s, now_ms):
     return "written" if store.put(LANE, minute_ms, pkg, st) is not None else "same"
 
 
-def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000):
-    """Process every ready minute after the cursor; returns how many new minutes were processed."""
+def day_start(ms, tz):
+    t = settings.local_time(ms, tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(t.timestamp() * 1000)
+
+
+def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE):
+    """Model fusion for these minutes, in order (packages must exist), then segment summaries."""
+    if env is None or not s["fusion"]["enabled"] or not minutes:
+        return 0
+    segs = segments.update(env, store, s, day_start(minutes[0], s["tz"]), now_ms, lane, summarize_now=False)
+    titled = [{"start": g["start"], "end": g["end"], "cls": g["cls"], "title": (g.get("summary") or {}).get("title")}
+              for g in segs if g["cls"] != "gap"]
+    done = 0
+    for m in minutes:
+        doc = store.latest(lane, m)
+        if not doc:
+            continue
+        prev = store.latest(lane, m - MIN_MS)
+        fusion.run_minute(env, store, s, settings_version, m, doc["package"], doc["strong"],
+                          {"prev": prev["package"] if prev else None}, lane=lane, now_ms=now_ms,
+                          segments=[g for g in titled if g["start"] < m])
+        done += 1
+    segments.update(env, store, s, day_start(now_ms, s["tz"]), now_ms, lane)
+    store.set_state(cost_today=round(store.cost_today(s["tz"], now_ms), 4))
+    return done
+
+
+def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000, env=None, settings_version=0):
+    """Process every ready minute after the cursor; fuse the new ones that are recent enough.
+    Returns how many new minutes were processed."""
     last_ready = settings.minute_floor(now_ms - MIN_MS - PROCESS_DELAY_MS)
     state = store.state()
     cursor = state.get("cursor_minute")
@@ -52,7 +80,7 @@ def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000):
         return 0                                 # nothing new is ready: no re-check either (once per new minute)
     done = state.get("processed", 0)
     same = state.get("skipped_same", 0)
-    count = 0
+    count, new = 0, []
     try:
         if cursor is not None:
             for m in range(cursor - (RECHECK_MINUTES - 1) * MIN_MS, cursor + MIN_MS, MIN_MS):
@@ -63,8 +91,11 @@ def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000):
                 same += 1
             count += 1
             done += 1
+            new.append(m)
             store.set_state(cursor_minute=m, processed=done, skipped_same=same)
         store.set_state(last_run_ms=now_ms, last_error="", skipped_same=same)
+        age_limit = s["fusion"]["max_age_min"] * MIN_MS + MIN_MS + PROCESS_DELAY_MS
+        fuse(env, store, s, [m for m in new if now_ms - m <= age_limit], now_ms, settings_version)
     except Exception as e:                       # noqa: BLE001 - recorded, then the caller retries
         try:
             store.set_state(last_error=f"{type(e).__name__}: {str(e)[:200]}", last_run_ms=now_ms)
@@ -84,10 +115,13 @@ def main():
     ap.add_argument("--token-file")
     ap.add_argument("--api-port", type=int, default=52740)
     ap.add_argument("--rebuild", nargs=2, metavar=("FROM", "TO"))
+    ap.add_argument("--fusion", action="store_true", help="with --rebuild: also run the model over the range")
     ap.add_argument("--catch-up-max-hours", type=float, default=48)
     a = ap.parse_args()
     from pymongo import MongoClient
-    uri = settings.load_env(a.hubmix_env).get("MONGO_URI")
+    hub = settings.load_env(a.hubmix_env)
+    uri = hub.get("MONGO_URI")
+    env = {"base_url": hub.get("BASE_URL", "https://aihubmix.com/v1"), "api_key": hub["API_KEY"]} if hub.get("API_KEY") else None
     if not uri:
         raise SystemExit("MONGO_URI missing in the hubmix env file")
     db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
@@ -95,12 +129,16 @@ def main():
     store.ensure_indexes()
     settings_store = SettingsStore(db, a.settings)
     if a.rebuild:
-        s, _ = settings_store.current()
+        s, version = settings_store.current()
         lo, hi = (_parse_local(t, s["tz"]) for t in a.rebuild)
         hi = min(hi, settings.minute_floor(int(time.time() * 1000) - MIN_MS - PROCESS_DELAY_MS) + MIN_MS)   # never the future
-        written = sum(process_minute(records, store, m, s, int(time.time() * 1000)) == "written"
-                      for m in range(settings.minute_floor(lo), hi, MIN_MS))
+        minutes = list(range(settings.minute_floor(lo), hi, MIN_MS))
+        written = sum(process_minute(records, store, m, s, int(time.time() * 1000)) == "written" for m in minutes)
         print(f"rebuilt {a.rebuild[0]}–{a.rebuild[1]}: {written} new versions", flush=True)
+        if a.fusion:
+            before = store.cost_today(s["tz"], int(time.time() * 1000))
+            n = fuse(env, store, s, minutes, int(time.time() * 1000), version)
+            print(f"fused {n} minutes, cost ${store.cost_today(s['tz'], int(time.time() * 1000)) - before:.4f}", flush=True)
         return
     token = open(a.token_file).read().strip() if a.token_file else ""
     from . import api
@@ -111,7 +149,7 @@ def main():
         try:
             good, version = settings_store.current()      # settings are versioned in the database (phase 1)
             store.set_state(settings_version=version)
-            n = tick(records, store, good, int(time.time() * 1000), int(a.catch_up_max_hours * 3600_000))
+            n = tick(records, store, good, int(time.time() * 1000), int(a.catch_up_max_hours * 3600_000), env, version)
             if n:
                 print(f"processed {n} minute(s), cursor {store.state().get('cursor_minute')}", flush=True)
             time.sleep(5)

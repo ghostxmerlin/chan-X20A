@@ -7,6 +7,10 @@ from mind_fixtures import FakeDB, T0, session, sound, speech, vision   # noqa: E
 from mind import runner, settings                                     # noqa: E402
 from mind.records import Records                                      # noqa: E402
 from mind.store import Store                                          # noqa: E402
+from mind import fusion                                               # noqa: E402
+from test_mind_fusion import FakeChat                                 # noqa: E402
+
+ENV = {"base_url": "http://x", "api_key": "k"}
 
 S = settings.load(None)
 MIN = 60_000
@@ -108,6 +112,48 @@ class RunnerTest(unittest.TestCase):
         self.process(T0 + 5 * MIN)
         names = self.store.latest("live", T0 + 5 * MIN)["package"]["faces"]
         self.assertIn(9, [f["face"] for f in names])
+
+
+class RunnerFusionTest(RunnerTest):
+    def setUp(self):
+        super().setUp()
+        self.fake = FakeChat()
+        fusion.CHAT = self.fake
+
+    def test_tick_fuses_new_recent_minutes_only(self):
+        self.store.set_state(cursor_minute=T0)
+        now = T0 + 3 * 3600_000
+        runner.tick(self.rec, self.store, S, now, 48 * 3600_000, env=ENV)
+        fused = sorted({d["minute"] for d in self.db["mind_scenes"].docs})
+        self.assertGreater(self.db.count("mind_packages"), 170)
+        self.assertTrue(fused and fused[0] >= now - 60 * MIN - 140_000)
+        self.assertEqual(len(fused), 60)
+
+    def test_recheck_does_not_fuse_again(self):
+        now = T0 + 10 * MIN + 80_000
+        self.store.set_state(cursor_minute=T0)
+        runner.tick(self.rec, self.store, S, now, 48 * 3600_000, env=ENV)
+        n = self.db.count("mind_scenes")
+        self.db.add("speech", speech("H", "s-late", T0 + 5 * MIN + 1000))
+        runner.tick(self.rec, self.store, S, now + MIN, 48 * 3600_000, env=ENV)
+        self.assertEqual(self.db.count("mind_scenes"), n + 1)
+
+    def test_fusion_disabled_writes_no_scenes(self):
+        import copy
+        s = copy.deepcopy(S); s["fusion"]["enabled"] = False
+        self.store.set_state(cursor_minute=T0)
+        runner.tick(self.rec, self.store, s, T0 + 10 * MIN + 80_000, 48 * 3600_000, env=ENV)
+        self.assertEqual((self.db.count("mind_scenes"), self.fake.calls), (0, []))
+
+    def test_no_env_writes_no_scenes(self):
+        self.store.set_state(cursor_minute=T0)
+        runner.tick(self.rec, self.store, S, T0 + 10 * MIN + 80_000, 48 * 3600_000)
+        self.assertEqual(self.db.count("mind_scenes"), 0)
+
+    def test_segment_summaries_run_after_fusion(self):
+        self.store.set_state(cursor_minute=T0)
+        runner.tick(self.rec, self.store, S, T0 + 10 * MIN + 80_000, 48 * 3600_000, env=ENV)
+        self.assertIn("segment", {d["step"] for d in self.db["mind_runs"].docs})
 
 
 if __name__ == "__main__":
