@@ -77,14 +77,30 @@ test('camera streaming toggle requires the new capability and a boolean',async()
  for(const bad of [{action:'camera',enabled:'true',boot:'boot-a'},{action:'camera',boot:'boot-a'},{action:'camera',enabled:true,extra:1,boot:'boot-a'},{action:'camera',enabled:true,boot:'old'}]) await assert.rejects(c.execute(bad));
  assert.equal(calls.length,2);
 });
-test('recognition requires new capability and an exact manual mode',async()=>{
+test('m12d: m12_mode is detection on/off only; face_recognition is gone',async()=>{
  const {m,c,calls}=fixture();
  await assert.rejects(c.execute({action:'m12_mode',mode:'face_recognition',boot:'boot-a'}));
- m.info.capabilities.m12_recognition='supported';
- await c.execute({action:'m12_mode',mode:'face_recognition',boot:'boot-a'});
- assert.equal(calls[0][0],'/v1/control');assert.deepEqual(calls[0][1],{target:'m12_mode',mode:'face_recognition'});
+ await c.execute({action:'m12_mode',mode:'face_detector',boot:'boot-a'});
+ assert.deepEqual(calls[0][1],{target:'m12_mode',mode:'face_detector'});
+ await c.execute({action:'m12_mode',mode:'standby',boot:'boot-a'});
  await assert.rejects(c.execute({action:'m12_mode',mode:'train',boot:'boot-a'}));
- assert.equal(calls.length,1);
+ assert.equal(calls.length,2);
+});
+test('m12d library requests need m12d firmware, an online M12 and a valid name',async()=>{
+ const {m,c,calls}=fixture();
+ const learn={action:'m12_learn',name:'person-a',boot:'boot-a'};
+ await assert.rejects(c.execute(learn));                                    // old firmware: no m12d protocol
+ m.telemetry.m12={valid:true,protocol:'m12d',online:false};
+ await assert.rejects(c.execute(learn));                                    // offline
+ m.telemetry.m12.online=true;
+ await c.execute(learn);assert.deepEqual(calls.at(-1)[1],{target:'m12_request',op:'learn',name:'person-a'});
+ await c.execute({action:'m12_forget',name:'名字',boot:'boot-a'});assert.deepEqual(calls.at(-1)[1],{target:'m12_request',op:'forget',name:'名字'});
+ await c.execute({action:'m12_faces',boot:'boot-a'});assert.deepEqual(calls.at(-1)[1],{target:'m12_request',op:'faces'});
+ const r=await c.execute({action:'m12_who',boot:'boot-a'});assert.deepEqual(calls.at(-1)[1],{target:'m12_request',op:'who'});assert.match(r.message,/认人库/);
+ for(const name of ['', 'a'.repeat(33), '一二三四五六七八九十一', 'x\u0001', 7]) await assert.rejects(c.execute({action:'m12_learn',name,boot:'boot-a'}));
+ await assert.rejects(c.execute({action:'m12_learn',boot:'boot-a'}));      // missing name
+ await assert.rejects(c.execute({action:'m12_who',face:3,boot:'boot-a'}));  // no extra keys
+ assert.equal(calls.length,4);
 });
 test('interaction modes require exact schema, new capabilities and unchanged boot',async()=>{
  const {m,c,calls}=fixture(),request={action:'interaction',mode:'tracking',enabled:true,boot:'boot-a'};

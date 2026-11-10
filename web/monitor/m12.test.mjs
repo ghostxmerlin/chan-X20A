@@ -1,54 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { M12Tracker } from './m12.mjs';
-const data = (us, results, extra = {}) => ({ boot_id:'a', timestamp_us:us, m12:{valid:true,function:'face_detector',requested_us:1_000_000,results,last_result_us:us,num:1,faces:[{x:10,y:20,w:30,h:40,prob:.9}],...extra}});
-test('recognition uses its own counter and identities; stale/switching/empty frames clear names',()=>{
+// Telemetry shaped like collector-0.4.66+ m12_json (m12d).
+const data=(us,m={})=>({boot_id:'b',timestamp_us:us,m12:{protocol:'m12d',valid:true,online:true,hb_age_ms:500,
+  heartbeat:{t:72,fps:15.2,tier:0,up:100,mem:65000,frames:10,reopens:0,drop:0,mhz:1400},
+  function:'detect',requested_function:'detect',mode_request_pending:false,last_result_us:us-100000,num:1,
+  faces:[{id:3,x:100,y:80,w:120,h:150,prob:.97,gender:'f',age:31,age_group:'adult',name:'person-a'}],
+  persons:[{id:18,x:80,y:60,w:300,h:420,prob:.99,face:3}],library:{valid:true,faces:[{name:'person-a',samples:5}]},commands:[],...m}});
+test('detecting: fps and temperature come from the heartbeat, faces carry id/name/attributes',()=>{
+ const t=new M12Tracker(),s=t.snapshot(data(5_000_000),true);
+ assert.equal(s.status,'detecting');assert.equal(s.fps,15.2);assert.equal(s.temperature,72);
+ assert.equal(s.faces[0].id,3);assert.equal(s.faces[0].name,'person-a');assert.equal(s.persons.length,1);assert.equal(s.count,1);
+ assert.deepEqual(s.library,[{name:'person-a',samples:5}]);
+});
+test('offline, serial, hot, standby and pending switches are reported and clear the boxes',()=>{
  const t=new M12Tracker();
- const sample=(us,n,extra={})=>data(us,999,{function:'face_recognition',recognitions:n,last_recognition_us:us,frame_us:us,frame_recognition:true,faces:[{x:10,y:20,w:30,h:40,prob:.9,name:'papa',match_prob:.83,known:true}],...extra});
- t.accept(sample(2000000,3));t.accept(sample(3000000,5));
- const s=t.snapshot(sample(3000000,5),true);assert.equal(s.status,'recognizing');assert.equal(s.fps,2);assert.equal(s.faces[0].name,'papa');
- assert.deepEqual(t.snapshot(sample(6000000,5,{last_recognition_us:3000000,frame_us:3000000}),true).faces,[]);
- assert.deepEqual(t.snapshot(sample(4000000,5,{requested_us:4000000,frame_us:3000000,last_recognition_us:3000000}),true).faces,[]);
- assert.deepEqual(t.snapshot(sample(4000000,6,{num:0,faces:[]}),true).faces,[]);
- assert.deepEqual(t.snapshot(sample(4000000,6,{frame_recognition:false}),true).faces,[]);
- assert.deepEqual(t.snapshot(sample(4000000,6),false).faces,[]);
+ assert.equal(t.snapshot(data(1,{online:false}),true).status,'offline');
+ assert.equal(t.snapshot(data(1,{online:false}),true).temperature,null);
+ assert.equal(t.snapshot(data(1,{valid:false}),true).status,'serial_unavailable');
+ assert.equal(t.snapshot(data(1),false).status,'disconnected');
+ const hot=t.snapshot(data(1,{heartbeat:{t:91,fps:0,tier:3}}),true);assert.equal(hot.status,'hot');assert.equal(hot.faces.length,0);
+ const sb=t.snapshot(data(1,{function:'standby',requested_function:'standby'}),true);assert.equal(sb.status,'standby');assert.equal(sb.fps,null);assert.equal(sb.faces.length,0);
+ assert.equal(t.snapshot(data(1,{function:'standby',requested_function:'detect',mode_request_pending:true}),true).status,'starting');
+ assert.equal(t.snapshot(data(1,{function:'detect',requested_function:'standby',mode_request_pending:true}),true).status,'stopping');
 });
-test('recognition startup acknowledgement without faces is not an identity or result',()=>{
+test('detection lines that stop arriving make the view stalled with fps 0',()=>{
+ const t=new M12Tracker(),s=t.snapshot(data(10_000_000,{last_result_us:7_000_000}),true);
+ assert.equal(s.status,'stalled');assert.equal(s.fps,0);assert.equal(s.faces.length,0);
+});
+test('malformed boxes and missing library are filtered, not drawn',()=>{
  const t=new M12Tracker();
- const waiting=data(3000000,0,{function:'face_recognition',recognitions:0,last_recognition_us:0,last_recognition_report_us:2000000,frame_us:0,faces:[]});
- t.accept(waiting);const s=t.snapshot(waiting,true);
- assert.equal(s.status,'recognition_waiting');assert.equal(s.fps,null);assert.equal(s.count,null);assert.deepEqual(s.faces,[]);
- assert.equal(t.snapshot({...waiting,m12:{...waiting.m12,requested_us:2500000}},true).status,'starting');
-});
-test('M12 rate is device result delta, not poll count; duplicate samples do not inflate it',()=>{
- const t=new M12Tracker();t.accept(data(2_000_000,10));t.accept(data(3_000_000,17));t.accept(data(3_000_000,17));
- const s=t.snapshot(data(3_000_000,17),true);assert.equal(s.fps,7);assert.equal(s.status,'detecting');assert.equal(s.faces.length,1);
-});
-test('zero-face results count; standby, new request, stale data and reboot discard old detections',()=>{
- const t=new M12Tracker();t.accept(data(2_000_000,10));t.accept(data(3_000_000,17,{num:0,faces:[]}));
- assert.equal(t.snapshot(data(3_000_000,17,{num:0,faces:[]}),true).fps,7);
- const standby=data(4_000_000,17,{function:'standby',last_result_us:3_000_000});t.accept(standby);
- assert.deepEqual(t.snapshot(standby,true).faces,[]);assert.equal(t.snapshot(standby,true).fps,null);
- const restart=data(5_000_000,17,{requested_us:5_000_000,last_result_us:3_000_000});t.accept(restart);
- assert.equal(t.snapshot(restart,true).status,'starting');assert.deepEqual(t.snapshot(restart,true).faces,[]);
- assert.deepEqual(t.snapshot(restart,false).faces,[]);
- const reboot={...data(2_000_000,1),boot_id:'b'};t.accept(reboot);assert.equal(t.snapshot(reboot,true).fps,null);
-});
-test('stalled results expire while telemetry remains fresh; counter/time reset cannot produce negative FPS',()=>{
- const t=new M12Tracker();t.accept(data(2_000_000,10));t.accept(data(3_000_000,17));
- const stale=data(6_000_000,17,{last_result_us:3_000_000});t.accept(stale);
- assert.equal(t.snapshot(stale,true).status,'stalled');assert.equal(t.snapshot(stale,true).fps,0);assert.deepEqual(t.snapshot(stale,true).faces,[]);
- t.accept(data(7_000_000,1));assert.equal(t.snapshot(data(7_000_000,1),true).fps,null);
- t.accept(data(1_500_000,0));assert.equal(t.snapshot(data(1_500_000,0),true).fps,null);
-});
-
-
-test('standby UI distinguishes a pending request from a historical report',()=>{
- const t=new M12Tracker();
- const pending=data(4_000_000,17,{function:'standby',requested_us:4_000_000,running:'Face Detector',last_rx_us:3_000_000});
- t.accept(pending);assert.equal(t.snapshot(pending,true).status,'standby_pending');
- const old=data(4_000_000,17,{function:'standby',requested_us:4_000_000,running:'Audio FFT',last_rx_us:3_000_000});
- assert.equal(t.snapshot(old,true).status,'standby_pending');
- const reported=data(5_000_000,17,{function:'standby',requested_us:4_000_000,running:'Audio FFT',last_rx_us:4_500_000});
- assert.equal(t.snapshot(reported,true).status,'standby');
+ const s=t.snapshot(data(5_000_000,{faces:[{id:1,x:1,y:1,w:0,h:10,prob:.9},{id:2,x:1,y:1,w:10,h:10,prob:2}],library:{valid:false}}),true);
+ assert.equal(s.faces.length,0);assert.equal(s.library,null);
 });

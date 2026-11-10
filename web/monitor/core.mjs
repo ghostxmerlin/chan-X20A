@@ -236,8 +236,10 @@ export class Monitor extends EventEmitter {
       this.event(formatted.kind, formatted.text, at);
       if (event.kind === 'gap') Object.assign(this.events.at(-1), { gap: { total: Number(event.detail) || 0, times: 1 }, gapAt: at });
     }
-    if (data.m12?.function !== previous?.m12?.function || data.m12?.running !== previous?.m12?.running)
-      this.event('m12', `M12 请求 ${data.m12?.function || '—'} · 设备报告 ${data.m12?.running || '尚无回应'}`);
+    if (data.m12?.online !== previous?.m12?.online && previous)
+      this.event('m12', data.m12?.online ? 'M12 上线（收到心跳）' : 'M12 离线（6 秒内没有心跳）');
+    if (data.m12?.function !== previous?.m12?.function)
+      this.event('m12', `M12 ${({detect:'检测已开',standby:'已待机',unknown:'状态未确认'})[data.m12?.function] || data.m12?.function || '—'}`);
     const state = data.remote?.motor?.state;
     if (state !== previous?.remote?.motor?.state && state) this.event('motor', `舵机状态 ${state}`);
   }
@@ -251,8 +253,9 @@ export class Monitor extends EventEmitter {
       eyesCatalog: this.info?.eyes || {styles:[],states:[]},
       frame: this.frame ? { seq: this.frame.seq, at: this.frame.at, bytes: this.frame.bytes.length } : null,
       audio: { ...this.audio, error: this.audioError }, cameraError: this.cameraError,
+      // M12 temperature now comes from the m12d heartbeat (tracker); the optional SSH bridge stays under m12.system.
       m12: { ...this.m12Tracker.snapshot(this.telemetry, this.online && fresh.telemetry),
-        system: this.m12System.snapshot(now), temperature: this.m12System.snapshot(now).temperature }, thermalHistory: this.thermalHistory,
+        system: this.m12System.snapshot(now) }, thermalHistory: this.thermalHistory,
       motion: this.motion, events: this.events, filteredSpeech: this.filteredSpeech, now };
   }
   addViewer() {

@@ -1163,8 +1163,8 @@ esp_err_t web_control(httpd_req_t* request, JsonObject doc, const char* target)
         result["request_seq"] = m12_view_request() >> 2;
     } else if (strcmp(target, "m12_mode") == 0) {
         const char* mode = doc["mode"] | "";
+        // m12d: detection on/off only (cfg det); identification is a request, see m12_request.
         M12Function function = strcmp(mode, "face_detector") == 0 ? M12Function::detect :
-            strcmp(mode, "face_recognition") == 0 ? M12Function::recognize :
             strcmp(mode, "standby") == 0 ? M12Function::standby : M12Function::none;
         if (function == M12Function::none) { httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid M12 mode"); return ESP_OK; }
         if (function != M12Function::standby && !m12_snapshot().valid) return unavailable(request, "M12 serial unavailable");
@@ -1374,6 +1374,30 @@ const ControlTarget kControlTargets[] = {
     {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control},
     {"servo", servo_control}, {"wifi", wifi_control},
     {"m12_view", web_control}, {"m12_mode", web_control}, {"yaw_step", web_control}, {"voice_play", web_control},
+    {"m12_request", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t {
+        // {"target":"m12_request","op":"ping|ver|status|cfg|learn|who|forget|faces"[,"name":..][,"face":id]}
+        // Asynchronous: 202 with the request id; the result appears in telemetry m12.commands.
+        M12Op op;
+        if (!m12_op_from_name(body["op"] | "", op) || body.size() > 3 ||
+            (body["name"].is<const char*>() == false && !body["name"].isNull()) || (!body["face"].isNull() && !body["face"].is<int>()) ||
+            (op == M12Op::cfg && body.size() != 1)) {
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Expected op ping|ver|status|cfg|learn|who|forget|faces, optional name / face"); return ESP_OK;
+        }
+        M12RequestArgs args;
+        const std::string name = body["name"] | "";
+        if (op == M12Op::learn || op == M12Op::forget) {
+            if (!m12_valid_name(name.c_str())) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Name must be 1-32 bytes UTF-8 without control characters"); return ESP_OK; }
+            args.name = name.c_str();
+        }
+        if (op == M12Op::learn || op == M12Op::who) args.face = body["face"] | -1;
+        const int32_t id = m12_request(op, args);
+        if (id < 0) {
+            const char* reason = m12_request_error(id);
+            if (id == -4) { httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, reason); return ESP_OK; }
+            return id == -3 ? (httpd_resp_set_status(r, "409 Conflict"), httpd_resp_sendstr(r, reason)) : unavailable(r, reason);
+        }
+        JsonDocument result; result["accepted"] = true; result["op"] = m12_op_name(op); result["id"] = id;
+        httpd_resp_set_status(r, "202 Accepted"); return send_json(r, result); }},
     {"interaction", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return interaction::handle(r, body); }},
     {"hearing", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return hearing::handle(r, body); }},
     {"eyes", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return eyes::command_handler(r, body); }},
@@ -1738,13 +1762,17 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
                     }
                     char status[64];
                     const auto waited_s = static_cast<unsigned long>(m12.requested_us > 0 ? (now - m12.requested_us) / 1000000 : 0);
+                    const char* named = nullptr;
+                    for (size_t i = 0; fresh && i < m12.count && !named; ++i) if (m12.faces[i].name[0]) named = m12.faces[i].name;
                     if (!m12.valid) std::snprintf(status, sizeof(status), "M12 serial unavailable");
-                    else if (!answered && m12.rx_bytes == 0 && waited_s >= 10)
+                    else if (!m12.online && m12.rx_bytes == 0)
                         std::snprintf(status, sizeof(status), "no data from M12 - check blue port");
-                    else if (!answered) std::snprintf(status, sizeof(status), "starting M12... %lus", waited_s);
+                    else if (!m12.online) std::snprintf(status, sizeof(status), "M12 offline (no heartbeat)");
+                    else if (m12.hb.tier == 3) std::snprintf(status, sizeof(status), "M12 too hot %.0fC - paused", m12.hb.t);
+                    else if (!answered) std::snprintf(status, sizeof(status), "starting detection... %lus", waited_s);
                     else if (!fresh) std::snprintf(status, sizeof(status), "M12 data stale");
                     else if (shown == 0) std::snprintf(status, sizeof(status), "no face");
-                    else if (m12.frame_recognition) std::snprintf(status, sizeof(status), "%s", m12.identity.known ? m12.identity.name : "unknown face");
+                    else if (named) std::snprintf(status, sizeof(status), "%s", named);
                     else std::snprintf(status, sizeof(status), "faces %u", static_cast<unsigned>(shown));
                     screen_update_faces(boxes, shown, status);
                 }

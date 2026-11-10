@@ -32,7 +32,7 @@ esp_err_t httpd_resp_set_status(httpd_req_t* r,const char* status){r->status=sta
 esp_err_t httpd_resp_set_type(httpd_req_t*,const char*){return ESP_OK;}
 esp_err_t httpd_resp_send(httpd_req_t* r,const char* out,size_t n){r->response.assign(out,n);return ESP_OK;}
 void tick(){fake_now+=100000;interaction::tick(fake_now);}
-void known(const char* name="registered"){fake_now+=200000;face.frame_us=fake_now;face.frame_seq++;face.frame_recognition=true;face.count=1;auto& f=face.faces[0];f.x=200;f.y=100;f.w=100;f.h=100;f.prob=.9f;f.match_prob=.8f;std::strncpy(f.name,name,15);f.name[15]=0;interaction::tick(fake_now);}
+void known(const char* name="registered"){fake_now+=200000;face.frame_us=fake_now;face.frame_seq++;face.online=true;face.count=1;auto& f=face.faces[0];f.x=200;f.y=100;f.w=100;f.h=100;f.prob=.9f;std::snprintf(f.name,sizeof(f.name),"%s",name);interaction::tick(fake_now);}
 std::string dialogue(){ArduinoJson::JsonDocument d;interaction::json(d.to<ArduinoJson::JsonObject>());return d["dialogue"]["state"].as<std::string>();}
 int main(){
     assert(interaction::set_mode("tracking",true)==ESP_ERR_INVALID_STATE);assert(!tracking);
@@ -43,14 +43,14 @@ int main(){
     interaction::asr_command(0x10,false);assert(tracking&&face.function==M12Function::detect);
     const auto first_calls=camera_calls;interaction::asr_command(0x10,false);assert(camera_calls==first_calls);
     interaction::asr_command(0x1b,false);assert(tracking&&camera_calls==first_calls);
-    assert(interaction::set_mode("recognition",true)==ESP_OK);assert(face.function==M12Function::recognize);
-    interaction::asr_command(0x11,false);assert(!tracking&&face.function==M12Function::recognize);
+    assert(interaction::set_mode("recognition",true)==ESP_OK);assert(face.function==M12Function::detect);
+    interaction::asr_command(0x11,false);assert(!tracking&&face.function==M12Function::detect);
     // A newly requested recognition mode must not accept frames from the previous UART command.
     const auto applied_revision=face.mode_request_revision;
     face.mode_request_revision=applied_revision-4;
     known();known();assert(!listening.requested()&&owner_calls==0);
     face.mode_request_revision=applied_revision;
-    known("unknown");assert(!listening.requested());known();assert(!listening.requested());
+    known("");assert(!listening.requested());known();assert(!listening.requested());   // nameless face does not count
     tick();assert(!listening.requested());known();assert(listening.requested()&&dialogue()=="listening"&&owner_calls==1);
     hearing::set_listening(false);known();assert(!listening.requested()&&owner_calls==1&&dialogue()=="stopped_by_user");
     interaction::set_mode("recognition",false);assert(face.function==M12Function::standby);
@@ -60,8 +60,8 @@ int main(){
     interaction::set_mode("recognition",false);assert(!listening.requested()); // own session is stopped
     remote.mode_left_seq++;tick();assert(tracking);const auto calls=camera_calls;
     tick();assert(tracking&&camera_calls==calls);remote.mode_left_seq+=2;tick();assert(tracking); // coalesced parity
-    remote.mode_right_seq++;tick();assert(face.function==M12Function::recognize);
-    remote.mode_left_seq++;tick();assert(!tracking&&face.function==M12Function::recognize);
+    remote.mode_right_seq++;tick();assert(face.function==M12Function::detect);
+    remote.mode_left_seq++;tick();assert(!tracking&&face.function==M12Function::detect);
     remote.mode_up_seq++;tick();assert(listening.requested());remote.mode_up_seq++;tick();assert(!listening.requested());
     remote.mode_down_seq++;tick();assert(!listening.requested()&&!tracking);
     mode_request=next_m12_request(mode_request,M12Function::detect);face.function=M12Function::detect;

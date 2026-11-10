@@ -91,6 +91,8 @@ const char* startup_state = "waiting_feedback";
 
 RemoteCenterInput center_input;
 RemoteReaction reaction = RemoteReaction::None;
+M12Target track_target;          // face/person being tracked (motor_task only)
+uint32_t track_target_seq = 0;
 uint32_t reaction_seq = 0;
 int64_t reaction_timestamp = 0;
 
@@ -367,23 +369,26 @@ void motor_task(void*)
                 const auto limits = motion.yawServo().getAngleLimit();
                 input.lower = limits.x; input.upper = limits.y;
                 input.settled = manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete());
-                input.mode = static_cast<int>(camera.function);
+                // m12d: 0 standby, 1 detect (confirmed by its cfg reply); none / offline counts as 0.
+                input.mode = camera.online && camera.function == M12Function::detect ? 1 : 0;
                 input.mode_revision = m12_mode_request();
                 input.applied_mode_revision = camera.mode_request_revision;
                 input.requested_mode = static_cast<int>(m12_requested_function(input.mode_revision));
                 input.mode_requested_us = camera.requested_us;
                 input.frame_seq = camera.frame_seq; input.frame_us = camera.frame_us;
-                input.frame_mode = camera.frame_recognition ? 2 : 1;
-                if (camera.valid) {
-                    int largest = -1;
-                    for (size_t i = 0; i < camera.count; ++i) {
-                        const auto& face = camera.faces[i];
-                        const int area = face.w * face.h;
-                        if (area <= largest) continue;
-                        largest = area;
-                        input.x = face.x; input.y = face.y; input.w = face.w; input.h = face.h;
+                input.frame_mode = 1;
+                if (camera.valid && camera.online) {
+                    // Follow the same face id while it stays in view; with no face (beyond
+                    // ~1.5 m) follow a person box.
+                    M12Detection det;
+                    det.count = camera.count; std::memcpy(det.faces, camera.faces, sizeof(det.faces));
+                    det.persons = camera.persons; std::memcpy(det.person, camera.person, sizeof(det.person));
+                    const M12Target target = m12_track_target(det, track_target);
+                    if (camera.frame_seq != track_target_seq) { track_target = target; track_target_seq = camera.frame_seq; }
+                    if (target.valid) {
+                        input.x = target.x; input.y = target.y; input.w = target.w; input.h = target.h;
+                        input.face_count = static_cast<unsigned>(std::max<size_t>(camera.count, 1));   // a person counts as one
                     }
-                    input.face_count = camera.count;
                 }
                 const auto action = tracking.step(input);
                 if (action == FaceTracking::Action::Cancel) {

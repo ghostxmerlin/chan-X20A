@@ -11,9 +11,9 @@ struct TrackingInput {
     uint32_t frame_seq=0,mode_revision=0,applied_mode_revision=0;
     bool control_enabled=false, feedback_valid=false, settled=false;
     int measured=0,lower=-1280,upper=1280;
-    int mode=0,frame_mode=0,requested_mode=1; // M12 standby=0, detect=1, recognize=2
+    int mode=0,frame_mode=0,requested_mode=1; // M12 (m12d) standby=0, detect=1
     unsigned face_count=0;
-    int x=0,y=0,w=0,h=0; // unscaled 640x480 M12 coordinates
+    int x=0,y=0,w=0,h=0; // unscaled 640x480 M12 coordinates: the tracked face, or the top of a person box
 };
 
 // Pure policy. Protected by remote's mutex; only motor_task consumes its actions.

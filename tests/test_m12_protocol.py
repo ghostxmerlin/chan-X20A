@@ -1,4 +1,4 @@
-"""Host checks for the actual M12 parser and explicit mode policy."""
+"""Host checks for the m12d protocol layer (parser, framing, requests, who policy, target)."""
 import pathlib
 import subprocess
 import tempfile

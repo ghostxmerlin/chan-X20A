@@ -1,6 +1,6 @@
 import {hearingBody} from './hearing.mjs';
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
-const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'],mic_gain:['value'],m12_mode:['mode'],m12:['enabled'],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
+const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'],mic_gain:['value'],m12_mode:['mode'],m12:['enabled'],m12_learn:['name'],m12_forget:['name'],m12_faces:[],m12_who:[],m12_ping:[],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
 // Every JSON control reaches the robot through one endpoint; `target` selects the feature.
 const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',mic_gain:'mic_gain',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_step:'yaw_step',pitch:'pitch',camera:'camera'};
 const route = '/v1/control';
@@ -14,7 +14,12 @@ export class Controls {
     if (Object.keys(input).length !== keys.length || !keys.every(k=>Object.hasOwn(input,k))) fail(400,'控制参数无效');
     if (['interaction','m12','motor','camera'].includes(input.action) && typeof input.enabled !== 'boolean') fail(400,'启用状态必须是布尔值');
     if (input.action==='interaction' && !['tracking','recognition','advanced'].includes(input.mode)) fail(400,'未知交互模式');
-    if (input.action==='m12_mode' && !['standby','face_detector','face_recognition'].includes(input.mode)) fail(400,'未知 M12 模式');
+    // m12d: detection on/off only; identification goes through m12_learn / m12_who / m12_forget / m12_faces.
+    if (input.action==='m12_mode' && !['standby','face_detector'].includes(input.mode)) fail(400,'未知 M12 模式');
+    if (['m12_learn','m12_forget'].includes(input.action)) {
+      const n=input.name;
+      if (typeof n!=='string' || !n.length || Buffer.byteLength(n,'utf8')>32 || /[\u0000-\u001f\u007f]/.test(n)) fail(400,'名字须为 1–32 字节，不能含控制字符');
+    }
     if (input.action==='yaw' && ![-20,20].includes(input.delta_deg)) fail(400,'左右每次只调整一档（20°）');
     if (input.action==='yaw_center' && input.slot!==0) fail(400,'回中只接受 0 档');
     if (input.action.startsWith('wifi_')) {
@@ -56,7 +61,6 @@ export class Controls {
       const body=Object.fromEntries(fields[input.action].map(k=>[k,input[k]]));
       return {target:'eyes',op:input.action.slice(5),...body,...(input.action==='eyes_play'?{mode:'once'}:{})};
     }
-    if (input.action==='m12_mode' && m.info?.capabilities?.m12_recognition!=='supported') fail(409,'当前固件尚未支持手动认人');
     if (input.action==='camera' && m.info?.capabilities?.camera_control!=='supported') fail(409,'当前固件尚未支持相机开关');
     if (input.action==='yaw_step' && m.info?.capabilities?.yaw_step_diagnostics!=='supported') fail(409,'当前固件尚未支持步进诊断参数');
     if (input.action.startsWith('servo_') && m.info?.capabilities?.servo_tuning!=='supported') fail(409,'当前固件尚未支持舵机参数调节');
@@ -72,11 +76,17 @@ export class Controls {
     if (input.action==='mic_gain' && m.info?.capabilities?.mic_gain!=='supported') fail(409,'当前固件不支持麦克风增益（需要 collector-0.4.60 或更新）');
     if (input.action==='voice' && (m.info?.capabilities?.voice_library!=='supported' || !t.health?.audio_ready || !t.playback || t.playback.busy)) fail(409,'等待语音就绪和当前播放结束');
     if (((input.action==='m12' && input.enabled) || (input.action==='m12_mode' && input.mode!=='standby')) && !t.m12?.valid) fail(409,'M12 串口尚未就绪');
+    if (input.action.startsWith('m12_') && input.action!=='m12_mode') {
+      if (t.m12?.protocol!=='m12d') fail(409,'固件过旧：需要 collector-0.4.66 或更新（m12d 协议）');
+      if (!t.m12?.online) fail(409,'M12 离线（6 秒内没有收到心跳）');
+    }
     if (['yaw','yaw_center','yaw_step','pitch'].includes(input.action) && (!motor?.enabled || !motor?.requested)) fail(409,'请先启用舵机');
     if (['yaw','yaw_center','yaw_step'].includes(input.action) && (!motor.yaw?.valid || t.timestamp_us-motor.timestamp_us<0 || t.timestamp_us-motor.timestamp_us>=1000000 || !motor.yaw_trajectory_complete || ['queued','moving'].includes(motor.web_yaw?.state))) fail(409,'等待有效左右角度反馈和动作结束');
     if (input.action==='pitch' && (!pitch?.feedback_valid || t.timestamp_us-pitch.feedback_timestamp_us<0 || t.timestamp_us-pitch.feedback_timestamp_us>=1000000 || ['queued','moving','waiting_feedback'].includes(pitch.state))) fail(409,'等待有效仰角反馈和动作结束');
     if(input.action.startsWith('servo_')) return {target:'servo',op:input.action.slice(6),...Object.fromEntries(fields[input.action].map(k=>[k,input[k]]))};
     if(input.action.startsWith('wifi_')) return {target:'wifi',op:input.action.slice(5),...Object.fromEntries(fields[input.action].map(k=>[k,input[k]]))};
+    if (input.action.startsWith('m12_') && input.action!=='m12_mode')
+      return {target:'m12_request',op:input.action.slice(4),...(input.name!==undefined?{name:input.name}:{})};
     return {target:targets[input.action],...Object.fromEntries(fields[input.action].map(k=>[k,input[k]]))};
   }
   async execute(input) {
@@ -87,7 +97,7 @@ export class Controls {
       const result=await this.monitor.client.control(route,body,input.boot,()=>this.validate(input));
       if(result.accepted!==true) fail(502,'设备没有确认接收请求');
       this.monitor.event('control',`网页 ${input.action} 请求已接收，执行状态以遥测为准`);
-      return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='mic_gain'?`麦克风增益已设为 ${input.value} dB 并保存，立即生效`:input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':'设备已接收请求，执行状态见下方'};
+      return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='mic_gain'?`麦克风增益已设为 ${input.value} dB 并保存，立即生效`:input.action.startsWith('m12_')&&input.action!=='m12_mode'?`已发送 ${input.action.slice(4)}，结果见认人库`:input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':'设备已接收请求，执行状态见下方'};
     } catch(error) {
       const known=error.status>=400 && error.status<500;
       const message=known ? (error.status===409?'设备拒绝本次操作，请检查最新状态':error.message) : '请求结果未确认；请查看实时状态，本次不会自动重发';

@@ -7,7 +7,6 @@ export class ControlPanel {
   }) {
     this.doc=doc;this.send=send;this.pending=false;this.dirty=false;this.boot='';
     this.actions={
-      'm12-recognize':()=>({action:'m12_mode',mode:'face_recognition'}),
       'm12-start':()=>({action:'m12',enabled:true}), 'm12-stop':()=>({action:'m12',enabled:false}),
       'motor-enable':()=>({action:'motor',enabled:true}), 'motor-disable':()=>({action:'motor',enabled:false}),
       'camera-toggle':()=>({action:'camera',enabled:this.state?.telemetry?.health?.camera_enabled!==true}),
@@ -48,7 +47,7 @@ export class ControlPanel {
     const cameraKnown=typeof t.health?.camera_enabled==='boolean', cameraOn=t.health?.camera_enabled===true;
     this.el('camera-toggle').textContent=cameraOn?'关闭相机':'开启相机';
     const stepDiag=state?.capabilities?.yaw_step_diagnostics==='supported';
-    const availability={'m12-recognize':t.m12?.valid && state?.capabilities?.m12_recognition==='supported','m12-start':t.m12?.valid,'m12-stop':true,'motor-enable':!m.requested,'motor-disable':true,'yaw-left':yawReady&&(m.web_yaw?.measured_slot===undefined||m.web_yaw.measured_slot>-(m.web_yaw.slots??3)),'yaw-right':yawReady&&(m.web_yaw?.measured_slot===undefined||m.web_yaw.measured_slot<(m.web_yaw.slots??3)),'yaw-center':yawReady,'yaw-step-left':yawReady&&stepDiag,'yaw-step-right':yawReady&&stepDiag,'pitch-apply':pitchReady,'camera-toggle':state?.capabilities?.camera_control==='supported' && cameraKnown};
+    const availability={'m12-start':t.m12?.valid && t.m12?.online!==false,'m12-stop':true,'motor-enable':!m.requested,'motor-disable':true,'yaw-left':yawReady&&(m.web_yaw?.measured_slot===undefined||m.web_yaw.measured_slot>-(m.web_yaw.slots??3)),'yaw-right':yawReady&&(m.web_yaw?.measured_slot===undefined||m.web_yaw.measured_slot<(m.web_yaw.slots??3)),'yaw-center':yawReady,'yaw-step-left':yawReady&&stepDiag,'yaw-step-right':yawReady&&stepDiag,'pitch-apply':pitchReady,'camera-toggle':state?.capabilities?.camera_control==='supported' && cameraKnown};
     for(const id of ['yaw-step-input','yaw-speed-input','yaw-path-select']) this.el(id).disabled=!this.ready||this.pending||!stepDiag;
     if(!this.stepDefaultsSet && fresh && stepDiag){this.el('yaw-step-input').value='5';this.el('yaw-speed-input').value=String(m.web_yaw?.default_speed||600);this.stepDefaultsSet=true;}
     for(const id of Object.keys(this.actions)) this.el(id).disabled=!this.ready || this.pending || !availability[id];

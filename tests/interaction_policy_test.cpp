@@ -6,26 +6,26 @@ using namespace collector::interaction;
 int main() {
     assert(camera_mode(false,false)==M12Function::standby);
     assert(camera_mode(true,false)==M12Function::detect);
-    assert(camera_mode(true,true)==M12Function::recognize);
-    assert(camera_mode(false,true)==M12Function::recognize);
+    assert(camera_mode(true,true)==M12Function::detect);    // m12d: recognition = detection + names
+    assert(camera_mode(false,true)==M12Function::detect);
     assert(asr_mode_action(0x10,false)==AsrModeAction::OpenTracking);
     assert(asr_mode_action(0x11,false)==AsrModeAction::CloseTracking);
     assert(asr_mode_action(0x1b,false)==AsrModeAction::None);
     assert(asr_mode_action(0x10,true)==AsrModeAction::None);
     assert(toggle_due(0xffffffff,0));assert(!toggle_due(2,4));
-    M12Face face{};face.x=200;face.y=100;face.w=120;face.h=140;face.prob=.9f;face.match_prob=.8f;std::strcpy(face.name,"known_a");
+    M12Face face{};face.x=200;face.y=100;face.w=120;face.h=140;face.prob=.9f;std::strcpy(face.name,"known_a");
     OwnerGate g;g.reset(1000);
-    OwnerFrame f{1,2000,1500,true,M12Function::recognize,1,&face};
+    OwnerFrame f{1,2000,1500,true,M12Function::detect,1,&face};
     assert(!g.observe(f,2000));assert(g.seen());assert(!g.confirmed());
     assert(!g.observe(f,3000)); // polling one frame must never confirm identity
     f.seq=2;f.at_us=200000;assert(g.observe(f,200000));assert(g.confirmed());
     f.seq=3;f.at_us=400000;assert(!g.observe(f,400000)); // one entry per enable cycle
     assert(!g.observe(f,1200000));assert(!g.seen());assert(g.confirmed());
     g.reset(1300000);assert(!g.observe(f,1300000));assert(!g.seen());
-    f.seq=4;f.at_us=1400000;f.requested_us=1350000;f.recognition=false;
+    f.seq=4;f.at_us=1400000;f.requested_us=1350000;f.current=false;          // not our confirmed detection
     assert(!g.observe(f,1400000));assert(!g.seen());
-    f.recognition=true;f.mode=M12Function::detect;assert(!g.observe(f,1400000));
-    f.mode=M12Function::recognize;std::strcpy(face.name,"unknown");assert(!g.observe(f,1400000));assert(!g.seen());
+    f.current=true;f.mode=M12Function::standby;assert(!g.observe(f,1400000));
+    f.mode=M12Function::detect;face.name[0]=0;assert(!g.observe(f,1400000));assert(!g.seen());   // no name: not recognised
     std::strcpy(face.name,"known_b");f.seq=5;f.at_us=1500000;assert(!g.observe(f,1500000));
     std::strcpy(face.name,"known_c");f.seq=6;f.at_us=1600000;assert(!g.observe(f,1600000));
     f.seq=7;f.at_us=1700000;assert(g.observe(f,1700000));assert(std::strcmp(g.name(),"known_c")==0);

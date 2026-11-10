@@ -29,6 +29,6 @@ test('SSH pins the known device and never puts a password in argv; stop prevents
 test('M12 temperature remains visible when only the StackChan link is down',()=>{
  const system=new M12System(binding);system.accept(parseSystemLine(line()),1000);
  const monitor=new Monitor({},system);const s=monitor.snapshot(1100);
- assert.equal(s.online,false);assert.equal(s.m12.system.connected,true);assert.equal(s.m12.temperature.celsius,60);
+ assert.equal(s.online,false);assert.equal(s.m12.system.connected,true);assert.equal(s.m12.system.temperature.celsius,60);
  assert.ok(!JSON.stringify(s).includes(binding.password));
 });

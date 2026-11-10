@@ -96,7 +96,7 @@ void tick(int64_t now) {
     const auto face=m12_snapshot();
     const bool current_mode=owned_m12 && face.mode_request_revision==owned_m12 &&
                             m12_mode_request()==owned_m12;
-    if(owner.observe({face.frame_seq,face.frame_us,face.requested_us,face.frame_recognition&&current_mode,
+    if(owner.observe({face.frame_seq,face.frame_us,face.requested_us,current_mode&&face.online,
                      face.function,face.count,face.faces},now)) {
         switch(hearing::start_for_owner(owner_expected,owner_token)) {
         case hearing::OwnerStart::Started:dialogue="listening";break;
