@@ -42,7 +42,8 @@ class PromptsTest(unittest.TestCase):
     def test_v2_asks_for_positive_likely_statements(self):
         sys_text = render("v2", S, self.pkg, self.strong, None, [], {})[0]["content"]
         for phrase in ("用正向的话说出最可能的情况", "大概在桌前工作", "附近大概没人", "不要写否定式", "总共不超过 8 条",
-                       "规则算出的主人状态是底稿", "有语言以外的证据时必须引用"):
+                       "规则算出的主人状态是底稿", "有语言以外的证据时必须引用",
+                       "who_am_i 写 hello 自己", "有人说话时写 topic"):
             self.assertIn(phrase, sys_text)
         self.assertEqual(render("v2", S, self.pkg, self.strong, None, [], {})[1], render("v1", S, self.pkg, self.strong, None, [], {})[1])
 

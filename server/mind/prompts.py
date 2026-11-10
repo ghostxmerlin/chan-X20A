@@ -75,7 +75,9 @@ V2_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟�
 【证据和输出】
 - basis：seen 看到 / heard 听到 / inferred 推断 / assumed 猜测；confidence：high / mid / low；要把把握调高，必须引用本分钟的新证据。evidence 只写给出的代号；seen、heard 必须引用本分钟的 s/t/a/v 代号。
 - entries 每条带稳定的 key（如 people.owner、people.others、activity.desk、sound_scene.room、time_place.now、topic.1），op 相对上一分钟：keep 不变、update 改写、add 新增、end 结束。没变就写 keep，不要换个说法重写。
-- who_am_i / where_am_i / people_doing 各一句正向陈述，带把握。summary 不超过 20 个字。changes 写这一分钟变了什么（没变留空）。"""
+- who_am_i 写 hello 自己（我是谁、此刻感官怎样），不要写别人；where_am_i 写 hello 在哪；people_doing 写旁边的人在干什么。各一句正向陈述，带把握。
+- 有人说话时写 topic：两个转写里一致出现的词说明了最可能的话题，就写出来（把握可以是 low）；完全听不清时才不写。
+- summary 不超过 20 个字。changes 写这一分钟变了什么（没变留空）。"""
 
 VERSIONS = {"v1": {"system": V1_SYSTEM}, "v2": {"system": V2_SYSTEM}}
 STATE_TEXT = {"seen": "看到主人", "just_left": "主人刚离开画面", "likely_present": "主人很可能在",
