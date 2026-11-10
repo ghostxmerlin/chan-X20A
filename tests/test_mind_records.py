@@ -47,6 +47,12 @@ class RecordsTest(unittest.TestCase):
         self.assertTrue(settings.in_work_hours(T0, s))                       # Tuesday 16:40
         self.assertFalse(settings.in_work_hours(T0 + 3 * 3600_000, s))       # 19:40
 
+    def test_sounds_are_found_by_t_since_they_have_no_at(self):
+        db = FakeDB()
+        db.add("sessions", session("A", T0 - 600_000))
+        db.add("sounds", {"session": "A", "id": "a-1", "t": T0 + 1_000, "kind": "typing", "pos": [16000 * 601, 16000 * 602]})
+        self.assertEqual([d["id"] for d in Records(db).window(T0, T0 + 60_000)["sounds"]], ["a-1"])
+
     def test_window_returns_overlapping_sessions_and_marks_wall(self):
         db = FakeDB()
         db.add("sessions", session("A", T0 - 600_000), session("B", T0 - 900_000, T0 - 300_000),
