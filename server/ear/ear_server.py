@@ -40,6 +40,8 @@ import sherpa_onnx as so
 from websockets.asyncio.server import serve
 
 import recorder
+import hello_db
+import tingwu as tingwu_rt
 import sound_kinds
 import hearing_protocol as hp
 
@@ -274,6 +276,11 @@ class Ear:
         self.vad_origin = 0
         self.stream_generation = 0
         self.rec = None            # recorder.Recorder, set by the connection handler
+        self.db = None             # hello_db.HelloDB, set by the connection handler (optional)
+        self.session = None        # "YYYYMMDD/HHMMSS-source-cN": recording folder = database key
+        self.tingwu_keys = None    # (api key, app id) when 听悟 realtime is on for robot sources
+        self.tingwu = None         # tingwu_rt.TingwuStream for this connection
+        self.tw_sentences = 0
         self.hello = {"type": "hello", "sr": SR, "tick_ms": ms(TICK), "speakers": sorted(m.speakers)[:64],
                       "speaker_hi": self.hi, "speaker_lo": self.lo, "sound_min_db": self.sound_min_db,
                       "voice_hi": self.voice_hi, "voice_lo": self.voice_lo,
@@ -286,6 +293,8 @@ class Ear:
     def post(self, ev):
         if self.closed:
             return
+        if self.db is not None and self.session:
+            self.db.event(self.session, ev)
         if len(self.outbox) >= 24:
             self.outbox.pop(0)
         ev.setdefault("v", 1)
@@ -323,10 +332,52 @@ class Ear:
         self.next_tag = self.tag_ring.end + TAG_WIN
 
     async def close(self):
+        if self.tingwu is not None:
+            self.tingwu.close()               # finishes the task and fetches the diarized result later
+        if self.db is not None and self.session:
+            self.db.session_update(self.session, {"end_ms": int(time.time() * 1000), "utterances": self.sid,
+                                                  "sounds": self.aid, "rx_bytes": self.rx_bytes})
         self.closed = True
         self.enroll.cancel()
         for task in list(self.tasks): task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+
+    # ---------- 听悟 realtime (robot sources) ----------
+    def start_tingwu(self):
+        key, app = self.tingwu_keys
+        start_ms = int(time.time() * 1000)
+
+        def sentence(s):
+            if not s["final"]:
+                return
+            self.tw_sentences += 1
+            b, e = s.get("begin_ms"), s.get("end_ms")
+            pos = [int(b * SR / 1000), int(e * SR / 1000)] if isinstance(b, (int, float)) and isinstance(e, (int, float)) else None
+            row = {"text": s["text"], "begin_ms": b, "end_ms": e, "pos": pos, "sentence_id": s.get("id"),
+                   "self": self.self_history.overlap(*pos) if pos else None, "at": int(time.time() * 1000),
+                   "data_id": self.tingwu.data_id if self.tingwu else None}
+            if self.db is not None and self.session:
+                self.db.tingwu(self.session, "sentence", self.tw_sentences, row)
+            self.post({"type": "tingwu", "phase": "sentence", "n": self.tw_sentences, "text": s["text"][:300],
+                       "pos": pos, "self": row["self"]})
+
+        def final(paragraphs):
+            print(f"tingwu final {self.session}: {len(paragraphs)} paragraphs", flush=True)
+            if self.db is not None and self.session:
+                for i, p in enumerate(paragraphs, 1):
+                    self.db.tingwu(self.session, "paragraph", i, {**p, "at": int(time.time() * 1000)})
+                self.db.session_update(self.session, {"tingwu": {"sentences": self.tw_sentences, "paragraphs": len(paragraphs),
+                                                                 "audio_s": round(self.tingwu.audio_seconds(), 1),
+                                                                 "data_id": self.tingwu.data_id, "started_ms": start_ms}})
+
+        def error(message):
+            print(f"tingwu error {self.session}: {message}", flush=True)
+            self.post({"type": "tingwu", "phase": "error", "error": message[:160]})
+            if self.db is not None and self.session:
+                self.db.session_update(self.session, {"tingwu_error": message[:300]})
+
+        self.tingwu = tingwu_rt.TingwuStream(key, app, sentence, final, error)
+        self.tingwu.start()
 
     def arrival(self, sample):
         """(mono, epoch ms) when the chunk holding `sample` arrived."""
@@ -423,6 +474,8 @@ class Ear:
             return
         if self.rec:
             self.rec.audio_in(raw, data, self.opus is not None)
+        if self.tingwu is not None:
+            self.tingwu.feed(data)             # raw 16 kHz mic, before denoise and self-silencing
         x = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
         self.tick_sq += float(np.sum(x ** 2))      # level meter reports what the mic really heard
         self.tick_n += len(x)
@@ -689,6 +742,14 @@ class Ear:
                 self.clean_ring = Ring(RING_SECONDS * SR) if asr_only else self.ring
                 if self.rec:
                     self.rec.declare(msg)
+                    if self.db is not None and self.rec.dir:
+                        self.session = hello_db.session_key(self.rec.dir)
+                        self.db.session_open(self.session, {
+                            "source": msg.get("source"), "peer": self.rec.peer, "start_ms": self.rec.meta.get("start_ms"),
+                            "start": self.rec.meta.get("start"), "audio": {k: msg.get(k) for k in ("format", "sample_rate", "frame_ms", "framing")},
+                            "device": msg.get("device"), "recording": self.rec.dir, "models": self.hello.get("models")})
+                if self.device_profile and self.tingwu_keys and self.tingwu is None:
+                    self.start_tingwu()
                 self.post({"type":"audio", "format":fmt, "sample_rate":SR,
                            "input_sample_rate":rate, "framing":framing, "frame_ms":msg.get("frame_ms"),
                            "sound_profile": "device" if self.device_profile else "default",
@@ -769,6 +830,11 @@ def main():
     ap.add_argument("--models", required=True)
     ap.add_argument("--speakers", default=None, help="speakers.npz (default: next to this file)")
     ap.add_argument("--threads", type=int, default=2)
+    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/aidea/agent/.env"),
+                    help="env file with MONGO_URI and DASHSCOPE_API_KEY / DASHSCOPE_APP_ID (server only)")
+    ap.add_argument("--db", choices=["on", "off"], default="on", help="write sessions/speech/sounds/tingwu to MongoDB 'hello'")
+    ap.add_argument("--tingwu", choices=["on", "off"], default="on",
+                    help="听悟 realtime transcription for robot sources (billed per audio minute)")
     ap.add_argument("--denoise-mode", choices=["stream", "asr", "off"], default="stream",
                     help="robot sources only: denoise what VAD+ASR hear, only ASR segments, or nothing")
     ap.add_argument("--token-file", default=os.environ.get("SOUL_TOKEN_FILE", ""))
@@ -785,6 +851,17 @@ def main():
 
     t0 = time.monotonic()
     models = Models(a.models, db_path, a.threads, a.denoise_mode)
+    secrets = tingwu_rt.load_env(a.hubmix_env)
+    database = None
+    if a.db == "on" and secrets.get("MONGO_URI"):
+        try:
+            import pymongo  # noqa: F401
+            database = hello_db.HelloDB(secrets["MONGO_URI"])
+        except ImportError:
+            print("hello db off: pymongo not installed", flush=True)
+    tingwu_keys = (secrets["DASHSCOPE_API_KEY"], secrets["DASHSCOPE_APP_ID"]) \
+        if a.tingwu == "on" and secrets.get("DASHSCOPE_API_KEY") and secrets.get("DASHSCOPE_APP_ID") else None
+    print(f"hello db: {'on' if database else 'off'}; tingwu realtime: {'on' if tingwu_keys else 'off'}", flush=True)
     print(f"models loaded in {time.monotonic() - t0:.1f}s; speakers: {sorted(models.speakers)}", flush=True)
     ex = ThreadPoolExecutor(max_workers=1)
 
@@ -805,6 +882,8 @@ def main():
         print(f"+ {peer} c{conn_no[0]}", flush=True)
         ear = Ear(models, ws, ex)
         ear.rec = recorder.Recorder(rec_root, conn_no[0], f"{peer[0]}:{peer[1]}", ear.hello)
+        ear.db = database
+        ear.tingwu_keys = tingwu_keys
         ticker = asyncio.create_task(ear.ticker())
         try:
             async for data in ws:
