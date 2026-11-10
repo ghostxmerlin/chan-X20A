@@ -35,7 +35,7 @@ def lookback_start(records, minute_ms):
 def process_minute(records, store, minute_ms, s, now_ms):
     end = minute_ms + MIN_MS
     window = records.window(minute_ms, end)
-    lookback = records.window(lookback_start(records, minute_ms), end)
+    lookback = records.window(minute_ms - LOOKBACK_MS, end, vision_start_ms=lookback_start(records, minute_ms))
     pkg = package.build(window, minute_ms, s, lookback)
     st = strong.evaluate(pkg, lookback, minute_ms, s, now_ms)
     return "written" if store.put(LANE, minute_ms, pkg, st) is not None else "same"

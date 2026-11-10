@@ -26,8 +26,10 @@ class Records:
         flt = {"start_ms": {"$lt": end_ms}, "$or": [{"end_ms": {"$exists": False}}, {"end_ms": {"$gt": start_ms}}]}
         return list(self.db["sessions"].find(flt, {"_id": 0}).sort("start_ms", 1))
 
-    def window(self, start_ms, end_ms):
-        out = {"sessions": self.sessions(start_ms, end_ms)}
+    def window(self, start_ms, end_ms, vision_start_ms=None):
+        """Records in [start_ms, end_ms); vision (and sessions) may reach further back."""
+        vstart = start_ms if vision_start_ms is None else min(start_ms, vision_start_ms)
+        out = {"sessions": self.sessions(vstart, end_ms)}
         starts = {}
         for name in AUDIO_COLLECTIONS:
             field = TIME_FIELD[name]
@@ -43,7 +45,7 @@ class Records:
                     kept.append(d)
             kept.sort(key=lambda d: d["_wall"])
             out[name] = kept
-        vision = list(self.db["vision"].find({"at": {"$gte": start_ms, "$lt": end_ms}}, {"_id": 0}).sort("at", 1))
+        vision = list(self.db["vision"].find({"at": {"$gte": vstart, "$lt": end_ms}}, {"_id": 0}).sort("at", 1))
         for d in vision:
             d["_wall"], d["_drift"] = int(d["at"]), None
         out["vision"] = vision
