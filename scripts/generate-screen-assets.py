@@ -33,11 +33,19 @@ fs.writeFileSync(process.argv[4],image.asPng());
 
 ET.register_namespace("", "http://www.w3.org/2000/svg")
 svg = ET.parse(source / "artwork/laughing-man.svg").getroot()
+# 2026-11-10 (user): the face filled the screen and touched the bottom status strip; draw it at
+# 90% diameter about the viewBox centre (13, 13.5). Canvas size and on-screen position unchanged.
+FACE_SCALE = 0.9
+group = ET.Element("{http://www.w3.org/2000/svg}g", {"transform": f"translate(13 13.5) scale({FACE_SCALE:g}) translate(-13 -13.5)"})
+for child in list(svg):
+    svg.remove(child)
+    group.append(child)
+svg.append(group)
 frame_count = 120
 frames = []
 for number in range(frame_count):
     frame = copy.deepcopy(svg)
-    for child in frame:
+    for child in frame.iter():
         if child.get("id") == "lettering":
             child.set("transform", f"rotate({-number * 360 / frame_count:g} 13 13.5)")
     path = cache / f"frame-{number:03d}"
@@ -47,7 +55,7 @@ for number in range(frame_count):
     assert rgba.size == (260, 240)
     rgb = Image.alpha_composite(Image.new("RGBA", rgba.size, "#000000"), rgba).convert("RGB")
     frames.append(array.array("H", (((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-                                   for r, g, b in rgb.getdata())))
+                                   for r, g, b in rgb.get_flattened_data())))
 
 def image_c(name, pixels, width, height, stride, color_format):
     text = "static const uint8_t " + name + "_pixels[] = {\n"

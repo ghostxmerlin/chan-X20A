@@ -47,11 +47,19 @@ void Player::update_countdown(int64_t now) {
 void Player::begin_natural(int64_t now) {
     // Every non-idle state remains eligible. Friendly/curious/thoughtful beats
     // get more turns; hurt/angry/refusing/scared remain uncommon.
-    constexpr uint8_t weights[kStateCount]={0,6,1,2,1,5,3,3,1,2,4,4,2,5,5,3,1,2,4,2,3,3,6,5,6,4,2,1,4,3};
+    constexpr uint8_t legacy[kStateCount]={0,6,1,2,1,5,3,3,1,2,4,4,2,5,5,3,1,2,4,2,3,3,6,5,6,4,2,1,4,3};
+    // A configured pool (normal mode: sleepy / thinking / curious) replaces the weights with an
+    // equal chance for each pooled state; a single-state pool may repeat.
+    uint8_t weights[kStateCount];
+    size_t pooled=0;
+    for(size_t i=0;i<kStateCount;++i){weights[i]=natural_pool_?((natural_pool_>>i)&1u):legacy[i];pooled+=i&&weights[i];}
+    weights[0]=0;
+    const bool avoid_repeat=pooled>1;
     uint32_t total=0;
-    for(size_t i=1;i<kStateCount;++i)if(State(i)!=last_natural_)total+=weights[i];
+    for(size_t i=1;i<kStateCount;++i)if(!avoid_repeat||State(i)!=last_natural_)total+=weights[i];
+    if(!total)return;
     auto draw=random_below(total);
-    for(size_t i=1;i<kStateCount;++i)if(State(i)!=last_natural_) {
+    for(size_t i=1;i<kStateCount;++i)if(!avoid_repeat||State(i)!=last_natural_) {
         if(draw<weights[i]){value_.state=State(i);break;}draw-=weights[i];
     }
     last_natural_=value_.state;natural_rounds_=1+random_below(3);natural_frames_=0;
@@ -79,12 +87,14 @@ void Player::set_gate(bool allowed,Error reason,int64_t now) {
 }
 SubmitResult Player::submit(const Command& c,Source source,int64_t now,uint32_t job) {
     tick(now);
-    if (!valid_command(c) || (source!=Source::Manual && source!=Source::Voice)) return {false,0,Error::InvalidArgument};
+    if (!valid_command(c) || (source!=Source::Manual && source!=Source::Voice && source!=Source::Hearing)) return {false,0,Error::InvalidArgument};
     for (auto& r:history_) if (r.result.request_seq && now-r.at<60000000 && !std::strcmp(c.request_id,r.command.request_id)) {
         if (!same(c,r.command)) return {false,0,Error::IdConflict};
         return {true,r.result.request_seq,Error::None,true};
     }
-    if (current_>=0 && history_[current_].source==Source::Manual && source==Source::Voice) return {false,0,Error::Busy};
+    if (current_>=0 && history_[current_].source==Source::Manual && (source==Source::Voice || source==Source::Hearing)) return {false,0,Error::Busy};
+    // A voice cue outranks a hearing emotion; a hearing emotion never interrupts a voice cue.
+    if (current_>=0 && history_[current_].source==Source::Voice && source==Source::Hearing) return {false,0,Error::Busy};
     if (c.op==Operation::Play) {
         if (configuring()) return {false,0,Error::Busy};
         if (!gate_) return {false,0,Error::NotVisible};

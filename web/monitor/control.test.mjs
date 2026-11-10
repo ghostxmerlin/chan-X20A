@@ -207,3 +207,11 @@ test('mic gain needs the 0.4.60 capability and sends one integer 0..24 dB',async
  await assert.rejects(c.execute({...request,boot:'boot-b'}));
  assert.equal(calls.length,3);
 });
+test('hearing voiceprint delete sends op forget with the name only',async()=>{
+ const {m,c,calls}=fixture();m.info.capabilities.hearing='supported';
+ await c.execute({action:'hearing_forget',name:'person-a',boot:'boot-a'});
+ assert.deepEqual(calls.at(-1)[1],{target:'hearing',op:'forget',name:'person-a'});
+ for(const name of ['',' ','x'.repeat(49),3]) await assert.rejects(c.execute({action:'hearing_forget',name,boot:'boot-a'}));
+ await assert.rejects(c.execute({action:'hearing_forget',boot:'boot-a'}));
+ assert.equal(calls.length,1);
+});

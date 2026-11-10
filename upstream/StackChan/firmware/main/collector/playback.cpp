@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "eye_mode.h"
 #include "playback.h"
 #include "playback_session.h"
 #include "voice_library.h"
@@ -118,7 +119,8 @@ struct Output {
         std::lock_guard<std::mutex> lock(status_mutex);
         submitted_bytes=bytes;
         if(cue.submitted(bytes) && job && job->voice && hearing_owner.allowed(job->hearing_session))
-            eyes::voice_started(job->id,job->voice->id,(job->voice->frames*1000u+23999u)/24000u);
+            eyes::voice_started(job->id,job->voice->id,(job->voice->frames*1000u+23999u)/24000u,
+                                eye_state_for_emotion(voice_emotion(job->voice->id)));   // clips 41-80
     }
     void pause() { vTaskDelay(1); }
     void drain() { vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(100))); }

@@ -25,6 +25,10 @@ export function hearingBody(input,config) {
   if(typeof input.enabled!=='boolean')fail('监听状态须为布尔值');return {op:'listen',enabled:input.enabled};
  }
  if(input.action==='hearing_cancel')return {op:'cancel'};
+ if(input.action==='hearing_forget'){
+  if(typeof input.name!=='string'||!input.name.trim()||input.name.length>48)fail('请选择要删除的声纹');
+  return {op:'forget',name:input.name};
+ }
  if(typeof input.name!=='string'||!/^[\p{L}\p{N}_ -]{1,48}$/u.test(input.name)||!input.name.trim()||typeof input.replace!=='boolean')fail('请填写 1–48 字的姓名，只使用文字、数字、空格、下划线或短横线');
  return {op:'enroll',name:input.name,replace:input.replace};
 }

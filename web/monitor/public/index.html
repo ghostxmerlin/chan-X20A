@@ -82,7 +82,7 @@
       </div>
     </section>
     <section class="panel hearing-panel" aria-labelledby="hearing-heading">
-      <div class="panel-head"><h2 id="hearing-heading">连续听觉</h2><span id="hearing-status" class="muted">等待连接</span></div>
+      <div class="panel-head"><h2 id="hearing-heading">连续听觉</h2><span id="hearing-status" class="muted">等待连接</span><button data-open="hearing-config" title="填名字后点“录入五句话”，按提示自然说五句话">录入声纹</button></div>
       <div class="panel-body">
         <div class="identity-row"><p id="hearing-identity">身份：—</p><p id="hearing-emotion">情绪标签：—</p></div><p id="hearing-text" class="hearing-transcript">等待语音</p>
         <div class="volume-row" title="麦克风数字增益，作用于录音、连续听觉和音频流；带限幅，近处大声不会破音。保存在机身，重启后保留。一臂远说话约 −30 dBFS 为宜。"><label for="mic-gain-input">麦克风增益</label><input id="mic-gain-input" type="range" min="0" max="24" step="1" value="12" disabled><span id="mic-gain-value">—</span></div>
@@ -109,7 +109,7 @@
   <div class="control-buttons"><button id="hearing-save" disabled>保存配置</button><button id="hearing-import" disabled>使用本机现有后端</button></div>
   <p class="note">保存后待机。说 start 开始连续监听，stop 停止；关闭网页仍会继续，开机默认关闭。后端沿用现有录音保存设置。</p>
   <label for="hearing-name">声纹姓名</label><input id="hearing-name" maxlength="48" placeholder="例如 papa" autocomplete="off" disabled><label class="hearing-check"><input id="hearing-replace" type="checkbox" disabled>重新录入同名身份（先备份原资料）</label>
-  <div class="control-buttons"><button id="hearing-enroll" disabled>录入五句话</button><button id="hearing-cancel" disabled>取消录入</button></div><p id="hearing-speakers" class="note">已登记：—</p>
+  <div class="control-buttons"><button id="hearing-enroll" disabled>录入五句话</button><button id="hearing-cancel" disabled>取消录入</button></div><p id="hearing-speakers" class="note">已登记：—</p><ul id="hearing-speaker-list" class="m12-library-list" aria-label="已登记的声纹"></ul><p id="hearing-forget-note" class="note" role="status">删除前服务器会备份原声纹库；删除需要连续听觉正在运行。</p>
   <p class="note">对着机身麦克风自然说五句话，每句 1–12 秒，句间停顿。录入时暂停情绪回应，结束恢复原监听状态；120 秒未完成会取消。进度在连续听觉面板显示。</p>
   <p class="note">回应所有人，声纹只显示身份。后端情绪标签选择相近台词与眼睛；平静或未确定时不回应。自身播放声音不参与触发，回应至少间隔 10 秒。</p>
 </dialog>

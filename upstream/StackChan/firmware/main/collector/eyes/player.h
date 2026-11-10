@@ -11,6 +11,10 @@ public:
     void seed_random(uint32_t seed) { random_=seed?seed:0x6d2b79f5; }
     void set_idle_ready(bool ready) { value_.ready=ready && value_.memory_ready; }
     void set_gate(bool allowed,Error reason,int64_t now);
+    // Natural cycle pool: bit i = State(i). 0 keeps the original weighted 29-state cycle.
+    void set_natural_pool(uint32_t mask) { natural_pool_=mask; }
+    // false: a voice cue never enables the eyes by itself (normal mode keeps the home page).
+    void set_voice_auto_enable(bool on) { auto_enable_=on; }
     SubmitResult submit(const Command&,Source,int64_t now,uint32_t voice_job=0);
     void loaded(uint32_t generation,int64_t now);
     void failed(uint32_t generation,Error error,int64_t now);
@@ -34,6 +38,7 @@ private:
     Snapshot value_{};
     bool gate_=false, auto_enable_=true, loaded_=false, natural_active_=false;
     uint8_t natural_rounds_=0, natural_frames_=0;
+    uint32_t natural_pool_=0;
     State last_natural_=State::Invalid;
     uint32_t random_=0x6d2b79f5;
     int64_t first_deadline_=0, began_=0, idle_began_=0;

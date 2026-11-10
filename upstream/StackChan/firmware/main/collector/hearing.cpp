@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: MIT */
+#include "eye_mode.h"
+#include "eyes/eyes.h"
 #include "hearing.h"
 #include "hearing_policy.h"
 #include "playback.h"
@@ -50,6 +52,9 @@ std::string state="idle",error,enroll_name,enroll_id,enroll_phase="idle",speaker
 std::vector<std::string> speakers;
 bool replace_speaker=false;
 int enroll_n=0;
+// Voiceprint deletion (2026-11-10): pending name sent on the live session; result for telemetry.
+std::string forget_pending,forget_name,forget_state="idle",forget_error;
+std::string enroll_rejected; // why the last sentence did not count (server reason code), "" if it did
 ResponsePolicy policy;
 QuietWait quiet;              // chosen response waiting for a quiet room (hearing_policy.h)
 bool server_speaking=false;int64_t last_speaking_us=0; // backend VAD state from every tick
@@ -93,6 +98,13 @@ bool explicit_listening_locked(bool enable,bool toggle=false) {
     if(!(enable&&(before.requested||before.enrolling)))apply_listening_locked(enable);
     return true;
 }
+void show_emotion_eyes(const char* emotion) {
+    const auto state=eye_state_for_emotion(emotion);
+    if(!eyes::valid(state))return;
+    eyes::Command c;c.op=eyes::Operation::Play;c.state=state;c.mode=eyes::Mode::Once;
+    eye_request_id(c.request_id,[]{return esp_random();});
+    eyes::submit(c,eyes::Source::Hearing);
+}
 void finish_enroll_locked(const char* phase,const char* why="") {
     control.finish_enrollment();enroll_phase=phase;error=why;
     new_session_locked();state=control.requested()?"connecting":"idle";
@@ -124,6 +136,12 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
     for(auto event:doc["events"].as<JsonArrayConst>()) {
         const char* type=event["type"]|"";
         if(!std::strcmp(type,"hello"))read_speakers(event["speakers"]);
+        else if(!std::strcmp(type,"speakers")&&!std::strcmp(event["op"]|"","forget")) {
+            read_speakers(event["speakers"]);
+            if(forget_name==(event["name"]|"")){forget_state=(event["ok"]|false)?"done":"error";forget_error=event["error"]|"";}
+            const bool ok=event["ok"]|false;
+            record_locked("link",std::string(ok?"voiceprint deleted: ":"voiceprint delete failed: ")+forget_name.substr(0,48));
+        }
         else if(!std::strcmp(type,"audio")) {
             audio_ack=!std::strcmp(event["format"]|"","opus")&&!std::strcmp(event["framing"]|"","sea1")&&event["input_sample_rate"].as<int>()==24000;
             if(!audio_ack)error="backend_protocol_mismatch";
@@ -132,6 +150,8 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             const char* phase=event["phase"]|"";
             if(!std::strcmp(phase,"started")||!std::strcmp(phase,"progress")) {
                 enroll_ack=true;enroll_phase=phase;enroll_n=std::clamp(event["n"]|0,0,5);
+                if(!std::strcmp(phase,"started"))enroll_rejected.clear();
+                else enroll_rejected=event["rejected"]|"";
             } else if(!std::strcmp(phase,"done")) {
                 enroll_n=5;read_speakers(event["speakers"]);finish_enroll_locked("done");return;
             } else if(!std::strcmp(phase,"error")||!std::strcmp(phase,"cancelled")) {
@@ -166,6 +186,9 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
             const int clip=policy.consider(seq,emotion.c_str(),valid,self,valid?static_cast<int>(processing):-1,now,esp_random(),
                 kVoiceCount,[](int clip_id){return voice_emotion(clip_id);});
             if(clip)quiet.hold(clip,now,text.substr(0,120),emotion);
+            // Normal eye mode: no response for this utterance → show its emotion once (vision on only;
+            // with the eyes disabled the request is refused and the home page stays).
+            else if(!self&&!text.empty())show_emotion_eyes(emotion.c_str());
         }
     }
 }
@@ -274,6 +297,11 @@ void worker(void*) {
             if(self_gate.should_send(sounding)) {
                 JsonDocument flags;flags["type"]="self";flags["sounding"]=sounding;flags["moving"]=false;flags["t_us"]=first_us;
                 ok=send_json(*socket,flags);
+            }
+            {
+                std::string forget;
+                {std::lock_guard<std::mutex> lock(mutex);forget.swap(forget_pending);}
+                if(ok&&!forget.empty()){JsonDocument msg;msg["type"]="forget";msg["name"]=forget;ok=send_json(*socket,msg);}
             }
             std::memcpy(encoded.data(),"SEA1",4);
             for(unsigned i=0;i<4;++i)encoded[4+i]=(wire_seq>>(i*8))&255;
@@ -431,8 +459,9 @@ void json(JsonObject out,bool with_events,uint32_t events_after) {
     out["text"]=text;out["emotion"]=emotion;out["emotion_reliable"]=false;out["respond_to"]="everyone";
     out["last_speech_age_ms"]=last_speech?(esp_timer_get_time()-last_speech)/1000:-1;
     auto list=out["speakers"].to<JsonArray>();for(const auto& name:speakers)list.add(name);
+    auto forget=out["forget"].to<JsonObject>();forget["name"]=forget_name;forget["state"]=forget_state;forget["error"]=forget_error;
     auto enrollment=out["enrollment"].to<JsonObject>();enrollment["active"]=control.enrolling();enrollment["name"]=enroll_name;
-    enrollment["phase"]=enroll_phase;enrollment["n"]=enroll_n;enrollment["count"]=5;
+    enrollment["phase"]=enroll_phase;enrollment["n"]=enroll_n;enrollment["count"]=5;enrollment["rejected"]=enroll_rejected;
 }
 
 esp_err_t handle(httpd_req_t* request,JsonObject doc) {
@@ -455,8 +484,19 @@ esp_err_t handle(httpd_req_t* request,JsonObject doc) {
         if(name.empty()||name.size()>144||name.find_first_of("/\\\r\n\t")!=std::string::npos)return respond(request,"400 Bad Request","invalid_name");
         if(!ready||url.empty()||secret.empty()||control.enrolling())return respond(request,"409 Conflict","not_ready_or_enrollment_active");
         control.begin_enrollment();enroll_name=name;replace_speaker=doc["replace"];enroll_n=0;enroll_phase="connecting";
-        new_session_locked();enroll_id=boot+"-"+std::to_string(control.generation());state="connecting";error.clear();quiet_until=esp_timer_get_time()+1200000;
+        // No 1.2 s self-sound guard here (2026-11-10): a web enrollment makes no sound, and the guard
+        // marked the user's first sentence as her own voice, so it never counted.
+        new_session_locked();enroll_id=boot+"-"+std::to_string(control.generation());state="connecting";error.clear();quiet_until=0;
         return respond(request,"202 Accepted","enrollment_requested");
+    }
+    if(op=="forget"&&doc.size()==2&&doc["name"].is<const char*>()) {
+        // Deleting goes through the backend that stores the voiceprints, on the live session.
+        const std::string name=doc["name"].as<std::string>();
+        if(name.empty()||name.size()>144)return respond(request,"400 Bad Request","invalid_name");
+        if(std::find(speakers.begin(),speakers.end(),name)==speakers.end())return respond(request,"404 Not Found","unknown_speaker");
+        if(!connected||control.enrolling())return respond(request,"409 Conflict","start_listening_first");
+        forget_pending=name;forget_name=name;forget_state="pending";forget_error.clear();
+        return respond(request,"202 Accepted","forget_requested");
     }
     if(op=="cancel"&&doc.size()==1) {
         const bool was_enrolling=control.enrolling();control.cancel_enrollment();

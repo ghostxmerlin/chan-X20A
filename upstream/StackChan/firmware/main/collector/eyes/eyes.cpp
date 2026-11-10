@@ -98,11 +98,21 @@ void display_gate(bool home,bool display_on,bool reaction) {
     if(!home || !display_on || reaction)r.held_slot=-1;
     r.player.set_gate(home&&display_on&&!reaction,reaction?Error::Reaction:!home||!display_on?Error::PageHidden:Error::None,r.backend.now_us());r.sync();
 }
-void voice_started(uint32_t job,int clip,uint32_t duration) {
-    if (!runtime || clip<1 || clip>40) return;
+void set_natural_pool(uint32_t mask) {
+    if (!runtime) return;
+    auto& r=*runtime;std::lock_guard<std::mutex> lock(r.mutex);r.player.set_natural_pool(mask);
+}
+void set_voice_auto_enable(bool on) {
+    if (!runtime) return;
+    auto& r=*runtime;std::lock_guard<std::mutex> lock(r.mutex);r.player.set_voice_auto_enable(on);
+}
+void voice_started(uint32_t job,int clip,uint32_t duration,State fallback) {
+    // Clips 1-40 have a hand-made expression table; later clips use the caller's fallback.
+    const State state=clip>=1 && clip<=40?voice_state(clip):fallback;
+    if (!runtime || clip<1 || !valid(state)) return;
     auto& r=*runtime;Command c;
     std::snprintf(c.request_id,sizeof(c.request_id),"feedface-0000-4000-8000-%012lx",static_cast<unsigned long>(job));
-    c.state=voice_state(clip);c.mode=Mode::Loop;c.loop_for_ms=std::clamp<uint32_t>(duration,1000,30000);
+    c.state=state;c.mode=Mode::Loop;c.loop_for_ms=std::clamp<uint32_t>(duration,1000,30000);
     std::lock_guard<std::mutex> lock(r.mutex);r.player.set_resources(r.backend.available(),r.scratch!=nullptr);
     r.apply(c,Source::Voice,job);
 }

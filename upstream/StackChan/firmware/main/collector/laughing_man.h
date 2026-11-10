@@ -4,7 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-enum { COLLECTOR_FACE_FRAME_COUNT = 120, COLLECTOR_FACE_CHANGED_PIXELS = 7478, COLLECTOR_FACE_FRAME_BYTES = 4674, COLLECTOR_FACE_REGION_COUNT = 25 };
+enum { COLLECTOR_FACE_FRAME_COUNT = 120, COLLECTOR_FACE_CHANGED_PIXELS = 6153, COLLECTOR_FACE_FRAME_BYTES = 3846, COLLECTOR_FACE_REGION_COUNT = 25 };
 LV_IMAGE_DECLARE(collector_laughing_man);
 extern const uint16_t collector_laughing_man_offsets[];
 extern const uint16_t collector_laughing_man_palette[];

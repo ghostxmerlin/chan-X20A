@@ -23,6 +23,7 @@
 #include "mic_gain.h"
 #include "mem_diag.h"
 #include "psram_task.h"
+#include "eye_mode.h"
 #include <ArduinoJson.hpp>
 #include <board.h>
 #include <audio/audio_codec.h>
@@ -1737,8 +1738,10 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
             }
             const uint32_t requested_view = m12_view_request();
             if (requested_view != view_seen) {
-                view_seen = requested_view; face_view = m12_requested_view(requested_view);
-                screen_show_faces(face_view, tick_ms);
+                // Normal eye mode (user, 2026-11-10): turning vision on no longer opens the full-screen
+                // face-box page; the home page stays and shows the v14 mech eyes (eye_mode.h).
+                view_seen = requested_view; face_view = false;
+                if (screen_showing_faces()) screen_show_faces(false, tick_ms);
             }
             if (face_view && !screen_showing_faces()) {
                 face_view = false;
@@ -1914,6 +1917,24 @@ void run()
         }
         previous_ip = ip;
         interaction::tick(esp_timer_get_time());
+        {
+            // Normal eye mode (eye_mode.h): laughing man without vision; v14 mech eyes while the
+            // M12 is asked to detect (tracking, recognition or the face view).
+            static EyeModeController eye_mode;
+            static bool eye_mode_ready = false;
+            const int64_t t = esp_timer_get_time();
+            if (!eye_mode_ready) { eyes::set_natural_pool(kNormalNaturalPool); eyes::set_voice_auto_enable(false); eye_mode_ready = true; }
+            const bool vision = m12_requested_function(m12_mode_request()) == M12Function::detect;
+            if (eye_mode.due(vision, t)) {
+                eyes::Command c;
+                c.op = eyes::Operation::Configure; c.enabled = vision; c.style = kNormalVisionStyle;
+                eye_request_id(c.request_id, [] { return esp_random(); });
+                const auto result = eyes::submit(c, eyes::Source::Manual);
+                eye_mode.applied(vision, result.accepted, t);
+                ESP_LOGI(kTag, "eyes: vision %s -> %s (%s)", vision ? "on" : "off", vision ? "v14 mech eyes" : "laughing man",
+                         result.accepted ? "accepted" : eyes::name(result.error));
+            }
+        }
         update_screen(ip, ssid);
         const int64_t now = esp_timer_get_time();
         // One interrupt allocation table per boot (USB log): core 0 must keep free

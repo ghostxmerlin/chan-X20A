@@ -5,7 +5,7 @@ const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'
 const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',mic_gain:'mic_gain',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_step:'yaw_step',pitch:'pitch',camera:'camera'};
 const route = '/v1/control';
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
-Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[]});
+Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[],hearing_forget:['name']});
 export class Controls {
   constructor(monitor,{loadHearingConfig=()=>{throw new Error('not configured');}}={}) { this.monitor=monitor; this.busy=false; this.loadHearingConfig=loadHearingConfig; }
   validate(input) {

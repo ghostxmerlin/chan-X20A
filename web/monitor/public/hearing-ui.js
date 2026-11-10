@@ -9,6 +9,7 @@ export class HearingPanel {
   this.doc=doc;this.send=send;this.pending=false;
   for(const [id,op,params] of [['save','config',{}],['import','import',{}],['start','listen',{enabled:true}],['stop','listen',{enabled:false}],['enroll','enroll',{}],['cancel','cancel',{}]])
    this.el('hearing-'+id).addEventListener('click',()=>this.act(op,params));
+  this.el('hearing-speaker-list').addEventListener('click',event=>{const name=event.target?.dataset?.forget;if(name!==undefined)this.act('forget',{name});});
   this.el('mic-gain-input').addEventListener('input',()=>{this.el('mic-gain-value').textContent=`+${this.el('mic-gain-input').value} dB · 松手后应用`;});
   this.el('mic-gain-input').addEventListener('change',()=>this.setMicGain(Number(this.el('mic-gain-input').value)));
  }
@@ -64,8 +65,22 @@ export class HearingPanel {
   if(fresh&&h.text&&/[\p{L}\p{N}]/u.test(h.text))this.lastText={text:h.text,boot:state.boot};
   const shownText=this.lastText?.boot===state?.boot?this.lastText.text:'';
   this.el('hearing-text').textContent=fresh&&shownText?`${shownText}${shownText===h.text&&h.last_speech_age_ms>=0?' · '+Math.floor(h.last_speech_age_ms/1000)+' 秒前':''}`:'等待语音';
-  this.el('hearing-progress').textContent=fresh?`${phases[enrollment.phase]||'尚未录入'} · ${enrollment.n||0} / 5 句${enrollment.name?' · '+enrollment.name:''}`:'录入状态已过期';
-  this.el('hearing-speakers').textContent=fresh?`已登记：${h.speakers?.join('、')||'等待后端返回'}`:'已登记：—';
+  // Why the last sentence did not count (server reason, collector-0.4.68+).
+  const rejected={too_short:'上一句太短，没算进去：每句至少说 1 秒',too_long:'上一句太长（超过 12 秒），没算进去',not_voice:'上一句听起来不像清楚的人声，没算进去：靠近一点、正常音量再说',self_voice:'上一句和 hello 自己的声音重叠，没算进去',bad_embedding:'上一句声纹提取失败，请再说一句'};
+  const why=enrollment.active&&enrollment.rejected?` · ${rejected[enrollment.rejected]||enrollment.rejected}`:'';
+  this.el('hearing-progress').textContent=fresh?`${phases[enrollment.phase]||'尚未录入'} · ${enrollment.n||0} / 5 句${enrollment.name?' · '+enrollment.name:''}${why}`:'录入状态已过期';
+  this.el('hearing-speakers').textContent=fresh?`已登记：${h.speakers?.length?h.speakers.length+' 个':'等待后端返回'}`:'已登记：—';
+  // Voiceprint list with delete buttons (collector-0.4.70+ reports hearing.forget).
+  const list=this.el('hearing-speaker-list');list.replaceChildren?.();
+  const canForget=this.ready&&!this.pending&&!!h.connected&&!enrollment.active&&!!h.forget;
+  for(const name of (fresh?h.speakers||[]:[])){
+   const li=this.doc.createElement('li');const span=this.doc.createElement('span');span.textContent=name;
+   const b=this.doc.createElement('button');b.textContent='删除';b.className='stop-button';b.dataset.forget=name;b.disabled=!canForget;
+   li.append(span,b);list.append?.(li);
+  }
+  const f=h.forget||{};
+  const forgetText={pending:`正在删除「${f.name}」…`,done:`已删除「${f.name}」`,error:`删除「${f.name}」失败：${f.error==='unknown_speaker'?'服务器上没有这个声纹':f.error==='save_failed'?'服务器保存失败，原声纹库未改':f.error}`};
+  this.el('hearing-forget-note').textContent=!fresh?'—':!h.forget?'当前固件不支持删除声纹':forgetText[f.state]||(h.connected?'删除前服务器会备份原声纹库。':'删除需要连续听觉正在运行（先点开始）。');
   this.el('hearing-error').textContent=fresh&&h.error?`状态提示：${h.error}`:'';
   // Heartbeat: the backend ticks every 100 ms; the robot drops the session after 3 s without one.
   const hb=h.heartbeat,d=h.disconnects||{},end=h.last_end||{};

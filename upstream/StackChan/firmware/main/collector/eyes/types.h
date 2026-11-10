@@ -4,7 +4,8 @@
 namespace collector::eyes {
 enum class Operation { Configure, Play, Stop };
 enum class Mode { Once, Loop };
-enum class Source { None, Manual, Voice, Natural };
+// Hearing: an emotional utterance without a voice response (normal eye mode, 2026-11-10).
+enum class Source { None, Manual, Voice, Natural, Hearing };
 inline constexpr uint32_t kManualFirstFrameDeadlineMs=10000, kVoiceFirstFrameDeadlineMs=1500;
 enum class Phase { Legacy, Loading, Idle, Playing, Suspended, Error };
 enum class RequestStatus { Unknown, Accepted, Presenting, Completed, Cancelled, Expired, Failed };
@@ -13,7 +14,7 @@ enum class Error { None, InvalidArgument, Disabled, NotVisible, Busy, StorageUna
     VoiceEnded, RequestUnknown, IdConflict };
 inline const char* name(Operation v) { return v==Operation::Configure?"configure":v==Operation::Play?"play":"stop"; }
 inline const char* name(Mode v) { return v==Mode::Once?"once":"loop"; }
-inline const char* name(Source v) { return v==Source::Manual?"manual":v==Source::Voice?"voice":v==Source::Natural?"natural":"none"; }
+inline const char* name(Source v) { return v==Source::Manual?"manual":v==Source::Voice?"voice":v==Source::Natural?"natural":v==Source::Hearing?"hearing":"none"; }
 inline const char* name(Phase v) { const char* a[]={"legacy","loading","idle","playing","suspended","error"};return a[size_t(v)]; }
 inline const char* name(RequestStatus v) { const char* a[]={"unknown","accepted","presenting","completed","cancelled","expired","failed"};return a[size_t(v)]; }
 inline const char* name(Error v) {

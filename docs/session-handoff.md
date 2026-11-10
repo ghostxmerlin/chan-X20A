@@ -1,5 +1,15 @@
 # 会话交接记录
 
+## 2026-11-10 傍晚：正常眼睛模式、声纹录入/删除、降噪可控评估（0.4.68–0.4.71，Claude）
+
+- **正常眼睛模式**（`collector/eye_mode.h`）：没开视觉一直笑脸男（台词也不切，`set_voice_auto_enable(false)`）；M12 被请求检测（追踪 / 认人 / 开启检测 / turn on）时 v14 机甲眼睛，自然循环只在 idle↔sleepy/thinking/curious（`set_natural_pool`）；听到有情绪的话且没有台词回应时按情绪播一次（新来源 `Source::Hearing`，台词表情优先、手动最优先）；41–80 号台词按台词情绪切表情（原来被忽略）。0.4.71 起开启视觉不再切到全屏人脸框页面。主循环每 250 ms 跟随 `m12_requested_function`，失败 2 s 重试。实测：认人模式下 v14 显示并循环 curious/sleepy；开启检测时主页显示 v14。
+- **笑脸男缩到 90% 直径**：`scripts/generate-screen-assets.py` 加 `FACE_SCALE=0.9`（工具按 docs/build.md 装在 `.tools/ui-assets`，先验证原样再生成一字不差）；30 色、6153 变化像素，固件小约 100 KB。`tests/test_packed_palette.py` 改为从头文件读尺寸、用独立 Python 解包比对，不再钉死旧图。
+- **声纹录入**：原因①录入开始固件把前 1.2 s 标为自身发声，第一句被丢（0.4.70 网页录入不再加此保护）；②hello 麦克风人声把握偏低（0.17–0.5），服务端对 stackchan 来源接受 `unclear`（≥0.2）；③不足 1 s 的句子不收。服务端 progress 带 `rejected`（too_short/too_long/not_voice/self_voice/bad_embedding），0.4.68 转到遥测 `hearing.enrollment.rejected`，网页显示原因。用户已部署并录入 “me”，录入后认出 me（0.62/0.80）。
+- **声纹删除**：服务端 `{"type":"forget","name"}` → `hp.forget_speaker`（原子替换 + .bak），回 `speakers` 事件；0.4.71 `hearing` op `forget`（需会话在线），遥测 `hearing.forget`；网页“录入声纹”窗口列表 + 删除。需再部署服务端才生效。
+- **降噪可控评估**：40 秒稿子（正常 / 小声 / 打字 / 拍手 / 叹气 / 2–3 m），从 8081 原始口录两次（录前关连续听觉以免回应插话）。`--denoise-mode stream|asr|off`：安静一次 stream 能抓到小声（60%）和远处（9%），off/asr 漏掉；嘈杂一次都不行，stream 把同事和用户连成大段；asr 模式无用。三种都没认出打字/拍手/叹气（背景 −30 dBFS）。用户定：**耳朵听到就报，是否结合人脸由思考服务判断**。服务器上没有 GTCRN 模型，降噪未启用。录音 `.private/mind-tingwu-test/20261110/ctrl-take*.wav`。
+- **构建 / 部署**：每版只写 ota_1、独立 verify，备份 `backups/ota_1-collector-0.4.6{7,8,9}/0.4.70-before-*-20261110.bin`。服务端部署被权限检查拦截，需用户自己运行 `server/ear/deploy.sh`。
+
+
 ## 2026-11-10 下午：M12 换成 m12d 自研程序，驱动与网页重写（0.4.66–0.4.67，Claude）
 
 **背景**：M12 原厂固件已换成用户自研常驻程序 m12d（协议：m12d 仓库 `docs/protocol.md`，0.1.0）。原厂功能切换、audio_fft 待机、Face Recognition 训练和原厂人脸库全部失效。盘点与迁移表见 [m12d 迁移](m12d-migration.md)。实机：迁移前 M12 已在推送 m12d 检测行，但旧固件 89 次待机命令全部无回应。
