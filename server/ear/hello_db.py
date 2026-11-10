@@ -145,10 +145,10 @@ class HelloDB:
                         log.warning("hello db write dropped: %s", self.error)
                     else:
                         time.sleep(1 + attempt)
+            self.queue.task_done()
 
     def flush(self, timeout=5.0):
-        """Wait until the queue is empty (tests and shutdown)."""
+        """Wait until every queued row has been written or dropped (tests and shutdown)."""
         end = time.time() + timeout
-        while not self.queue.empty() and time.time() < end:
-            time.sleep(0.02)
-        time.sleep(0.05)
+        while self.queue.unfinished_tasks and time.time() < end:
+            threading.Event().wait(0.02)          # not time.sleep: tests patch it
