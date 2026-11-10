@@ -5,6 +5,9 @@ One directory per connection:  <root>/<YYYYMMDD>/<HHMMSS>-<source>-c<n>/
   audio.opus     Opus clients: the packets exactly as received, in a standard Ogg Opus file
                  (plays in VLC/ffmpeg/browsers; sample positions = the ear's "pos" sample indexes)
   audio.wav      PCM16 clients: the samples exactly as received
+  heard.opus     robot (stackchan*) sources with the denoiser: what VAD/ASR/tags actually heard, after
+                 the GTCRN denoiser and before the "she is speaking" silencing, 16 kHz 24 kbps Opus;
+                 sample positions = the ear's "pos" sample indexes (2026-11-10)
   events.jsonl   every event the ear sent (speech, sound, enroll, errors, ...), with the tick that carried it
   ticks.jsonl    every 100 ms heartbeat (without its events)
   client.jsonl   every text message the client sent except pings (audio declaration, self flags, config, enroll)
@@ -19,6 +22,7 @@ import wave
 from datetime import datetime
 
 SR = 16000
+HEARD_FRAME = 960          # 60 ms at 16 kHz
 
 
 def _crc_table():
@@ -96,6 +100,7 @@ class Recorder:
         self.root, self.conn_no, self.peer, self.hello = root, conn_no, peer, hello
         self.dir = None
         self.audio = None
+        self.heard = None        # heard.opus writer, opened by the first heard_in()
         self.kind = None
         self.files = {}
         self.meta = {}
@@ -193,10 +198,32 @@ class Recorder:
         self.files["client"].write(json.dumps({"t": int(time.time() * 1000), "msg": msg}, ensure_ascii=False) + "\n")
         self.counts["client_msgs"] += 1
 
+    def heard_in(self, x):
+        """x: float32 16 kHz samples after the denoiser (any length); encoded in 60 ms Opus frames."""
+        self._open(None)
+        if self.heard is None:
+            import numpy as np, opuslib_next
+            self._np = np
+            self.heard_enc = opuslib_next.Encoder(SR, 1, opuslib_next.APPLICATION_VOIP)
+            self.heard_enc.bitrate = 24000
+            self.heard = OggOpusWriter(os.path.join(self.dir, "heard.opus"), input_rate=SR,
+                                       comments=[f"SOURCE={self.meta['source']}", "CONTENT=denoised (what the ear heard)"])
+            self.heard_buf = np.zeros(0, dtype=np.float32)
+            self.meta["heard_file"] = "heard.opus"
+            self._write_meta()
+        np = self._np
+        self.heard_buf = np.concatenate([self.heard_buf, x.astype(np.float32)])
+        while len(self.heard_buf) >= HEARD_FRAME:
+            frame, self.heard_buf = self.heard_buf[:HEARD_FRAME], self.heard_buf[HEARD_FRAME:]
+            pcm = (np.clip(frame, -1, 1) * 32767).astype("<i2").tobytes()
+            self.heard.write(self.heard_enc.encode(pcm, HEARD_FRAME), HEARD_FRAME)
+
     def close(self):
         if not self.dir:
             return
         try:
+            if self.heard is not None:
+                self.heard.close()
             if self.audio is not None:
                 self.audio.close()
         finally:

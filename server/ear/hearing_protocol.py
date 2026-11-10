@@ -62,6 +62,7 @@ class Enrollment:
         self.epoch = 0
         self.active = False
         self.embs = []
+        self.rejected = ''
 
     def start(self, msg, speakers, now):
         name = msg.get('name', '')
@@ -93,23 +94,23 @@ class Enrollment:
         return {'type':'enroll', 'name':self.name, 'request_id':self.request_id, 'n':len(self.embs), 'count':5}
 
     def accept(self, epoch, emb, duration, voice, sounding, now):
+        """True once five sentences are in. self.rejected says why the last one did not count
+        ('' when it did): too_short / too_long / not_voice / self_voice / bad_embedding."""
+        self.rejected = ''
         if not self.active or epoch != self.epoch or self.expired(now):
             return False
-        if not voice or sounding or not 1 <= duration <= 12 or not np.isfinite(emb).all() or np.linalg.norm(emb) < 1e-6:
+        reason = ('self_voice' if sounding else 'too_short' if duration < 1 else 'too_long' if duration > 12 else
+                  'not_voice' if not voice else
+                  'bad_embedding' if not np.isfinite(emb).all() or np.linalg.norm(emb) < 1e-6 else '')
+        if reason:
+            self.rejected = reason
             return False
         self.embs.append(emb.copy())
         return len(self.embs) >= 5
 
 
-def save_speaker(path, speakers, name, embs, replace):
-    """No shared state mutation until the durable atomic replacement succeeds."""
-    if name in speakers and not replace:
-        raise ValueError('speaker exists; explicit replace required')
-    vector = np.mean(embs, axis=0).astype(np.float32)
-    norm = np.linalg.norm(vector)
-    if not np.isfinite(vector).all() or norm < 1e-6:
-        raise ValueError('invalid voiceprint')
-    updated = {**speakers, name: vector / norm}
+def _write_speakers(path, updated):
+    """Durable atomic replacement of speakers.npz; the previous file is kept as a .bak copy."""
     path = Path(path)
     fd, temporary = tempfile.mkstemp(prefix='.speakers-', dir=path.parent)
     try:
@@ -124,4 +125,25 @@ def save_speaker(path, speakers, name, embs, replace):
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
+
+
+def save_speaker(path, speakers, name, embs, replace):
+    """No shared state mutation until the durable atomic replacement succeeds."""
+    if name in speakers and not replace:
+        raise ValueError('speaker exists; explicit replace required')
+    vector = np.mean(embs, axis=0).astype(np.float32)
+    norm = np.linalg.norm(vector)
+    if not np.isfinite(vector).all() or norm < 1e-6:
+        raise ValueError('invalid voiceprint')
+    updated = {**speakers, name: vector / norm}
+    _write_speakers(path, updated)
+    return updated
+
+
+def forget_speaker(path, speakers, name):
+    """Remove one voiceprint (2026-11-10). The old file stays as a .bak copy; nothing else changes."""
+    if name not in speakers:
+        raise KeyError('unknown speaker')
+    updated = {k: v for k, v in speakers.items() if k != name}
+    _write_speakers(path, updated)
     return updated

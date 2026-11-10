@@ -10,12 +10,16 @@ Protocol (v1):
                             {"type":"config","speaker_hi":0.6,"speaker_lo":0.4,
                              "sound_min_db":15,"voice_hi":0.4,"voice_lo":0.2}
                             {"type":"self","sounding":false,"moving":false}
+                            {"type":"forget","name":"..."}   (delete a voiceprint; answered by a "speakers" event)
   server -> client  text  : exactly one frame every 100 ms, a "tick":
       {"v":1,"type":"tick","seq":n,"t":<server epoch ms>,
        "rx":<samples received so far>,"rx_idle_ms":..,"rx_gap_ms":..,"rx_bytes":<audio bytes so far>,
-       "level_db":..,"noise_db":..,"speaking":bool,"events":[...]}
+       "level_db":..,"noise_db":..,"heard_noise_db":..,"speaking":bool,"events":[...]}
     The tick is the heartbeat; events (speech / sound / enroll / pong / hello) ride on it,
     so the server never sends more than 10 frames a second.
+    level_db / noise_db describe the raw microphone. For robot sources ("source":"stackchan...")
+    the audio goes through a streaming GTCRN denoiser before VAD/ASR/tags (the audio ack says
+    "denoise":"gtcrn"); heard_noise_db is the floor of that denoised audio, which the gates use.
 
 The ear reports facts plus confidence bands; it never decides what they mean.
 """
@@ -111,7 +115,7 @@ def loudest_100ms(x):
 class Models:
     """Inference objects, shared by all connections; one worker thread uses them."""
 
-    def __init__(self, mdir, db_path, threads):
+    def __init__(self, mdir, db_path, threads, denoise_mode="stream"):
         sv = f"{mdir}/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
         # CED-mini: tiny called a speaking second "Mantra/Music"; mini costs ~1 ms more per window
         ced = f"{mdir}/sherpa-onnx-ced-mini-audio-tagging-2024-04-19"
@@ -128,12 +132,26 @@ class Models:
             model=so.AudioTaggingModelConfig(ced=f"{ced}/model.int8.onnx", num_threads=1),
             labels=f"{ced}/class_labels_indices.csv", top_k=25))    # wide enough to see voice labels
         self.kind_of = sound_kinds.build(f"{ced}/class_labels_indices.csv")
+        # Robot mic denoiser (2026-11-10): the StackChan mic picks up crackle from the robot's own
+        # digital activity; GTCRN removed it and, on the user's 3 min office clip, SenseVoice went
+        # from 15 to 24 sentences. Optional: without the model file the ear runs as before.
+        # denoise_mode: "stream" = VAD and ASR hear the denoised audio; "asr" = VAD, speaker and tags
+        # hear the raw mic and only the speech segment handed to SenseVoice is denoised; "off".
+        gtcrn = f"{mdir}/speech-enhancement/gtcrn_simple.onnx"
+        self.denoise_mode = denoise_mode
+        self.denoise_cfg = so.OnlineSpeechDenoiserConfig(model=so.OfflineSpeechDenoiserModelConfig(
+            gtcrn=so.OfflineSpeechDenoiserGtcrnModelConfig(model=gtcrn), num_threads=1)) \
+            if os.path.exists(gtcrn) and denoise_mode != "off" else None
         self.lock = threading.Lock()
         self.db_path = db_path
         self.speakers = {}
         if os.path.exists(db_path):
             d = np.load(db_path)
             self.speakers = {k: d[k] for k in d.files}
+
+    def new_denoiser(self):
+        """A fresh streaming denoiser (it keeps state, so one per connection), or None."""
+        return so.OnlineSpeechDenoiser(self.denoise_cfg) if self.denoise_cfg else None
 
     def embed(self, x):
         s = self.spk.create_stream()
@@ -176,6 +194,9 @@ class Models:
     def save_speaker(self, name, embs, replace=False):
         self.speakers = hp.save_speaker(self.db_path, self.speakers, name, embs, replace)
 
+    def forget_speaker(self, name):
+        self.speakers = hp.forget_speaker(self.db_path, self.speakers, name)
+
 
 class Ring:
     """Fixed-size history addressed by absolute sample index."""
@@ -208,6 +229,11 @@ class Ear:
         self.m, self.ws, self.ex = m, ws, ex
         self.vad = so.VoiceActivityDetector(m.vad_cfg, buffer_size_in_seconds=60)
         self.ring = Ring(RING_SECONDS * SR)
+        # Sound tags read the raw mic (2026-11-10): GTCRN is a speech enhancer and removed typing
+        # (14 → 0 events on the user's test) while helping speech. Without a denoiser both rings
+        # are the same object, so the Mac path is unchanged.
+        self.tag_ring = self.ring
+        self.clean_ring = self.ring   # what SenseVoice reads ("asr" mode: the denoised copy)
         self.carry = np.zeros(0, dtype=np.float32)
         self.opus = None                          # set by {"type":"audio","format":"opus"}; default PCM16
         self.rx_bytes = 0
@@ -220,6 +246,10 @@ class Ear:
         # last 60 s of tick levels; the floor is their 10th percentile, so a steady sound (TV, siren)
         # only becomes "background" after it has filled ~54 s, not after a dozen seconds
         self.levels = collections.deque(maxlen=600)
+        # the same for what VAD/ASR/tags hear (after the denoiser); gates compare against this floor
+        self.heard_sq, self.heard_n = 0.0, 0
+        self.heard_levels = collections.deque(maxlen=600)
+        self.denoiser = None          # streaming GTCRN for robot sources (set by the audio message)
         self.outbox = []
         self.hi, self.lo = 0.6, 0.4
         self.sound_min_db = SOUND_MIN_DB
@@ -248,7 +278,8 @@ class Ear:
                       "speaker_hi": self.hi, "speaker_lo": self.lo, "sound_min_db": self.sound_min_db,
                       "voice_hi": self.voice_hi, "voice_lo": self.voice_lo,
                       "models": {"asr": "sense-voice int8 2024-07-17", "spk": "3dspeaker campplus zh",
-                                 "vad": "silero (min_silence 0.4 s)", "tags": "ced-mini → sound_kinds"}}
+                                 "vad": "silero (min_silence 0.4 s)", "tags": "ced-mini → sound_kinds",
+                                 "denoise": "gtcrn_simple (stackchan sources)" if m.denoise_cfg else None}}
         self.post(dict(self.hello))
 
     # ---------- helpers ----------
@@ -289,7 +320,7 @@ class Ear:
         self.carry = np.zeros(0, dtype=np.float32)
         self.sounds.clear()
         self.pending.clear()
-        self.next_tag = self.ring.end + TAG_WIN
+        self.next_tag = self.tag_ring.end + TAG_WIN
 
     async def close(self):
         self.closed = True
@@ -304,10 +335,23 @@ class Ear:
             return time.monotonic(), int(time.time() * 1000)
         return self.arr_mono[i], self.arr_epoch[i]
 
-    def floor(self):
+    @staticmethod
+    def _floor_of(levels):
         # ignore digital silence (exact zeros, e.g. padding in test files): a real mic never gets there
-        lv = [x for x in self.levels if x > -100]
+        lv = [x for x in levels if x > -100]
         return float(np.percentile(lv, 10)) if len(lv) >= 5 else None
+
+    def floor(self):
+        """Background level of what the ear hears (after the denoiser): what the gates compare with."""
+        return self._floor_of(self.heard_levels)
+
+    def mic_floor(self):
+        """Background level of the raw microphone, as reported to the robot (noise_db)."""
+        return self._floor_of(self.levels)
+
+    def loud_tag(self, x):
+        f = self.tag_floor()
+        return None if f is None or not len(x) else round(db(rms(x)) - f, 1)
 
     def loud(self, x):
         f = self.floor()
@@ -380,9 +424,27 @@ class Ear:
         if self.rec:
             self.rec.audio_in(raw, data, self.opus is not None)
         x = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
-        self.self_history.add(self.ring.end, self.ring.end + len(x), self.self_flags)
         self.tick_sq += float(np.sum(x ** 2))      # level meter reports what the mic really heard
         self.tick_n += len(x)
+        if self.tag_ring is not self.ring:
+            # raw audio for sound tags; her own voice is silenced here too
+            self.tag_ring.write(np.zeros_like(x) if self.self_flags.get("sounding") else x)
+        if self.denoiser is not None:
+            # Streaming GTCRN keeps sample alignment (output k = input k) but hands back whole
+            # 16 ms hops, so a few ms may come out with the next packet; positions stay exact.
+            y = np.asarray(self.denoiser.run(x, SR).samples, dtype=np.float32)
+            if self.rec:
+                self.rec.heard_in(y)
+            if self.clean_ring is not self.ring:            # "asr": only SenseVoice gets the denoised copy
+                self.clean_ring.write(np.zeros_like(y) if self.self_flags.get("sounding") else y)
+            else:
+                x = y
+                if not len(x):
+                    self.schedule_tags()
+                    return
+        self.self_history.add(self.ring.end, self.ring.end + len(x), self.self_flags)
+        self.heard_sq += float(np.sum(x ** 2))
+        self.heard_n += len(x)
         if self.self_flags.get("sounding"):
             # While she is making sound (playback plus the robot's 1.2 s tail) the mic hears her own
             # voice; there is no echo cancellation, so VAD, ASR and sound tags get silence instead
@@ -402,8 +464,10 @@ class Ear:
             self.vad.accept_waveform(buf[i:i + 512])
         self.carry = buf[n:]
         self.track_speech()
+        self.schedule_tags()
 
-        while self.ring.end >= self.next_tag:
+    def schedule_tags(self):
+        while self.tag_ring.end >= self.next_tag:
             b = self.next_tag
             self.next_tag += TAG_HOP
             self.spawn(self.tag_window(b - TAG_WIN, b))
@@ -426,7 +490,8 @@ class Ear:
             if cur is None:
                 cur = self.new_utterance(start)
             audio = self.segment_audio(start, end)          # original audio, not the VAD's dithered copy
-            self.spawn(self.end_speech(self.segment_context(cur, start - PRE_ROLL, end), audio, start, end, t_pop))
+            clean = self.clean_ring.read(max(start - PRE_ROLL, self.vad_origin), end) if self.clean_ring is not self.ring else audio
+            self.spawn(self.end_speech(self.segment_context(cur, start - PRE_ROLL, end), audio, start, end, t_pop, clean))
             self.cur = None
             self.speaking = self.vad.is_speech_detected()
             if self.speaking:                                   # max_speech_duration split: keeps going
@@ -452,7 +517,7 @@ class Ear:
                    "t": cur["t"], "speaker": sp, "voice": self.voice(tags, sp), "self": cur["self"],
                    "debug": {"spk_tag_ms": ms(time.monotonic() - t0), "audio_s": round(len(audio) / SR, 2)}})
 
-    async def end_speech(self, cur, audio, start, end, t_pop):
+    async def end_speech(self, cur, audio, start, end, t_pop, clean=None):
         t_q = time.monotonic()
         arr_mono, _ = self.arrival(end)
 
@@ -460,7 +525,7 @@ class Ear:
             t0 = time.monotonic()
             e = self.m.embed(audio)
             t1 = time.monotonic()
-            r = self.m.transcribe(audio)
+            r = self.m.transcribe(audio if clean is None or not len(clean) else clean)
             t2 = time.monotonic()
             tags = self.m.tags(audio)
             t3 = time.monotonic()
@@ -487,11 +552,17 @@ class Ear:
               "debug": {"vad_wait_ms": ms(t_pop - arr_mono), "queue_ms": ms(t0 - t_q), "spk_ms": ms(t1 - t0),
                         "asr_ms": ms(t2 - t1), "tag_ms": ms(t3 - t2), "server_ms": ms(time.monotonic() - t_pop)}}
         self.post(ev)
+        # The robot mic's CED voice probability runs low (office noise, hum): the user's clear
+        # sentences scored 0.17-0.26 on 2026-11-10, so robot sources also accept "unclear" (>= voice_lo).
+        voiced = ev["voice"]["acoustic_band"] == "voice" or (self.device_profile and ev["voice"]["acoustic_band"] == "unclear")
         ready = self.enroll.accept(cur["enroll_epoch"], e, dur,
-                                   ev["voice"]["acoustic_band"] == "voice" and ev["event"] == "speech" and bool(text),
+                                   voiced and ev["event"] == "speech" and bool(text),
                                    cur["self"]["sounding"], time.monotonic())
         if self.enroll.active and cur["enroll_epoch"] == self.enroll.epoch:
-            self.post({**self.enroll.progress(), "phase":"progress"})
+            progress = {**self.enroll.progress(), "phase":"progress", "dur": round(dur, 2)}
+            if getattr(self.enroll, "rejected", ""):
+                progress["rejected"] = self.enroll.rejected
+            self.post(progress)
         if ready:
             result = self.enroll.progress()
             try:
@@ -503,9 +574,13 @@ class Ear:
             self.enroll.cancel()
 
     # ---------- sound ----------
+    def tag_floor(self):
+        """Floor for sound gates: the raw mic when tags read the raw ring, else what VAD hears."""
+        return self.mic_floor() if self.tag_ring is not self.ring else self.floor()
+
     async def tag_window(self, a, b):
-        x = self.ring.read(a, b)
-        f = self.floor()
+        x = self.tag_ring.read(a, b)
+        f = self.tag_floor()
         lift = None if f is None else loudest_100ms(x) - f
         faint = rms(x) < QUIET_RMS if f is None else lift < self.sound_min_db
         # robot mic: quiet labels (typing, breathing...) may start an event from a lower lift
@@ -557,7 +632,7 @@ class Ear:
                 self.post({"type": "sound", "phase": "end", "id": s["id"], "kind": k,
                            "label": sound_kinds.LABEL_ZH.get(k, k), "pos": [s["start"], s["last"]], "t": s["t"],
                            "dur": round((s["last"] - s["start"]) / SR, 2), "peak": round(s["peak"], 2),
-                           "loud_db": self.loud(self.ring.read(s["start"], s["last"])), "raw": s["raw"],
+                           "loud_db": self.loud_tag(self.tag_ring.read(s["start"], s["last"])), "raw": s["raw"],
                            "self": dict(self.self_flags)})
 
     # ---------- control ----------
@@ -578,6 +653,20 @@ class Ear:
                 # Discard an utterance already in progress before this explicit enrollment.
                 self.reset_segment()
                 self.post({**self.enroll.progress(), "phase":"started"})
+            elif k == "forget":
+                # {"type":"forget","name":..}: delete one voiceprint; the reply lists what is left.
+                name = msg.get("name")
+                if not isinstance(name, str) or not name:
+                    raise ValueError("forget needs a speaker name")
+                try:
+                    self.m.forget_speaker(name)
+                    self.post({"type":"speakers", "op":"forget", "name":name, "ok":True, "speakers":sorted(self.m.speakers)[:64]})
+                except KeyError:
+                    self.post({"type":"speakers", "op":"forget", "name":name, "ok":False, "error":"unknown_speaker",
+                               "speakers":sorted(self.m.speakers)[:64]})
+                except OSError:
+                    self.post({"type":"speakers", "op":"forget", "name":name, "ok":False, "error":"save_failed",
+                               "speakers":sorted(self.m.speakers)[:64]})
             elif k == "enroll_cancel":
                 result = self.enroll.progress() if self.enroll.active else {"type":"enroll"}
                 self.enroll.cancel()
@@ -593,11 +682,17 @@ class Ear:
                     self.opus = None
                 self.framing = framing
                 self.device_profile = str(msg.get("source") or "").startswith("stackchan")
+                self.denoiser = self.m.new_denoiser() if self.device_profile else None
+                stream = self.denoiser is not None and getattr(self.m, "denoise_mode", "stream") == "stream"
+                asr_only = self.denoiser is not None and not stream
+                self.tag_ring = Ring(RING_SECONDS * SR) if stream else self.ring
+                self.clean_ring = Ring(RING_SECONDS * SR) if asr_only else self.ring
                 if self.rec:
                     self.rec.declare(msg)
                 self.post({"type":"audio", "format":fmt, "sample_rate":SR,
                            "input_sample_rate":rate, "framing":framing, "frame_ms":msg.get("frame_ms"),
-                           "sound_profile": "device" if self.device_profile else "default"})
+                           "sound_profile": "device" if self.device_profile else "default",
+                           "denoise": "gtcrn" if self.denoiser is not None else None})
             elif k == "config":
                 hi, lo = float(msg.get("speaker_hi", self.hi)), float(msg.get("speaker_lo", self.lo))
                 vh, vl = float(msg.get("voice_hi", self.voice_hi)), float(msg.get("voice_lo", self.voice_lo))
@@ -633,7 +728,11 @@ class Ear:
             level = db(math.sqrt(self.tick_sq / self.tick_n)) if self.tick_n else None
             if level is not None:
                 self.levels.append(level)
-            f = self.floor()
+            heard = db(math.sqrt(self.heard_sq / self.heard_n)) if self.heard_n else None
+            if heard is not None:
+                self.heard_levels.append(heard)
+            f = self.mic_floor()
+            hf = self.floor()
             events = []
             budget = 0
             remaining = []
@@ -653,9 +752,11 @@ class Ear:
             tick = {"v": 1, "type": "tick", "seq": seq, "t": int(time.time() * 1000), "rx": self.ring.end,
                     "rx_idle_ms": ms(now - self.last_rx) if self.last_rx else None,
                     "rx_gap_ms": ms(self.tick_gap), "rx_bytes": self.rx_bytes, "level_db": level,
-                    "noise_db": round(f, 1) if f is not None else None, "speaking": self.speaking,
+                    "noise_db": round(f, 1) if f is not None else None,
+                    "heard_noise_db": round(hf, 1) if hf is not None else None, "speaking": self.speaking,
                     "events": events}
             self.tick_gap, self.tick_sq, self.tick_n = 0.0, 0.0, 0
+            self.heard_sq, self.heard_n = 0.0, 0
             if self.rec:
                 self.rec.tick(tick, events)
             await self.ws.send(json.dumps(tick, ensure_ascii=False))
@@ -668,6 +769,8 @@ def main():
     ap.add_argument("--models", required=True)
     ap.add_argument("--speakers", default=None, help="speakers.npz (default: next to this file)")
     ap.add_argument("--threads", type=int, default=2)
+    ap.add_argument("--denoise-mode", choices=["stream", "asr", "off"], default="stream",
+                    help="robot sources only: denoise what VAD+ASR hear, only ASR segments, or nothing")
     ap.add_argument("--token-file", default=os.environ.get("SOUL_TOKEN_FILE", ""))
     ap.add_argument("--recordings", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings"),
                     help="where every connection is recorded (default: recordings/ next to this file); never pruned")
@@ -681,7 +784,7 @@ def main():
     conn_no = [0]
 
     t0 = time.monotonic()
-    models = Models(a.models, db_path, a.threads)
+    models = Models(a.models, db_path, a.threads, a.denoise_mode)
     print(f"models loaded in {time.monotonic() - t0:.1f}s; speakers: {sorted(models.speakers)}", flush=True)
     ex = ThreadPoolExecutor(max_workers=1)
 
