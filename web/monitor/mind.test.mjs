@@ -80,6 +80,7 @@ test('proxy forwards whitelisted POSTs with the token and rejects others', async
  assert.equal((await proxy.post('/mark','{"kind":"arrive"}')).status,200);
  assert.deepEqual(seen[0],['/mark','Bearer k','POST','{"kind":"arrive"}']);
  assert.equal((await proxy.post('/state','{}')).status,400);
+ assert.equal((await proxy.post('/place','{"label":"办公室"}')).status,200);
  assert.equal((await proxy.post('/mark','x'.repeat(16385))).status,413);
  assert.equal((await proxy.get('/scene?t=5&lane=rerun')).status,200);
  assert.equal((await proxy.get('/scene?t=5&lane=evil')).status,400);
@@ -128,4 +129,8 @@ test('model fields are escaped even when they are not known values', ()=>{
 test('refresh leaves an open minute alone', ()=>{
  assert.deepEqual(ui.refreshPlan(null),{timeline:true,detail:false});
  assert.deepEqual(ui.refreshPlan(123),{timeline:false,detail:false});
+});
+test('place line shows the reported place', ()=>{
+ assert.equal(ui.placeLabel({label:'办公室',source:'owner_report',at:Date.UTC(2026,10,10,8,0)}).startsWith('办公室（你报告'),true);
+ assert.equal(ui.placeLabel({label:null,source:'no_wifi_data'}),'未知（还没有报告）');
 });

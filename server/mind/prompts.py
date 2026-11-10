@@ -114,7 +114,13 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
     st, cov = strong, strong["coverage"]
     L.append("【本分钟】")
     L.append(f"rule:time {st['time']['label']}，星期{st['time']['weekday']}，{'工作时段' if st['time']['work_hours'] else '非工作时段'}")
-    L.append(f"rule:place 地点：{st['place']['label'] or s['place']['default']}（{'来自 Wi-Fi' if st['place']['label'] else '默认，没有 Wi-Fi 数据'}）")
+    pl = st["place"]
+    if pl.get("label") and pl.get("source") == "owner_report":
+        L.append(f"rule:place 地点：{pl['label']}（主人报告，{_hhmm(pl['at'], tz)}）")
+    elif pl.get("label"):
+        L.append(f"rule:place 地点：{pl['label']}（来自 Wi-Fi）")
+    else:
+        L.append(f"rule:place 地点：{s['place']['default']}（默认，没有报告也没有 Wi-Fi 数据）")
     L.append(f"rule:coverage 感官覆盖：听觉 {cov['hearing_s']} 秒，视觉 {cov['vision_s']} 秒，M12 {cov['m12_s']} 秒{'（估计）' if cov['estimated'] else ''}")
     L.append(f"rule:owner 主人状态（规则）：{STATE_TEXT.get(st['owner']['state'], st['owner']['state'])}——{st['owner']['why']}")
     L.append(f"rule:self hello 这一分钟自己出声 {len(pkg['self_speech'])} 次")

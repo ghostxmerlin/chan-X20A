@@ -55,6 +55,11 @@ class PromptsTest(unittest.TestCase):
         self.assertIn("主人：Dave", u)
         self.assertIn("主人（Dave）", u)
 
+    def test_reported_place_in_the_prompt(self):
+        st = copy.deepcopy(self.strong); st["place"] = {"label": "办公室", "source": "owner_report", "at": T0 - 3600_000}
+        u = render("v1", S, self.pkg, st, None, [], {})[1]["content"]
+        self.assertIn("rule:place 地点：办公室（主人报告", u)
+
     def test_speech_text_off_hides_words(self):
         s2 = deep(S, sources={"speech_text": False})
         u = render("v1", s2, self.pkg, self.strong, None, [], {})[1]["content"]

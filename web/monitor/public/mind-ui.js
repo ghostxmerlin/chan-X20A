@@ -56,6 +56,7 @@ const BASIS={seen:'看到',heard:'听到',inferred:'推断',assumed:'猜测'};
 const CONF={high:'高',mid:'中',low:'低'};
 const CLASS_COLOURS={present:'#2e9d4f',absent:'#e8912d',unknown:'#9aa0a6',off:'#555555',gap:'#333338'};
 const CLASS_LABEL={present:'主人在',absent:'主人不在',unknown:'不确定',off:'感官关',gap:'mind 没在运行'};
+export const placeLabel=p=>p?.label?`${p.label}（${p.source==='owner_report'?`你报告，${hhmm(p.at)}`:'来自 Wi-Fi'}）`:'未知（还没有报告）';
 export const basisLabel=b=>BASIS[b]||escapeHtml(b||'');
 export function groupEntries(entries){
  const out={};
@@ -83,7 +84,7 @@ export function nowHtml(now){
  if(!sc)return `<div class="now"><p class="meta">${hhmm(rec.minute)} · ${sourceLabel(rec)}</p><p>${owner}</p>${seg}<p class="alt">这一分钟只有规则结果</p></div>`;
  return `<div class="now"><p class="meta">${hhmm(rec.minute)} · ${escapeHtml(sourceLabel(rec))} · ${escapeHtml(sc.summary)}</p>
  ${answer('我是谁',sc.who_am_i)}${answer('我在哪',sc.where_am_i)}${answer('旁边的人在干什么',sc.people_doing)}
- <p>规则：${owner}${st?` · ${escapeHtml(coverageTitle(st.coverage))}`:''}</p>${seg}
+ <p>规则：${owner}${st?` · ${escapeHtml(coverageTitle(st.coverage))} · 地点：${escapeHtml(placeLabel(st.place))}`:''}</p>${seg}
  <div class="dims">${entriesHtml(sc.entries)}</div>
  ${sc.want_to_know?`<p class="alt">想确认：${escapeHtml(sc.want_to_know)}</p>`:''}</div>`;
 }
@@ -223,6 +224,15 @@ export function start(doc){
   const kind=e.target.dataset?.mark;if(!kind)return;
   try{const r=await postJson('/mark',{kind});el('mind-mark-msg').textContent=`已记 ${hhmm(r.at)} ${e.target.textContent}`;}
   catch(err){el('mind-mark-msg').textContent='没记上：'+err.message;}
+ });
+ async function reportPlace(label){
+  if(!label.trim())return;
+  try{const r=await postJson('/place',{label});el('mind-place-msg').textContent=`已报告 ${hhmm(r.at)}：${label}（下一分钟起生效）`;}
+  catch(err){el('mind-place-msg').textContent='没报上：'+err.message;}
+ }
+ el('mind-place').addEventListener('click',e=>{
+  if(e.target.dataset?.place)reportPlace(e.target.dataset.place);
+  if(e.target.id==='mind-place-send')reportPlace(el('mind-place-input').value);
  });
  el('mind-open-settings').addEventListener('click',async()=>{
   try{

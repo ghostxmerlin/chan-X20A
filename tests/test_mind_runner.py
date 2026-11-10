@@ -39,6 +39,15 @@ class RunnerTest(unittest.TestCase):
     def process(self, minute):
         return runner.process_minute(self.rec, self.store, minute, S, minute + 10 * MIN)
 
+    def test_owner_reported_place_reaches_strong_elements(self):
+        self.db.add("mind_labels", {"lane": "live", "kind": "place", "label": "办公室", "at": T0 - 3600_000})
+        self.db.add("mind_labels", {"lane": "live", "kind": "place", "label": "家里", "at": T0 + 5 * MIN})
+        self.process(T0)
+        place = self.store.latest("live", T0)["strong"]["place"]
+        self.assertEqual((place["label"], place["source"], place["at"]), ("办公室", "owner_report", T0 - 3600_000))
+        self.process(T0 + 6 * MIN)
+        self.assertEqual(self.store.latest("live", T0 + 6 * MIN)["strong"]["place"]["label"], "家里")
+
     def test_indexes_for_every_mind_table(self):
         made = {name: c.indexes for name, c in self.db.collections.items() if getattr(c, "indexes", None)}
         for name in ("mind_packages", "mind_scenes", "mind_runs", "mind_segments", "mind_labels", "mind_settings"):

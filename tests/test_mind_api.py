@@ -180,6 +180,12 @@ class ApiV1Test(unittest.TestCase):
         self.assertEqual(r["settings_version"], live["settings_version"])
         self.assertNotIn("别处", self.fake.calls[-1]["messages"][1]["content"])
 
+    def test_place_report(self):
+        self.assertEqual(self.post_json("/place", {"label": "办公室"}).status, 200)
+        self.assertEqual(self.post_json("/place", {"label": ""}).status, 400)
+        self.assertEqual(self.post_json("/place", {"label": "x" * 41}).status, 400)
+        self.assertEqual(self.store.place_at(int(__import__("time").time() * 1000) + 1000)["label"], "办公室")
+
     def test_now_and_names(self):
         now = self.call("/now").json()
         self.assertEqual(now["scene"]["source"], "model")

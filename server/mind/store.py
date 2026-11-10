@@ -156,6 +156,12 @@ class Store:
         return sum(d.get("cost_usd") or 0 for d in self.db["mind_runs"].find({"at": {"$gte": start, "$lt": start + 86400_000}},
                                                                                {"cost_usd": 1}))
 
+    def place_at(self, ms):
+        """The owner's latest place report at or before ms (phase 1: reported on the page, not Wi-Fi)."""
+        for d in self.db["mind_labels"].find({"kind": "place", "at": {"$lte": ms}}, {"_id": 0}).sort("at", -1).limit(1):
+            return d
+        return None
+
     def scenes_range(self, lane, from_ms, to_ms):
         latest = {}
         for d in self.db["mind_scenes"].find({"lane": lane, "minute": {"$gte": from_ms, "$lt": to_ms}}, {"_id": 0}):

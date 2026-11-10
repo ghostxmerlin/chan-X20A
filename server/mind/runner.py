@@ -39,6 +39,9 @@ def process_minute(records, store, minute_ms, s, now_ms):
     lookback = records.window(minute_ms - LOOKBACK_MS, end, vision_start_ms=lookback_start(records, minute_ms))
     pkg = package.build(window, minute_ms, s, lookback)
     st = strong.evaluate(pkg, lookback, minute_ms, s, now_ms)
+    report = store.place_at(end - 1)
+    if report:
+        st["place"] = {"label": report["label"], "source": "owner_report", "at": report["at"]}
     return "written" if store.put(LANE, minute_ms, pkg, st) is not None else "same"
 
 

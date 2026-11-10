@@ -8,7 +8,7 @@ import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats']);
-const POST_PATHS=new Set(['/settings','/mark','/label','/rerun']);
+const POST_PATHS=new Set(['/settings','/mark','/label','/rerun','/place']);
 const PARAMS=new Set(['from','to','t','version','days','lane']);
 const MAX_BODY=16384;
 const DEFAULT_SOCKET=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../.private/mind-tunnel/mind.sock');

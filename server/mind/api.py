@@ -160,6 +160,12 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise BadRequest(f"kind must be one of {', '.join(MARKS)}")
             db["mind_labels"].insert_one({"lane": LANE, "kind": "mark", "mark": body["kind"], "at": now, "note": _str(body.get("note"), 300)})
             return {"ok": True, "at": now}
+        if path == "/place":
+            label = body.get("label")
+            if not isinstance(label, str) or not (1 <= len(label.strip()) <= 40):
+                raise BadRequest("label: 1–40 characters")
+            db["mind_labels"].insert_one({"lane": LANE, "kind": "place", "label": label.strip(), "at": now})
+            return {"ok": True, "at": now}
         if path == "/label":
             minute = body.get("minute")
             if not isinstance(minute, int) or body.get("verdict") not in VERDICTS or body.get("field") not in FIELDS:
@@ -235,7 +241,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/settings", "/mark", "/label", "/rerun"):
+            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place"):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:
