@@ -73,3 +73,47 @@ test('socket directory is private (0700)', async()=>{
  new MindProxy({ssh:'h',token:'k',socketPath:sock,spawnFn:fakeSsh(),requestFn:okFetch([])}).tunnel();
  assert.equal(fs.statSync(path.dirname(sock)).mode&0o777,0o700);
 });
+
+test('proxy forwards whitelisted POSTs with the token and rejects others', async()=>{
+ const seen=[],proxy=new MindProxy({ssh:'h',token:'k',socketPath:SOCK,prepareFn:()=>{},spawnFn:fakeSsh(),
+  requestFn:async(sock,p,h,o={})=>{seen.push([p,h.Authorization,o.method,o.body]);return {status:200,body:'{}'};}});
+ assert.equal((await proxy.post('/mark','{"kind":"arrive"}')).status,200);
+ assert.deepEqual(seen[0],['/mark','Bearer k','POST','{"kind":"arrive"}']);
+ assert.equal((await proxy.post('/state','{}')).status,400);
+ assert.equal((await proxy.post('/mark','x'.repeat(16385))).status,413);
+ assert.equal((await proxy.get('/scene?t=5&lane=rerun')).status,200);
+ assert.equal((await proxy.get('/scene?t=5&lane=evil')).status,400);
+ assert.equal((await proxy.get('/stats?days=7')).status,200);
+});
+test('server POST /api/mind/* requires same origin and JSON', async t=>{
+ const calls=[],mind={get:async()=>({status:200,body:'{}'}),post:async(p,b)=>{calls.push([p,b]);return {status:200,body:'{"ok":true}'};},stop(){}};
+ const server=createMonitorServer(new Monitor({binding:{address:'http://127.0.0.1:8080',token:'b'.repeat(32)}}),undefined,mind);
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const url=`http://127.0.0.1:${server.address().port}`,origin=url;
+ assert.equal((await fetch(url+'/api/mind/mark',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,403);
+ assert.equal((await fetch(url+'/api/mind/mark',{method:'POST',headers:{'Content-Type':'text/plain',Origin:origin},body:'{}'})).status,415);
+ const ok=await fetch(url+'/api/mind/mark',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:'{"kind":"arrive"}'});
+ assert.equal(ok.status,200);assert.deepEqual(calls,[['/mark','{"kind":"arrive"}']]);
+ assert.equal((await fetch(url+'/api/mind/other',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:'{}'})).status,404);
+});
+test('entries grouped in fixed dimension order', ()=>{
+ assert.deepEqual(Object.keys(ui.groupEntries([{dimension:'topic'},{dimension:'people'},{dimension:'weird'}])),['people','topic','other']);
+ assert.equal(ui.basisLabel('inferred'),'推断');
+});
+test('source label', ()=>{
+ const T=Date.UTC(2026,10,10,8,52);
+ assert.match(ui.sourceLabel({source:'carried',carried_from:T}),/^沿用自 \d\d:\d\d$/);
+ assert.equal(ui.sourceLabel({source:'model'}),'模型');assert.equal(ui.sourceLabel({source:'rules_only'}),'仅规则');
+});
+test('settings form round trip keeps lists and numbers', ()=>{
+ const s={tz:'Asia/Shanghai',owner:{display:'主人',voice_names:['me','主人'],face_names:['me']},people:[{display:'同事A',voice_names:['a'],face_names:[]}],
+  work:{days:[1,2,3,4,5],start:'09:00',end:'19:00'},thresholds:{just_left_min:2},self_facts:'我',place:{default:'办公室'},persona:'',
+  sources:{speech_text:true,tingwu:true,sounds:false,vision:true},fusion:{enabled:true,model:'gpt-6-luna',prompt:'v1',max_age_min:60,review_after_min:[5,10,20,30]},budget_usd_per_day:20};
+ assert.deepEqual(ui.settingsFromForm(ui.formFromSettings(s),s),s);
+});
+test('new markup carries no style attributes (CSP)', ()=>{
+ const scene={minute:0,source:'model',scene:{who_am_i:{text:'a',confidence:'high'},where_am_i:{text:'b',confidence:'mid'},people_doing:{text:'c',confidence:'low'},owner_view:'present',
+  entries:[{key:'people.owner',dimension:'people',text:'在',basis:'seen',confidence:'high',evidence:['v1']}],changes:[],summary:'s',want_to_know:''},checks:{}};
+ const html=ui.nowHtml({scene,strong:{owner:{state:'seen',why:'w'},coverage:{hearing_s:60,vision_s:60,m12_s:60}},segment:null})+ui.segmentsHtml([{start:0,end:null,cls:'present',summary:{title:'t',text:'x'}}])+ui.settingsHtml(ui.formFromSettings({owner:{display:'a',voice_names:[],face_names:[]},people:[],work:{days:[],start:'09:00',end:'19:00'},sources:{},fusion:{},place:{}}),{voice:['me'],face:[]});
+ assert.doesNotMatch(html,/style="/);assert.match(html,/data-c=/);
+});

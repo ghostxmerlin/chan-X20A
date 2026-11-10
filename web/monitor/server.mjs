@@ -45,6 +45,25 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
       });
       return;
     }
+    if (req.method === 'POST' && url.pathname.startsWith('/api/mind/')) {
+      const sub = url.pathname.slice('/api/mind'.length);
+      if (!['/settings', '/mark', '/label', '/rerun'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (origin !== 'http://' + req.headers.host) { respond(403, '写入必须来自当前观察页面'); return; }
+      if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') { respond(415, '只接受 JSON'); return; }
+      if (!mind) { respond(503, '情景服务未配置'); return; }
+      let body = '', size = 0, ended = false;
+      const timer = setTimeout(() => { if (!ended) { ended = true; respond(408, '请求超时'); req.destroy(); } }, 3000);
+      req.on('close', () => clearTimeout(timer));
+      req.on('data', chunk => { size += chunk.length; if (size > 16384) { ended = true; clearTimeout(timer); respond(413, '内容过长'); req.destroy(); } else body += chunk; });
+      req.on('end', () => {
+        clearTimeout(timer); if (ended) return; ended = true;
+        mind.post(sub, body).then(r => {
+          res.writeHead(r.status, { 'Content-Type': r.status < 300 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });
+          res.end(r.body);
+        }, () => respond(502, '情景服务出错'));
+      });
+      return;
+    }
     if (req.method !== 'GET') { respond(405, '此路径不接受写入'); return; }
     if (url.pathname === '/health') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ service: 'stackchan-monitor', pid: process.pid })); return; }
     if (assets.has(url.pathname)) {
@@ -55,7 +74,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/state', '/timeline', '/minute'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
       mind.get(sub + url.search).then(r => {
         res.writeHead(r.status, { 'Content-Type': r.status === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });

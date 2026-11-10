@@ -7,20 +7,23 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-const PATHS=new Set(['/state','/timeline','/minute']);
-const PARAMS=new Set(['from','to','t','version']);
+const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats']);
+const POST_PATHS=new Set(['/settings','/mark','/label','/rerun']);
+const PARAMS=new Set(['from','to','t','version','days','lane']);
+const MAX_BODY=16384;
 const DEFAULT_SOCKET=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../.private/mind-tunnel/mind.sock');
 function prepareSocketDir(socketPath){
  const dir=path.dirname(socketPath);
  fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.chmodSync(dir,0o700);
 }
-export function socketRequest(socketPath,pathAndQuery,headers,timeout=8000){
+export function socketRequest(socketPath,pathAndQuery,headers,{method='GET',body=null,timeout=8000}={}){
  return new Promise((resolve,reject)=>{
-  const req=http.request({socketPath,path:pathAndQuery,method:'GET',headers,timeout},res=>{
+  const h=body==null?headers:{...headers,'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)};
+  const req=http.request({socketPath,path:pathAndQuery,method,headers:h,timeout},res=>{
    let body='';res.setEncoding('utf8');res.on('data',c=>{body+=c;if(body.length>4e6)req.destroy(new Error('too large'));});
    res.on('end',()=>resolve({status:res.statusCode,body}));
   });
-  req.on('timeout',()=>req.destroy(new Error('timeout')));req.on('error',reject);req.end();
+  req.on('timeout',()=>req.destroy(new Error('timeout')));req.on('error',reject);req.end(body??undefined);
  });
 }
 export class MindProxy {
@@ -30,7 +33,10 @@ export class MindProxy {
  static check(pathAndQuery){
   let url;try{url=new URL(pathAndQuery,'http://x');}catch{return null;}
   if(!pathAndQuery.startsWith('/')||!PATHS.has(url.pathname)||url.pathname!==pathAndQuery.split('?')[0])return null;
-  for(const [k,v] of url.searchParams)if(!PARAMS.has(k)||!/^\d{1,16}$/.test(v))return null;
+  for(const [k,v] of url.searchParams){
+   if(!PARAMS.has(k))return null;
+   if(k==='lane'?!['live','rerun'].includes(v):!/^\d{1,16}$/.test(v))return null;
+  }
   return url.pathname+url.search;
  }
  tunnel(){
@@ -51,6 +57,15 @@ export class MindProxy {
   if(!target)return {status:400,body:'参数不允许'};
   if(!this.tunnel())return {status:503,body:'情景服务连接中'};
   try{return await this.requestFn(this.socketPath,target,{Authorization:`Bearer ${this.token}`});}
+  catch{return {status:503,body:'情景服务连接中'};}
+ }
+ async post(path,bodyText){
+  if(!this.ssh||!this.token)return {status:503,body:'本机 .env 缺少 SOUL_SERVER_SSH 或 SOUL_EAR_TOKEN'};
+  if(!POST_PATHS.has(path))return {status:400,body:'不允许的写入'};
+  if(typeof bodyText!=='string'||Buffer.byteLength(bodyText)>MAX_BODY)return {status:413,body:'内容过长'};
+  if(!this.tunnel())return {status:503,body:'情景服务连接中'};
+  // a rerun may wait for two model calls (90 s each)
+  try{return await this.requestFn(this.socketPath,path,{Authorization:`Bearer ${this.token}`},{method:'POST',body:bodyText,timeout:200000});}
   catch{return {status:503,body:'情景服务连接中'};}
  }
  stop(){const c=this.child;this.child=null;if(c&&!c.killed)c.kill();}

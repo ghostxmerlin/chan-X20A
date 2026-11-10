@@ -11,9 +11,25 @@
     <a href="/">← 观察台</a>
     <label>日期 <input type="date" id="mind-date"></label>
     <select id="mind-range"><option value="3">最近 3 小时</option><option value="24">全天</option></select>
+    <button id="mind-open-settings">设置</button>
+    <span id="mind-stats-line" class="alt"></span>
     <span id="mind-status">连接中…</span>
   </header>
-  <p class="legend" id="mind-legend"></p>
-  <main id="mind-timeline"></main>
+  <main>
+    <section><h2>此刻</h2><div id="mind-now"></div></section>
+    <section id="mind-marks" class="marks">
+      <button data-mark="arrive">我来了</button><button data-mark="leave">我走了</button><button data-mark="meeting">在开会</button>
+      <button data-mark="others_near">旁边有人</button><button data-mark="alone">只有我</button><span id="mind-mark-msg" class="alt"></span>
+    </section>
+    <section><h2>今天的情景段</h2><div id="mind-segments"></div></section>
+    <details><summary>分钟明细</summary><p class="legend" id="mind-legend"></p><div id="mind-timeline"></div></details>
+    <details><summary>模型调用统计（最近 7 天）</summary><div id="mind-stats"></div></details>
+  </main>
+  <dialog id="settings-dialog">
+    <h2>mind 设置</h2>
+    <div id="settings-form"></div>
+    <p id="settings-msg" class="alt"></p>
+    <div class="dialog-buttons"><button id="settings-save">保存为新版本</button><button id="settings-cancel">关闭</button></div>
+  </dialog>
 </body>
 </html>
