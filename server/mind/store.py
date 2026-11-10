@@ -1,5 +1,7 @@
 """mind tables in the hello database: mind_packages (versioned minute packages) and mind_state."""
+import datetime
 import time
+from zoneinfo import ZoneInfo
 
 LANE = "live"
 SOUND_SHORT = {"typing": "打字"}
@@ -86,3 +88,43 @@ class Store:
 
     def set_state(self, **fields):
         self.state_coll.update_one({"_id": LANE}, {"$set": fields}, upsert=True)
+
+    # ---- phase 1: scenes and model runs ----
+    def put_scene(self, lane, minute, doc):
+        prev = self.db["mind_scenes"].find_one({"lane": lane, "minute": minute}, {"version": 1}, sort=[("version", -1)])
+        version = (prev["version"] + 1) if prev else 1
+        self.db["mind_scenes"].insert_one({**doc, "lane": lane, "minute": minute, "version": version,
+                                           "built_at": int(time.time() * 1000)})
+        return version
+
+    def latest_scene(self, lane, minute):
+        return self.db["mind_scenes"].find_one({"lane": lane, "minute": minute}, {"_id": 0}, sort=[("version", -1)])
+
+    def scene_versions(self, lane, minute):
+        return list(self.db["mind_scenes"].find({"lane": lane, "minute": minute}, {"_id": 0}).sort("version", 1))
+
+    def last_scene_before(self, lane, minute):
+        for d in self.db["mind_scenes"].find({"lane": lane, "minute": {"$lt": minute}}, {"_id": 0}) \
+                .sort([("minute", -1), ("version", -1)]).limit(1):
+            return d
+        return None
+
+    def latest_scene_any(self, lane):
+        for d in self.db["mind_scenes"].find({"lane": lane}, {"_id": 0}).sort([("minute", -1), ("version", -1)]).limit(1):
+            return d
+        return None
+
+    def put_run(self, doc):
+        self._run_seq = getattr(self, "_run_seq", 0) + 1
+        run_id = f"r{int(time.time() * 1000)}-{self._run_seq}"
+        self.db["mind_runs"].insert_one({**doc, "run_id": run_id})
+        return run_id
+
+    def get_run(self, run_id):
+        return self.db["mind_runs"].find_one({"run_id": run_id}, {"_id": 0})
+
+    def cost_today(self, tz, now_ms):
+        day = datetime.datetime.fromtimestamp(now_ms / 1000, ZoneInfo(tz)).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = int(day.timestamp() * 1000)
+        return sum(d.get("cost_usd") or 0 for d in self.db["mind_runs"].find({"at": {"$gte": start, "$lt": start + 86400_000}},
+                                                                               {"cost_usd": 1}))

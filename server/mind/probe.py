@@ -12,16 +12,15 @@ import json
 import os
 import re
 import time
-import urllib.error
-import urllib.request
 
 from . import settings
+from .llm import PRICES, cost_usd  # noqa: F401  (shared with fusion)
+from .llm import chat as call
 
 MODES = ["json_schema", "tools", "json_object", "plain"]
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["owner_present", "activity", "people_count"],
           "properties": {"owner_present": {"type": "string", "enum": ["yes", "no", "unknown"]},
                          "activity": {"type": "string"}, "people_count": {"type": "integer"}}}
-PRICES = {"gpt-6-luna": (0.1, 0.5), "gpt-6.1-terra": (1.0, 5.0)}     # USD per million tokens, list price
 SYSTEM = "你在帮一个桌面机器人整理它对周围的感知。只根据给出的内容回答，不确定就答 unknown。"
 TASK = "根据下面这一分钟的感知内容，回答：主人在不在（owner_present: yes/no/unknown）、旁边的人在做什么（activity，一句中文）、看到或听到大约几个人（people_count）。"
 IMAGE_TASK = "这是机器人摄像头拍的一张低分辨率照片。回答：画面里有没有人（owner_present 填 unknown，因为你不认识主人）、在做什么（activity）、几个人（people_count）。"
@@ -79,13 +78,6 @@ def parse(mode, response_json):
     return obj if _valid(obj) else None
 
 
-def cost_usd(model, usage):
-    if model not in PRICES or not usage:
-        return None
-    pin, pout = PRICES[model]
-    return (usage.get("prompt_tokens", 0) * pin + usage.get("completion_tokens", 0) * pout) / 1_000_000
-
-
 def prompt_from(pkg, strong):
     lines = [TASK, f"时间：{strong.get('time', {}).get('label', '')}；规则判断的主人状态：{strong.get('owner', {}).get('state', '')}"]
     for x in pkg.get("speech", [])[:20]:
@@ -96,21 +88,6 @@ def prompt_from(pkg, strong):
     for g in pkg.get("sounds", []):
         lines.append(f"声音：{g.get('label') or g.get('kind')} × {g.get('count')}")
     return "\n".join(lines)
-
-
-def call(base_url, key, body, timeout=60):
-    req = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", method="POST",
-                                 data=json.dumps(body).encode(),
-                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-    t0 = time.monotonic()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read()), int((time.monotonic() - t0) * 1000), None
-    except urllib.error.HTTPError as e:
-        with e:
-            return None, int((time.monotonic() - t0) * 1000), f"HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}"
-    except Exception as e:                       # noqa: BLE001 - recorded, not retried
-        return None, int((time.monotonic() - t0) * 1000), f"{type(e).__name__}: {str(e)[:200]}"
 
 
 def main():
