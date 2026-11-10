@@ -19,7 +19,8 @@ SUMMARY_SCHEMA = {"type": "object", "additionalProperties": False, "required": [
                   "properties": {"title": {"type": "string"}, "text": {"type": "string"},
                                  "confidence": {"type": "string", "enum": ["high", "mid", "low"]}}}
 SYSTEM = ("你在整理桌面宠物机器人 hello 一段连续时间里的情景。给出这一段的标题（不超过 20 个字）和一两句总结："
-          "谁在、在做什么、环境怎样、有什么变化。只依据给出的每分钟情景，不编造；把握不足就说得保守一些。")
+          "谁在、大概在做什么、环境怎样、有什么变化。用正向的话说出最可能的情况，例如“Dave 在桌前工作，旁边有人聊天”；"
+          "不要写“无法判断”“无法确认”这类否定句，证据弱就用“可能”“大概”。只依据给出的每分钟情景，不编造。")
 
 
 def owner_class(state):
@@ -73,7 +74,7 @@ def summarize(env, store, s, seg, scenes, lane, now_ms):
         except (KeyError, IndexError, TypeError, ValueError):
             err = "unparsable segment summary"
     usage = (resp or {}).get("usage") or {}
-    run_id = store.put_run({"lane": lane, "minute": seg["start"], "step": "segment", "prompt": "segment-v1", "model": model,
+    run_id = store.put_run({"lane": lane, "minute": seg["start"], "step": "segment", "prompt": "segment-v2", "model": model,
                             "request": body, "response": resp, "parsed": out, "error": err, "latency_ms": ms, "usage": usage,
                             "cost_usd": llm.cost_usd(model, usage), "retries": 0, "at": now_ms})
     if out is None:

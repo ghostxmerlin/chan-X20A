@@ -98,6 +98,10 @@ class UpdateTest(unittest.TestCase):
         segments.update(ENV, self.store, S, T, T + 16 * MIN)
         self.assertEqual(len(self.fake.calls), 2)
 
+    def test_segment_prompt_is_positive(self):
+        self.assertIn("用正向的话", segments.SYSTEM)
+        self.assertIn("不要写“无法判断”", segments.SYSTEM)
+
     def test_no_env_means_no_summaries(self):
         self.add(T, ["seen"] * 3)
         segs = segments.update(None, self.store, S, T, T + 5 * MIN)

@@ -11,6 +11,7 @@ OWNER_CLASS = {"seen": "present", "just_left": "present", "likely_present": "pre
                "unknown": "unknown", "sensors_off": "unknown"}
 MAX_ENTRIES, MAX_TEXT, MAX_SUMMARY = 20, 200, 20
 STALE_MS, EXPIRE_MS = 15 * 60_000, 60 * 60_000      # spec 3.6.3: entries without new evidence fade, then go
+NEGATIVE = ("无法", "不能", "不明", "无从", "没有提供", "看不到", "不确定是否", "难以判断")   # disclaimer wording (user: 少用否定式)
 
 
 def _is_pkg_code(code, pkg):
@@ -18,7 +19,7 @@ def _is_pkg_code(code, pkg):
 
 
 def apply(out, prev_entries, pkg, strong, minute_ms):
-    checks = {"invalid_refs": 0, "downgraded": 0, "raise_blocked": 0, "ended": 0, "omitted": 0, "expired": 0,
+    checks = {"invalid_refs": 0, "downgraded": 0, "raise_blocked": 0, "ended": 0, "omitted": 0, "expired": 0, "negative_ratio": 0.0,
               "rule_conflict": False, "language_only": 0.0}
     prev = {e["key"]: e for e in prev_entries or []}
     merged, seen = [], set()
@@ -69,6 +70,8 @@ def apply(out, prev_entries, pkg, strong, minute_ms):
     view = out.get("owner_view") if out.get("owner_view") in VIEWS else "unknown"
     checks["rule_conflict"] = rule != "unknown" and view != "unknown" and rule != view
 
+    if merged:
+        checks["negative_ratio"] = round(sum(1 for e in merged if any(w in e.get("text", "") for w in NEGATIVE)) / len(merged), 3)
     has_other = any(c[0] in "av" for c in pkg.get("codes", {}))
     judged = [e for e in merged if e.get("dimension") in ("people", "activity")]
     if has_other and judged:

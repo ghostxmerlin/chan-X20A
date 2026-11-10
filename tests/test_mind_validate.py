@@ -97,6 +97,11 @@ class ValidateTest(unittest.TestCase):
         gone, c = apply(out([]), [prev("people.x", last_evidence=T - 61 * 60_000)], PKG, STRONG, T)
         self.assertEqual((gone["entries"], c["expired"]), ([], 1))
 
+    def test_negative_ratio(self):
+        _, c = apply(out([entry("a", text="无法确认 Dave 是否在场"), entry("b", text="Dave 大概在桌前工作"),
+                          entry("c", text="不能据此判断画面外"), entry("d", text="附近大概没人")]), [], PKG, STRONG, T)
+        self.assertEqual(c["negative_ratio"], 0.5)
+
     def test_lengths_capped(self):
         scene, _ = apply(out([entry(f"k{i}", text="x" * 500) for i in range(25)], summary="一" * 40), [], PKG, STRONG, T)
         self.assertEqual((len(scene["entries"]), len(scene["entries"][0]["text"]), len(scene["summary"])), (20, 200, 20))
