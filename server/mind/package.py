@@ -7,7 +7,7 @@ import hashlib
 import json
 from collections import Counter
 
-BUILDER_VERSION = 1
+BUILDER_VERSION = 2            # 2: speech / tingwu items carry pos
 MINUTE_MS = 60_000
 STATUS_EVENTS = ("vision_on", "vision_off", "m12_online", "m12_offline")
 CLOSERS = {"m12_offline": "m12_offline", "vision_off": "vision_off"}
@@ -161,7 +161,7 @@ def build(window, minute_ms, s, lookback):
         nonlocal tcount
         tcount += 1
         ref = {"c": "tingwu", "session": t.get("session"), "kind": t.get("kind", "sentence"), "n": t.get("n")}
-        item = {"code": code("t", tcount, ref, t), "ref": ref, "text": t.get("text", "")}
+        item = {"code": code("t", tcount, ref, t), "ref": ref, "text": t.get("text", ""), "pos": t.get("pos")}
         if alone:
             item["at"] = t["_wall"]
         return item
@@ -170,7 +170,7 @@ def build(window, minute_ms, s, lookback):
     for i, d in enumerate(speech_docs):
         ref = {"c": "speech", "session": d.get("session"), "id": d.get("id")}
         voice = d.get("voice") or {}
-        item = {"code": code("s", i + 1, ref, d), "ref": ref, "at": d["_wall"], "text": d.get("text", ""),
+        item = {"code": code("s", i + 1, ref, d), "ref": ref, "at": d["_wall"], "text": d.get("text", ""), "pos": d.get("pos"),
                 "dur": d.get("dur"), "who": _who(d), "loud_db": voice.get("loud_db"), "voice_p": voice.get("p"),
                 "emotion": d.get("emotion"), "tingwu": [tingwu_item(t, False) for t in attach.get(i, [])]}
         (self_speech if item["who"]["kind"] == "self" else speech).append(item)

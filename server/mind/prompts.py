@@ -1,0 +1,156 @@
+"""Perception prompts for the per-minute fusion call: versioned system text, input rendering and the
+strict output schema (spec 4.1, 4.2, 5). The system part never changes inside a version, so the
+provider's prefix cache can hold it; the user part carries settings, segments, the previous minute
+and this minute, from the least to the most changing.
+"""
+import json
+
+from . import settings as settings_mod
+
+CONFIDENCE = {"type": "string", "enum": ["high", "mid", "low"]}
+ANSWER = {"type": "object", "additionalProperties": False, "required": ["text", "confidence"],
+          "properties": {"text": {"type": "string"}, "confidence": CONFIDENCE}}
+DIMENSIONS = ["people", "activity", "sound_scene", "vision", "self", "time_place", "topic", "contradiction"]
+ENTRY = {"type": "object", "additionalProperties": False,
+         "required": ["key", "dimension", "op", "text", "basis", "confidence", "evidence"],
+         "properties": {"key": {"type": "string"}, "dimension": {"type": "string", "enum": DIMENSIONS},
+                        "op": {"type": "string", "enum": ["keep", "update", "add", "end"]},
+                        "text": {"type": "string"},
+                        "basis": {"type": "string", "enum": ["seen", "heard", "inferred", "assumed"]},
+                        "confidence": CONFIDENCE, "evidence": {"type": "array", "items": {"type": "string"}}}}
+SCENE_SCHEMA = {"type": "object", "additionalProperties": False,
+                "required": ["who_am_i", "where_am_i", "people_doing", "owner_view", "entries", "changes", "summary", "want_to_know"],
+                "properties": {"who_am_i": ANSWER, "where_am_i": ANSWER, "people_doing": ANSWER,
+                               "owner_view": {"type": "string", "enum": ["present", "absent", "unknown"]},
+                               "entries": {"type": "array", "items": ENTRY},
+                               "changes": {"type": "array", "items": {"type": "string"}},
+                               "summary": {"type": "string"}, "want_to_know": {"type": "string"}}}
+RULE_CODES = {"rule:owner", "rule:coverage", "rule:time", "rule:place", "rule:self"}
+
+V1_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
+
+【任务纪律】
+- 情景要全面，按维度写：people 人（谁在、在哪、远近）、activity 在做什么、sound_scene 声音环境、vision 画面、self hello 自身和各感官的状态、time_place 时间地点、topic 话题、contradiction 矛盾。话题只是其中一项，活动不等于在说什么。
+- 在证据范围内说出最可能的情况，并标明把握；只有确实没有证据时才写“不知道”，同时写出要什么证据才能知道（want_to_know）。不要因为不完全确定就处处写“不明”。
+- 有语言以外的证据时必须引用：脸（v 代号）、声音事件（a 代号）、感官覆盖和规则（rule: 代号）。几句话不等于几个人，不能只凭几句话判断人数或活动。
+- 规则算出的主人状态是底稿（rule:owner），你不能改它；owner_view 写你自己的看法，与规则不同时另写一条 contradiction 说明为什么。
+
+【感官说明书（已知毛病）】
+- 麦克风增益开到最大，有持续的风扇嗡嗡声；远处的话常被转写错或漏掉。响度低的句子只能当“有人在说话”的证据，内容不可靠。
+- 声纹在办公室里多半认不出人；“不确定，最像某人”不等于就是那个人。
+- 两个转写（SenseVoice 和听悟）常给出不同的字；一致的部分可信，不一致的部分都存疑。
+- 人脸认出名字很快也比较稳；年龄、性别不稳，不要引用。
+- 脸消失 1.5 秒就算“离开画面”，低头、转身、hello 自己转头都会这样，不代表人走了。
+- 头会追着脸转，画面只是 hello 正看着的方向，画面外有没有人看不到，只能靠声音。
+- 感官关着的时候，“没看到、没听到”不是证据。
+- hello 自己会播台词；标为“hello 自己出的声”的不是别人说的话。
+
+【证据规则】
+- basis：seen 看到（本分钟的脸或画面）、heard 听到（本分钟的话或声音）、inferred 推断（从证据推出）、assumed 猜测（没有直接证据，按常理或上下文）。
+- confidence：high / mid / low。要把一条的把握调高，必须引用本分钟的新证据。
+- evidence 只写给出的代号：s 话、t 听悟、a 声音、v 脸、rule: 规则行。seen 和 heard 必须引用本分钟的 s/t/a/v 代号。
+
+【输出】
+- entries 里每条带稳定的 key（如 people.owner、people.others、activity.desk、sound_scene.room、self.senses、time_place.now、topic.1），op 表示相对上一分钟：keep 不变、update 改写、add 新增、end 结束。上一分钟的条目没变就写 keep，不要换个说法重写。
+- who_am_i / where_am_i / people_doing 各一两句，带把握。summary 不超过 20 个字，给时间轴用。changes 写这一分钟相对上一分钟变了什么（没变就留空）。"""
+
+VERSIONS = {"v1": {"system": V1_SYSTEM}}
+STATE_TEXT = {"seen": "看到主人", "just_left": "主人刚离开画面", "likely_present": "主人很可能在",
+              "unknown": "不知道主人在不在", "likely_absent": "主人很可能不在", "sensors_off": "感官全关，无法判断"}
+
+
+def _hhmm(ms, tz):
+    return settings_mod.local_time(ms, tz).strftime("%H:%M")
+
+
+def _hhmmss(ms, tz):
+    return settings_mod.local_time(ms, tz).strftime("%H:%M:%S")
+
+
+def _who(w, owner_names, people):
+    if w["kind"] == "known":
+        return "认出：" + _display(w["name"], owner_names, people)
+    if w["kind"] == "unsure":
+        return f"不确定，最像{_display(w['best'], owner_names, people)}（{(w.get('score') or 0):.2f}）"
+    return "不认识的声音"
+
+
+def _display(name, owner, people):
+    if name in owner["voice_names"] or name in owner["face_names"]:
+        return f"主人（{owner['display']}）"
+    for p in people:
+        if name in p.get("voice_names", []) or name in p.get("face_names", []):
+            return p["display"]
+    return str(name)
+
+
+def _overlaps(a, b):
+    return isinstance(a, list) and isinstance(b, list) and len(a) == 2 and len(b) == 2 and min(a[1], b[1]) > max(a[0], b[0])
+
+
+def render(version, s, pkg, strong, prev_scene, segments, neighbours):
+    tz, owner, people, src = s["tz"], s["owner"], s.get("people", []), s["sources"]
+    system = VERSIONS[version]["system"]
+    L = ["【设置】", f"关于我：{s['self_facts']}", f"默认地点：{s['place']['default']}", f"主人：{owner['display']}"]
+    if people:
+        L.append("认识的人：" + "、".join(p["display"] for p in people))
+    L.append("")
+    L.append("【今天的情景段】")
+    if segments:
+        for g in segments:
+            end = _hhmm(g["end"], tz) if g.get("end") else "现在"
+            L.append(f"{_hhmm(g['start'], tz)}–{end} {g.get('title') or g.get('cls', '')}")
+    else:
+        L.append("（还没有）")
+    L.append("")
+    if prev_scene:
+        L.append("【上一分钟的判断，可能有错】")
+        for e in (prev_scene.get("scene") or {}).get("entries", []):
+            age = max(0, round((pkg["minute"] - e.get("last_evidence", pkg["minute"])) / 60000))
+            L.append(f"{e['key']}（{e.get('dimension', '')}，{e.get('basis', '')}，{e.get('confidence', '')}，最后有证据：{age} 分钟前）：{e['text']}")
+        L.append("")
+    st, cov = strong, strong["coverage"]
+    L.append("【本分钟】")
+    L.append(f"rule:time {st['time']['label']}，星期{st['time']['weekday']}，{'工作时段' if st['time']['work_hours'] else '非工作时段'}")
+    L.append(f"rule:place 地点：{st['place']['label'] or s['place']['default']}（{'来自 Wi-Fi' if st['place']['label'] else '默认，没有 Wi-Fi 数据'}）")
+    L.append(f"rule:coverage 感官覆盖：听觉 {cov['hearing_s']} 秒，视觉 {cov['vision_s']} 秒，M12 {cov['m12_s']} 秒{'（估计）' if cov['estimated'] else ''}")
+    L.append(f"rule:owner 主人状态（规则）：{STATE_TEXT.get(st['owner']['state'], st['owner']['state'])}——{st['owner']['why']}")
+    L.append(f"rule:self hello 这一分钟自己出声 {len(pkg['self_speech'])} 次")
+    prev_speech = (neighbours.get("prev") or {}).get("speech", []) if neighbours else []
+    for x in pkg["speech"]:
+        who = _who(x["who"], owner, people)
+        loud = f"，响度 {x['loud_db']}" if x.get("loud_db") is not None else ""
+        if src["speech_text"]:
+            alt = "".join(f"（{t['code']} 听悟听成：{t['text']}）" for t in x["tingwu"]) if src["tingwu"] else ""
+            L.append(f"{x['code']} {_hhmmss(x['at'], tz)} 说话 [{who}{loud}]：{x['text']}{alt}")
+        else:
+            L.append(f"{x['code']} {_hhmmss(x['at'], tz)} 有人说了一句话 [{who}{loud}]")
+    if src["speech_text"] and src["tingwu"]:
+        for t in pkg["tingwu_only"]:
+            dup = any(p.get("ref", {}).get("session") == t["ref"]["session"] and _overlaps(p.get("pos"), t.get("pos"))
+                      for p in prev_speech)
+            if not dup:
+                L.append(f"{t['code']} {_hhmmss(t['at'], tz)} 只有听悟听到：{t['text']}")
+    for x in pkg["self_speech"]:
+        L.append(f"{x['code']} hello 自己出的声{('：' + x['text']) if src['speech_text'] else ''}")
+    if src["sounds"]:
+        for g in pkg["sounds"]:
+            loud = f"，最响 {g['max_loud_db']}" if g.get("max_loud_db") is not None else ""
+            L.append(f"{','.join(g['codes'])} 声音事件：{g['label'] or g['kind']} × {g['count']}{loud}")
+    if src["vision"]:
+        for f in pkg["faces"]:
+            name = _display(f["name"], owner, people) if f["name"] else "未认出的脸"
+            to = "仍在画面里" if f["open"] else f"{_hhmmss(f['to'], tz)} 离开画面"
+            L.append(f"{f['code']} 脸：{name}，{_hhmmss(f['from'], tz)} 起，{to}")
+        L.append(f"人形检测：本分钟 {pkg['persons']['seconds']} 秒，{pkg['persons']['ids']} 个编号")
+    for c in st.get("contradictions", []):
+        L.append(f"规则发现的矛盾：{c['kind']}（{','.join(c['codes'])}）")
+    return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(L)}]
+
+
+def schema_format():
+    return {"type": "json_schema", "json_schema": {"name": "scene", "strict": True, "schema": SCENE_SCHEMA}}
+
+
+def as_text(messages):
+    return json.dumps(messages, ensure_ascii=False)
