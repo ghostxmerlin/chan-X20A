@@ -22,7 +22,7 @@
           <div><dt>PSRAM 余</dt><dd id="psram">—</dd></div><div title="各内部堆区域历史最低空闲之和，不是同时发生的最低总空闲，也不是 DMA 空闲。"><dt>各堆最低之和 ⓘ</dt><dd id="heap-minimum">—</dd></div>
           <div><dt>Wi-Fi <button data-open="wifi-config" class="inline-button">网络</button></dt><dd id="wifi">—</dd></div><div><dt>遥控器</dt><dd id="remote">—</dd></div>
           <div><dt>光照</dt><dd id="light">—</dd></div><div><dt>接近</dt><dd id="proximity">—</dd></div><div><dt>显示</dt><dd id="display">—</dd></div>
-          <div class="mic-row" title="机身麦克风通道最近 0.5 s 的平均与峰值电平（来自遥测，不拉音频流）；ADC 已是最大增益。"><dt>麦克风</dt><dd><span id="mic">—</span><span class="meter mic-meter" role="meter" aria-label="麦克风电平" aria-valuemin="-60" aria-valuemax="0"><span id="mic-fill"></span></span></dd></div>
+          <div class="mic-row" title="机身麦克风通道最近 0.5 s 的平均与峰值电平（来自遥测，不拉音频流）；已含数字增益（连续听觉面板可调），ADC 模拟增益已是最大 37.5 dB。"><dt>麦克风</dt><dd><span id="mic">—</span><span class="meter mic-meter" role="meter" aria-label="麦克风电平" aria-valuemin="-60" aria-valuemax="0"><span id="mic-fill"></span></span></dd></div>
         </dl>
         <div class="thermal-caption"><span id="chip-temperature-note">ESP32-S3 · 等待读数</span><span>2 min</span></div><canvas id="chip-thermal" aria-label="StackChan 芯片温度趋势"></canvas>
       </div>
@@ -82,6 +82,7 @@
       <div class="panel-head"><h2 id="hearing-heading">连续听觉</h2><span id="hearing-status" class="muted">等待连接</span></div>
       <div class="panel-body">
         <div class="identity-row"><p id="hearing-identity">身份：—</p><p id="hearing-emotion">情绪标签：—</p></div><p id="hearing-text" class="hearing-transcript">等待语音</p>
+        <div class="volume-row" title="麦克风数字增益，作用于录音、连续听觉和音频流；带限幅，近处大声不会破音。保存在机身，重启后保留。一臂远说话约 −30 dBFS 为宜。"><label for="mic-gain-input">麦克风增益</label><input id="mic-gain-input" type="range" min="0" max="24" step="1" value="12" disabled><span id="mic-gain-value">—</span></div>
         <div class="control-buttons"><button id="hearing-start" disabled>开始 · start</button><button id="hearing-stop" class="stop-button" disabled>停止 · stop</button></div>
         <p id="hearing-heartbeat" class="note" role="status">心跳：—</p><p id="hearing-link" class="note">断线：—</p><p id="hearing-response" class="note">回应：—</p>
         <p id="hearing-progress" role="status">尚未录入 · 0 / 5 句</p><p id="hearing-error" class="note"></p><p id="hearing-command" class="command-result" role="status">刷新页面不会开始监听。</p>

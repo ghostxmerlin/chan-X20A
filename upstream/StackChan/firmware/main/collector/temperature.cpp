@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "psram_task.h"
 #include "temperature.h"
 #include "temperature_sample.h"
 #include <driver/temperature_sensor.h>
@@ -26,7 +27,7 @@ void temperature_task(void*) {
     if (error != ESP_OK) {
         ESP_LOGW(kTag, "Sensor unavailable: %s", esp_err_to_name(error));
         if (handle) temperature_sensor_uninstall(handle);
-        vTaskDelete(nullptr); return;
+        vTaskDeleteWithCaps(nullptr); return;
     }
     ESP_LOGI(kTag, "ESP32-S3 internal sensor ready (20..100 C, 1 Hz)");
     while (true) {
@@ -42,7 +43,7 @@ void temperature_task(void*) {
 }
 }
 void temperature_init() {
-    if (xTaskCreatePinnedToCore(temperature_task, "collector_temp", 3072, nullptr, 1, nullptr, 1) != pdPASS) {
+    if (create_psram_task(temperature_task, "collector_temp", 3072, nullptr, 1, 1) != pdPASS) {
         std::lock_guard<std::mutex> lock(mutex);
         sample.error = ESP_ERR_NO_MEM;
         ESP_LOGW(kTag, "Temperature task unavailable");

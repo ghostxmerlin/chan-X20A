@@ -20,6 +20,9 @@
 #include "remote_actuation.h"
 #include "connection_protocol.h"
 #include "web_control.h"
+#include "mic_gain.h"
+#include "mem_diag.h"
+#include "psram_task.h"
 #include <ArduinoJson.hpp>
 #include <board.h>
 #include <audio/audio_codec.h>
@@ -91,6 +94,12 @@ std::atomic<uint32_t> audio_errors{0}, camera_errors{0}, audio_sent{0}, audio_sk
 std::atomic<uint32_t> frame_seq{0};
 std::atomic<uint32_t> published_frames{0};
 std::atomic<int64_t> last_audio_us{0};
+// Mic digital gain (mic_gain.h): set from the web task, read once per block by audio_task.
+std::atomic<int> mic_gain_db{kMicGainDefaultDb};
+std::atomic<uint32_t> mic_limited_blocks{0};
+std::atomic<float> mic_gain_applied_db{0.0f};
+std::atomic_bool mic_gain_saved{false};
+std::atomic<const char*> mic_gain_source{"default"};
 std::atomic<uint32_t> camera_processing_us{0}, camera_jpeg_us{0}, camera_jpeg_bytes{0};
 std::mutex audio_mutex, frame_mutex, sensor_mutex;
 
@@ -497,7 +506,7 @@ void environment_task(void*)
     }
     // No hot-plug support on the built-in chip. A missing/unknown part is
     // reported once in metadata instead of repeated retries/log flooding.
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
 void camera_task(void*)
@@ -538,26 +547,44 @@ void camera_task(void*)
     }
 }
 
+// Saved mic gain, read in the creating (internal-stack) task: audio_task runs on a PSRAM stack.
+void load_mic_gain_setting()
+{
+    nvs_handle_t nvs; uint8_t saved = 0;
+    if (nvs_open("collector", NVS_READONLY, &nvs) == ESP_OK) {
+        if (nvs_get_u8(nvs, "mic_gain", &saved) == ESP_OK && mic_gain_valid(saved)) {
+            mic_gain_db = saved; mic_gain_source = "saved"; mic_gain_saved = true;
+        }
+        nvs_close(nvs);
+    }
+}
+
 void audio_task(void*)
 {
     auto codec = Board::GetInstance().GetAudioCodec();
     codec->EnableOutput(false);
     if (codec->input_sample_rate() != kSampleRate || codec->input_channels() != kChannels) {
         ESP_LOGE(kTag, "Unexpected audio format; refusing mislabeled PCM");
-        vTaskDelete(nullptr);
+        vTaskDeleteWithCaps(nullptr);
     }
     audio_ring = static_cast<AudioBlock*>(heap_caps_calloc(kRingBlocks, sizeof(AudioBlock), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!audio_ring) {
         ESP_LOGE(kTag, "Audio ring allocation failed");
-        vTaskDelete(nullptr);
+        vTaskDeleteWithCaps(nullptr);
     }
     std::vector<int16_t> input(kFrames * kChannels);
+    MicGain gain; int gain_db = mic_gain_db.load(); gain.set_db(gain_db);
     codec->EnableInput(true);
     audio_ready = true;
     playback_set_audio_ready();
     while (true) {
         const bool ok = codec->InputData(input);
         const int64_t completed = esp_timer_get_time();
+        if (ok) {
+            if (const int want = mic_gain_db.load(); want != gain_db) { gain_db = want; gain.set_db(want); }
+            if (gain.process(input.data(), kFrames, kChannels, 0)) ++mic_limited_blocks; // channel 0 = mic; 1 = speaker reference
+            mic_gain_applied_db = gain.applied_db();
+        }
         {
             std::lock_guard<std::mutex> lock(audio_mutex);
             const uint32_t seq = ++audio_sequence; // Failed reads remain observable as sequence gaps.
@@ -662,7 +689,7 @@ void discovery_task(void*)
     if (fd < 0 || bind(fd, reinterpret_cast<sockaddr*>(&local), sizeof(local)) != 0) {
         if (fd >= 0) close(fd);
         ESP_LOGW(kTag, "UDP discovery unavailable; saved address remains usable");
-        vTaskDelete(nullptr);
+        vTaskDeleteWithCaps(nullptr);
         return;
     }
     int64_t last_reply_us = -200000;
@@ -903,6 +930,7 @@ esp_err_t info_handler(httpd_req_t* request)
     capabilities["yaw_step_diagnostics"] = "supported"; // target yaw_step: whole-degree steps, speed and path
     capabilities["servo_tuning"] = "supported"; // target servo: EEPROM P/D/I/punch/deadband/max torque, runtime goal profile, release policy
     capabilities["wifi_profiles"] = "supported"; // target wifi: saved networks, scan; telemetry wifi carries the state
+    capabilities["mic_gain"] = "supported"; // 0.4.60: target mic_gain, digital gain + limiter on the mic channel
     capabilities["unified_control"] = "supported"; // 0.4.46: every JSON control/config goes through POST /v1/control {target,...}
     control_info_json(doc["control"].to<JsonObject>());
     doc["assets"]["endpoint"] = "/v1/assets";
@@ -1032,6 +1060,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     health["dma_largest_free"] = heap_caps_get_largest_free_block(dma_caps);
     health["reset_reason_code"] = static_cast<int>(esp_reset_reason());
     health["psram_free"] = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    health["alloc_failures"] = mem_diag_failed_allocs(); health["alloc_failures_internal"] = mem_diag_failed_internal();
     health["heap_min_free"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     health["camera_enabled"] = camera_enabled.load();
     health["camera_errors"] = camera_errors.load();
@@ -1068,6 +1097,12 @@ esp_err_t telemetry_handler(httpd_req_t* request)
             health["mic_level_dbfs"] = nullptr; health["mic_peak_dbfs"] = nullptr;
         }
         health["mic_window_ms"] = 500;
+        // Levels above are after the digital gain; ADC PGA is fixed at its 37.5 dB maximum.
+        health["mic_gain_db"] = mic_gain_db.load();
+        health["mic_gain_applied_db"] = std::round(mic_gain_applied_db.load() * 10.0f) / 10.0f;
+        health["mic_gain_min_db"] = kMicGainMinDb; health["mic_gain_max_db"] = kMicGainMaxDb;
+        health["mic_gain_source"] = mic_gain_source.load(); health["mic_gain_saved"] = mic_gain_saved.load();
+        health["mic_limited_blocks"] = mic_limited_blocks.load();
     }
     health["speaker_enabled"] = playback_output_enabled();
     const int speaker_reset = hal_bridge::board_speaker_reset_state();
@@ -1348,6 +1383,19 @@ const ControlTarget kControlTargets[] = {
             httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Volume must be an integer 10..100"); return ESP_OK;
         }
         JsonDocument result; result["accepted"] = true; result["volume"] = playback_volume();
+        httpd_resp_set_status(r, "202 Accepted"); return send_json(r, result); }},
+    {"mic_gain", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t {
+        // {"target":"mic_gain","value":0..24} dB; applies from the next 20 ms block and is saved.
+        if (body.size() != 1 || !body["value"].is<int>() || !mic_gain_valid(body["value"].as<int>())) {
+            httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Mic gain must be an integer 0..24 dB"); return ESP_OK;
+        }
+        const int db = body["value"].as<int>();
+        mic_gain_db = db; mic_gain_source = "web";
+        nvs_handle_t nvs; esp_err_t err = nvs_open("collector", NVS_READWRITE, &nvs);
+        if (err == ESP_OK) { err = nvs_set_u8(nvs, "mic_gain", static_cast<uint8_t>(db)); if (err == ESP_OK) err = nvs_commit(nvs); nvs_close(nvs); }
+        mic_gain_saved = err == ESP_OK;
+        ESP_LOGI(kTag, "mic gain %d dB from web%s", db, err == ESP_OK ? "" : " (not saved)");
+        JsonDocument result; result["accepted"] = true; result["mic_gain_db"] = db; result["saved"] = err == ESP_OK;
         httpd_resp_set_status(r, "202 Accepted"); return send_json(r, result); }},
 };
 
@@ -1731,6 +1779,7 @@ void run()
     // Never erase NVS on errors: factory Wi-Fi/calibration remain intact.
     ESP_ERROR_CHECK(nvs_flash_init());
     hal_bridge::set_collector_mode(true);
+    mem_diag_start(); // USB MEM/TASKS/ALLOCFAIL lines for the network-stack wedge
     init_wifi(); // Radio is active before generating pairing entropy.
     load_identity();
     ESP_LOGI(kTag, "FIRMWARE=%s DEVICE_ID=%s BOOT_ID=%s", kVersion, device_id.c_str(), boot_id.c_str());
@@ -1746,16 +1795,17 @@ void run()
     playback_init();
     hearing::init(device_id,boot_id);
     update_screen({});
-    ESP_ERROR_CHECK(xTaskCreate(sensor_task, "collector_sensors", 6144, nullptr, 3, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
-    ESP_ERROR_CHECK(xTaskCreate(environment_task, "collector_environment", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
-    ESP_ERROR_CHECK(xTaskCreate(audio_task, "collector_audio", 6144, nullptr, 7, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(create_psram_task(sensor_task, "collector_sensors", 6144, nullptr, 3) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(create_psram_task(environment_task, "collector_environment", 4096, nullptr, 2) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    load_mic_gain_setting();
+    ESP_ERROR_CHECK(create_psram_task(audio_task, "collector_audio", 6144, nullptr, 7) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     load_camera_setting();
     // Keep JPEG work off Wi-Fi's core 0, still below sensor and audio priorities.
-    ESP_ERROR_CHECK(xTaskCreatePinnedToCore(camera_task, "collector_camera", 8192, nullptr, 2, nullptr, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(create_psram_task(camera_task, "collector_camera", 8192, nullptr, 2, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(serial_config_task, "collector_serial", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     start_server(8080, 32768, false);
     start_server(8081, 32769, true);
-    ESP_ERROR_CHECK(xTaskCreate(discovery_task, "collector_discovery", 4096, nullptr, 1, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(create_psram_task(discovery_task, "collector_discovery", 4096, nullptr, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_LOGI(kTag, "HTTP ready :8080 /v1/info /v1/telemetry /v1/frame; :8081 /v1/audio");
     ESP_LOGI(kTag, "USB fallback: one JSON line with cmd=wifi, ssid and password; saved only in collector NVS");
     size_t attempt = 0;

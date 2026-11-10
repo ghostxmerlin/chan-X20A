@@ -1,8 +1,8 @@
 import {hearingBody} from './hearing.mjs';
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
-const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'],m12_mode:['mode'],m12:['enabled'],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
+const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'],mic_gain:['value'],m12_mode:['mode'],m12:['enabled'],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
 // Every JSON control reaches the robot through one endpoint; `target` selects the feature.
-const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_step:'yaw_step',pitch:'pitch',camera:'camera'};
+const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',mic_gain:'mic_gain',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_step:'yaw_step',pitch:'pitch',camera:'camera'};
 const route = '/v1/control';
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
 Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[]});
@@ -34,6 +34,7 @@ export class Controls {
     }
     if (input.action==='pitch' && (typeof input.angle_deg!=='number' || !Number.isFinite(input.angle_deg) || input.angle_deg<5 || input.angle_deg>85 || Math.abs(input.angle_deg*10-Math.round(input.angle_deg*10))>1e-7)) fail(400,'仰角须为 5–85°，步长 0.1°');
     if (input.action==='volume' && (!Number.isInteger(input.value) || input.value<10 || input.value>100)) fail(400,'音量须为 10–100 的整数');
+    if (input.action==='mic_gain' && (!Number.isInteger(input.value) || input.value<0 || input.value>24)) fail(400,'麦克风增益须为 0–24 dB 的整数');
     if (input.action==='voice') {
       const count = this.monitor.info?.voice_library?.count || 40;
       if (!Number.isInteger(input.clip_id) || input.clip_id<0 || input.clip_id>count) fail(400,`请选择 1–${count} 条台词，或随机播放`);
@@ -68,6 +69,7 @@ export class Controls {
       if(input.enabled && input.mode==='tracking' && (!motor?.enabled || !motor?.requested)) fail(409,'请先启用舵机');
     }
     if (input.action==='volume' && !Number.isInteger(t.playback?.volume_min)) fail(409,'当前固件不支持音量调节');
+    if (input.action==='mic_gain' && m.info?.capabilities?.mic_gain!=='supported') fail(409,'当前固件不支持麦克风增益（需要 collector-0.4.60 或更新）');
     if (input.action==='voice' && (m.info?.capabilities?.voice_library!=='supported' || !t.health?.audio_ready || !t.playback || t.playback.busy)) fail(409,'等待语音就绪和当前播放结束');
     if (((input.action==='m12' && input.enabled) || (input.action==='m12_mode' && input.mode!=='standby')) && !t.m12?.valid) fail(409,'M12 串口尚未就绪');
     if (['yaw','yaw_center','yaw_step','pitch'].includes(input.action) && (!motor?.enabled || !motor?.requested)) fail(409,'请先启用舵机');
@@ -85,7 +87,7 @@ export class Controls {
       const result=await this.monitor.client.control(route,body,input.boot,()=>this.validate(input));
       if(result.accepted!==true) fail(502,'设备没有确认接收请求');
       this.monitor.event('control',`网页 ${input.action} 请求已接收，执行状态以遥测为准`);
-      return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':'设备已接收请求，执行状态见下方'};
+      return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='mic_gain'?`麦克风增益已设为 ${input.value} dB 并保存，立即生效`:input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':'设备已接收请求，执行状态见下方'};
     } catch(error) {
       const known=error.status>=400 && error.status<500;
       const message=known ? (error.status===409?'设备拒绝本次操作，请检查最新状态':error.message) : '请求结果未确认；请查看实时状态，本次不会自动重发';

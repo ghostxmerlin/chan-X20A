@@ -9,6 +9,15 @@ export class HearingPanel {
   this.doc=doc;this.send=send;this.pending=false;
   for(const [id,op,params] of [['save','config',{}],['import','import',{}],['start','listen',{enabled:true}],['stop','listen',{enabled:false}],['enroll','enroll',{}],['cancel','cancel',{}]])
    this.el('hearing-'+id).addEventListener('click',()=>this.act(op,params));
+  this.el('mic-gain-input').addEventListener('input',()=>{this.el('mic-gain-value').textContent=`+${this.el('mic-gain-input').value} dB · 松手后应用`;});
+  this.el('mic-gain-input').addEventListener('change',()=>this.setMicGain(Number(this.el('mic-gain-input').value)));
+ }
+ async setMicGain(value){
+  if(!this.fresh||this.gainPending||!Number.isInteger(value))return;
+  const boot=this.state.boot;this.gainPending=true;this.render(this.state,this.fresh);
+  try{const result=await this.send({action:'mic_gain',value,boot});this.el('hearing-command').textContent=this.state.boot===boot?result.message:'机器人已重启，请核对当前状态';}
+  catch(e){this.el('hearing-command').textContent=e.name==='TimeoutError'?'结果未确认，请查看状态；不会自动重发':e.message;}
+  finally{this.gainPending=false;this.render(this.state,this.fresh);}
  }
  el(id){return this.doc.getElementById(id);}
  async act(op,params={}){
@@ -32,6 +41,11 @@ export class HearingPanel {
  render(state,fresh){
   this.state=state;this.fresh=fresh;
   const h=state?.telemetry?.hearing||{},enrollment=h.enrollment||{};
+  const hl=state?.telemetry?.health||{},gainSupported=!!fresh&&state?.capabilities?.mic_gain==='supported'&&Number.isInteger(hl.mic_gain_db);
+  this.el('mic-gain-input').disabled=!gainSupported||!!this.gainPending;
+  if(gainSupported&&!this.gainPending&&this.doc.activeElement!==this.el('mic-gain-input'))this.el('mic-gain-input').value=String(hl.mic_gain_db);
+  const gainSources={default:'默认',saved:'开机保存值',web:'网页'};
+  if(this.doc.activeElement!==this.el('mic-gain-input')||!gainSupported)this.el('mic-gain-value').textContent=!fresh?'—':!gainSupported?'当前固件不支持':`+${hl.mic_gain_db} dB · ${gainSources[hl.mic_gain_source]||hl.mic_gain_source}${hl.mic_gain_saved===false&&hl.mic_gain_source==='web'?' · 未保存':''} · 限幅 ${hl.mic_limited_blocks??0} 块`;
   const supported=state?.capabilities?.hearing==='supported';
   this.ready=!!fresh&&supported&&!!h.ready;
   if(fresh&&supported&&this.loadedBoot!==state.boot){this.el('hearing-url').value=h.url||'';this.el('hearing-token').value='';this.loadedBoot=state.boot;}

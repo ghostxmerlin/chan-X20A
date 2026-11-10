@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "psram_task.h"
 #include "m12_unit.h"
 #include "web_control.h"
 #include <driver/gpio.h>
@@ -89,7 +90,7 @@ void m12_task(void*)
 {
     // Installed from this task (pinned to core 1) so the UART interrupt is allocated
     // on core 1: core 0 must keep free inputs for Wi-Fi's lazily allocated AES interrupt.
-    if (!install_uart()) vTaskDelete(nullptr);
+    if (!install_uart()) vTaskDeleteWithCaps(nullptr);
     ESP_LOGI(kTag, "UnitV2 M12 on Port C: UART0 %d 8N1, TX GPIO%d, RX GPIO%d (core %d)", kBaud, kTx, kRx, xPortGetCoreID());
     // A bare line flushes whatever the M12 collected while our TX pin was still
     // floating; it answers with one harmless "invalid json format" error.
@@ -240,7 +241,7 @@ void m12_task(void*)
 
 void m12_init()
 {
-    if (xTaskCreatePinnedToCore(m12_task, "collector_m12", 6144, nullptr, 2, nullptr, 1) != pdPASS)
+    if (create_psram_task(m12_task, "collector_m12", 6144, nullptr, 2, 1) != pdPASS)
         ESP_LOGE(kTag, "M12 task unavailable");
 }
 

@@ -179,3 +179,15 @@ test('real DeviceClient sends local voice through its route and boot whitelist',
  await assert.rejects(client.control('/v1/control',{target:'voice_play',clip_id:1},'old',()=>{}));
  await assert.rejects(client.control('/v1/voice/delete',{clip_id:1},'boot-a',()=>{}));assert.equal(seen.length,1);
 });
+test('mic gain needs the 0.4.60 capability and sends one integer 0..24 dB',async()=>{
+ const {m,c,calls}=fixture();
+ const request={action:'mic_gain',value:12,boot:'boot-a'};
+ await assert.rejects(c.execute(request));
+ m.info.capabilities.mic_gain='supported';
+ const result=await c.execute(request);assert.equal(calls[0][0],'/v1/control');assert.deepEqual(calls[0][1],{target:'mic_gain',value:12});
+ assert.match(result.message,/12 dB/);
+ for(const v of [0,24]){await c.execute({...request,value:v});assert.equal(calls.at(-1)[1].value,v);}
+ for(const v of [-1,25,6.5,'12',null]) await assert.rejects(c.execute({...request,value:v}));
+ await assert.rejects(c.execute({...request,boot:'boot-b'}));
+ assert.equal(calls.length,3);
+});

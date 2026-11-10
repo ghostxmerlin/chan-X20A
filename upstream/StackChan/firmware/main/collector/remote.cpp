@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "psram_task.h"
 #include "remote.h"
 #include "remote_protocol.h"
 #include "remote_modes.h"
@@ -790,7 +791,7 @@ void remote_init()
     const auto error = espnow_init(&config);
     if (error == ESP_OK) ready = espnow_set_config_for_data_type(ESPNOW_DATA_TYPE_DATA, true, received) == ESP_OK;
     ESP_LOGI("CollectorRemote", "ESP-NOW receiver %s; ID=1, channel follows Wi-Fi", ready ? "ready" : "unavailable");
-    ESP_ERROR_CHECK(xTaskCreate(motor_task, "collector_motor", 6144, nullptr, 3, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(create_psram_task(motor_task, "collector_motor", 6144, nullptr, 3) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
 }
 bool remote_arm(bool active)
 {
