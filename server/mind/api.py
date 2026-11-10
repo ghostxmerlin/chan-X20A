@@ -1,7 +1,10 @@
-"""Read-only HTTP API of mind, on the server's loopback only (the Mac reaches it over ssh).
+"""HTTP API of mind on the server's loopback only (the Mac reaches it over ssh). Every call needs
+"Authorization: Bearer <token>". POST bodies: application/json, at most 16 KB. POSTs write only
+mind tables (settings versions, labels/marks, rerun lane) — never raw records, never the live
+scenes. Sentence text only leaves through this API; nothing is logged.
 
-GET /state · /timeline?from=&to= (≤ 24 h) · /minute?t=&version=   — all need "Authorization: Bearer <token>".
-Sentence text only leaves through this API; nothing is logged.
+GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats
+POST /settings /mark /label /rerun
 """
 import hmac
 import json
@@ -9,12 +12,22 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from . import fusion, prompts, segments, settings as settings_mod
+from .settings_store import MODELS
 from .store import LANE
 
 MAX_RANGE_MS = 24 * 3600_000
+MAX_BODY = 16 * 1024
+MARKS = ("arrive", "leave", "meeting", "others_near", "alone")
+VERDICTS = ("right", "wrong", "unsure")
+FIELDS = ("owner", "people", "activity", "topic", "summary", "other")
 
 
 class BadRequest(Exception):
+    pass
+
+
+class NotFound(Exception):
     pass
 
 
@@ -30,13 +43,156 @@ def _int(q, name, required=True):
         raise BadRequest(f"{name} must be an integer") from None
 
 
-def make_server(store, token, host="127.0.0.1", port=52740):
+def _range(q):
+    lo, hi = _int(q, "from"), _int(q, "to")
+    if hi <= lo or hi - lo > MAX_RANGE_MS:
+        raise BadRequest("range must be positive and at most 24 h")
+    return lo, hi
+
+
+def _str(v, n):
+    return str(v)[:n] if v is not None else ""
+
+
+def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
+    ctx = ctx or {}
+    db = store.db
+
+    def current_settings():
+        ss = ctx.get("settings_store")
+        return ss.current() if ss else (settings_mod.load(None), 0)
+
+    def names():
+        voice, face = [], []
+        for d in db["speech"].find({"speaker.band": "known"}, {"speaker.name": 1}).limit(5000):
+            n = (d.get("speaker") or {}).get("name")
+            if n and n not in voice:
+                voice.append(n)
+        for d in db["vision"].find({"name": {"$exists": True}}, {"name": 1}).limit(5000):
+            if d.get("name") and d["name"] not in face:
+                face.append(d["name"])
+        return {"voice": voice[:50], "face": face[:50]}
+
+    def stats(days):
+        s, _ = current_settings()
+        now = int(time.time() * 1000)
+        start = now - days * 86400_000
+        rows = {}
+        for d in db["mind_runs"].find({"at": {"$gte": start}}, {"at": 1, "step": 1, "model": 1, "usage": 1, "cost_usd": 1, "error": 1, "lane": 1}):
+            day = settings_mod.local_time(d["at"], s["tz"]).strftime("%Y-%m-%d")
+            key = (day, d.get("step"), d.get("model"), d.get("lane"))
+            r = rows.setdefault(key, {"day": day, "step": d.get("step"), "model": d.get("model"), "lane": d.get("lane"), "calls": 0,
+                                      "failures": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0})
+            u = d.get("usage") or {}
+            r["calls"] += 1
+            r["failures"] += 1 if d.get("error") else 0
+            r["prompt_tokens"] += u.get("prompt_tokens", 0) or 0
+            r["completion_tokens"] += u.get("completion_tokens", 0) or 0
+            r["cost_usd"] = round(r["cost_usd"] + (d.get("cost_usd") or 0), 6)
+        out = sorted(rows.values(), key=lambda r: (r["day"], r["step"] or "", r["model"] or ""), reverse=True)
+        today = settings_mod.local_time(now, s["tz"]).strftime("%Y-%m-%d")
+        return {"days": days, "today": today, "rows": out,
+                "today_cost_usd": round(sum(r["cost_usd"] for r in out if r["day"] == today), 6),
+                "today_calls": sum(r["calls"] for r in out if r["day"] == today)}
+
+    def get(path, q):
+        if path == "/state":
+            return {**store.state(), "lane": LANE, "now_ms": int(time.time() * 1000)}
+        if path == "/timeline":
+            return store.timeline(LANE, *_range(q))
+        if path == "/minute":
+            t, version = _int(q, "t"), _int(q, "version", required=False)
+            doc = store.get(LANE, t, version) if version is not None else store.latest(LANE, t)
+            if not doc:
+                raise NotFound("no such minute")
+            return {**doc, "versions": store.versions(LANE, t)}
+        if path == "/now":
+            s, _ = current_settings()
+            scene = store.latest_scene_any(LANE)
+            pkg = store.latest(LANE, scene["minute"]) if scene else None
+            now = int(time.time() * 1000)
+            segs = segments.update(None, store, s, now - 24 * 3600_000 if not scene else scene["minute"] - 12 * 3600_000, now,
+                                   LANE, summarize_now=False)
+            return {"minute": scene["minute"] if scene else None, "scene": scene, "strong": pkg["strong"] if pkg else None,
+                    "segment": segs[-1] if segs else None, "state": store.state()}
+        if path == "/segments":
+            s, _ = current_settings()
+            lo, hi = _range(q)
+            return segments.update(None, store, s, lo, hi, LANE, summarize_now=False)
+        if path == "/scene":
+            t = _int(q, "t")
+            lane = (q.get("lane") or [LANE])[0]
+            if lane not in (LANE, "rerun"):
+                raise BadRequest("lane must be live or rerun")
+            versions = store.scene_versions(lane, t)
+            if not versions:
+                raise NotFound("no scene for this minute")
+            runs = [store.get_run(v["run_id"]) for v in versions if v.get("run_id")]
+            return {"versions": versions, "runs": [r for r in runs if r]}
+        if path == "/settings":
+            s, v = current_settings()
+            ss = ctx.get("settings_store")
+            return {"settings": s, "version": v, "history": ss.history() if ss else []}
+        if path == "/names":
+            return names()
+        if path == "/prompts":
+            return {"versions": sorted(prompts.VERSIONS), "models": list(MODELS)}
+        if path == "/labels":
+            lo, hi = _range(q)
+            return list(db["mind_labels"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("at", 1))
+        if path == "/stats":
+            days = _int(q, "days", required=False) or 7
+            return stats(max(1, min(days, 3650)))
+        raise NotFound("not found")
+
+    def post(path, body):
+        now = int(time.time() * 1000)
+        if path == "/settings":
+            ss = ctx.get("settings_store")
+            if not ss:
+                raise BadRequest("settings are not configurable here")
+            try:
+                return {"version": ss.save(body.get("settings"), _str(body.get("note"), 200))}
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+        if path == "/mark":
+            if body.get("kind") not in MARKS:
+                raise BadRequest(f"kind must be one of {', '.join(MARKS)}")
+            db["mind_labels"].insert_one({"lane": LANE, "kind": "mark", "mark": body["kind"], "at": now, "note": _str(body.get("note"), 300)})
+            return {"ok": True, "at": now}
+        if path == "/label":
+            minute = body.get("minute")
+            if not isinstance(minute, int) or body.get("verdict") not in VERDICTS or body.get("field") not in FIELDS:
+                raise BadRequest(f"minute (int), verdict ({'/'.join(VERDICTS)}) and field ({'/'.join(FIELDS)}) required")
+            scene = store.latest_scene(LANE, minute)
+            if not scene:
+                raise NotFound("no live scene for this minute")
+            db["mind_labels"].insert_one({"lane": LANE, "kind": "label", "minute": minute, "scene_version": scene["version"],
+                                          "verdict": body["verdict"], "field": body["field"], "correct": _str(body.get("correct"), 300),
+                                          "note": _str(body.get("note"), 300), "at": now})
+            return {"ok": True}
+        if path == "/rerun":
+            minute, prompt, model = body.get("minute"), body.get("prompt"), body.get("model")
+            if not isinstance(minute, int) or prompt not in prompts.VERSIONS or model not in MODELS:
+                raise BadRequest("minute (int), prompt (known version) and model (known model) required")
+            if not ctx.get("env"):
+                raise BadRequest("no model access configured")
+            doc = store.latest(LANE, minute)
+            if not doc:
+                raise NotFound("no package for this minute")
+            s, v = current_settings()
+            prev = store.latest(LANE, minute - 60_000)
+            return fusion.run_minute(ctx["env"], store, s, v, minute, doc["package"], doc["strong"],
+                                     {"prev": prev["package"] if prev else None}, lane="rerun",
+                                     force_prompt=prompt, force_model=model, now_ms=now)
+        raise NotFound("not found")
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
         def _send(self, code, payload):
-            body = json.dumps(payload, ensure_ascii=False).encode()
+            body = json.dumps(payload, ensure_ascii=False, default=str).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -48,41 +204,58 @@ def make_server(store, token, host="127.0.0.1", port=52740):
             supplied = supplied[7:] if supplied.startswith("Bearer ") else ""
             return bool(token) and hmac.compare_digest(supplied.encode(), token.encode())
 
-        def do_POST(self):
-            self._send(405, {"error": "read only"})
-
-        do_PUT = do_DELETE = do_PATCH = do_POST
+        def _run(self, fn):
+            try:
+                self._send(200, fn())
+            except BadRequest as e:
+                self._send(400, {"error": str(e)})
+            except NotFound as e:
+                self._send(404, {"error": str(e)})
+            except Exception as e:               # noqa: BLE001 - database trouble shows as 503
+                self._send(503, {"error": f"{type(e).__name__}"})
 
         def do_GET(self):
             if not self._authorized():
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            q = parse_qs(url.query)
-            try:
-                if url.path == "/state":
-                    self._send(200, {**store.state(), "lane": LANE, "now_ms": int(time.time() * 1000)})
-                elif url.path == "/timeline":
-                    lo, hi = _int(q, "from"), _int(q, "to")
-                    if hi <= lo or hi - lo > MAX_RANGE_MS:
-                        raise BadRequest("range must be positive and at most 24 h")
-                    self._send(200, store.timeline(LANE, lo, hi))
-                elif url.path == "/minute":
-                    t, version = _int(q, "t"), _int(q, "version", required=False)
-                    doc = store.get(LANE, t, version) if version is not None else store.latest(LANE, t)
-                    if not doc:
-                        self._send(404, {"error": "no such minute"})
-                        return
-                    self._send(200, {**doc, "versions": store.versions(LANE, t)})
+            self._run(lambda: get(url.path, parse_qs(url.query)))
+
+        def do_POST(self):
+            if not self._authorized():
+                self._send(401, {"error": "bad token"})
+                return
+            url = urlsplit(self.path)
+            if url.path not in ("/settings", "/mark", "/label", "/rerun"):
+                if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
+                    self._send(405, {"error": "read only"})
                 else:
                     self._send(404, {"error": "not found"})
-            except BadRequest as e:
-                self._send(400, {"error": str(e)})
-            except Exception as e:               # noqa: BLE001 - database trouble shows as 503
-                self._send(503, {"error": f"{type(e).__name__}"})
+                return
+            if not (self.headers.get("Content-Type", "").split(";")[0].strip() == "application/json"):
+                self._send(415, {"error": "application/json only"})
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > MAX_BODY:
+                self._send(413, {"error": "body too large"})
+                return
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                self._send(400, {"error": "bad json"})
+                return
+            if not isinstance(body, dict):
+                self._send(400, {"error": "body must be an object"})
+                return
+            self._run(lambda: post(url.path, body))
+
+        def do_PUT(self):
+            self._send(405, {"error": "use POST"})
+
+        do_DELETE = do_PATCH = do_PUT
 
     return ThreadingHTTPServer((host, port), Handler)
 
 
-def serve(store, token, host="127.0.0.1", port=52740):
-    make_server(store, token, host, port).serve_forever()
+def serve(store, token, host="127.0.0.1", port=52740, ctx=None):
+    make_server(store, token, host, port, ctx).serve_forever()

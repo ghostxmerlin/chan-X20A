@@ -142,7 +142,8 @@ def main():
         return
     token = open(a.token_file).read().strip() if a.token_file else ""
     from . import api
-    threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port), daemon=True).start()
+    threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port,
+                                             {"env": env, "settings_store": settings_store}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}", flush=True)
     while True:
