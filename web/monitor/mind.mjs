@@ -1,12 +1,31 @@
 // Proxy from the local monitor to the server's mind API (server/mind/api.py), which listens on the
-// server's loopback only. An ssh port forward carries it; the token is added here and never reaches
-// the browser. Only GET state / timeline / minute with numeric from, to, t, version pass.
+// server's loopback only. An ssh forward to a Unix socket in a private (0700) directory carries it —
+// no local TCP port another process could squat to catch the token. The token is added here and
+// never reaches the browser. Only GET state / timeline / minute with numeric from, to, t, version pass.
 import {spawn} from 'node:child_process';
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 const PATHS=new Set(['/state','/timeline','/minute']);
 const PARAMS=new Set(['from','to','t','version']);
+const DEFAULT_SOCKET=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../.private/mind-tunnel/mind.sock');
+function prepareSocketDir(socketPath){
+ const dir=path.dirname(socketPath);
+ fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.chmodSync(dir,0o700);
+}
+export function socketRequest(socketPath,pathAndQuery,headers,timeout=8000){
+ return new Promise((resolve,reject)=>{
+  const req=http.request({socketPath,path:pathAndQuery,method:'GET',headers,timeout},res=>{
+   let body='';res.setEncoding('utf8');res.on('data',c=>{body+=c;if(body.length>4e6)req.destroy(new Error('too large'));});
+   res.on('end',()=>resolve({status:res.statusCode,body}));
+  });
+  req.on('timeout',()=>req.destroy(new Error('timeout')));req.on('error',reject);req.end();
+ });
+}
 export class MindProxy {
- constructor({ssh,token,localPort=52741,remotePort=52740,spawnFn=spawn,fetchFn=globalThis.fetch,now=Date.now}={}){
-  Object.assign(this,{ssh,token,localPort,remotePort,spawnFn,fetchFn,now});this.child=null;this.lastStart=-Infinity;
+ constructor({ssh,token,socketPath=DEFAULT_SOCKET,remotePort=52740,spawnFn=spawn,requestFn=socketRequest,prepareFn=prepareSocketDir,now=Date.now}={}){
+  Object.assign(this,{ssh,token,socketPath,remotePort,spawnFn,requestFn,prepareFn,now});this.child=null;this.lastStart=-Infinity;
  }
  static check(pathAndQuery){
   let url;try{url=new URL(pathAndQuery,'http://x');}catch{return null;}
@@ -18,8 +37,10 @@ export class MindProxy {
   if(this.child)return true;
   if(this.now()-this.lastStart<5000)return false;
   this.lastStart=this.now();
+  this.prepareFn(this.socketPath);
   const child=this.spawnFn('ssh',['-N','-o','BatchMode=yes','-o','ExitOnForwardFailure=yes','-o','ServerAliveInterval=15',
-   '-o','ConnectTimeout=15','-L',`127.0.0.1:${this.localPort}:127.0.0.1:${this.remotePort}`,this.ssh],{stdio:'ignore'});
+   '-o','ConnectTimeout=15','-o','StreamLocalBindUnlink=yes','-o','StreamLocalBindMask=0177',
+   '-L',`${this.socketPath}:127.0.0.1:${this.remotePort}`,this.ssh],{stdio:'ignore'});
   child.on('exit',()=>{if(this.child===child)this.child=null;});
   child.on('error',()=>{if(this.child===child)this.child=null;});
   this.child=child;return true;
@@ -29,10 +50,8 @@ export class MindProxy {
   const target=MindProxy.check(pathAndQuery);
   if(!target)return {status:400,body:'参数不允许'};
   if(!this.tunnel())return {status:503,body:'情景服务连接中'};
-  try{
-   const r=await this.fetchFn(`http://127.0.0.1:${this.localPort}${target}`,{headers:{Authorization:`Bearer ${this.token}`},signal:AbortSignal.timeout(8000)});
-   return {status:r.status,body:await r.text()};
-  }catch{return {status:503,body:'情景服务连接中'};}
+  try{return await this.requestFn(this.socketPath,target,{Authorization:`Bearer ${this.token}`});}
+  catch{return {status:503,body:'情景服务连接中'};}
  }
  stop(){const c=this.child;this.child=null;if(c&&!c.killed)c.kill();}
 }
