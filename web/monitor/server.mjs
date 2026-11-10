@@ -6,12 +6,15 @@ import { DeviceClient, Monitor } from './core.mjs';
 import { Controls } from './control.mjs';
 import { existingHearingConfig } from './hearing.mjs';
 import { M12System } from './m12-system.mjs';
+import { MindProxy } from './mind.mjs';
+import { parseEnv } from 'node:util';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export const root = path.resolve(directory, '../..');
-export function createMonitorServer(monitor, controls = new Controls(monitor,{loadHearingConfig:()=>existingHearingConfig(path.join(root,'.env'))})) {
+export function createMonitorServer(monitor, controls = new Controls(monitor,{loadHearingConfig:()=>existingHearingConfig(path.join(root,'.env'))}), mind = null) {
   const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']],
-    ['/hearing-ui.js', ['hearing-ui.js','text/javascript; charset=utf-8']], ['/servo-tuning-ui.js', ['servo-tuning-ui.js','text/javascript; charset=utf-8']], ['/wifi-ui.js', ['wifi-ui.js','text/javascript; charset=utf-8']], ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
+    ['/hearing-ui.js', ['hearing-ui.js','text/javascript; charset=utf-8']], ['/servo-tuning-ui.js', ['servo-tuning-ui.js','text/javascript; charset=utf-8']], ['/wifi-ui.js', ['wifi-ui.js','text/javascript; charset=utf-8']], ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
+    ['/mind.html', ['mind.html', 'text/html; charset=utf-8']], ['/mind-ui.js', ['mind-ui.js', 'text/javascript; charset=utf-8']], ['/mind.css', ['mind.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -50,6 +53,16 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
       catch { respond(503, '页面文件尚未准备好'); }
       return;
     }
+    if (url.pathname.startsWith('/api/mind/')) {
+      const sub = url.pathname.slice('/api/mind'.length);
+      if (!['/state', '/timeline', '/minute'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!mind) { respond(503, '情景服务未配置'); return; }
+      mind.get(sub + url.search).then(r => {
+        res.writeHead(r.status, { 'Content-Type': r.status === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });
+        res.end(r.body);
+      }, () => respond(502, '情景服务出错'));
+      return;
+    }
     if (url.pathname === '/api/state') {
       res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(monitor.snapshot())); return;
     }
@@ -84,9 +97,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const port = config.port ?? 8787;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('本机端口无效');
   const monitor = new Monitor(new DeviceClient(config), new M12System(config.m12, {root}));
-  const server = createMonitorServer(monitor);
+  let env = {};
+  try { env = parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8')); } catch {}
+  const mind = new MindProxy({ ssh: env.SOUL_SERVER_SSH, token: env.SOUL_EAR_TOKEN });
+  const server = createMonitorServer(monitor, undefined, mind);
   server.on('error', error => { console.error('本机观察台启动失败：' + error.code); process.exit(1); });
   server.listen(port, '127.0.0.1', () => console.log(`StackChan 观察台：http://127.0.0.1:${port}/`));
-  const close = () => { monitor.stop(); server.closeAllConnections(); server.close(() => process.exit(0)); };
+  const close = () => { monitor.stop(); mind.stop(); server.closeAllConnections(); server.close(() => process.exit(0)); };
   process.on('SIGTERM', close); process.on('SIGINT', close);
 }

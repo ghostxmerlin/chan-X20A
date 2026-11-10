@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hello 情景</title>
+  <link rel="stylesheet" href="/mind.css"><script type="module" src="/mind-ui.js"></script>
+</head>
+<body>
+  <header>
+    <h1>hello 情景</h1>
+    <a href="/">← 观察台</a>
+    <label>日期 <input type="date" id="mind-date"></label>
+    <select id="mind-range"><option value="3">最近 3 小时</option><option value="24">全天</option></select>
+    <span id="mind-status">连接中…</span>
+  </header>
+  <p class="legend" id="mind-legend"></p>
+  <main id="mind-timeline"></main>
+</body>
+</html>
