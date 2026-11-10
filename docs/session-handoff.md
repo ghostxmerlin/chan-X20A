@@ -1,5 +1,13 @@
 # 会话交接记录
 
+## 2026-11-10 傍晚：视觉变化事件入库（0.4.73，Claude）
+
+- **hello 端**（`m12_protocol.h` `M12ChangeTracker`，`m12_unit.cpp`）：按 m12d 的 face/person id 跟踪，变化即生成事件：`face_found`、`face_attrs`（性别/年龄段一出现就报，用户要求“认到信息要尽快报”）、`face_named`（名字出现或变化）、`face_unknown`（who 回复无人匹配，带 sim）、`face_lost`（1.5 s 未见，带最后的框、名字、属性；`reason` timeout/vision_off/m12_offline/evicted）、`person_found/lost`、`vision_on/off`（以 cfg 回复为准）、`m12_online/offline`。事件进 PSRAM 64 条队列（满了丢最旧并计数，遥测 `m12.vision_events`），由听觉会话每块音频顺带上传 `{"type":"vision",...,"t_us","now_us"}`；听觉关着时先存着，连上再补发。
+- **服务器**：耳朵收 `vision` 写 `hello.vision`（键 session+t_us+event+face+person；`at` = 收到时间 − 在机器人上等待的时间）。
+- **实测**：脸 #165 found → attrs（男/成年/30）→ 0.5 s 后 named me；部署期间的事件补发入库。已知小问题：found 已带属性时会紧跟一条内容相同的 face_attrs（未修）。部署前进入画面的 #164 的 found/named 发给了旧服务端被拒。
+- **部署**：服务端部署在用户说“部署吧”后执行；单独刷固件不受限，与部署写在同一条命令里会被权限检查拦截。
+
+
 ## 2026-11-10 傍晚：hello 数据库与听悟实时转写（0.4.72，Claude）
 
 - **数据库 `hello`**（服务器本机 MongoDB；连接 `MONGO_URI` 运行时从 hubmix `~/aidea/agent/.env` 读，不进仓库）：`sessions`（每连接：来源、起止、录音路径、模型、听悟统计）、`speech`（SenseVoice 每句，已识别的熟人带 `speaker.name`）、`sounds`、`tingwu`（实时句 `kind=sentence`、会话后带说话人的 `kind=paragraph`）。键为 `session`=录音文件夹名（`YYYYMMDD/HHMMSS-source-cN`）+ id，可回到原声；**音频不进库**（录音文件永久保留，库里存路径和采样位置）。`server/ear/hello_db.py` 单后台线程 + 有界队列，库不可用只丢行（计数）不影响耳朵。

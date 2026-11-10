@@ -11,6 +11,7 @@ Protocol (v1):
                              "sound_min_db":15,"voice_hi":0.4,"voice_lo":0.2}
                             {"type":"self","sounding":false,"moving":false}
                             {"type":"forget","name":"..."}   (delete a voiceprint; answered by a "speakers" event)
+                            {"type":"vision","event":"face_found",...}   (M12 change event; stored in hello.vision)
   server -> client  text  : exactly one frame every 100 ms, a "tick":
       {"v":1,"type":"tick","seq":n,"t":<server epoch ms>,
        "rx":<samples received so far>,"rx_idle_ms":..,"rx_gap_ms":..,"rx_bytes":<audio bytes so far>,
@@ -706,6 +707,12 @@ class Ear:
                 # Discard an utterance already in progress before this explicit enrollment.
                 self.reset_segment()
                 self.post({**self.enroll.progress(), "phase":"started"})
+            elif k == "vision":
+                # M12 change event from the robot (collector-0.4.73+): stored, never answered.
+                if not isinstance(msg.get("event"), str) or len(msg["event"]) > 32:
+                    raise ValueError("vision needs an event name")
+                if self.db is not None and self.session:
+                    self.db.vision(self.session, msg, int(time.time() * 1000))
             elif k == "forget":
                 # {"type":"forget","name":..}: delete one voiceprint; the reply lists what is left.
                 name = msg.get("name")

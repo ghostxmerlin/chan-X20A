@@ -6,6 +6,9 @@ Collections (one document per thing; `session` = the recording folder name, e.g.
   speech    SenseVoice sentences: text, pos (16 kHz samples in the session audio), emotion,
             speaker, voice, self flags; unique (session, id)
   sounds    sound events (typing, clap ...): kind, label, pos, peak; unique (session, id)
+  vision    M12 change events from the robot (face/person found, named, attrs, unknown, lost,
+            vision on/off, M12 online/offline); `at` = wall time of the event; unique
+            (session, t_us, event, face, person)
   tingwu    听悟 realtime sentences (kind "sentence", final only) and the diarized result after
             the session (kind "paragraph", speaker); unique (session, kind, n)
 Audio stays in the recording files (never deleted); the database stores paths and positions.
@@ -56,6 +59,9 @@ def open_db(uri):
     db.sounds.create_index([("session", ASCENDING), ("id", ASCENDING)], unique=True)
     db.tingwu.create_index([("session", ASCENDING), ("kind", ASCENDING), ("n", ASCENDING)], unique=True)
     db.tingwu.create_index([("at", ASCENDING)])
+    db.vision.create_index([("session", ASCENDING), ("t_us", ASCENDING), ("event", ASCENDING), ("face", ASCENDING),
+                            ("person", ASCENDING)], unique=True)
+    db.vision.create_index([("at", ASCENDING)])
     return db
 
 
@@ -92,6 +98,16 @@ class HelloDB:
     def tingwu(self, session, kind, n, doc):
         self._put("upsert", "tingwu", {"session": session, "kind": kind, "n": n},
                   {**doc, "session": session, "kind": kind, "n": n, "engine": "tingwu"})
+
+    def vision(self, session, msg, received_ms):
+        """One robot vision event; its wall time is the arrival time minus how long it waited."""
+        wait_ms = max(0, (msg.get("now_us", 0) - msg.get("t_us", 0)) // 1000) if isinstance(msg.get("now_us"), int) else 0
+        doc = {k: msg.get(k) for k in ("event", "t_us", "f", "face", "person", "box", "prob", "sim", "gender", "age",
+                                        "age_group", "name", "reason") if msg.get(k) is not None}
+        doc.update({"session": session, "at": received_ms - wait_ms, "received": received_ms})
+        key = {"session": session, "t_us": doc.get("t_us"), "event": doc.get("event"), "face": doc.get("face"),
+               "person": doc.get("person")}
+        self._put("upsert", "vision", key, doc)
 
     def event(self, session, ev):
         """Route one ear event; speech/sound 'end' rows only."""

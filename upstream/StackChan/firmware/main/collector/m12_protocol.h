@@ -463,6 +463,141 @@ inline M12Target m12_track_target(const M12Detection& d, const M12Target& previo
     return {true, true, body->id, body->x, body->y, body->w, head};
 }
 
+// ---------- vision change events (2026-11-10) ----------
+// The robot reports what changed in view, not every detection line: raw material for the
+// server's mind. Faces and persons are tracked by m12d's ids; an id unseen for kLostUs is lost.
+// Everything learnt about a face is reported as soon as it is known (user, 2026-11-10): name
+// (face_named) and gender / age group (face_attrs, ~0.6 s after the face appears), not at loss.
+enum class M12VisionKind : uint8_t {
+    face_found, face_named, face_unknown, face_lost, person_found, person_lost,
+    vision_on, vision_off, m12_online, m12_offline, face_attrs
+};
+inline const char* m12_vision_kind_name(M12VisionKind k)
+{
+    static const char* const names[] = {"face_found", "face_named", "face_unknown", "face_lost", "person_found",
+                                        "person_lost", "vision_on", "vision_off", "m12_online", "m12_offline", "face_attrs"};
+    return names[static_cast<size_t>(k)];
+}
+struct M12VisionEvent {
+    M12VisionKind kind = M12VisionKind::face_found;
+    int64_t t_us = 0;                     // robot clock (esp_timer)
+    uint32_t f = 0;                       // m12d frame number (0 for status events)
+    int32_t face = -1, person = -1;       // ids (person events: `face` = paired face)
+    int16_t x = 0, y = 0, w = 0, h = 0;   // 640x480
+    float prob = 0, sim = -1;             // sim: who similarity (face_unknown)
+    char gender = 0;
+    int16_t age = -1;
+    M12AgeGroup age_group = M12AgeGroup::none;
+    char name[kM12NameBytes + 1] = {};
+    char reason[12] = {};                 // lost: "timeout" or "vision_off"
+};
+class M12ChangeTracker {
+public:
+    static constexpr int64_t kLostUs = 1500000;
+    static constexpr size_t kFaces = 8, kPersons = 5;
+    template <typename Emit> void detection(const M12Detection& d, int64_t now, Emit emit)
+    {
+        for (size_t i = 0; i < d.count; ++i) {
+            const auto& f = d.faces[i];
+            if (f.id < 0) continue;
+            Face* t = find_face(f.id);
+            if (!t) {
+                t = slot_face(now, emit);
+                t->used = true; t->face = f; t->last_us = now; t->named[0] = 0; t->gender = 0; t->age_group = M12AgeGroup::none;
+                emit(face_event(M12VisionKind::face_found, f, d.f, now));
+            }
+            t->face = f; t->last_us = now; t->f = d.f;
+            if (f.name[0] && std::strcmp(f.name, t->named)) {
+                std::snprintf(t->named, sizeof(t->named), "%s", f.name);
+                emit(face_event(M12VisionKind::face_named, f, d.f, now));
+            }
+            if (f.gender && (f.gender != t->gender || f.age_group != t->age_group)) {
+                t->gender = f.gender; t->age_group = f.age_group;
+                emit(face_event(M12VisionKind::face_attrs, f, d.f, now));
+            }
+        }
+        for (size_t i = 0; i < d.persons; ++i) {
+            const auto& p = d.person[i];
+            if (p.id < 0) continue;
+            Person* t = find_person(p.id);
+            if (!t) {
+                t = slot_person(now, emit);
+                t->used = true;
+                emit(person_event(M12VisionKind::person_found, p, d.f, now));
+            }
+            t->person = p; t->last_us = now; t->f = d.f;
+        }
+    }
+    template <typename Emit> void tick(int64_t now, Emit emit)
+    {
+        for (auto& t : faces_) if (t.used && now - t.last_us >= kLostUs) lose_face(t, now, "timeout", emit);
+        for (auto& t : persons_) if (t.used && now - t.last_us >= kLostUs) lose_person(t, now, "timeout", emit);
+    }
+    // Detection stopped (standby / M12 offline): everything in view is lost now.
+    template <typename Emit> void clear(int64_t now, const char* reason, Emit emit)
+    {
+        for (auto& t : faces_) if (t.used) lose_face(t, now, reason, emit);
+        for (auto& t : persons_) if (t.used) lose_person(t, now, reason, emit);
+    }
+    size_t faces_in_view() const { size_t n = 0; for (const auto& t : faces_) n += t.used; return n; }
+    size_t persons_in_view() const { size_t n = 0; for (const auto& t : persons_) n += t.used; return n; }
+
+private:
+    struct Face {
+        bool used = false; M12Face face; int64_t last_us = 0; uint32_t f = 0; char named[kM12NameBytes + 1] = {};
+        char gender = 0; M12AgeGroup age_group = M12AgeGroup::none;     // last attributes reported
+    };
+    struct Person { bool used = false; M12Person person; int64_t last_us = 0; uint32_t f = 0; };
+    Face faces_[kFaces];
+    Person persons_[kPersons];
+    static M12VisionEvent face_event(M12VisionKind k, const M12Face& f, uint32_t frame, int64_t now)
+    {
+        M12VisionEvent e; e.kind = k; e.t_us = now; e.f = frame; e.face = f.id;
+        e.x = f.x; e.y = f.y; e.w = f.w; e.h = f.h; e.prob = f.prob; e.gender = f.gender; e.age = f.age; e.age_group = f.age_group;
+        std::snprintf(e.name, sizeof(e.name), "%s", f.name);
+        return e;
+    }
+    static M12VisionEvent person_event(M12VisionKind k, const M12Person& p, uint32_t frame, int64_t now)
+    {
+        M12VisionEvent e; e.kind = k; e.t_us = now; e.f = frame; e.person = p.id; e.face = p.face;
+        e.x = p.x; e.y = p.y; e.w = p.w; e.h = p.h; e.prob = p.prob;
+        return e;
+    }
+    template <typename Emit> void lose_face(Face& t, int64_t now, const char* reason, Emit emit)
+    {
+        auto e = face_event(M12VisionKind::face_lost, t.face, t.f, now);
+        if (!e.name[0]) std::snprintf(e.name, sizeof(e.name), "%s", t.named);   // last name it carried
+        if (!e.gender) { e.gender = t.gender; e.age_group = t.age_group; }
+        std::snprintf(e.reason, sizeof(e.reason), "%s", reason);
+        t.used = false;
+        emit(e);
+    }
+    template <typename Emit> void lose_person(Person& t, int64_t now, const char* reason, Emit emit)
+    {
+        auto e = person_event(M12VisionKind::person_lost, t.person, t.f, now);
+        std::snprintf(e.reason, sizeof(e.reason), "%s", reason);
+        t.used = false;
+        emit(e);
+    }
+    Face* find_face(int32_t id) { for (auto& t : faces_) if (t.used && t.face.id == id) return &t; return nullptr; }
+    Person* find_person(int32_t id) { for (auto& t : persons_) if (t.used && t.person.id == id) return &t; return nullptr; }
+    // A free slot, or the least recently seen track (lost first) when the table is full.
+    template <typename Emit> Face* slot_face(int64_t now, Emit emit)
+    {
+        Face* oldest = nullptr;
+        for (auto& t : faces_) { if (!t.used) return &t; if (!oldest || t.last_us < oldest->last_us) oldest = &t; }
+        lose_face(*oldest, now, "evicted", emit);
+        return oldest;
+    }
+    template <typename Emit> Person* slot_person(int64_t now, Emit emit)
+    {
+        Person* oldest = nullptr;
+        for (auto& t : persons_) { if (!t.used) return &t; if (!oldest || t.last_us < oldest->last_us) oldest = &t; }
+        lose_person(*oldest, now, "evicted", emit);
+        return oldest;
+    }
+};
+
 // Explicit vision modes. m12d always detects while det is on; recognition is a request.
 enum class M12Function : uint8_t { standby = 0, detect = 1, none = 3 };
 inline uint32_t next_m12_request(uint32_t previous, M12Function mode)

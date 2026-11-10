@@ -59,6 +59,20 @@ class HelloDBTest(unittest.TestCase):
         self.assertEqual(fake.ops[3][3]["engine"], "tingwu")
         self.assertEqual(db.written, 5); self.assertEqual(db.dropped, 0)
 
+    def test_vision_events_get_their_wall_time_and_a_stable_key(self):
+        fake = FakeDB()
+        db = hello_db.HelloDB("unused", client_factory=lambda: fake)
+        db.vision("s1", {"type": "vision", "event": "face_named", "t_us": 5_000_000, "now_us": 7_000_000, "face": 4,
+                         "name": "person-a", "box": [1, 2, 3, 4], "junk": 1}, received_ms=100_000)
+        db.vision("s1", {"type": "vision", "event": "vision_on", "t_us": 1}, received_ms=50)
+        db.flush()
+        (op, coll, key, doc), (_, _, key2, doc2) = fake.ops
+        self.assertEqual((op, coll), ("replace", "vision"))
+        self.assertEqual(key, {"session": "s1", "t_us": 5_000_000, "event": "face_named", "face": 4, "person": None})
+        self.assertEqual(doc["at"], 98_000); self.assertEqual(doc["received"], 100_000)   # waited 2 s on the robot
+        self.assertEqual(doc["name"], "person-a"); self.assertNotIn("junk", doc); self.assertNotIn("type", doc)
+        self.assertEqual(doc2["at"], 50)
+
     def test_only_known_speakers_get_a_name(self):
         row = hello_db.speech_doc("s", {"id": "s-1", "speaker": {"band": "unsure", "name": "person-a", "score": 0.45}})
         self.assertIsNone(row["speaker"]["name"]); self.assertEqual(row["speaker"]["best"], "person-a")
@@ -161,6 +175,21 @@ class EarTingwuTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([r[1:4] for r in rows if r[0] == "tingwu"][-1], (ear.session, "paragraph", 1))
             self.assertTrue(any(r[0] == "open" for r in rows) and any(r[0] == "update" for r in rows))
         ex.shutdown()
+
+    async def test_vision_message_is_stored_not_answered(self):
+        import ear_server
+        rows = []
+        with patch.object(ear_server.so, "VoiceActivityDetector", return_value=SimpleNamespace(reset=lambda: None)):
+            models = SimpleNamespace(vad_cfg=None, speakers={}, lock=__import__("threading").Lock(), denoise_cfg=None, new_denoiser=lambda: None)
+            ear = ear_server.Ear(models, None, ThreadPoolExecutor(1))
+            ear.db = SimpleNamespace(vision=lambda *a: rows.append(a), event=lambda *a: None)
+            ear.session = "20261110/x-c1"
+            before = len(ear.outbox)
+            await ear.on_text('{"type":"vision","event":"face_found","t_us":1,"face":3}')
+            self.assertEqual(rows[0][0], "20261110/x-c1"); self.assertEqual(rows[0][1]["face"], 3)
+            self.assertEqual(len(ear.outbox), before)
+            await ear.on_text('{"type":"vision"}')
+            self.assertEqual(ear.outbox[-1]["type"], "error")
 
     async def test_mac_source_never_starts_tingwu(self):
         import ear_server

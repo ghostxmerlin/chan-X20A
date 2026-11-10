@@ -211,6 +211,50 @@ int main()
         assert(tb.valid && tb.person && tb.id == 18 && tb.x == 200 && tb.w == 120 && tb.h == 60);
         assert(!m12_track_target(parse(R"({"f":5,"num":0,"face":[]})").det, tb).valid);
     }
+    // --- vision change events ---
+    {
+        M12ChangeTracker tr;
+        std::vector<M12VisionEvent> ev;
+        auto emit = [&](const M12VisionEvent& e) { ev.push_back(e); };
+        auto frame = [&](const char* json) { return parse(json).det; };
+        tr.detection(frame(R"({"f":1,"num":1,"face":[{"x":10,"y":10,"w":100,"h":120,"prob":0.95,"id":4}],"person":[{"x":0,"y":0,"w":300,"h":400,"prob":0.9,"id":18,"face":4}]})"), 0, emit);
+        assert(ev.size() == 2 && ev[0].kind == M12VisionKind::face_found && ev[0].face == 4 && ev[0].w == 100);
+        assert(ev[1].kind == M12VisionKind::person_found && ev[1].person == 18 && ev[1].face == 4);
+        ev.clear();
+        // same ids again: nothing new; attributes and a name arrive later
+        tr.detection(frame(R"({"f":2,"num":1,"face":[{"x":12,"y":10,"w":100,"h":120,"prob":0.95,"id":4,"gender":"f","age":34,"age_group":"adult"}]})"), 500000, emit);
+        assert(ev.size() == 1 && ev[0].kind == M12VisionKind::face_attrs && ev[0].gender == 'f' && ev[0].age == 34);   // reported at once
+        ev.clear();
+        tr.detection(frame(R"({"f":3,"num":1,"face":[{"x":12,"y":10,"w":100,"h":120,"prob":0.95,"id":4,"gender":"f","age_group":"adult","name":"person-a"}]})"), 600000, emit);
+        assert(ev.size() == 1 && ev[0].kind == M12VisionKind::face_named && !std::strcmp(ev[0].name, "person-a"));
+        tr.detection(frame(R"({"f":4,"num":1,"face":[{"x":12,"y":10,"w":100,"h":120,"prob":0.95,"id":4,"gender":"f","age_group":"adult","name":"person-a"}]})"), 700000, emit);
+        assert(ev.size() == 1);                                          // same name and attributes: not repeated
+        ev.clear();
+        // the person box was last seen at t=0 → lost after 1.5 s; the face keeps going
+        tr.tick(1400000, emit); assert(ev.empty());
+        tr.tick(1500000, emit);
+        assert(ev.size() == 1 && ev[0].kind == M12VisionKind::person_lost && !std::strcmp(ev[0].reason, "timeout"));
+        ev.clear();
+        tr.tick(2200000, emit);                                          // face last seen at 0.7 s
+        assert(ev.size() == 1 && ev[0].kind == M12VisionKind::face_lost && ev[0].face == 4);
+        assert(!std::strcmp(ev[0].name, "person-a") && ev[0].gender == 'f' && ev[0].x == 12);
+        assert(tr.faces_in_view() == 0 && tr.persons_in_view() == 0);
+        ev.clear();
+        // vision off loses everything at once
+        tr.detection(frame(R"({"f":9,"num":2,"face":[{"x":1,"y":1,"w":20,"h":20,"prob":0.9,"id":7},{"x":100,"y":1,"w":20,"h":20,"prob":0.9,"id":8}]})"), 3000000, emit);
+        ev.clear();
+        tr.clear(3100000, "vision_off", emit);
+        assert(ev.size() == 2 && ev[0].kind == M12VisionKind::face_lost && !std::strcmp(ev[1].reason, "vision_off"));
+        // more ids than slots: the stalest track is evicted (lost) first
+        ev.clear();
+        for (int i = 0; i < 9; ++i) {
+            std::string j = R"({"f":20,"num":1,"face":[{"x":1,"y":1,"w":20,"h":20,"prob":0.9,"id":)" + std::to_string(100 + i) + "}]}";
+            tr.detection(frame(j.c_str()), 4000000 + i, emit);
+        }
+        size_t evicted = 0; for (const auto& e : ev) evicted += e.kind == M12VisionKind::face_lost && !std::strcmp(e.reason, "evicted");
+        assert(evicted == 1 && tr.faces_in_view() == M12ChangeTracker::kFaces);
+        assert(!std::strcmp(m12_vision_kind_name(M12VisionKind::m12_offline), "m12_offline"));
+    }
     // --- explicit modes and screen mapping ---
     {
         uint32_t r = next_m12_request(0, M12Function::detect);

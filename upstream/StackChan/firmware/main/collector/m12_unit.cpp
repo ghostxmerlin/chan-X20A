@@ -69,6 +69,12 @@ struct Shared {
     uint32_t confirmed_revision = UINT32_MAX;
     int32_t who_inflight = -1;
     uint32_t who_busy = 0;
+    // vision change events for the server (state_mutex): oldest first, newest kept when full
+    static constexpr size_t kVision = 64;
+    M12ChangeTracker tracker;
+    M12VisionEvent vision[kVision];
+    size_t vision_head = 0, vision_count = 0;
+    uint32_t vision_total = 0, vision_dropped = 0;
     // tx side (tx_mutex)
     M12Requests pending;
     Waiting waiting[M12Requests::kSlots];
@@ -102,6 +108,20 @@ bool install_uart()
     gpio_pullup_en(kRx);
     return true;
 }
+
+void push_vision_locked(const M12VisionEvent& e)
+{
+    auto& s = *shared;
+    if (s.vision_count == Shared::kVision) { s.vision_head = (s.vision_head + 1) % Shared::kVision; --s.vision_count; ++s.vision_dropped; }
+    s.vision[(s.vision_head + s.vision_count) % Shared::kVision] = e;
+    ++s.vision_count; ++s.vision_total;
+}
+void status_event_locked(M12VisionKind kind, int64_t now)
+{
+    M12VisionEvent e; e.kind = kind; e.t_us = now;
+    push_vision_locked(e);
+}
+const auto vision_sink = [](const M12VisionEvent& e) { push_vision_locked(e); };
 
 void put_record_locked(const Record& r)
 {
@@ -158,6 +178,11 @@ void finish_request(const M12Pending& p, const M12Reply* reply, const char* err,
         case M12Op::cfg:
             shared->cfg_inflight = false;
             if (!err && r.cfg.valid) {
+                const bool was_on = shared->det_known && shared->det;
+                if (r.cfg.det != was_on || !shared->det_known) {
+                    if (!r.cfg.det) shared->tracker.clear(now, "vision_off", vision_sink);
+                    if (r.cfg.det != was_on) status_event_locked(r.cfg.det ? M12VisionKind::vision_on : M12VisionKind::vision_off, now);
+                }
                 shared->cfg = r.cfg;
                 shared->det_known = true;
                 shared->det = r.cfg.det;
@@ -171,6 +196,11 @@ void finish_request(const M12Pending& p, const M12Reply* reply, const char* err,
             break;
         case M12Op::who:
             shared->who_inflight = -1;
+            if (!err && !r.has_name) {          // asked and nobody matched: report it right away
+                M12VisionEvent e; e.kind = M12VisionKind::face_unknown; e.t_us = now; e.f = r.f;
+                e.face = r.face >= 0 ? r.face : p.face; e.sim = r.sim;
+                push_vision_locked(e);
+            }
             break;
         case M12Op::faces:
             if (!err && r.has_library) {
@@ -256,9 +286,12 @@ void m12_task(void*)
                 s.function = M12Function::none;
                 shared->det_known = false;
                 ++shared->offline_events;
+                shared->tracker.clear(now, "m12_offline", vision_sink);
+                status_event_locked(M12VisionKind::m12_offline, now);
                 ESP_LOGW(kTag, "no heartbeat for %lld ms: M12 offline", static_cast<long long>((now - s.last_hb_us) / 1000));
             }
             online = s.online;
+            shared->tracker.tick(now, vision_sink);
         }
         // --- expired requests ---
         for (M12Pending p; ; ) {
@@ -348,6 +381,7 @@ void m12_task(void*)
                     s.hb = msg.hb;
                     // m12d settings reset on power-up (det back to true): send cfg again.
                     if (came_online || restarted) { shared->det_known = false; if (restarted) ++shared->restarts; }
+                    if (came_online) status_event_locked(M12VisionKind::m12_online, rx_us);
                 }
                 last_up = msg.hb.up;
                 if (came_online) ESP_LOGI(kTag, "heartbeat: M12 online (up %lu s, %.0f C)", static_cast<unsigned long>(msg.hb.up), msg.hb.t);
@@ -376,6 +410,7 @@ void m12_task(void*)
                     std::memcpy(s.faces, msg.det.faces, sizeof(s.faces));
                     s.persons = msg.det.persons;
                     std::memcpy(s.person, msg.det.person, sizeof(s.person));
+                    shared->tracker.detection(msg.det, rx_us, vision_sink);
                     // ask who only while detection is what we asked for
                     if (s.online && shared->det_known && shared->det && want_det) {
                         face = who.next(msg.det, rx_us);
@@ -458,6 +493,19 @@ int32_t m12_request(M12Op op, const M12RequestArgs& args, M12Callback callback, 
         if (!shared->state.online) return -2;
     }
     return send_request(op, args, 0, callback, context, true, false);
+}
+
+size_t m12_take_vision_events(M12VisionEvent* out, size_t max)
+{
+    if (!shared) return 0;
+    std::lock_guard<std::mutex> lock(state_mutex);
+    auto& s = *shared;
+    size_t n = 0;
+    while (n < max && s.vision_count) {
+        out[n++] = s.vision[s.vision_head];
+        s.vision_head = (s.vision_head + 1) % Shared::kVision; --s.vision_count;
+    }
+    return n;
 }
 
 const char* m12_request_error(int32_t code)
@@ -544,6 +592,9 @@ void m12_json(ArduinoJson::JsonObject out)
         e["name"] = std::string(shared->library[i].name); e["samples"] = shared->library[i].samples;
     }
     out["rx_bytes"] = s.rx_bytes;
+    auto vision = out["vision_events"].to<ArduinoJson::JsonObject>();
+    vision["queued"] = shared->vision_count; vision["total"] = shared->vision_total; vision["dropped"] = shared->vision_dropped;
+    vision["faces_in_view"] = shared->tracker.faces_in_view(); vision["persons_in_view"] = shared->tracker.persons_in_view();
     auto counters = out["counters"].to<ArduinoJson::JsonObject>();
     counters["lines"] = shared->lines; counters["invalid"] = shared->invalid_lines; counters["overflow"] = shared->overflow_lines;
     counters["replies"] = shared->replies; counters["errors"] = shared->errors; counters["timeouts"] = shared->timeouts;
