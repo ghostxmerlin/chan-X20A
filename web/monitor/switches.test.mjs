@@ -32,8 +32,39 @@ test('starting / stopping vision counts as the requested side', ()=>{
  assert.equal(sw.switchView(robot({m12:'starting'}),true,{enabled:true}).vision.on,true);
  assert.equal(sw.switchView(robot({m12:'stopping'}),true,{enabled:true}).vision.on,false);
 });
-test('toggle requests: hearing_listen, m12 and the mind switch', ()=>{
- assert.deepEqual(sw.toggleRequest('hearing',robot(),true),{kind:'control',body:{action:'hearing_listen',enabled:true,boot:'b1'}});
+const fresh=Date.now();
+const SW=(on,running,{available=true,stale=false}={})=>({tingwu:{on},tingwu_status:{running,available,stale,at:fresh}});
+test('level is local when listening with the tingwu switch off', ()=>{
+ const v=sw.switchView(robot({listen:true,hstate:'listening'}),true,{enabled:false},SW(false,[]));
+ assert.equal(v.hearing.level,'local');assert.equal(v.cost,'现在不花钱');
+ assert.equal(sw.switchView(robot(),true,{enabled:false},SW(true,[])).hearing.level,'off');
+});
+test('level tingwu and cost only when the ear reports a running stream', ()=>{
+ const r=robot({listen:true,hstate:'listening'});
+ const v=sw.switchView(r,true,{enabled:false},SW(true,['s1']));
+ assert.equal(v.hearing.level,'tingwu');assert.equal(v.hearing.tingwuRunning,true);assert.match(v.cost,/正在花钱：听悟/);
+ const w=sw.switchView(r,true,{enabled:false},SW(true,[]));
+ assert.equal(w.hearing.tingwuRunning,false);assert.equal(w.cost,'现在不花钱');assert.match(w.hearing.detail,/听悟未在运行|正在开启听悟/);
+});
+test('stale status with tingwu selected says unknown, never free', ()=>{
+ const v=sw.switchView(robot({listen:true}),true,{enabled:false},SW(true,[],{stale:true}));
+ assert.equal(v.hearing.tingwuRunning,null);assert.match(v.cost,/听悟状态未知/);assert.doesNotMatch(v.cost,/现在不花钱/);
+});
+test('unavailable tingwu disables the button', ()=>{
+ const v=sw.switchView(robot({listen:true}),true,{enabled:false},SW(true,[],{available:false}));
+ assert.equal(v.hearing.tingwuAvailable,false);assert.match(v.hearing.detail,/服务器未配置听悟/);assert.doesNotMatch(v.cost,/听悟（/);
+});
+test('switches unknown: no tingwu level is claimed', ()=>{
+ const v=sw.switchView(robot({listen:true}),true,{enabled:false},null);
+ assert.equal(v.hearing.level,'unknown');
+});
+test('level requests set the tier before turning hearing on', ()=>{
+ const r=robot();
+ assert.deepEqual(sw.levelRequests('off',r),[{kind:'control',body:{action:'hearing_listen',enabled:false,boot:'b1'}},{kind:'switch',body:{name:'tingwu',on:false}}]);
+ assert.deepEqual(sw.levelRequests('local',r),[{kind:'switch',body:{name:'tingwu',on:false}},{kind:'control',body:{action:'hearing_listen',enabled:true,boot:'b1'}}]);
+ assert.deepEqual(sw.levelRequests('tingwu',r),[{kind:'switch',body:{name:'tingwu',on:true}},{kind:'control',body:{action:'hearing_listen',enabled:true,boot:'b1'}}]);
+});
+test('toggle requests: m12 and the mind switch', ()=>{
  assert.deepEqual(sw.toggleRequest('vision',robot({m12:'detecting'}),true),{kind:'control',body:{action:'m12',enabled:false,boot:'b1'}});
  assert.deepEqual(sw.toggleRequest('mind',robot(),{enabled:true}),{kind:'mind',body:{enabled:false}});
 });
