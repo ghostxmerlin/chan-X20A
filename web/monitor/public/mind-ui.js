@@ -56,6 +56,10 @@ const BASIS={seen:'看到',heard:'听到',inferred:'推断',assumed:'猜测'};
 const CONF={high:'高',mid:'中',low:'低'};
 const CLASS_COLOURS={present:'#2e9d4f',absent:'#e8912d',unknown:'#9aa0a6',off:'#555555',gap:'#333338'};
 const CLASS_LABEL={present:'主人在',absent:'主人不在',unknown:'不确定',off:'感官关',gap:'mind 没在运行'};
+export function frameCaption(f){
+ if(!f)return '还没有收到画面';
+ return `${hhmmss(f.at)} 收到 · 变化 ${f.diff===255?'首张':f.diff} · 今天 ${f.today} 张${f.missing?' · 文件缺失':''}`;
+}
 export const placeLabel=p=>p?.label?`${p.label}（${p.source==='owner_report'?`你报告，${hhmm(p.at)}`:'来自 Wi-Fi'}）`:'未知（还没有报告）';
 export const basisLabel=b=>BASIS[b]||escapeHtml(b||'');
 export function groupEntries(entries){
@@ -251,6 +255,22 @@ export function start(doc){
  el('mind-date').addEventListener('change',()=>{open=null;refresh();});
  el('mind-range').addEventListener('change',refresh);
  getJson('/prompts').then(p=>{prompts=p;},()=>{});
+ // 服务器收到的最新画面（第 2 步）：JPEG arrives as base64 JSON; shown through a blob: URL (CSP has no data:).
+ let frameURL=null;
+ async function refreshFrame(){
+  let f=null;
+  try{const r=await fetch('/api/mind/frames/latest',{signal:AbortSignal.timeout(10000)});f=r.ok?await r.json():null;}catch{f=null;}
+  el('mind-frame-cap').textContent=frameCaption(f);
+  const img=el('mind-frame-img');
+  if(f?.jpeg_b64){
+   const bytes=Uint8Array.from(atob(f.jpeg_b64),c=>c.charCodeAt(0));
+   const url=URL.createObjectURL(new Blob([bytes],{type:'image/jpeg'}));
+   img.src=url;img.hidden=false;
+   if(frameURL)URL.revokeObjectURL(frameURL);
+   frameURL=url;
+  }
+ }
+ refreshFrame();setInterval(refreshFrame,15000);
  refresh();setInterval(refresh,10000);
 }
 if(typeof document!=='undefined'&&document.getElementById('mind-timeline'))start(document);

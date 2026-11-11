@@ -26,8 +26,11 @@ export function switchView(robot,fresh,mind,switches=null){
  const status=robot?.m12?.status||'disconnected';
  const visionKnown=!!fresh&&status!=='disconnected';
  const vOn=visionKnown&&VISION_ON.has(status);
- const vision={known:visionKnown,on:vOn,can:visionKnown&&(vOn||(!!t.m12?.valid&&t.m12?.online!==false)),
-  detail:!fresh?'状态未知（数据过期）':VISION[status]||status};
+ const camKnown=typeof t.health?.camera_enabled==='boolean',camOn=t.health?.camera_enabled===true;
+ const vLevel=!visionKnown||!camKnown?'unknown':camOn&&vOn?'upload':vOn?'m12_only':camOn?'camera_only':'off';
+ const vision={known:visionKnown&&camKnown,on:vOn,level:vLevel,camera:camOn,
+  can:visionKnown&&(vOn||(!!t.m12?.valid&&t.m12?.online!==false)),
+  detail:!fresh?'状态未知（数据过期）':`${VISION[status]||status} · 摄像头${!camKnown?'未知':camOn?'开（变化时上传）':'关'}`};
  const mindKnown=!!mind&&typeof mind.enabled==='boolean';
  const senses=hearing.on||vision.on;
  const m={known:mindKnown,on:mindKnown&&mind.enabled,can:mindKnown,
@@ -52,15 +55,31 @@ export function levelRequests(level,robot){
  return [tier(level==='tingwu'),listen(true)];
 }
 
+// Vision tiers (step 2): 上传 = body camera on (frames to the server on change) + M12 detection.
+export function visionRequests(level,robot){
+ const c=(action,enabled)=>({kind:'control',body:{action,enabled,boot:robot?.boot}});
+ return level==='upload'?[c('camera',true),c('m12',true)]:[c('camera',false),c('m12',false)];
+}
+export function visionButtons(v,pending){
+ const s=v.vision;
+ return {off:!!pending||!s.known,upload:!!pending||!s.known||!s.can,recognize:true};
+}
+async function runRequests(reqs,keepGoing,post){
+ const errors=[];
+ for(const req of reqs){
+  try{await post(req);}
+  catch(e){errors.push({kind:req.kind,action:req.body?.action,error:e});if(!keepGoing)break;}
+ }
+ return errors;
+}
+
 // Send a tier's requests in order. "off" tries every step; turning on stops at the first failure so
 // hearing never starts in an unknown tier. Returns [{kind, error}] for the failed steps.
 export async function runLevel(level,robot,post){
- const errors=[];
- for(const req of levelRequests(level,robot)){
-  try{await post(req);}
-  catch(e){errors.push({kind:req.kind,error:e});if(level!=='off')break;}
- }
- return errors;
+ return runRequests(levelRequests(level,robot),level==='off',post);
+}
+export async function runVision(level,robot,post){
+ return runRequests(visionRequests(level,robot),level==='off',post);
 }
 
 // Disabled state of the three tier buttons. 关 needs only the server switch or the robot to be known.
@@ -80,6 +99,7 @@ export function toggleRequest(which,robot,mindOrFresh){
 
 const NAMES={hearing:'听觉',vision:'视觉',mind:'情景'};
 const LEVELS=[['off','关'],['local','本地'],['tingwu','听悟']];
+const VLEVELS=[['off','关'],['upload','上传'],['recognize','识别']];
 async function postJson(path,body){
  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
  if(!r.ok)throw new Error(await r.text());
@@ -92,10 +112,13 @@ export class SwitchBar{
   const root=doc.getElementById('switches');
   const hearing='<div class="switch switch-group" id="sw-hearing" role="group" aria-label="听觉档位"><b>听觉</b><span id="sw-hearing-state">—</span>'+
    LEVELS.map(([k,label])=>`<button id="sw-hearing-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-hearing-detail">—</small></div>';
-  root.innerHTML=hearing+['vision','mind'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
+  const vision='<div class="switch switch-group" id="sw-vision" role="group" aria-label="视觉档位"><b>视觉</b><span id="sw-vision-state">—</span>'+
+   VLEVELS.map(([k,label])=>`<button id="sw-vision-${k}" aria-pressed="false" disabled${k==='recognize'?' title="第 3 步：识别（待做）"':''}>${label}</button>`).join('')+'<small id="sw-vision-detail">—</small></div>';
+  root.innerHTML=hearing+vision+['mind'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
    '<span id="sw-cost" class="switch-cost" role="status">—</span>';
   for(const [k] of LEVELS)doc.getElementById('sw-hearing-'+k).addEventListener('click',()=>this.setLevel(k));
-  for(const k of ['vision','mind'])doc.getElementById('sw-'+k).addEventListener('click',()=>this.toggle(k));
+  for(const [k] of VLEVELS)if(k!=='recognize')doc.getElementById('sw-vision-'+k).addEventListener('click',()=>this.setVision(k));
+  doc.getElementById('sw-mind').addEventListener('click',()=>this.toggle('mind'));
   this.pollMind();setInterval(()=>this.pollMind(),5000);
   if(pollRobot){this.pollRobot();setInterval(()=>this.pollRobot(),2000);}
  }
@@ -130,6 +153,13 @@ export class SwitchBar{
   this.msg=errors.map(({kind,error})=>`听觉（${steps[kind]}）：${error.name==='TimeoutError'?'结果未确认，请看状态':error.message}`).join('；');
   this.pending=null;this.paint();
  }
+ async setVision(level){
+  if(this.pending)return;
+  this.pending='vision';this.msg='';this.paint();
+  const errors=await runVision(level,this.robot,req=>postJson('/api/control',req.body));
+  this.msg=errors.map(({action,error})=>`视觉（${action==='camera'?'摄像头':'M12'}）：${error.name==='TimeoutError'?'结果未确认，请看状态':error.message}`).join('；');
+  this.pending=null;this.paint();
+ }
  paint(){
   const v=switchView(this.robot,this.fresh,this.mind,this.switches),$=id=>this.doc.getElementById(id);
   const hv=v.hearing,g=$('sw-hearing');
@@ -140,7 +170,12 @@ export class SwitchBar{
   }
   $('sw-hearing-state').textContent=this.pending==='hearing'?'发送中…':{off:'关',local:'本地',tingwu:'听悟',unknown:'未知'}[hv.level];
   $('sw-hearing-detail').textContent=hv.detail;
-  for(const k of ['vision','mind']){
+  const vv=v.vision,vg=$('sw-vision'),vdis=visionButtons(v,this.pending);
+  vg.classList.toggle('on',vv.level==='upload');vg.classList.toggle('unknown',!vv.known);
+  for(const [k] of VLEVELS){const b=$('sw-vision-'+k);b.setAttribute('aria-pressed',String(vv.level===k));b.disabled=vdis[k];}
+  $('sw-vision-state').textContent=this.pending==='vision'?'发送中…':{off:'关',upload:'上传',m12_only:'只有 M12',camera_only:'只有摄像头',unknown:'未知'}[vv.level];
+  $('sw-vision-detail').textContent=vv.detail;
+  for(const k of ['mind']){
    const s=v[k],b=$('sw-'+k);
    b.setAttribute('aria-pressed',String(s.on));b.classList.toggle('on',s.on);b.classList.toggle('unknown',!s.known);
    b.disabled=!!this.pending||!s.can;

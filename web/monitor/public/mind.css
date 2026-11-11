@@ -60,3 +60,7 @@ dialog fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 8px
 .error { color: #d24b3c; }
 @media (max-width: 640px) { .compare { grid-template-columns: 1fr; } .seg { grid-template-columns: 14px 84px 1fr; } .seg .alt { grid-column: 2 / -1; } }
 .stale { opacity: .55; }
+
+/* 服务器收到的画面 (camera upload, step 2) */
+#mind-frame-img{display:block;width:100%;max-width:320px;aspect-ratio:4/3;object-fit:contain;background:#000;border:1px solid #444;border-radius:4px}
+#mind-frame-img[hidden]{display:none}

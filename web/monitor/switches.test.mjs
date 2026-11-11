@@ -80,6 +80,27 @@ test('关 stays clickable when the robot state is unknown but the switch is know
  assert.equal(sw.levelButtons(sw.switchView(null,false,null,null),false).off,true);
  assert.equal(sw.levelButtons(v,true).off,true);
 });
+const cam=(r,on)=>({...r,telemetry:{...r.telemetry,health:{camera_enabled:on}}});
+test('vision level upload needs both camera and M12', ()=>{
+ assert.equal(sw.switchView(cam(robot({m12:'detecting'}),true),true,{enabled:false}).vision.level,'upload');
+ assert.equal(sw.switchView(cam(robot({m12:'standby'}),false),true,{enabled:false}).vision.level,'off');
+ assert.equal(sw.switchView(cam(robot({m12:'standby'}),true),true,{enabled:false}).vision.level,'camera_only');
+ assert.equal(sw.switchView(cam(robot({m12:'detecting'}),true),false,{enabled:false}).vision.level,'unknown');
+});
+test('m12 only when the camera is off', ()=>{
+ assert.equal(sw.switchView(cam(robot({m12:'detecting'}),false),true,{enabled:false}).vision.level,'m12_only');
+});
+test('vision requests: camera before m12', ()=>{
+ const r=robot();
+ assert.deepEqual(sw.visionRequests('upload',r),[{kind:'control',body:{action:'camera',enabled:true,boot:'b1'}},{kind:'control',body:{action:'m12',enabled:true,boot:'b1'}}]);
+ assert.deepEqual(sw.visionRequests('off',r),[{kind:'control',body:{action:'camera',enabled:false,boot:'b1'}},{kind:'control',body:{action:'m12',enabled:false,boot:'b1'}}]);
+});
+test('recognize is never clickable in this step', ()=>{
+ const v=sw.switchView(cam(robot({m12:'detecting'}),true),true,{enabled:true});
+ const b=sw.visionButtons(v,false);
+ assert.equal(b.recognize,true);assert.equal(b.off,false);assert.equal(b.upload,false);
+ assert.equal(sw.visionButtons(sw.switchView(null,false,null),false).upload,true);
+});
 test('toggle requests: m12 and the mind switch', ()=>{
  assert.deepEqual(sw.toggleRequest('vision',robot({m12:'detecting'}),true),{kind:'control',body:{action:'m12',enabled:false,boot:'b1'}});
  assert.deepEqual(sw.toggleRequest('mind',robot(),{enabled:true}),{kind:'mind',body:{enabled:false}});
