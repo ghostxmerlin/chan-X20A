@@ -69,7 +69,8 @@ def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE, revise=F
         sensed = sensed or cov["hearing_s"] + cov["vision_s"] > 0
         prev = store.latest(lane, m - MIN_MS)
         fusion.run_minute(env, store, s, settings_version, m, doc["package"], doc["strong"],
-                          {"prev": prev["package"] if prev else None}, lane=lane, now_ms=now_ms,
+                          {"prev": prev["package"] if prev else None, "recent": fusion.recent_speech(store, lane, m)},
+                          lane=lane, now_ms=now_ms,
                           segments=[g for g in titled if g["start"] < m], package_version=doc["version"], revise=revise)
         done += 1
     segments.update(env, store, s, day_start(now_ms, s["tz"]), now_ms, lane, summarize_now=sensed)

@@ -74,6 +74,17 @@ def _parse(resp):
     return out, None
 
 
+def recent_speech(store, lane, minute_ms, minutes=5, limit=30):
+    """What people said in the minutes before this one (oldest first), for the topic summary."""
+    out = []
+    for k in range(minutes, 0, -1):
+        doc = store.latest(lane, minute_ms - k * MIN_MS)
+        for x in ((doc or {}).get("package") or {}).get("speech", []):
+            if x.get("text"):
+                out.append({"at": x["at"], "who": x["who"], "text": x["text"]})
+    return out[-limit:]
+
+
 def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbours, lane="live",
                force_prompt=None, force_model=None, now_ms=None, segments=None, package_version=None, revise=False):
     """revise: late records rewrote this minute's package — call again only if the content changed
@@ -82,7 +93,7 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
     forced = force_prompt is not None or force_model is not None
     prev = store.last_scene_before("live" if lane == "rerun" else lane, minute_ms)
     level = prev.get("review_level", 0) if prev else 0
-    prompt = force_prompt or s["fusion"]["prompt"]
+    prompt = prompts.resolve(force_prompt or s["fusion"]["prompt"])
     model = force_model or s["fusion"]["model"]
     # e1 counts as content binned to the people count (not the eye wording); a minute without an eye record
     # (no new frames) keeps the last count, so a settled picture is not a change.

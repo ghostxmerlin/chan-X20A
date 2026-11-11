@@ -100,6 +100,7 @@ export function nowHtml(now){
  if(!sc)return `<div class="now"><p class="meta">${hhmm(rec.minute)} · ${sourceLabel(rec)}</p><p>${owner}</p>${seg}<p class="alt">这一分钟只有规则结果</p></div>`;
  return `<div class="now"><p class="meta">${hhmm(rec.minute)} · ${escapeHtml(sourceLabel(rec))} · ${escapeHtml(sc.summary)}</p>
  ${answer('我是谁',sc.who_am_i)}${answer('我在哪',sc.where_am_i)}${answer('旁边的人在干什么',sc.people_doing)}
+ ${sc.topic_summary?`<p class="topic">话题：${escapeHtml(sc.topic_summary)}</p>`:''}
  <p>规则：${owner}${st?` · ${escapeHtml(coverageTitle(st.coverage))} · 地点：${escapeHtml(placeLabel(st.place))}`:''}</p>${seg}
  <div class="dims">${entriesHtml(sc.entries)}</div>
  ${sc.want_to_know?`<p class="alt">想确认：${escapeHtml(sc.want_to_know)}</p>`:''}</div>`;
@@ -115,7 +116,7 @@ export function sceneHtml(rec,run){
  const checks=rec.source==='model'?`<p class="alt">校验：无效代号 ${Number(c.invalid_refs)||0} · 降级 ${Number(c.downgraded)||0} · 拦下的提高 ${Number(c.raise_blocked)||0} · 规则冲突 ${c.rule_conflict?'有':'无'} · 只凭语言 ${Math.round((Number(c.language_only)||0)*100)}%</p>`:'';
  const num=v=>escapeHtml(v??'—');
  const r=run?`<p class="alt">${escapeHtml(run.model)} · ${num(run.latency_ms)} ms · 输入 ${num(run.usage?.prompt_tokens)} / 输出 ${num(run.usage?.completion_tokens)} token · $${Number(run.cost_usd||0).toFixed(5)}${run.error?` · 错误：${escapeHtml(run.error)}`:''}</p><details><summary>完整提示和回复</summary><pre>${escapeHtml(JSON.stringify(run.request?.messages,null,1))}</pre><pre>${escapeHtml(JSON.stringify(run.response,null,1))}</pre></details>`:'';
- const body=sc?`${answer('我是谁',sc.who_am_i)}${answer('我在哪',sc.where_am_i)}${answer('旁边的人在干什么',sc.people_doing)}<div class="dims">${entriesHtml(sc.entries)}</div>`:'<p class="alt">没有模型情景</p>';
+ const body=sc?`${answer('我是谁',sc.who_am_i)}${answer('我在哪',sc.where_am_i)}${answer('旁边的人在干什么',sc.people_doing)}${sc.topic_summary?`<p class="topic">话题：${escapeHtml(sc.topic_summary)}</p>`:''}<div class="dims">${entriesHtml(sc.entries)}</div>`:'<p class="alt">没有模型情景</p>';
  return `<div class="scene"><p class="meta">${escapeHtml(rec.lane==='rerun'?'重跑':'正式')} · ${escapeHtml(sourceLabel(rec))} · ${escapeHtml(rec.reason||'')} · ${escapeHtml(rec.prompt||'')} · 第 ${escapeHtml(rec.version)} 版</p>${body}${checks}${r}</div>`;
 }
 const list=v=>String(v||'').split(/[,，\s]+/).map(x=>x.trim()).filter(Boolean);
@@ -177,7 +178,7 @@ export function start(doc){
  el('mind-date').value=today;
  el('mind-legend').innerHTML=Object.keys(LABELS).map(k=>`<span><i class="dot" data-c="${COLOURS[k]}"></i>${LABELS[k]}</span>`).join('')+'<span>三条小条：听觉 / 视觉 / M12 这一分钟工作的秒数</span>';
  paint(el('mind-legend'));
- let open=null,settingsBase=null,prompts={versions:['v3'],models:['gpt-6-luna','gpt-6.1-terra']};
+ let open=null,settingsBase=null,prompts={versions:['v4'],models:['gpt-6-luna','gpt-6.1-terra']};
  const range=()=>{const day=el('mind-date').value||today,hours=Number(el('mind-range').value),dayStart=new Date(day+'T00:00:00').getTime(),now=Date.now();
   const to=Math.min(dayStart+86400000,day===today?now:dayStart+86400000);return {day,from:hours===24||day!==today?dayStart:Math.max(dayStart,to-hours*3600000),to,dayStart};};
  async function refresh(){

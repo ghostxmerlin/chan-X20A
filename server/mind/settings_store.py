@@ -15,7 +15,7 @@ def _prompt_versions():
         from . import prompts
         return set(prompts.OFFERED)
     except ImportError:
-        return {"v3"}
+        return {"v4"}
 
 
 def _names(errs, where, value, min_items, max_items):

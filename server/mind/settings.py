@@ -20,7 +20,7 @@ DEFAULTS = {
     "place": {"default": "办公室，主人的办公桌上"},
     "persona": "",                # stored only, never sent to the perception prompt
     "sources": {"speech_text": True, "tingwu": True, "sounds": True, "vision": True},
-    "fusion": {"enabled": True, "model": "gpt-6-luna", "prompt": "v3", "max_age_min": 60, "review_after_min": [5, 10, 20, 30]},
+    "fusion": {"enabled": True, "model": "gpt-6-luna", "prompt": "v4", "max_age_min": 60, "review_after_min": [5, 10, 20, 30]},
     "budget_usd_per_day": 20.0,   # runaway guard only (user: cost is not a concern, but keep statistics)
 }
 MINUTE_MS = 60_000

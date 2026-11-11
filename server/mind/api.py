@@ -260,7 +260,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                       for g in segs if g["cls"] != "gap" and g["start"] < minute]
             prev = store.latest(LANE, minute - 60_000)
             return fusion.run_minute(ctx["env"], store, s, v, minute, doc["package"], doc["strong"],
-                                     {"prev": prev["package"] if prev else None}, lane="rerun",
+                                     {"prev": prev["package"] if prev else None,
+                                      "recent": fusion.recent_speech(store, LANE, minute)}, lane="rerun",
                                      force_prompt=prompt, force_model=model, now_ms=now, segments=titled,
                                      package_version=doc["version"])
         raise NotFound("not found")
