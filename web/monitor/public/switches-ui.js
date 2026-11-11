@@ -29,7 +29,12 @@ export function switchView(robot,fresh,mind,switches=null){
  const camKnown=typeof t.health?.camera_enabled==='boolean',camOn=t.health?.camera_enabled===true;
  const vLevel=!visionKnown||!camKnown?'unknown':camOn&&vOn?'upload':vOn?'m12_only':camOn?'camera_only':'off';
  const vLevelAny=vLevel==='unknown'&&!!fresh&&camKnown?(camOn?'camera_only':'off'):vLevel;   // M12 link down: the camera alone
- const vision={known:visionKnown&&camKnown,offKnown:!!fresh&&(camKnown||visionKnown),on:vOn,level:vLevelAny,camera:camOn,
+ const eyeKnown=!!switches?.eye&&!!switches?.eye_status,es=switches?.eye_status||{};
+ const eyeOn=eyeKnown&&switches.eye.on===true;
+ const eyeAvailable=eyeKnown&&typeof es.available==='boolean'?es.available:null;
+ const eyeRunning=!eyeKnown||es.stale?null:es.running===true;
+ const vision={known:visionKnown&&camKnown,offKnown:!!fresh&&(camKnown||visionKnown),on:vOn,
+  level:vLevelAny==='upload'&&eyeOn?'recognize':vLevelAny,camera:camOn,eyeKnown,eyeOn,eyeAvailable,eyeRunning,
   can:visionKnown&&(vOn||(!!t.m12?.valid&&t.m12?.online!==false)),
   detail:!fresh?'状态未知（数据过期）':`${VISION[status]||status} · 摄像头${!camKnown?'未知':camOn?'开（变化时上传）':'关'}`};
  const mindKnown=!!mind&&typeof mind.enabled==='boolean';
@@ -43,7 +48,10 @@ export function switchView(robot,fresh,mind,switches=null){
   if(tingwuRunning===true)paying.push('听悟（约 0.9 元/小时）');
   const tingwuUnknown=tingwuRunning===null&&hearing.on&&(tingwuOn||!swKnown)&&tingwuAvailable!==false;
   if(m.on&&senses)paying.push('情景模型');
-  cost=paying.length?'正在花钱：'+paying.join(' + ')+(tingwuUnknown?'；听悟状态未知':''):tingwuUnknown?'听悟状态未知':'现在不花钱';
+  const eyeSelected=eyeOn&&camOn&&eyeAvailable!==false;
+  if(eyeSelected&&eyeRunning===true)paying.push('视觉识别（每分钟最多一次）');
+  const unknown=[tingwuUnknown&&'听悟状态未知',eyeSelected&&eyeRunning===null&&'识别状态未知'].filter(Boolean).join('；');
+  cost=paying.length?'正在花钱：'+paying.join(' + ')+(unknown?'；'+unknown:''):unknown||'现在不花钱';
  }
  return {hearing,vision,mind:m,cost};
 }
@@ -59,11 +67,15 @@ export function levelRequests(level,robot){
 // Vision tiers (step 2): 上传 = body camera on (frames to the server on change) + M12 detection.
 export function visionRequests(level,robot){
  const c=(action,enabled)=>({kind:'control',body:{action,enabled,boot:robot?.boot}});
- return level==='upload'?[c('camera',true),c('m12',true)]:[c('camera',false),c('m12',false)];
+ const eye=on=>({kind:'switch',body:{name:'eye',on}});         // the paid part first, so 关 stops it even if the robot is gone
+ if(level==='recognize')return [eye(true),c('camera',true),c('m12',true)];
+ if(level==='upload')return [eye(false),c('camera',true),c('m12',true)];
+ return [eye(false),c('camera',false),c('m12',false)];
 }
 export function visionButtons(v,pending){
  const s=v.vision;
- return {off:!!pending||!s.offKnown,upload:!!pending||!s.known||!s.can,recognize:true};
+ return {off:!!pending||!s.offKnown,upload:!!pending||!s.known||!s.can,
+  recognize:!!pending||!s.known||!s.can||!s.eyeKnown||s.eyeAvailable===false};
 }
 async function runRequests(reqs,keepGoing,post){
  const errors=[];
@@ -114,11 +126,11 @@ export class SwitchBar{
   const hearing='<div class="switch switch-group" id="sw-hearing" role="group" aria-label="听觉档位"><b>听觉</b><span id="sw-hearing-state">—</span>'+
    LEVELS.map(([k,label])=>`<button id="sw-hearing-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-hearing-detail">—</small></div>';
   const vision='<div class="switch switch-group" id="sw-vision" role="group" aria-label="视觉档位"><b>视觉</b><span id="sw-vision-state">—</span>'+
-   VLEVELS.map(([k,label])=>`<button id="sw-vision-${k}" aria-pressed="false" disabled${k==='recognize'?' title="第 3 步：识别（待做）"':''}>${label}</button>`).join('')+'<small id="sw-vision-detail">—</small></div>';
+   VLEVELS.map(([k,label])=>`<button id="sw-vision-${k}" aria-pressed="false" disabled${k==='recognize'?' title="每分钟用 haiku 看一次画面（约 2 元/天）"':''}>${label}</button>`).join('')+'<small id="sw-vision-detail">—</small></div>';
   root.innerHTML=hearing+vision+['mind'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
    '<span id="sw-cost" class="switch-cost" role="status">—</span>';
   for(const [k] of LEVELS)doc.getElementById('sw-hearing-'+k).addEventListener('click',()=>this.setLevel(k));
-  for(const [k] of VLEVELS)if(k!=='recognize')doc.getElementById('sw-vision-'+k).addEventListener('click',()=>this.setVision(k));
+  for(const [k] of VLEVELS)doc.getElementById('sw-vision-'+k).addEventListener('click',()=>this.setVision(k));
   doc.getElementById('sw-mind').addEventListener('click',()=>this.toggle('mind'));
   this.pollMind();setInterval(()=>this.pollMind(),5000);
   if(pollRobot){this.pollRobot();setInterval(()=>this.pollRobot(),2000);}
@@ -157,8 +169,12 @@ export class SwitchBar{
  async setVision(level){
   if(this.pending)return;
   this.pending='vision';this.msg='';this.paint();
-  const errors=await runVision(level,this.robot,req=>postJson('/api/control',req.body));
-  this.msg=errors.map(({action,error})=>`视觉（${action==='camera'?'摄像头':'M12'}）：${error.name==='TimeoutError'?'结果未确认，请看状态':error.message}`).join('；');
+  const errors=await runVision(level,this.robot,async req=>{
+   if(req.kind==='switch')this.switches=await postJson('/api/mind/switches',req.body);
+   else await postJson('/api/control',req.body);
+  });
+  const step=e=>e.kind==='switch'?'识别开关':e.action==='camera'?'摄像头':'M12';
+  this.msg=errors.map(e=>`视觉（${step(e)}）：${e.error.name==='TimeoutError'?'结果未确认，请看状态':e.error.message}`).join('；');
   this.pending=null;this.paint();
  }
  paint(){
@@ -172,9 +188,9 @@ export class SwitchBar{
   $('sw-hearing-state').textContent=this.pending==='hearing'?'发送中…':{off:'关',local:'本地',tingwu:'听悟',unknown:'未知'}[hv.level];
   $('sw-hearing-detail').textContent=hv.detail;
   const vv=v.vision,vg=$('sw-vision'),vdis=visionButtons(v,this.pending);
-  vg.classList.toggle('on',vv.level==='upload');vg.classList.toggle('unknown',!vv.known);
+  vg.classList.toggle('on',vv.level==='upload'||vv.level==='recognize');vg.classList.toggle('unknown',!vv.known);
   for(const [k] of VLEVELS){const b=$('sw-vision-'+k);b.setAttribute('aria-pressed',String(vv.level===k));b.disabled=vdis[k];}
-  $('sw-vision-state').textContent=this.pending==='vision'?'发送中…':{off:'关',upload:'上传',m12_only:'只有 M12',camera_only:'只有摄像头',unknown:'未知'}[vv.level];
+  $('sw-vision-state').textContent=this.pending==='vision'?'发送中…':{off:'关',upload:'上传',recognize:'识别',m12_only:'只有 M12',camera_only:'只有摄像头',unknown:'未知'}[vv.level];
   $('sw-vision-detail').textContent=vv.detail;
   for(const k of ['mind']){
    const s=v[k],b=$('sw-'+k);

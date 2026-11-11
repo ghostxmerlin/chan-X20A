@@ -90,16 +90,29 @@ test('vision level upload needs both camera and M12', ()=>{
 test('m12 only when the camera is off', ()=>{
  assert.equal(sw.switchView(cam(robot({m12:'detecting'}),false),true,{enabled:false}).vision.level,'m12_only');
 });
-test('vision requests: camera before m12', ()=>{
- const r=robot();
- assert.deepEqual(sw.visionRequests('upload',r),[{kind:'control',body:{action:'camera',enabled:true,boot:'b1'}},{kind:'control',body:{action:'m12',enabled:true,boot:'b1'}}]);
- assert.deepEqual(sw.visionRequests('off',r),[{kind:'control',body:{action:'camera',enabled:false,boot:'b1'}},{kind:'control',body:{action:'m12',enabled:false,boot:'b1'}}]);
+const EYE=(on,running,{available=true,stale=false}={})=>({tingwu:{on:false},tingwu_status:{running:[],available:true,stale:false,at:fresh},
+ eye:{on},eye_status:{running,available,stale,at:fresh}});
+test('vision requests set the eye switch first', ()=>{
+ const r=robot(),sw_=on=>({kind:'switch',body:{name:'eye',on}}),c=(action,enabled)=>({kind:'control',body:{action,enabled,boot:'b1'}});
+ assert.deepEqual(sw.visionRequests('recognize',r),[sw_(true),c('camera',true),c('m12',true)]);
+ assert.deepEqual(sw.visionRequests('upload',r),[sw_(false),c('camera',true),c('m12',true)]);
+ assert.deepEqual(sw.visionRequests('off',r),[sw_(false),c('camera',false),c('m12',false)]);
 });
-test('recognize is never clickable in this step', ()=>{
- const v=sw.switchView(cam(robot({m12:'detecting'}),true),true,{enabled:true});
- const b=sw.visionButtons(v,false);
- assert.equal(b.recognize,true);assert.equal(b.off,false);assert.equal(b.upload,false);
- assert.equal(sw.visionButtons(sw.switchView(null,false,null),false).upload,true);
+test('recognize level needs camera, M12 and the eye switch', ()=>{
+ const r=cam(robot({m12:'detecting'}),true);
+ assert.equal(sw.switchView(r,true,{enabled:false},EYE(true,true)).vision.level,'recognize');
+ assert.equal(sw.switchView(r,true,{enabled:false},EYE(false,false)).vision.level,'upload');
+ const v=sw.switchView(r,true,{enabled:false},EYE(true,true));
+ assert.match(v.cost,/视觉识别/);assert.equal(sw.visionButtons(v,false).recognize,false);
+});
+test('stale eye status with recognize says unknown, never free', ()=>{
+ const v=sw.switchView(cam(robot({m12:'detecting'}),true),true,{enabled:false},EYE(true,true,{stale:true}));
+ assert.equal(v.vision.eyeRunning,null);assert.match(v.cost,/识别状态未知/);assert.doesNotMatch(v.cost,/现在不花钱/);
+});
+test('unavailable eye disables recognize; unknown switches too', ()=>{
+ const r=cam(robot({m12:'detecting'}),true);
+ assert.equal(sw.visionButtons(sw.switchView(r,true,{enabled:false},EYE(false,false,{available:false})),false).recognize,true);
+ assert.equal(sw.visionButtons(sw.switchView(r,true,{enabled:false},null),false).recognize,true);
 });
 test('vision 关 works with the M12 disconnected while the camera uploads', ()=>{
  const r=cam(robot({m12:'disconnected'}),true);

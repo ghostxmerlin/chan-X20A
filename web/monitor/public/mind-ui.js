@@ -56,6 +56,18 @@ const BASIS={seen:'看到',heard:'听到',inferred:'推断',assumed:'猜测'};
 const CONF={high:'高',mid:'中',low:'低'};
 const CLASS_COLOURS={present:'#2e9d4f',absent:'#e8912d',unknown:'#9aa0a6',off:'#555555',gap:'#333338'};
 const CLASS_LABEL={present:'主人在',absent:'主人不在',unknown:'不确定',off:'感官关',gap:'mind 没在运行'};
+// eye result for one minute (plan 2026-11-11-eye): who is in view, doing what.
+export function eyeHtml(d){
+ if(!d)return '<p class="alt">还没有识别结果</p>';
+ const t=d.minute?`${hhmm(d.minute)} 的画面`:'';
+ if(d.source==='failed')return `<p class="alt">${t} · 识别失败，退避中${d.error?`（${escapeHtml(String(d.error).slice(0,80))}）`:''}</p>`;
+ if(d.source==='budget')return `<p class="alt">${t} · 今天的预算用完，没有识别</p>`;
+ if(d.source==='backoff')return `<p class="alt">${t} · 上次失败，退避中</p>`;
+ const r=d.result||{};
+ const people=(r.people||[]).map(p=>`<li>${escapeHtml([p.who,p.where,p.doing].filter(Boolean).join(' · '))}</li>`).join('');
+ return `<div class="eye"><p class="meta">${t} · ${Number(r.people_count??0)} 人 · 把握 ${escapeHtml(CONF[r.confidence]||r.confidence||'')} · ${(d.frames||[]).length} 张图</p>`+
+  (people?`<ul>${people}</ul>`:'')+`<p>${escapeHtml(r.activity||'')}</p><p class="alt">环境：${escapeHtml(r.scene||'—')} · 变化：${escapeHtml(r.changes||'—')}</p></div>`;
+}
 export function frameCaption(f){
  if(!f)return '还没有收到画面';
  return `${hhmmss(f.at)} 收到 · 变化 ${f.diff===255?'首张':f.diff+' 格'} · 今天 ${f.today} 张${f.missing?' · 文件缺失':''}`;
@@ -261,6 +273,9 @@ export function start(doc){
   let f=null;
   try{const r=await fetch('/api/mind/frames/latest',{signal:AbortSignal.timeout(10000)});f=r.ok?await r.json():null;}catch{f=null;}
   el('mind-frame-cap').textContent=frameCaption(f);
+  let e=null;
+  try{const r=await fetch('/api/mind/eye/latest',{signal:AbortSignal.timeout(10000)});e=r.ok?await r.json():null;}catch{e=null;}
+  el('mind-eye').innerHTML=eyeHtml(e);
   const img=el('mind-frame-img');
   if(f?.jpeg_b64){
    const bytes=Uint8Array.from(atob(f.jpeg_b64),c=>c.charCodeAt(0));

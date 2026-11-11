@@ -149,4 +149,13 @@ test('frame caption and panel markup', ()=>{
  const html=readFileSync(new URL('./public/mind.html',import.meta.url),'utf8');
  assert.match(html,/id="mind-frame-img"/);assert.doesNotMatch(html,/style="/);
 });
+test('eye card text', ()=>{
+ const html=ui.eyeHtml({minute:new Date(2026,10,11,12,8).getTime(),source:'model',result:{people_count:1,people:[{who:'主人',where:'桌前',doing:'喝水'}],
+  activity:'主人在桌前喝水',scene:'办公室',changes:'拿起杯子',confidence:'high'},frames:[{seq:1},{seq:2}]});
+ assert.match(html,/12:08/);assert.match(html,/1 人/);assert.match(html,/主人 · 桌前 · 喝水/);assert.match(html,/拿起杯子/);assert.doesNotMatch(html,/style="/);
+ assert.match(ui.eyeHtml({minute:0,source:'failed',error:'x'}),/失败/);
+ assert.match(ui.eyeHtml({minute:0,source:'budget'}),/预算/);
+ assert.match(ui.eyeHtml(null),/还没有识别结果/);
+ assert.match(ui.eyeHtml({minute:0,source:'model',result:{people_count:0,people:[],activity:'<b>',scene:'',changes:'',confidence:'low'}}),/&lt;b&gt;/);
+});
 
