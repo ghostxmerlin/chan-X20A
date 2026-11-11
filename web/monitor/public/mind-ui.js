@@ -81,7 +81,7 @@ export function groupEntries(entries){
 }
 export function sourceLabel(rec){
  if(!rec)return '';
- if(rec.source==='model')return '模型';
+ if(rec.source==='model')return rec.reason==='revised'?`模型 · 修订版（第 ${Number(rec.version)||'?'} 版）`:'模型';   // v3: late records revise a minute
  if(rec.source==='carried')return `沿用自 ${hhmm(rec.carried_from)}`;
  if(rec.source==='failed')return rec.carried_from?`调用失败，沿用自 ${hhmm(rec.carried_from)}`:'调用失败';
  return '仅规则';

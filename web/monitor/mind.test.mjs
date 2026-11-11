@@ -113,6 +113,10 @@ test('source label', ()=>{
  assert.match(ui.sourceLabel({source:'carried',carried_from:T}),/^沿用自 \d\d:\d\d$/);
  assert.equal(ui.sourceLabel({source:'model'}),'模型');assert.equal(ui.sourceLabel({source:'rules_only'}),'仅规则');
 });
+test('source label shows 修订', ()=>{
+ assert.equal(ui.sourceLabel({source:'model',reason:'revised',version:2}),'模型 · 修订版（第 2 版）');
+ assert.equal(ui.sourceLabel({source:'model',reason:'changed',version:1}),'模型');
+});
 test('settings form round trip keeps lists and numbers', ()=>{
  const s={tz:'Asia/Shanghai',owner:{display:'主人',aliases:['Kira','Dave'],voice_names:['me','主人'],face_names:['me']},people:[{display:'同事A',voice_names:['a'],face_names:[]}],
   work:{days:[1,2,3,4,5],start:'09:00',end:'19:00'},thresholds:{just_left_min:2},self_facts:'我',place:{default:'办公室'},persona:'',
