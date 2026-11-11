@@ -59,6 +59,9 @@ class ApiTest(unittest.TestCase):
             with e:
                 return Reply(e.code, e.read())
 
+    def test_eye_latest_404(self):
+        self.assertEqual(self.call("/eye/latest").status, 404)
+
     def test_latest_frame_404_without_frames(self):
         self.assertEqual(self.call("/frames/latest").status, 404)
 
@@ -227,7 +230,7 @@ class ApiV1Test(unittest.TestCase):
             self.post_json("/switches", {"name": "tingwu", "on": False})
 
     def test_switch_rejects_unknown_name_and_non_bool(self):
-        self.assertEqual(self.post_json("/switches", {"name": "eye", "on": True}).status, 400)
+        self.assertEqual(self.post_json("/switches", {"name": "mouth", "on": True}).status, 400)
         self.assertEqual(self.post_json("/switches", {"name": "tingwu", "on": "yes"}).status, 400)
 
     def put_frame(self, at, seq, data=b"\xff\xd8x\xff\xd9", path=None):
@@ -260,6 +263,27 @@ class ApiV1Test(unittest.TestCase):
         finally:
             coll = self.db["frames"]
             coll.docs[:] = [d for d in coll.docs if d.get("seq") != 103]
+
+    def test_eye_switch_roundtrip(self):
+        try:
+            r = self.post_json("/switches", {"name": "eye", "on": True}).json()
+            self.assertIs(r["eye"]["on"], True)
+            self.assertIs(r["eye_status"]["stale"], True)
+        finally:
+            self.post_json("/switches", {"name": "eye", "on": False})
+        self.assertIs(self.call("/switches").json()["eye"]["on"], False)
+
+    def test_eye_latest_and_range(self):
+        coll = self.db["eye_minutes"]
+        try:
+            coll.insert_one({"minute": T0, "version": 1, "source": "model", "result": {"activity": "a"}})
+            coll.insert_one({"minute": T0 + 60_000, "version": 1, "source": "model", "result": {"activity": "b"}})
+            self.assertEqual(self.call("/eye/latest").json()["result"]["activity"], "b")
+            rows = self.call(f"/eye?from={T0}&to={T0 + 60_000}").json()
+            self.assertEqual([r["minute"] for r in rows], [T0])
+            self.assertNotIn("_id", rows[0])
+        finally:
+            coll.docs[:] = []
 
     def test_place_report(self):
         self.assertEqual(self.post_json("/place", {"label": "办公室"}).status, 200)

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest']);
+const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye']);
 const POST_PATHS=new Set(['/settings','/mark','/label','/rerun','/place','/switch','/switches']);
 const PARAMS=new Set(['from','to','t','version','days','lane']);
 const MAX_BODY=16384;
