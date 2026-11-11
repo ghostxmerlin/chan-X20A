@@ -102,6 +102,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 "today_calls": sum(r["calls"] for r in out if r["day"] == today)}
 
     SWITCHES = ("tingwu", "eye", "notes")    # spec 2026-11-11 §3
+    MOUTH_MODES = ("off", "clips", "tts")    # 嘴: emotion clips (default) or soul-tts, never both (user 2026-11-11)
+
+    def mouth_mode():
+        m = (db["switches"].find_one({"_id": "mouth"}) or {}).get("mode")
+        return m if m in MOUTH_MODES else "clips"
 
     def switches():
         now = int(time.time() * 1000)
@@ -112,6 +117,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             out[name] = {"on": sw.get("on") is True, "at": sw.get("at")}
             out[name + "_status"] = {"running": st.get("running") or [], "available": st.get("available"), "at": st.get("at"),
                                      "stale": not isinstance(st.get("at"), int) or now - st["at"] > 90_000}
+        out["mouth"] = {"mode": mouth_mode(), "at": (db["switches"].find_one({"_id": "mouth"}) or {}).get("at")}
         return out
 
     def latest_frame():
@@ -222,6 +228,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             roles = speak.load_roles(ctx.get("roles_dir") or "")
             if body.get("role") not in roles:
                 raise BadRequest(f"role must be one of {', '.join(sorted(roles))}")
+            if mouth_mode() != "tts":
+                raise Conflict("嘴没切到 TTS 模式")
             s, _ = current_settings()
             try:
                 rec = speak.say(ctx["env"], store, s, roles, body["role"], tts, now)
@@ -231,6 +239,17 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == "/say/stop":
             tts = ctx.get("tts")
             return {"cancelled": tts.stop() if tts else []}
+        if path == "/switches" and body.get("name") == "mouth":
+            if body.get("mode") not in MOUTH_MODES:
+                raise BadRequest(f"mouth mode must be one of {'/'.join(MOUTH_MODES)}")
+            was = mouth_mode()
+            db["switches"].update_one({"_id": "mouth"}, {"$set": {"mode": body["mode"], "at": now, "by": "page"}}, upsert=True)
+            if was == "tts" and body["mode"] != "tts" and ctx.get("tts"):
+                try:
+                    ctx["tts"].stop()                    # leaving TTS: stop what is still playing
+                except Exception:                        # noqa: BLE001 - the switch itself is saved
+                    pass
+            return switches()
         if path == "/switches":
             if body.get("name") not in SWITCHES or not isinstance(body.get("on"), bool):
                 raise BadRequest(f"name ({'/'.join(SWITCHES)}) and on (true/false) required")

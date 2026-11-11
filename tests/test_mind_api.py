@@ -216,6 +216,18 @@ class ApiV1Test(unittest.TestCase):
             self.assertEqual(self.post_json("/settings", {"settings": old, "note": ""}).status, 400)
         self.assertEqual(settings.load(None)["fusion"]["prompt"], "v3")
 
+    def test_mouth_mode_switch(self):
+        self.assertEqual(self.call("/switches").json()["mouth"]["mode"], "clips")        # no document: today's clips
+        try:
+            self.assertEqual(self.post_json("/switches", {"name": "mouth", "mode": "tts"}).json()["mouth"]["mode"], "tts")
+            self.assertEqual(self.post_json("/switches", {"name": "mouth", "mode": "shout"}).status, 400)
+            self.assertEqual(self.post_json("/switches", {"name": "mouth", "on": True}).status, 400)
+            stopped = len(self.tts.stops)
+            self.post_json("/switches", {"name": "mouth", "mode": "clips"})
+            self.assertEqual(len(self.tts.stops), stopped + 1)                   # leaving TTS stops what is playing
+        finally:
+            self.post_json("/switches", {"name": "mouth", "mode": "clips"})
+
     def test_notes_switch_and_list_api(self):
         try:
             self.assertIs(self.post_json("/switches", {"name": "notes", "on": True}).json()["notes"]["on"], True)
@@ -237,12 +249,18 @@ class ApiV1Test(unittest.TestCase):
         self.assertEqual(self.post_json("/say", {"role": "roast"}).status, 409)      # mouth not connected
         self.assertEqual(self.post_json("/say", {"role": "nope"}).status, 400)
         self.tts.connected = True
+        self.post_json("/switches", {"name": "mouth", "mode": "clips"})
+        r = self.post_json("/say", {"role": "roast"})
+        self.assertEqual(r.status, 409)                                          # TTS mode is not on
+        self.assertIn("TTS", r.json()["error"])
+        self.post_json("/switches", {"name": "mouth", "mode": "tts"})
         try:
             self.fake.reply_next(json.dumps({"text": "这板子焊得，比我的发型还有个性。"}, ensure_ascii=False))
             r = self.post_json("/say", {"role": "roast"})
             self.assertEqual((r.status, r.json()["text"]), (200, "这板子焊得，比我的发型还有个性。"))
         finally:
             self.tts.connected = False
+            self.post_json("/switches", {"name": "mouth", "mode": "clips"})
         now = int(__import__("time").time() * 1000)
         rows = self.call(f"/utterances?from={now - 60_000}&to={now + 60_000}").json()
         self.assertEqual(rows[-1]["role"], "roast")

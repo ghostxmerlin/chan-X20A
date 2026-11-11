@@ -19,7 +19,7 @@ MIN = 60_000
 
 class FakeTts:
     def __init__(self, connected=True):
-        self.connected, self.said = connected, []
+        self.connected, self.said, self.stops = connected, [], []
 
     def health(self):
         return {"mouth": {"device": {"device_id": "x"} if self.connected else None}}
@@ -29,6 +29,7 @@ class FakeTts:
         return f"u{len(self.said)}"
 
     def stop(self):
+        self.stops.append(1)
         return []
 
     def status(self, uid, wait=0):

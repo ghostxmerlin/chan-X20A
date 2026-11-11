@@ -171,3 +171,11 @@ test('both pages carry the switch bar', ()=>{
   assert.match(html,/id="switches"/);assert.match(html,/switches\.css/);assert.doesNotMatch(html,/style="/);
  }
 });
+test('mouth mode: clips by default, tts and off silence the clips', ()=>{
+ assert.deepEqual(sw.mouthView(null),{known:false,mode:'unknown',detail:'状态未知'});
+ const clips=sw.mouthView({mouth:{mode:'clips'}});
+ assert.equal(clips.mode,'clips');assert.match(clips.detail,/情绪/);
+ assert.match(sw.mouthView({mouth:{mode:'tts'}}).detail,/情绪台词关/);
+ assert.equal(sw.mouthView({mouth:{mode:'off'}}).mode,'off');
+ assert.deepEqual(sw.mouthRequest('tts'),{kind:'switch',body:{name:'mouth',mode:'tts'}});
+});

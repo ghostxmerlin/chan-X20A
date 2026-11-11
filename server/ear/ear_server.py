@@ -47,6 +47,7 @@ import vision_link
 import tingwu as tingwu_rt
 import tingwu_switch
 import mouth_link
+import mouth_mode
 import sound_kinds
 import hearing_protocol as hp
 
@@ -290,6 +291,7 @@ class Ear:
         self.tw_streams = 0
         self.tw_retry_at = 0.0     # monotonic: no new stream before this (60 s after a start error)
         self.tingwu_switch = tingwu_switch.SwitchReader(lambda: None)   # the server switch; off unless main injects one
+        self.mouth_mode = mouth_mode.ModeReader(lambda: None)          # 嘴 mode; clips unless main injects one
         self.on_tingwu_change = None   # main: called when a stream starts or stops (status document)
         self.audio_declared = False
         self._tw_box = None
@@ -650,7 +652,7 @@ class Ear:
               "tags": {"speech_p": round(speech_p, 2),
                        "kinds": sorted(([k, round(p, 2), sound_kinds.LABEL_ZH.get(k, k)]
                                         for k, (p, _) in kinds.items()), key=lambda t: -t[1])[:3]},
-              "self": cur["self"],
+              "self": cur["self"], "respond": self.mouth_mode.respond,
               "debug": {"vad_wait_ms": ms(t_pop - arr_mono), "queue_ms": ms(t0 - t_q), "spk_ms": ms(t1 - t0),
                         "asr_ms": ms(t2 - t1), "tag_ms": ms(t3 - t2), "server_ms": ms(time.monotonic() - t_pop)}}
         self.post(ev)
@@ -925,6 +927,7 @@ def main():
     vision_active = set()
     mouth_active = set()
     tw_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("tingwu")) if database else (lambda: None))
+    mouth = mouth_mode.ModeReader((lambda: database.read_switch("mouth")) if database else (lambda: None))
 
     def write_tingwu_status():
         if database is not None:
@@ -937,6 +940,10 @@ def main():
         last, n = None, 0
         while True:
             await asyncio.to_thread(tw_switch.update)
+            before = mouth.mode
+            await asyncio.to_thread(mouth.update)
+            if mouth.mode != before:
+                print(f"mouth mode: {mouth.mode}", flush=True)
             if tw_switch.on != last:
                 print(f"tingwu switch: {'on' if tw_switch.on else 'off'}", flush=True)
             if tw_switch.on != last or n % 6 == 0:
@@ -990,6 +997,7 @@ def main():
         ear.db = database
         ear.tingwu_keys = tingwu_keys
         ear.tingwu_switch, ear.on_tingwu_change = tw_switch, write_tingwu_status
+        ear.mouth_mode = mouth
         ears.add(ear)
         ticker = asyncio.create_task(ear.ticker())
         try:

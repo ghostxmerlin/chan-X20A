@@ -335,7 +335,8 @@ export function start(doc){
   try{
    if(b.dataset.sayStop){await postJson('/say/stop',{});msg.textContent='已叫停';}
    else{msg.textContent='正在想…';const r=await postJson('/say',{role:b.dataset.role});msg.textContent=`说：${r.text}`;}
-  }catch(e){msg.textContent=String(e.message||e).includes('嘴没连上')?'hello 的嘴还没连上（固件 /mouth 未就绪）':`没说成：${e.message||e}`;}
+  }catch(e){const m=String(e.message||e);
+   msg.textContent=m.includes('TTS 模式')?'先把顶上的「嘴」切到 TTS':m.includes('嘴没连上')?'hello 的嘴还没连上（固件 /mouth 未就绪）':`没说成：${m}`;}
   refreshSay();
  });
  setInterval(refreshSay,5000);

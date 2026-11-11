@@ -63,6 +63,14 @@ export function switchView(robot,fresh,mind,switches=null){
  return {hearing,vision,mind:m,notes,cost};
 }
 
+// 嘴 (2026-11-11): emotion clips (default) or soul-tts from the page buttons, never both.
+export function mouthView(switches){
+ const mode=switches?.mouth?.mode;
+ if(!['off','clips','tts'].includes(mode))return {known:false,mode:'unknown',detail:'状态未知'};
+ return {known:true,mode,detail:{clips:'听到说话按情绪放 SD 台词',tts:'情绪台词关；用下面的按钮说（每句约 ¥0.005）',off:'不放台词，也不说'}[mode]};
+}
+export function mouthRequest(mode){return {kind:'switch',body:{name:'mouth',mode}};}
+
 // Hearing tiers: set the 听悟 switch first, so a connection that starts is already in the right tier.
 export function levelRequests(level,robot){
  const listen=enabled=>({kind:'control',body:{action:'hearing_listen',enabled,boot:robot?.boot}});
@@ -121,6 +129,7 @@ export function toggleRequest(which,robot,mindOrFresh){
 const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要'};
 const LEVELS=[['off','关'],['local','本地'],['tingwu','听悟']];
 const VLEVELS=[['off','关'],['upload','上传'],['recognize','识别']];
+const MLEVELS=[['off','关'],['clips','录音'],['tts','TTS']];
 async function postJson(path,body){
  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
  if(!r.ok)throw new Error(await r.text());
@@ -135,10 +144,13 @@ export class SwitchBar{
    LEVELS.map(([k,label])=>`<button id="sw-hearing-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-hearing-detail">—</small></div>';
   const vision='<div class="switch switch-group" id="sw-vision" role="group" aria-label="视觉档位"><b>视觉</b><span id="sw-vision-state">—</span>'+
    VLEVELS.map(([k,label])=>`<button id="sw-vision-${k}" aria-pressed="false" disabled${k==='recognize'?' title="每分钟用 haiku 看一次画面（约 2 元/天）"':''}>${label}</button>`).join('')+'<small id="sw-vision-detail">—</small></div>';
-  root.innerHTML=hearing+vision+['mind','notes'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
+  const mouth='<div class="switch switch-group" id="sw-mouth" role="group" aria-label="嘴"><b>嘴</b><span id="sw-mouth-state">—</span>'+
+   MLEVELS.map(([k,label])=>`<button id="sw-mouth-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-mouth-detail">—</small></div>';
+  root.innerHTML=hearing+vision+mouth+['mind','notes'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
    '<span id="sw-cost" class="switch-cost" role="status">—</span>';
   for(const [k] of LEVELS)doc.getElementById('sw-hearing-'+k).addEventListener('click',()=>this.setLevel(k));
   for(const [k] of VLEVELS)doc.getElementById('sw-vision-'+k).addEventListener('click',()=>this.setVision(k));
+  for(const [k] of MLEVELS)doc.getElementById('sw-mouth-'+k).addEventListener('click',()=>this.setMouth(k));
   doc.getElementById('sw-mind').addEventListener('click',()=>this.toggle('mind'));
   doc.getElementById('sw-notes').addEventListener('click',()=>this.toggle('notes'));
   this.pollMind();setInterval(()=>this.pollMind(),5000);
@@ -187,8 +199,20 @@ export class SwitchBar{
   this.msg=errors.map(e=>`视觉（${step(e)}）：${e.error.name==='TimeoutError'?'结果未确认，请看状态':e.error.message}`).join('；');
   this.pending=null;this.paint();
  }
+ async setMouth(mode){
+  if(this.pending)return;
+  this.pending='mouth';this.msg='';this.paint();
+  try{this.switches=await postJson('/api/mind/switches',mouthRequest(mode).body);}
+  catch(e){this.msg=`嘴：${e.name==='TimeoutError'?'结果未确认，请看状态':e.message}`;}
+  this.pending=null;this.paint();
+ }
  paint(){
   const v=switchView(this.robot,this.fresh,this.mind,this.switches),$=id=>this.doc.getElementById(id);
+  const mv=mouthView(this.switches),mg=$('sw-mouth');
+  mg.classList.toggle('on',mv.mode==='tts'||mv.mode==='clips');mg.classList.toggle('unknown',!mv.known);
+  for(const [k] of MLEVELS){const b=$('sw-mouth-'+k);b.setAttribute('aria-pressed',String(mv.mode===k));b.disabled=!!this.pending||this.switches==null;}
+  $('sw-mouth-state').textContent=this.pending==='mouth'?'发送中…':{off:'关',clips:'录音',tts:'TTS',unknown:'未知'}[mv.mode];
+  $('sw-mouth-detail').textContent=mv.detail;
   const hv=v.hearing,g=$('sw-hearing');
   g.classList.toggle('on',hv.on);g.classList.toggle('unknown',!hv.known||hv.level==='unknown');
   const dis=levelButtons(v,this.pending);
