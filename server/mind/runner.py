@@ -17,7 +17,7 @@ from .settings_store import SettingsStore
 from .store import LANE, Store
 
 MIN_MS = 60_000
-PROCESS_DELAY_MS = 30_000     # v3 (2026-11-11): first version 30 s after the minute; late records revise it
+PROCESS_DELAY_MS = 20_000     # first version 20 s after the minute (eye lands at 15–18 s); late records revise it
 LOOKBACK_MS = 30 * MIN_MS
 VISION_LOOKBACK_CAP_MS = 12 * 3600_000
 RECHECK_MINUTES = 10

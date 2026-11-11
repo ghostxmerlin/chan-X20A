@@ -77,12 +77,12 @@ class RunnerTest(unittest.TestCase):
 
     def test_tick_catches_up_after_downtime(self):
         self.store.set_state(cursor_minute=T0)
-        self.assertEqual(runner.tick(self.rec, self.store, S, T0 + 10 * MIN + 80_000), 9)
+        self.assertEqual(runner.tick(self.rec, self.store, S, T0 + 10 * MIN + runner.PROCESS_DELAY_MS), 9)
         self.assertEqual(self.store.state()["cursor_minute"], T0 + 9 * MIN)
         self.assertEqual(self.store.state()["last_error"], "")
 
     def test_tick_without_cursor_starts_an_hour_back(self):
-        self.assertEqual(runner.tick(self.rec, self.store, S, T0 + 140_000), 60)
+        self.assertEqual(runner.tick(self.rec, self.store, S, T0 + MIN + runner.PROCESS_DELAY_MS), 60)
         self.assertEqual(self.store.state()["cursor_minute"], T0)
 
     def test_tick_without_a_new_minute_reprocesses_nothing(self):
@@ -201,11 +201,12 @@ class RunnerFusionTest(RunnerTest):
     def scene_versions(self, minute):
         return sorted((d["version"], d["reason"]) for d in self.db["mind_scenes"].docs if d["minute"] == minute and d["lane"] == "live")
 
-    def test_minute_is_processed_30_s_after_it_ends(self):
+    def test_minute_is_processed_20_s_after_it_ends(self):
+        # live 2026-11-11 14:03–14:12: eye results land 15–18 s after the minute, so 20 s is enough
         self.store.set_state(cursor_minute=T0 - MIN)
-        runner.tick(self.rec, self.store, S, T0 + MIN + 29_000, 48 * 3600_000, env=ENV)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 19_000, 48 * 3600_000, env=ENV)
         self.assertEqual(self.store.state()["cursor_minute"], T0 - MIN)
-        runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 20_000, 48 * 3600_000, env=ENV)
         self.assertEqual(self.store.state()["cursor_minute"], T0)
 
     def eye_result(self, minute):
