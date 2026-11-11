@@ -13,9 +13,9 @@ HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 def _prompt_versions():
     try:
         from . import prompts
-        return set(prompts.VERSIONS)
+        return set(prompts.OFFERED)
     except ImportError:
-        return {"v1"}
+        return {"v2"}
 
 
 def _names(errs, where, value, min_items, max_items):

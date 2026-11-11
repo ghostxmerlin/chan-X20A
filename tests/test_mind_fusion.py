@@ -110,8 +110,9 @@ class FusionTest(unittest.TestCase):
         self.assertEqual(self.run_at(T + MIN, same=True, coverage=(60, 0))["reason"], "sensors_on")
 
     def test_new_prompt_version_calls_instead_of_carrying_the_old_scene(self):
-        self.run_at(T, same=True)
-        self.run_at(T + MIN, same=True)                      # carried (prompt v1 scene)
+        s1 = copy.deepcopy(S); s1["fusion"]["prompt"] = "v1"
+        self.run_at(T, s=s1, same=True)
+        self.run_at(T + MIN, s=s1, same=True)                # carried (prompt v1 scene)
         s2 = copy.deepcopy(S); s2["fusion"]["prompt"] = "v2"
         rec = self.run_at(T + 2 * MIN, s=s2, same=True)
         self.assertEqual((rec["source"], rec["reason"], rec["prompt"]), ("model", "prompt", "v2"))

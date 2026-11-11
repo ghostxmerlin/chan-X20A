@@ -80,6 +80,8 @@ V2_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟�
 - summary 不超过 20 个字。changes 写这一分钟变了什么（没变留空）。"""
 
 VERSIONS = {"v1": {"system": V1_SYSTEM}, "v2": {"system": V2_SYSTEM}}
+RETIRED = {"v1"}             # v1 (negative wording) is kept only so old runs stay readable; not offered
+OFFERED = sorted(set(VERSIONS) - RETIRED)
 STATE_TEXT = {"seen": "看到主人", "just_left": "主人刚离开画面", "likely_present": "主人很可能在",
               "unknown": "不知道主人在不在", "likely_absent": "主人很可能不在", "sensors_off": "感官全关，无法判断"}
 

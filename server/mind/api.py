@@ -140,7 +140,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == "/names":
             return names()
         if path == "/prompts":
-            return {"versions": sorted(prompts.VERSIONS), "models": list(MODELS)}
+            return {"versions": prompts.OFFERED, "models": list(MODELS)}
         if path == "/labels":
             lo, hi = _range(q)
             return list(db["mind_labels"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("at", 1))
@@ -188,7 +188,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return {"ok": True}
         if path == "/rerun":
             minute, prompt, model = body.get("minute"), body.get("prompt"), body.get("model")
-            if not isinstance(minute, int) or prompt not in prompts.VERSIONS or model not in MODELS:
+            if not isinstance(minute, int) or prompt not in prompts.OFFERED or model not in MODELS:
                 raise BadRequest("minute (int), prompt (known version) and model (known model) required")
             if not ctx.get("env"):
                 raise BadRequest("no model access configured")

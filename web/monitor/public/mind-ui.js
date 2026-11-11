@@ -161,7 +161,7 @@ export function start(doc){
  el('mind-date').value=today;
  el('mind-legend').innerHTML=Object.keys(LABELS).map(k=>`<span><i class="dot" data-c="${COLOURS[k]}"></i>${LABELS[k]}</span>`).join('')+'<span>三条小条：听觉 / 视觉 / M12 这一分钟工作的秒数</span>';
  paint(el('mind-legend'));
- let open=null,settingsBase=null,prompts={versions:['v1'],models:['gpt-6-luna','gpt-6.1-terra']};
+ let open=null,settingsBase=null,prompts={versions:['v2'],models:['gpt-6-luna','gpt-6.1-terra']};
  const range=()=>{const day=el('mind-date').value||today,hours=Number(el('mind-range').value),dayStart=new Date(day+'T00:00:00').getTime(),now=Date.now();
   const to=Math.min(dayStart+86400000,day===today?now:dayStart+86400000);return {day,from:hours===24||day!==today?dayStart:Math.max(dayStart,to-hours*3600000),to,dayStart};};
  async function refresh(){

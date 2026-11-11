@@ -164,7 +164,7 @@ class ApiV1Test(unittest.TestCase):
 
     def test_rerun_never_touches_live(self):
         before = [d for d in copy.deepcopy(self.db["mind_scenes"].docs) if d["lane"] == "live"]
-        r = self.post_json("/rerun", {"minute": T0, "prompt": "v1", "model": "gpt-6.1-terra"})
+        r = self.post_json("/rerun", {"minute": T0, "prompt": "v2", "model": "gpt-6.1-terra"})
         self.assertEqual(r.status, 200)
         self.assertEqual((r.json()["lane"], r.json()["model"]), ("rerun", "gpt-6.1-terra"))
         self.assertEqual([d for d in self.db["mind_scenes"].docs if d["lane"] == "live"], before)
@@ -176,7 +176,7 @@ class ApiV1Test(unittest.TestCase):
         cur = self.call("/settings").json()
         new = copy.deepcopy(cur["settings"]); new["place"]["default"] = "别处"
         self.post_json("/settings", {"settings": new, "note": ""})
-        r = self.post_json("/rerun", {"minute": T0, "prompt": "v1", "model": "gpt-6-luna"}).json()
+        r = self.post_json("/rerun", {"minute": T0, "prompt": "v2", "model": "gpt-6-luna"}).json()
         self.assertEqual(r["settings_version"], live["settings_version"])
         self.assertNotIn("别处", self.fake.calls[-1]["messages"][1]["content"])
 
@@ -188,12 +188,20 @@ class ApiV1Test(unittest.TestCase):
             self.assertEqual((r.status, r.json()["enabled"]), (200, False))
             self.assertIs(self.call("/state").json()["enabled"], False)
             n = len(self.fake.calls)
-            r = self.post_json("/rerun", {"minute": T0, "prompt": "v1", "model": "gpt-6-luna"})
+            r = self.post_json("/rerun", {"minute": T0, "prompt": "v2", "model": "gpt-6-luna"})
             self.assertEqual(r.status, 409)
             self.assertEqual(len(self.fake.calls), n)
         finally:
             self.post_json("/switch", {"enabled": True})
         self.assertIs(self.call("/state").json()["enabled"], True)
+
+    def test_v1_is_retired_but_old_records_stay_readable(self):
+        self.assertEqual(self.call("/prompts").json()["versions"], ["v2"])
+        self.assertEqual(self.post_json("/rerun", {"minute": T0, "prompt": "v1", "model": "gpt-6-luna"}).status, 400)
+        s = self.call("/settings").json()
+        old = copy.deepcopy(s["settings"]); old["fusion"]["prompt"] = "v1"
+        self.assertEqual(self.post_json("/settings", {"settings": old, "note": ""}).status, 400)
+        self.assertEqual(settings.load(None)["fusion"]["prompt"], "v2")
 
     def test_place_report(self):
         self.assertEqual(self.post_json("/place", {"label": "办公室"}).status, 200)
