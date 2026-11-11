@@ -74,7 +74,9 @@ def _parse(resp):
 
 
 def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbours, lane="live",
-               force_prompt=None, force_model=None, now_ms=None, segments=None, package_version=None):
+               force_prompt=None, force_model=None, now_ms=None, segments=None, package_version=None, revise=False):
+    """revise: late records rewrote this minute's package — call again only if the content changed
+    (returns None, writing nothing, when the minute has no scene yet or its content is the same)."""
     now_ms = now_ms if now_ms is not None else minute_ms + 2 * MIN_MS
     forced = force_prompt is not None or force_model is not None
     prev = store.last_scene_before("live" if lane == "rerun" else lane, minute_ms)
@@ -88,6 +90,11 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
             "last_call_fp": prev.get("last_call_fp") if prev else None, "review_level": level,
             "last_call_prompt": (prev["last_call_prompt"] if "last_call_prompt" in prev else prev.get("prompt")) if prev else None,
             "scene": None, "checks": None, "package_version": package_version, "package_fingerprint": pkg.get("fingerprint")}
+
+    if revise:
+        existing = store.latest_scene(lane, minute_ms)
+        if not existing or existing.get("content_fp") == base["content_fp"]:
+            return None
 
     def carry(source, reason):
         rec = dict(base, source=source, reason=reason)
@@ -105,7 +112,7 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
     if forced:
         action, reason = "call", "rerun"
     else:
-        action, reason = decide(prev, pkg, strong, s, minute_ms, level)
+        action, reason = ("call", "revised") if revise else decide(prev, pkg, strong, s, minute_ms, level)
         state = store.state()
         if action == "call" and (state.get("fusion_backoff_until") or 0) >= now_ms:   # a 1-min backoff skips the next minute
             action, reason = "carry", "backoff"

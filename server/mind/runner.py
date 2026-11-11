@@ -17,7 +17,7 @@ from .settings_store import SettingsStore
 from .store import LANE, Store
 
 MIN_MS = 60_000
-PROCESS_DELAY_MS = 80_000
+PROCESS_DELAY_MS = 30_000     # v3 (2026-11-11): first version 30 s after the minute; late records revise it
 LOOKBACK_MS = 30 * MIN_MS
 VISION_LOOKBACK_CAP_MS = 12 * 3600_000
 RECHECK_MINUTES = 10
@@ -50,7 +50,7 @@ def day_start(ms, tz):
     return int(t.timestamp() * 1000)
 
 
-def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE):
+def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE, revise=False):
     """Model fusion for these minutes, in order (packages must exist), then segment summaries.
     Nothing is called while the mind switch is off; segment summaries only when a sense was on in
     one of these minutes (both senses off: no model call of any kind)."""
@@ -69,7 +69,7 @@ def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE):
         prev = store.latest(lane, m - MIN_MS)
         fusion.run_minute(env, store, s, settings_version, m, doc["package"], doc["strong"],
                           {"prev": prev["package"] if prev else None}, lane=lane, now_ms=now_ms,
-                          segments=[g for g in titled if g["start"] < m], package_version=doc["version"])
+                          segments=[g for g in titled if g["start"] < m], package_version=doc["version"], revise=revise)
         done += 1
     segments.update(env, store, s, day_start(now_ms, s["tz"]), now_ms, lane, summarize_now=sensed)
     store.set_state(cost_today=round(store.cost_today(s["tz"], now_ms), 4))
@@ -87,12 +87,14 @@ def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000, env=None, sett
         return 0                                 # nothing new is ready: no re-check either (once per new minute)
     done = state.get("processed", 0)
     same = state.get("skipped_same", 0)
-    count, new = 0, []
+    count, new, rewritten = 0, [], []
     try:
         if cursor is not None:
             for m in range(cursor - (RECHECK_MINUTES - 1) * MIN_MS, cursor + MIN_MS, MIN_MS):
                 if process_minute(records, store, m, s, now_ms) == "same":
                     same += 1
+                else:
+                    rewritten.append(m)          # late records: a revision if the content changed
         for m in range(first, last_ready + MIN_MS, MIN_MS):
             if process_minute(records, store, m, s, now_ms) == "same":
                 same += 1
@@ -102,6 +104,7 @@ def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000, env=None, sett
             store.set_state(cursor_minute=m, processed=done, skipped_same=same)
         store.set_state(last_run_ms=now_ms, last_error="", skipped_same=same)
         age_limit = s["fusion"]["max_age_min"] * MIN_MS + MIN_MS + PROCESS_DELAY_MS
+        fuse(env, store, s, [m for m in rewritten if now_ms - m <= age_limit], now_ms, settings_version, revise=True)
         fuse(env, store, s, [m for m in new if now_ms - m <= age_limit], now_ms, settings_version)
     except Exception as e:                       # noqa: BLE001 - recorded, then the caller retries
         try:

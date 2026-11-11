@@ -144,14 +144,15 @@ class RunnerFusionTest(RunnerTest):
         self.assertTrue(fused and fused[0] >= now - 60 * MIN - 140_000)
         self.assertEqual(len(fused), 60)
 
-    def test_recheck_does_not_fuse_again(self):
+    def test_late_speech_revises_that_minute(self):
         now = T0 + 10 * MIN + 80_000
         self.store.set_state(cursor_minute=T0)
         runner.tick(self.rec, self.store, S, now, 48 * 3600_000, env=ENV)
         n = self.db.count("mind_scenes")
         self.db.add("speech", speech("H", "s-late", T0 + 5 * MIN + 1000))
         runner.tick(self.rec, self.store, S, now + MIN, 48 * 3600_000, env=ENV)
-        self.assertEqual(self.db.count("mind_scenes"), n + 1)
+        self.assertEqual(self.db.count("mind_scenes"), n + 2)          # the new minute + one revision
+        self.assertEqual(self.scene_versions(T0 + 5 * MIN)[-1][1], "revised")
 
     def test_fusion_disabled_writes_no_scenes(self):
         import copy
@@ -195,6 +196,58 @@ class RunnerFusionTest(RunnerTest):
         self.assertEqual(self.fake.calls, [])
         self.assertEqual({d["reason"] for d in db["mind_scenes"].docs}, {"sensors_off"})
 
+
+    # ---- mind v3: first version 30 s after the minute; late records revise it ----
+    def scene_versions(self, minute):
+        return sorted((d["version"], d["reason"]) for d in self.db["mind_scenes"].docs if d["minute"] == minute and d["lane"] == "live")
+
+    def test_minute_is_processed_30_s_after_it_ends(self):
+        self.store.set_state(cursor_minute=T0 - MIN)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 29_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(self.store.state()["cursor_minute"], T0 - MIN)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(self.store.state()["cursor_minute"], T0)
+
+    def eye_result(self, minute):
+        self.db.add("eye_minutes", {"minute": minute, "version": 1, "source": "model", "frames": [{"seq": 1}],
+                                    "result": {"people_count": 1, "people": [{"who": "主人", "where": "桌前", "doing": "打字"}],
+                                               "activity": "主人在打字", "scene": "办公室", "changes": "", "confidence": "high"}})
+
+    def test_late_eye_result_revises_the_minute_once(self):
+        self.store.set_state(cursor_minute=T0 - MIN)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(len(self.scene_versions(T0)), 1)
+        self.eye_result(T0)
+        runner.tick(self.rec, self.store, S, T0 + 2 * MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(self.scene_versions(T0)[-1], (2, "revised"))
+        runner.tick(self.rec, self.store, S, T0 + 3 * MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(len(self.scene_versions(T0)), 2)
+
+    def test_rewritten_package_with_same_content_is_not_revised(self):
+        self.store.set_state(cursor_minute=T0 - MIN)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
+        n = len(self.fake.calls)
+        self.db.add("sounds", sound("H", "a-late", T0 + 50_000))           # one more sound of the same kind
+        runner.tick(self.rec, self.store, S, T0 + 2 * MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(len(self.scene_versions(T0)), 1)
+        self.assertEqual(len(self.store.versions("live", T0)), 2)          # the package did get a new version
+
+    def test_no_revision_when_mind_is_off(self):
+        self.store.set_state(cursor_minute=T0 - MIN)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.store.set_state(enabled=False)
+        self.eye_result(T0)
+        runner.tick(self.rec, self.store, S, T0 + 2 * MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(len(self.scene_versions(T0)), 1)
+
+    def test_revision_runs_are_logged(self):
+        self.store.set_state(cursor_minute=T0 - MIN)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
+        before = sum(1 for d in self.db["mind_runs"].docs if d.get("minute") == T0 and d["step"] == "fusion")
+        self.eye_result(T0)
+        runner.tick(self.rec, self.store, S, T0 + 2 * MIN + 30_000, 48 * 3600_000, env=ENV)
+        after = sum(1 for d in self.db["mind_runs"].docs if d.get("minute") == T0 and d["step"] == "fusion")
+        self.assertEqual(after, before + 1)
 
 if __name__ == "__main__":
     unittest.main()
