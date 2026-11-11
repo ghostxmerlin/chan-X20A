@@ -46,6 +46,7 @@ import hello_db
 import vision_link
 import tingwu as tingwu_rt
 import tingwu_switch
+import mouth_link
 import sound_kinds
 import hearing_protocol as hp
 
@@ -922,6 +923,7 @@ def main():
     active = set()
     ears = set()                     # live Ear objects (for the 听悟 status document)
     vision_active = set()
+    mouth_active = set()
     tw_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("tingwu")) if database else (lambda: None))
 
     def write_tingwu_status():
@@ -948,6 +950,19 @@ def main():
         header = ws.request.headers.get("Authorization", "") if getattr(ws, "request", None) else ""
         if not hp.authenticate(path, header, token_value):
             await ws.close(code=4401, reason="bad token")
+            return
+        if urlsplit(path).path == "/mouth":            # speaker downlink: relayed to soul-tts (2026-11-11)
+            if len(mouth_active) >= 2:
+                await ws.close(code=1013, reason="server busy")
+                return
+            mouth_active.add(ws)
+            peer = ws.remote_address
+            print(f"+ {peer} mouth", flush=True)
+            try:
+                why = await mouth_link.relay(ws, mouth_link.UPSTREAM, token_value)
+            finally:
+                mouth_active.discard(ws)
+            print(f"- {peer} mouth: {why}", flush=True)
             return
         if urlsplit(path).path == "/vision":           # vision uplink: its own connection (collector-0.4.74+)
             if len(vision_active) >= 4:
