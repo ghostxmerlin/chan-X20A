@@ -18,6 +18,8 @@ public:
     bool Poll();
     // /mouth (0.4.77): also take binary messages up to max_bytes; hearing stays text only.
     void AcceptBinary(size_t max_bytes);
+    // Budget to finish one readable frame (default 200 ms: hearing must not stall capture).
+    void SetReadBudgetMs(int ms);
     void Abort();
     const std::string& Error() const;
     void OnData(std::function<void(const char*,size_t,bool)>);

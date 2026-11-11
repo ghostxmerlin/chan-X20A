@@ -61,6 +61,44 @@ private:
     size_t head_ = 0, count_ = 0;
 };
 
+// Decoded frames waiting for the speaker writer (storage Frames*Samples int16 in PSRAM on the robot).
+// Each frame carries its stream id; frames of another stream at the head are dropped on the way out.
+// Caller holds a mutex.
+template<size_t Frames, size_t Samples>
+class PcmFifo {
+public:
+    explicit PcmFifo(int16_t* storage) : store_(storage) {}
+    bool push(uint32_t sid, const int16_t* pcm)
+    {
+        if (!store_ || count_ == Frames) return false;
+        const size_t at = (head_ + count_) % Frames;
+        std::memcpy(store_ + at * Samples, pcm, Samples * sizeof(int16_t)); sid_[at] = sid; ++count_;
+        return true;
+    }
+    bool pop_for(uint32_t sid, int16_t* out)
+    {
+        while (count_) {
+            const size_t at = head_;
+            head_ = (head_ + 1) % Frames; --count_;
+            if (sid_[at] == sid) { std::memcpy(out, store_ + at * Samples, Samples * sizeof(int16_t)); return true; }
+        }
+        return false;
+    }
+    size_t count_for(uint32_t sid) const
+    {
+        size_t n = 0;
+        for (size_t i = 0; i < count_; ++i) n += sid_[(head_ + i) % Frames] == sid;
+        return n;
+    }
+    size_t size() const { return count_; }
+    bool full() const { return count_ == Frames; }
+    void clear() { head_ = count_ = 0; }
+private:
+    int16_t* store_;
+    uint32_t sid_[Frames] = {};
+    size_t head_ = 0, count_ = 0;
+};
+
 struct Report {
     enum Kind { Playing, Progress, Done, Stopped, Error } kind = Progress;
     uint32_t stream = 0;

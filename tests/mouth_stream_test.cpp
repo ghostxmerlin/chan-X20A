@@ -91,6 +91,20 @@ int main()
     v.stopped = true; assert(decide(v) == Action::Stopped);
     v = View{}; assert(decide(v) == Action::Idle);
 
+    // PCM queue between the decoder and the speaker writer: frames carry their stream; frames of an
+    // older stream are dropped on the way out; full means the decoder waits.
+    {
+        static int16_t pcm_store[3 * 4];
+        PcmFifo<3, 4> q(pcm_store);
+        const int16_t f1[4] = {1, 1, 1, 1}, f2[4] = {2, 2, 2, 2}, f3[4] = {3, 3, 3, 3};
+        assert(q.push(5, f1) && q.push(6, f2) && q.push(6, f3) && !q.push(6, f1));   // full
+        assert(q.count_for(6) == 2 && q.count_for(5) == 1);
+        int16_t out[4] = {};
+        assert(q.pop_for(6, out) && out[0] == 2 && q.size() == 1);    // stream 5's frame dropped first
+        assert(!q.pop_for(7, out) && q.size() == 0);                  // only another stream's: dropped, nothing out
+        q.push(6, f3); q.clear(); assert(q.size() == 0);
+    }
+
     // 嘴 mode: the ear's respond=false silences the emotion clips; an older ear (no field) answers.
     assert(hearing::response_allowed(false, false));
     assert(hearing::response_allowed(true, true));

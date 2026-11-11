@@ -14,8 +14,10 @@ void json(ArduinoJson::JsonObject out);
 // Player side (playback.cpp). false: no stream to play right now.
 struct PlayerView { uint32_t stream = 0; bool ended = false, stopped = false; size_t buffered = 0; uint32_t played_frames = 0; };
 bool player_view(PlayerView& v);
-// Next packet of `stream`, counted as played; false when empty or the stream changed.
+// Next packet of `stream` (for the decoder); false when empty, stopped or the stream changed.
 bool player_pop(uint32_t stream, uint8_t* out, size_t& n);
+// One frame of `stream` reached the speaker (played_ms for the server's flow control).
+void player_played(uint32_t stream);
 constexpr size_t kPacketMax = 768;
 // Queue a report for the server; Done / Stopped / Error also finish the stream.
 void player_report(const Report& r);

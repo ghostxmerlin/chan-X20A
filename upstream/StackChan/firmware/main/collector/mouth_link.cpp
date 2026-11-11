@@ -108,6 +108,7 @@ void run(void*)
         const std::string authorization = "Bearer " + token;
         socket.SetHeader("Authorization", authorization.c_str());
         socket.AcceptBinary(kMaxMessage);
+        socket.SetReadBudgetMs(3000);    // own task: a frame split by an RTT spike may take its time
         socket.OnData(on_message);
         bool ok = socket.Connect(url.c_str());
         if (ok) {
@@ -178,9 +179,13 @@ bool player_view(PlayerView& v)
 bool player_pop(uint32_t sid, uint8_t* out, size_t& n)
 {
     std::lock_guard<std::mutex> lock(mutex);
-    if (!ring || !stream.active() || stream.id != sid || stream.stopped || !ring->pop(out, n)) return false;
-    ++stream.played_frames;
-    return true;
+    return ring && stream.active() && stream.id == sid && !stream.stopped && ring->pop(out, n);
+}
+
+void player_played(uint32_t sid)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (stream.active() && stream.id == sid) ++stream.played_frames;
 }
 
 void player_report(const Report& r)

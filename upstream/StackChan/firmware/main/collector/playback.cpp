@@ -261,17 +261,68 @@ void process_playback(Job* job)
     delete job;
 }
 // ---------- /mouth stream player (0.4.77) ----------
-// Holds the playback gate for a whole session: first stream through the 1.5 s hold after the last,
-// so hearing hears silence (playback_self_sounding) and clips wait. Each 60 ms Opus packet is
-// decoded to 1440 samples and written in 480-sample blocks; the I2S DMA ring paces it in real time.
-// Underrun writes silence with the speaker on. All buffers and the stack are in PSRAM.
+// Two tasks. mouth_dec decodes Opus packets ahead into a PCM queue (about 1 s, PSRAM), so one slow
+// decode (preempted, PSRAM stalls: up to 114 ms seen on the robot) never reaches the speaker.
+// mouth_play holds the playback gate for a whole session (first stream through the 1.5 s hold after
+// the last; hearing hears silence and clips wait) and feeds I2S from the queue in 480-sample blocks;
+// the DMA ring paces it in real time. No decoded frame ready writes silence with the speaker on.
 constexpr size_t kStreamFrame = 24000 * mouth::kFrameMs / 1000;
-constexpr uint32_t kStreamStackBytes = 32768;
+constexpr size_t kPcmFrames = 16;                       // 960 ms of decoded audio
+constexpr uint32_t kDecoderStackBytes = 32768, kWriterStackBytes = 12288;
+using PcmQueue = mouth::PcmFifo<kPcmFrames, kStreamFrame>;
+std::mutex pcm_mutex;
+PcmQueue* pcm_queue = nullptr;
 struct StreamStats {
     uint32_t sessions = 0, streams = 0, frames = 0, decode_errors = 0, underruns = 0, gate_timeouts = 0, amp_errors = 0;
-    uint32_t decode_us_max = 0, stack_free = 0;
+    uint32_t decode_us_max = 0, decode_us_avg = 0, decodes = 0, decodes_over_60ms = 0, decoder_late = 0;
+    uint32_t decoder_stack_free = 0, writer_stack_free = 0;
     bool decoder_ok = false;
 } stream_stats;
+
+size_t pcm_ready(uint32_t sid) { std::lock_guard<std::mutex> lock(pcm_mutex); return pcm_queue ? pcm_queue->count_for(sid) : 0; }
+bool pcm_take(uint32_t sid, int16_t* out) { std::lock_guard<std::mutex> lock(pcm_mutex); return pcm_queue && pcm_queue->pop_for(sid, out); }
+void pcm_clear() { std::lock_guard<std::mutex> lock(pcm_mutex); if (pcm_queue) pcm_queue->clear(); }
+
+void decoder_worker(void*)
+{
+    auto* packet = static_cast<uint8_t*>(heap_caps_malloc(mouth::kPacketMax, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    auto* pcm = static_cast<int16_t*>(heap_caps_malloc(kStreamFrame * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    void* decoder = nullptr;
+    esp_opus_dec_cfg_t cfg{24000, 1, ESP_OPUS_DEC_FRAME_DURATION_60_MS, false};
+    if (!packet || !pcm || !pcm_queue || esp_opus_dec_open(&cfg, sizeof(cfg), &decoder) != ESP_AUDIO_ERR_OK) {
+        ESP_LOGE(kTag, "stream decoder: no memory or no Opus decoder");
+        vTaskDeleteWithCaps(nullptr);
+        return;
+    }
+    { std::lock_guard<std::mutex> lock(status_mutex); stream_stats.decoder_ok = true; }
+    uint32_t current = 0;
+    uint64_t total_us = 0;
+    for (uint32_t loops = 0;; ++loops) {
+        mouth::PlayerView pv;
+        if (!mouth::player_view(pv) || pv.stopped || !pv.buffered) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+        if (pv.stream != current) { current = pv.stream; esp_opus_dec_reset(decoder); }
+        bool room;
+        { std::lock_guard<std::mutex> lock(pcm_mutex); room = !pcm_queue->full(); }
+        if (!room) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }   // about 1 s decoded ahead already
+        size_t n = 0;
+        if (!mouth::player_pop(pv.stream, packet, n)) continue;
+        esp_audio_dec_in_raw_t raw{packet, static_cast<uint32_t>(n), 0, ESP_AUDIO_DEC_RECOVERY_NONE};
+        esp_audio_dec_out_frame_t out{reinterpret_cast<uint8_t*>(pcm), kStreamFrame * sizeof(int16_t), 0, 0};
+        esp_audio_dec_info_t info{};
+        const int64_t t0 = esp_timer_get_time();
+        const bool ok = esp_opus_dec_decode(decoder, &raw, &out, &info) == ESP_AUDIO_ERR_OK && out.decoded_size == kStreamFrame * sizeof(int16_t);
+        const auto took = static_cast<uint32_t>(esp_timer_get_time() - t0);
+        if (!ok) std::memset(pcm, 0, kStreamFrame * sizeof(int16_t));
+        { std::lock_guard<std::mutex> lock(pcm_mutex); pcm_queue->push(pv.stream, pcm); }
+        std::lock_guard<std::mutex> lock(status_mutex);
+        ++stream_stats.decodes; total_us += took;
+        stream_stats.decode_us_avg = static_cast<uint32_t>(total_us / stream_stats.decodes);
+        stream_stats.decode_us_max = std::max(stream_stats.decode_us_max, took);
+        if (took > 60000) ++stream_stats.decodes_over_60ms;
+        if (!ok) ++stream_stats.decode_errors;
+        if (!(loops & 63)) stream_stats.decoder_stack_free = uxTaskGetStackHighWaterMark(nullptr);
+    }
+}
 
 void write_silence(CoreS3AudioCodec* codec, int16_t* zeros)
 {
@@ -286,7 +337,7 @@ void stream_report(mouth::Report::Kind kind, uint32_t sid, uint32_t played, size
     mouth::player_report(r);
 }
 
-void stream_session(CoreS3AudioCodec* codec, void* decoder, uint8_t* packet, int16_t* pcm, int16_t* zeros)
+void stream_session(CoreS3AudioCodec* codec, int16_t* pcm, int16_t* zeros)
 {
     uint32_t cur = 0; bool started = false, underrun = false;
     uint32_t underruns = 0, underrun_ms = 0; int64_t underrun_since = 0, last_progress = 0, hold_until = 0;
@@ -294,7 +345,7 @@ void stream_session(CoreS3AudioCodec* codec, void* decoder, uint8_t* packet, int
         mouth::PlayerView pv;
         const int64_t now = esp_timer_get_time();
         if (!mouth::player_view(pv)) {
-            if (!hold_until) hold_until = now + mouth::kHoldUs;
+            if (!hold_until) { hold_until = now + mouth::kHoldUs; pcm_clear(); }
             if (now >= hold_until) return;
             write_silence(codec, zeros);
             continue;
@@ -302,48 +353,36 @@ void stream_session(CoreS3AudioCodec* codec, void* decoder, uint8_t* packet, int
         hold_until = 0;
         if (pv.stream != cur) {
             cur = pv.stream; started = underrun = false; underruns = underrun_ms = 0; last_progress = 0;
-            if (decoder) esp_opus_dec_reset(decoder);
             std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.streams; state = "buffering";
         }
+        // Decide on decoded audio: "ended" = the stream ended and every packet is decoded, so a
+        // decoder that falls behind shows as an underrun (counted), never as a gap in the middle.
+        const size_t decoded = pcm_ready(cur);
         mouth::View v; v.has_stream = true; v.started = started; v.underrun = underrun;
-        v.ended = pv.ended; v.stopped = pv.stopped; v.buffered = pv.buffered;
+        v.ended = pv.ended && !pv.buffered; v.stopped = pv.stopped; v.buffered = decoded;
         auto action = mouth::decide(v);
         if (action == mouth::Action::Start) {
             started = true;
-            stream_report(mouth::Report::Playing, cur, pv.played_frames, pv.buffered, 0, 0);
+            stream_report(mouth::Report::Playing, cur, pv.played_frames, pv.buffered + decoded, 0, 0);
             set_state("playing");
             action = mouth::Action::Play;
         }
         switch (action) {
-        case mouth::Action::Play: {
-            if (underrun) { underrun = false; underrun_ms += static_cast<uint32_t>((now - underrun_since) / 1000); }
-            size_t n = 0;
-            if (!mouth::player_pop(cur, packet, n)) break;
-            bool decoded = false;
-            if (decoder) {
-                esp_audio_dec_in_raw_t raw{packet, static_cast<uint32_t>(n), 0, ESP_AUDIO_DEC_RECOVERY_NONE};
-                esp_audio_dec_out_frame_t out{reinterpret_cast<uint8_t*>(pcm), kStreamFrame * sizeof(int16_t), 0, 0};
-                esp_audio_dec_info_t info{};
-                const int64_t t0 = esp_timer_get_time();
-                decoded = esp_opus_dec_decode(decoder, &raw, &out, &info) == ESP_AUDIO_ERR_OK && out.decoded_size == kStreamFrame * sizeof(int16_t);
-                const auto took = static_cast<uint32_t>(esp_timer_get_time() - t0);
-                std::lock_guard<std::mutex> lock(status_mutex);
-                stream_stats.decode_us_max = std::max(stream_stats.decode_us_max, took);
-                if (!decoded) ++stream_stats.decode_errors;
+        case mouth::Action::Play:
+            if (!pcm_take(cur, pcm)) {                   // packets here, decoder not done yet
+                { std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.decoder_late; }
+                write_silence(codec, zeros);
+                break;
             }
-            const int16_t* src = decoded ? pcm : zeros;
+            if (underrun) { underrun = false; underrun_ms += static_cast<uint32_t>((now - underrun_since) / 1000); }
             for (size_t at = 0; at < kStreamFrame; at += kPlaybackChunkFrames)
-                if (codec->WriteCollectorOutput(src + (decoded ? at : 0), kPlaybackChunkFrames) != ESP_OK) break;
-            std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.frames;
+                if (codec->WriteCollectorOutput(pcm + at, kPlaybackChunkFrames) != ESP_OK) break;
+            mouth::player_played(cur);
+            { std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.frames; }
             break;
-        }
         case mouth::Action::Underrun:
             underrun = true; ++underruns; underrun_since = now;
             { std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.underruns; }
-            write_silence(codec, zeros);
-            break;
-        case mouth::Action::Wait:
-        case mouth::Action::Silence:
             write_silence(codec, zeros);
             break;
         case mouth::Action::Done:
@@ -353,37 +392,29 @@ void stream_session(CoreS3AudioCodec* codec, void* decoder, uint8_t* packet, int
             break;
         case mouth::Action::Stopped:
             stream_report(mouth::Report::Stopped, cur, pv.played_frames, 0, underruns, underrun_ms);
+            pcm_clear();
             set_state("holding");
             break;
-        default:
+        default:                                          // Wait (prebuffer), Silence (rebuffer)
             write_silence(codec, zeros);
             break;
         }
-        if (started && (action == mouth::Action::Play || action == mouth::Action::Silence || action == mouth::Action::Underrun) &&
-            now - last_progress >= mouth::kProgressUs) {
+        if (started && action != mouth::Action::Done && action != mouth::Action::Stopped && now - last_progress >= mouth::kProgressUs) {
             last_progress = now;
             mouth::PlayerView after;
             if (mouth::player_view(after) && after.stream == cur)
-                stream_report(mouth::Report::Progress, cur, after.played_frames, after.buffered, underruns, underrun_ms);
+                stream_report(mouth::Report::Progress, cur, after.played_frames, after.buffered + pcm_ready(cur), underruns, underrun_ms);
         }
     }
 }
 
 void stream_worker(void*)
 {
-    auto* packet = static_cast<uint8_t*>(heap_caps_malloc(mouth::kPacketMax, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     auto* pcm = static_cast<int16_t*>(heap_caps_malloc(kStreamFrame * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     auto* zeros = static_cast<int16_t*>(heap_caps_calloc(kPlaybackChunkFrames, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    void* decoder = nullptr;
-    esp_opus_dec_cfg_t cfg{24000, 1, ESP_OPUS_DEC_FRAME_DURATION_60_MS, false};
-    if (packet && pcm && zeros && esp_opus_dec_open(&cfg, sizeof(cfg), &decoder) == ESP_AUDIO_ERR_OK) {
-        std::lock_guard<std::mutex> lock(status_mutex); stream_stats.decoder_ok = true;
-    } else {
-        ESP_LOGE(kTag, "stream player: no memory or no Opus decoder");
-    }
-    for (;;) {
+    for (uint32_t loops = 0;; ++loops) {
         mouth::PlayerView pv;
-        if (!stream_stats.decoder_ok || !voice_audio_ready || !mouth::player_view(pv)) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+        if (!pcm || !zeros || !stream_stats.decoder_ok || !voice_audio_ready || !mouth::player_view(pv)) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
         // A clip (SD, cue, upload) still holding the speaker: wait for it, then take the gate.
         const int64_t waited_from = esp_timer_get_time();
         bool got = false;
@@ -411,7 +442,7 @@ void stream_worker(void*)
             expected_bytes = received_bytes = submitted_bytes = 0;
         }
         const auto err = amp_begin(codec);
-        if (err == ESP_OK) stream_session(codec, decoder, packet, pcm, zeros);
+        if (err == ESP_OK) stream_session(codec, pcm, zeros);
         else {
             stream_report(mouth::Report::Error, pv.stream, 0, 0, 0, 0, "speaker_start");
             std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.amp_errors;
@@ -421,7 +452,7 @@ void stream_worker(void*)
             std::lock_guard<std::mutex> lock(status_mutex);
             error_code = err; cleanup_error = cleanup; error_stage = err ? "start" : cleanup ? "cleanup" : "none";
             state = err ? "failed" : "completed";
-            stream_stats.stack_free = uxTaskGetStackHighWaterMark(nullptr);
+            stream_stats.writer_stack_free = uxTaskGetStackHighWaterMark(nullptr);
             self_tail_until = esp_timer_get_time() + 1200000;
             gate.release();
         }
@@ -466,8 +497,12 @@ void playback_init() {
     if(!playback_stack)return;
     playback_queue=xQueueCreateStatic(1,sizeof(Job*),reinterpret_cast<uint8_t*>(playback_slot),&playback_queue_control);
     if(playback_queue&&xTaskCreateStatic(playback_worker,"collector_playback",kPlaybackStackBytes,nullptr,3,playback_stack,&playback_worker_control)) {
-        // /mouth player: I2S/I2C and Opus work only, no flash access, so its stack is in PSRAM.
-        if(create_psram_task(stream_worker,"mouth_play",kStreamStackBytes,nullptr,4)!=pdPASS)ESP_LOGE(kTag,"stream player task failed");
+        // /mouth player: I2S/I2C and Opus work only, no flash access, so both stacks are in PSRAM.
+        // The writer runs above the ear worker (4) so the speaker never waits; the decoder below it.
+        auto* store=static_cast<int16_t*>(heap_caps_malloc(kPcmFrames*kStreamFrame*sizeof(int16_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+        if(store)pcm_queue=new (std::nothrow) PcmQueue(store);
+        if(!pcm_queue||create_psram_task(decoder_worker,"mouth_dec",kDecoderStackBytes,nullptr,3)!=pdPASS||
+           create_psram_task(stream_worker,"mouth_play",kWriterStackBytes,nullptr,6)!=pdPASS)ESP_LOGE(kTag,"stream player tasks failed");
         return;
     }
     if(playback_queue)vQueueDelete(playback_queue);
@@ -677,7 +712,9 @@ void playback_json(ArduinoJson::JsonObject target)
     st["decoder_ok"] = stream_stats.decoder_ok; st["sessions"] = stream_stats.sessions; st["streams"] = stream_stats.streams;
     st["frames"] = stream_stats.frames; st["decode_errors"] = stream_stats.decode_errors; st["underruns"] = stream_stats.underruns;
     st["gate_timeouts"] = stream_stats.gate_timeouts; st["amp_errors"] = stream_stats.amp_errors;
-    st["decode_us_max"] = stream_stats.decode_us_max; st["stack_free_bytes"] = stream_stats.stack_free;
+    st["decode_us_max"] = stream_stats.decode_us_max; st["decode_us_avg"] = stream_stats.decode_us_avg;
+    st["decodes"] = stream_stats.decodes; st["decodes_over_60ms"] = stream_stats.decodes_over_60ms; st["decoder_late"] = stream_stats.decoder_late;
+    st["decoder_stack_free_bytes"] = stream_stats.decoder_stack_free; st["writer_stack_free_bytes"] = stream_stats.writer_stack_free;
     const int reset = hal_bridge::board_speaker_reset_state();
     if (reset < 0) target["hardware_reset_held"] = nullptr;
     else target["hardware_reset_held"] = reset != 0;

@@ -19,7 +19,7 @@ struct HearingSocket::Impl {
     esp_transport_handle_t native=nullptr,bounded=nullptr,ws=nullptr;
     OperationDeadline deadline;
     std::mutex descriptor_mutex;int descriptor=-1;
-    bool connected=false;
+    bool connected=false;int read_budget_ms=200;
     std::string auth,error;
     MessageBuffer buffer;
     std::function<void(const char*,size_t,bool)> on_data;
@@ -81,11 +81,11 @@ struct HearingSocket::Impl {
         if(deadline.cancelled){close();return false;}
         // An idle poll must not spend the frame-read budget or stall capture.
         // Once readable, allow the complete header/payload a shared 200 ms.
-        char bytes[2048];deadline.begin(esp_timer_get_time(),200);
+        char bytes[2048];deadline.begin(esp_timer_get_time(),read_budget_ms);
         const int available=esp_transport_poll_read(ws,0);
         if(available<0){error="poll";close();return false;}
         if(!available)return false;
-        int n=esp_transport_read(ws,bytes,sizeof(bytes),200);
+        int n=esp_transport_read(ws,bytes,sizeof(bytes),read_budget_ms);
         if(n<0||deadline.cancelled){error="read_"+std::to_string(n);close();return false;}
         if(!n)return true;                                   // a ping answered internally
         const auto result=buffer.add(esp_transport_ws_get_read_opcode(ws),esp_transport_ws_get_fin_flag(ws),
@@ -112,6 +112,7 @@ bool HearingSocket::IsConnected()const{return impl_->connected&&!impl_->deadline
 bool HearingSocket::Send(const std::string& text){return impl_->send(text.data(),text.size(),false);}
 bool HearingSocket::Send(const void* data,size_t size,bool binary){return impl_->send(data,size,binary);}
 bool HearingSocket::Poll(){return impl_->poll();}
+void HearingSocket::SetReadBudgetMs(int ms){impl_->read_budget_ms=ms;}
 void HearingSocket::AcceptBinary(size_t max_bytes){impl_->buffer.allow_binary=true;impl_->buffer.max_bytes=max_bytes;}
 void HearingSocket::Abort(){impl_->abort();}
 const std::string& HearingSocket::Error()const{return impl_->error;}
