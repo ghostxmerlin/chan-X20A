@@ -162,10 +162,4 @@ test('eye card text', ()=>{
  assert.match(ui.eyeHtml(null),/还没有识别结果/);
  assert.match(ui.eyeHtml({minute:0,source:'model',result:{people_count:0,people:[],activity:'<b>',scene:'',changes:'',confidence:'low'}}),/&lt;b&gt;/);
 });
-test('此刻 shows the topic summary when there is one', ()=>{
- const base={minute:0,source:'model',version:1,scene:{summary:'s',who_am_i:{text:'a',confidence:'mid'},where_am_i:{text:'b',confidence:'mid'},people_doing:{text:'c',confidence:'mid'},entries:[],want_to_know:''}};
- const withTopic={scene:{...base,scene:{...base.scene,topic_summary:'两人在讨论地线要接到机壳上。'}},strong:null,segment:null};
- assert.match(ui.nowHtml(withTopic),/话题：两人在讨论地线要接到机壳上。/);
- assert.doesNotMatch(ui.nowHtml({scene:base,strong:null,segment:null}),/话题：/);
-});
 

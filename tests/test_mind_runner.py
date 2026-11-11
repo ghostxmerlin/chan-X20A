@@ -216,7 +216,7 @@ class RunnerFusionTest(RunnerTest):
 
     def test_at_most_3_revisions_per_tick(self):
         import copy
-        s3 = copy.deepcopy(S); s3["fusion"]["prompt"] = "v4"
+        s3 = copy.deepcopy(S); s3["fusion"]["prompt"] = "v3"
         self.store.set_state(cursor_minute=T0 - MIN)
         runner.tick(self.rec, self.store, s3, T0 + 8 * MIN + 30_000, 48 * 3600_000, env=ENV)
         for k in range(8):
@@ -227,7 +227,7 @@ class RunnerFusionTest(RunnerTest):
 
     def test_late_eye_result_revises_the_minute_once(self):
         import copy
-        S = copy.deepcopy(globals()["S"]); S["fusion"]["prompt"] = "v4"
+        S = copy.deepcopy(globals()["S"]); S["fusion"]["prompt"] = "v3"
         self.store.set_state(cursor_minute=T0 - MIN)
         runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
         self.assertEqual(len(self.scene_versions(T0)), 1)
@@ -256,7 +256,7 @@ class RunnerFusionTest(RunnerTest):
 
     def test_revision_runs_are_logged(self):
         import copy
-        S = copy.deepcopy(globals()["S"]); S["fusion"]["prompt"] = "v4"
+        S = copy.deepcopy(globals()["S"]); S["fusion"]["prompt"] = "v3"
         self.store.set_state(cursor_minute=T0 - MIN)
         runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
         before = sum(1 for d in self.db["mind_runs"].docs if d.get("minute") == T0 and d["step"] == "fusion")

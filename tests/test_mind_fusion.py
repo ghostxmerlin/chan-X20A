@@ -20,7 +20,7 @@ def scene_json(summary="在桌前"):
     return json.dumps({"who_am_i": a, "where_am_i": a, "people_doing": a, "owner_view": "present",
                        "entries": [{"key": "people.owner", "dimension": "people", "op": "add", "text": "主人在桌前",
                                     "basis": "inferred", "confidence": "mid", "evidence": ["rule:owner"]}],
-                       "changes": [], "summary": summary, "want_to_know": "", "topic_summary": ""}, ensure_ascii=False)
+                       "changes": [], "summary": summary, "want_to_know": ""}, ensure_ascii=False)
 
 
 class FakeChat:
@@ -71,7 +71,7 @@ class FingerprintTest(unittest.TestCase):
         self.assertEqual(fusion.content_fp(pkg, strong, eye_bin=1), fusion.content_fp(pkg, strong, eye_bin=1))
 
     def test_v3_minute_without_eye_keeps_the_last_eye_bin(self):
-        s3 = copy.deepcopy(S); s3["fusion"]["prompt"] = "v4"
+        s3 = copy.deepcopy(S); s3["fusion"]["prompt"] = "v3"
         self.store = Store(FakeDB())
         fusion.CHAT = FakeChat()
         pkg, strong = minute_input(T, same=True)
@@ -112,27 +112,6 @@ class FusionTest(unittest.TestCase):
         self.run_at(T)
         self.assertEqual((self.fake.calls[0].get("reasoning_effort"), self.fake.calls[0]["max_tokens"]), ("low", 4000))
 
-    def test_old_prompt_name_in_settings_runs_the_latest(self):
-        s_old = copy.deepcopy(S); s_old["fusion"]["prompt"] = "v3"
-        rec = self.run_at(T, s=s_old)
-        self.assertEqual((rec["source"], rec["prompt"]), ("model", "v4"))
-
-    def test_topic_summary_is_kept_in_the_scene(self):
-        reply = json.loads(scene_json())
-        reply["topic_summary"] = "旁边两人在讨论板子的地线要接到机壳上，以及第二版板子的改动。"
-        self.fake.reply_next(json.dumps(reply, ensure_ascii=False))
-        rec = self.run_at(T)
-        self.assertEqual(rec["scene"]["topic_summary"], reply["topic_summary"])
-
-    def test_recent_speech_from_the_previous_five_minutes(self):
-        for k in range(1, 8):
-            pkg, strong = minute_input(T - k * MIN)
-            pkg["speech"][0]["text"] = f"第{k}分钟前"
-            pkg["builder"] = 3
-            self.store.put("live", T - k * MIN, pkg, strong)
-        got = fusion.recent_speech(self.store, "live", T)
-        self.assertEqual([x["text"] for x in got], [f"第{k}分钟前" for k in range(5, 0, -1)])
-
     def test_unchanged_minutes_are_carried_until_review(self):
         self.run_at(T, same=True)
         got = [self.run_at(T + k * MIN, same=True) for k in range(1, 7)]
@@ -157,7 +136,7 @@ class FusionTest(unittest.TestCase):
         self.run_at(T, same=True)
         self.db["mind_scenes"].docs[-1]["last_call_prompt"] = "v2"      # a scene an older prompt wrote
         rec = self.run_at(T + MIN, same=True)
-        self.assertEqual((rec["source"], rec["reason"], rec["prompt"]), ("model", "prompt", "v4"))
+        self.assertEqual((rec["source"], rec["reason"], rec["prompt"]), ("model", "prompt", "v3"))
         self.assertEqual(self.run_at(T + 2 * MIN, same=True)["source"], "carried")
 
     def test_sensors_off_minutes_never_call_the_model(self):
@@ -169,7 +148,7 @@ class FusionTest(unittest.TestCase):
 
     def test_rerun_of_a_sensors_off_minute_still_calls(self):
         pkg, strong = minute_input(T, owner="sensors_off", coverage=(0, 0))
-        rec = fusion.run_minute(ENV, self.store, S, 3, T, pkg, strong, {}, lane="rerun", force_prompt="v4", now_ms=T + 5 * MIN)
+        rec = fusion.run_minute(ENV, self.store, S, 3, T, pkg, strong, {}, lane="rerun", force_prompt="v3", now_ms=T + 5 * MIN)
         self.assertEqual((rec["source"], len(self.fake.calls)), ("model", 1))
 
     def test_timeout_retries_once_then_fails_and_backs_off(self):
@@ -203,7 +182,7 @@ class FusionTest(unittest.TestCase):
     def test_rerun_skips_the_gate_and_writes_its_own_lane(self):
         self.run_at(T, same=True)
         pkg, strong = minute_input(T, same=True)
-        rec = fusion.run_minute(ENV, self.store, S, 3, T, pkg, strong, {}, lane="rerun", force_prompt="v4", force_model="gpt-6.1-terra", now_ms=T + 5 * MIN)
+        rec = fusion.run_minute(ENV, self.store, S, 3, T, pkg, strong, {}, lane="rerun", force_prompt="v3", force_model="gpt-6.1-terra", now_ms=T + 5 * MIN)
         self.assertEqual((rec["lane"], rec["source"], rec["model"]), ("rerun", "model", "gpt-6.1-terra"))
         self.assertEqual([d["lane"] for d in self.db["mind_scenes"].docs], ["live", "rerun"])
 

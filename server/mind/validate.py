@@ -85,6 +85,5 @@ def apply(out, prev_entries, pkg, strong, minute_ms):
     scene = {"who_am_i": answer(out.get("who_am_i")), "where_am_i": answer(out.get("where_am_i")),
              "people_doing": answer(out.get("people_doing")), "owner_view": view, "entries": merged,
              "changes": [str(c)[:MAX_TEXT] for c in (out.get("changes") or [])[:10]],
-             "summary": str(out.get("summary", ""))[:MAX_SUMMARY], "want_to_know": str(out.get("want_to_know", ""))[:MAX_TEXT],
-             "topic_summary": str(out.get("topic_summary") or "")[:160]}
+             "summary": str(out.get("summary", ""))[:MAX_SUMMARY], "want_to_know": str(out.get("want_to_know", ""))[:MAX_TEXT]}
     return scene, checks

@@ -19,21 +19,17 @@ ENTRY = {"type": "object", "additionalProperties": False,
                         "basis": {"type": "string", "enum": ["seen", "heard", "inferred", "assumed"]},
                         "confidence": CONFIDENCE, "evidence": {"type": "array", "items": {"type": "string"}}}}
 SCENE_SCHEMA = {"type": "object", "additionalProperties": False,
-                "required": ["who_am_i", "where_am_i", "people_doing", "owner_view", "entries", "changes", "summary", "want_to_know",
-                             "topic_summary"],
+                "required": ["who_am_i", "where_am_i", "people_doing", "owner_view", "entries", "changes", "summary", "want_to_know"],
                 "properties": {"who_am_i": ANSWER, "where_am_i": ANSWER, "people_doing": ANSWER,
                                "owner_view": {"type": "string", "enum": ["present", "absent", "unknown"]},
                                "entries": {"type": "array", "items": ENTRY},
                                "changes": {"type": "array", "items": {"type": "string"}},
-                               "summary": {"type": "string"}, "want_to_know": {"type": "string"},
-                               "topic_summary": {"type": "string"}}}
+                               "summary": {"type": "string"}, "want_to_know": {"type": "string"}}}
 RULE_CODES = {"rule:owner", "rule:coverage", "rule:time", "rule:place", "rule:self"}
 
-# Only the newest prompt is kept (user 2026-11-11: no need to manage old versions); old runs keep their name,
-# and a settings version naming a removed prompt runs the newest one (resolve).
-# v4 = v3 (positive wording; the eye result e1 as the main visual evidence; short output) + a ~50-character
-# topic summary over the last few minutes of talk (user 2026-11-11: "地线" alone was too terse).
-V4_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
+# Only v3 is kept (2026-11-11, user: "有了v3，我们不必再管v2 v1了"); old runs keep their prompt name.
+# v3: positive, most-likely wording (v2) + the eye result e1 as the main visual evidence, shorter output.
+V3_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
 
 【怎么写】
 - 用正向的话说出最可能的情况，再用把握高低表示有多确定。例如：主人在画面里、又有打字声 → “主人大概在桌前工作（在打字）”，把握中；画面里没人、也没人说话 → “附近大概没人”，把握中；有人来回说话 → “旁边有人在聊天”；音乐声 → “有人在放音乐”。
@@ -62,22 +58,12 @@ V4_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟�
 - e1 是视觉识别：另一个模型看过这一分钟的画面后写的结果（几个人、谁、在哪、在做什么、环境）。画面以 e1 为主要依据：people、activity、vision 条目引用 e1，basis 可以是 seen；M12 的脸记录只用来补充名字。
 - e1 里“很可能是主人”的人，按主人在场来写，把握中。
 - 没有 e1 时，按脸记录（v 代号）来写。
-- who_am_i、where_am_i、people_doing 各一句，越短越好。
-
-【话题】
-- 如果最近几分钟的对话（本分钟的话，加上“前几分钟说的话”）在谈一件事、一个项目或一个主题，在 topic_summary 写一段约 50 字的摘要：谁在谈、谈的是什么、说到的要点或结论。
-- 归纳不出主题（零散的寒暄、只有一两个词、听不清）就让 topic_summary 留空，不要硬凑。两个转写不一致的词，只取一致的部分。"""
-VERSIONS = {"v4": {"system": V4_SYSTEM}}
-LATEST = "v4"
-MAX_TOKENS = {"v4": 4000}
+- who_am_i、where_am_i、people_doing 各一句，越短越好。"""
+VERSIONS = {"v3": {"system": V3_SYSTEM}}
+MAX_TOKENS = {"v3": 4000}
 # luna reasons before answering and the reasoning counts as output (live 2026-11-11: 940 of 1739 tokens);
 # v3 asks for low effort: 216 reasoning / 776 output tokens, complete answer, about 12.7 s.
-REASONING_EFFORT = {"v4": "low"}
-
-
-def resolve(name):
-    """The prompt to run for a settings value: itself if kept, else the newest."""
-    return name if name in VERSIONS else LATEST
+REASONING_EFFORT = {"v3": "low"}
 OFFERED = sorted(VERSIONS)
 STATE_TEXT = {"seen": "看到主人", "just_left": "主人刚离开画面", "likely_present": "主人很可能在",
               "unknown": "不知道主人在不在", "likely_absent": "主人很可能不在", "sensors_off": "感官全关，无法判断"}
@@ -134,12 +120,6 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
         for e in (prev_scene.get("scene") or {}).get("entries", []):
             age = max(0, round((pkg["minute"] - e.get("last_evidence", pkg["minute"])) / 60000))
             L.append(f"{e['key']}（{e.get('dimension', '')}，{e.get('basis', '')}，{e.get('confidence', '')}，最后有证据：{age} 分钟前{'，已陈旧' if e.get('stale') else ''}）：{e['text']}")
-        L.append("")
-    recent = (neighbours or {}).get("recent") or []
-    if recent and src["speech_text"]:
-        L.append("【前几分钟说的话（供归纳话题，内容可能有错）】")
-        for x in recent[-30:]:
-            L.append(f"{_hhmmss(x['at'], tz)} [{_who(x['who'], owner, people)}]：{x['text']}")
         L.append("")
     st, cov = strong, strong["coverage"]
     L.append("【本分钟】")
