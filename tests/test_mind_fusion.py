@@ -108,6 +108,13 @@ class FusionTest(unittest.TestCase):
         self.assertEqual((run["step"], run["model"], run["cost_usd"]), ("fusion", "gpt-6-luna", llm.cost_usd("gpt-6-luna", {"prompt_tokens": 1000, "completion_tokens": 200})))
         self.assertEqual(rec["scene"]["entries"][0]["key"], "people.owner")
 
+    def test_v3_asks_for_low_reasoning_effort(self):
+        s3 = copy.deepcopy(S); s3["fusion"]["prompt"] = "v3"
+        self.run_at(T, s=s3)
+        self.run_at(T + MIN)
+        self.assertEqual((self.fake.calls[0].get("reasoning_effort"), self.fake.calls[0]["max_tokens"]), ("low", 4000))
+        self.assertNotIn("reasoning_effort", self.fake.calls[1])        # v2 unchanged
+
     def test_unchanged_minutes_are_carried_until_review(self):
         self.run_at(T, same=True)
         got = [self.run_at(T + k * MIN, same=True) for k in range(1, 7)]

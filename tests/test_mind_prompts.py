@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mind_build import MIN, S, T0, build, sound, speech, tingwu, vision   # noqa: E402
 from mind import package                                                  # noqa: E402
-from mind.prompts import MAX_TOKENS, OFFERED, RULE_CODES, SCENE_SCHEMA, VERSIONS, render   # noqa: E402
+from mind.prompts import MAX_TOKENS, OFFERED, REASONING_EFFORT, RULE_CODES, SCENE_SCHEMA, VERSIONS, render   # noqa: E402
 from mind import settings                                                 # noqa: E402
 
 DOCS = [("speech", speech("S", "s-1", T0 + 1000, text="今天下午开会", band="known", name="me", pos=[16000, 32000])),
@@ -129,7 +129,10 @@ class PromptsTest(unittest.TestCase):
         sys_text = render("v3", S, self.with_eye(), self.strong, None, [], {})[0]["content"]
         self.assertIn("e1", sys_text)
         self.assertIn("不超过 6 条", sys_text)
-        self.assertEqual((MAX_TOKENS["v2"], MAX_TOKENS["v3"]), (4000, 2000))
+        # luna spends about half its output tokens reasoning (live 2026-11-11: 940 of 1739), so a 2000 cap
+        # truncated v3; v3 keeps 4000 and asks for low reasoning effort instead
+        self.assertEqual((MAX_TOKENS["v2"], MAX_TOKENS["v3"]), (4000, 4000))
+        self.assertEqual((REASONING_EFFORT.get("v2"), REASONING_EFFORT["v3"]), (None, "low"))
 
     def test_package_items_carry_pos(self):
         self.assertEqual(self.pkg["speech"][0]["pos"], [16000, 32000])

@@ -98,7 +98,10 @@ def _v3(v2):
 
 V3_SYSTEM = _v3(V2_SYSTEM)
 VERSIONS = {"v1": {"system": V1_SYSTEM}, "v2": {"system": V2_SYSTEM}, "v3": {"system": V3_SYSTEM}}
-MAX_TOKENS = {"v1": 4000, "v2": 4000, "v3": 2000}
+MAX_TOKENS = {"v1": 4000, "v2": 4000, "v3": 4000}
+# luna reasons before answering and the reasoning counts as output (live 2026-11-11: 940 of 1739 tokens);
+# v3 asks for low effort: 216 reasoning / 776 output tokens, complete answer, about 12.7 s.
+REASONING_EFFORT = {"v3": "low"}
 RETIRED = {"v1"}             # v1 (negative wording) is kept only so old runs stay readable; not offered
 OFFERED = sorted(set(VERSIONS) - RETIRED)
 STATE_TEXT = {"seen": "看到主人", "just_left": "主人刚离开画面", "likely_present": "主人很可能在",

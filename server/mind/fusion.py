@@ -130,6 +130,8 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
     messages = prompts.render(prompt, s, pkg, strong, prev, segments or [], neighbours or {})
     body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": prompts.MAX_TOKENS.get(prompt, 4000),
             "response_format": prompts.schema_format()}
+    if prompts.REASONING_EFFORT.get(prompt):
+        body["reasoning_effort"] = prompts.REASONING_EFFORT[prompt]
     resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
     out, perr = _parse(resp) if not err else (None, err)
     retries, total_ms, usage_sum = 0, ms, dict((resp or {}).get("usage") or {})
