@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copy the mind code to the server and (re)start its unit. Settings come from the repo-root .env.
+# Copy the mind code to the server and (re)start its units (soul-mind, soul-eye). Settings come from the repo-root .env.
 #   server/mind/deploy.sh            copy, start or restart, wait until it runs
 #   server/mind/deploy.sh --dry-run  only list what would be copied; changes nothing
 # Copies server/mind/*.py and settings.example.json into ~/soul-mind/mind/. The real settings

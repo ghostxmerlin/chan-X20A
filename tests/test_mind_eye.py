@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mind_fixtures import FakeDB, T0, vision   # noqa: E402
-from mind import eye, llm, settings             # noqa: E402
+from mind import eye, eye_runner, llm, settings   # noqa: E402
 from mind.store import Store                    # noqa: E402
 from test_mind_fusion import FakeChat           # noqa: E402
 
@@ -22,6 +22,14 @@ def eye_json():
                       ensure_ascii=False)
 
 
+class EyeChat(FakeChat):
+    """FakeChat whose default reply is a valid eye answer."""
+    def __call__(self, base_url, key, body, timeout=90):
+        if not self.queue:
+            self.queue.append((eye_json(), None))
+        return super().__call__(base_url, key, body, timeout)
+
+
 class EyeTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -29,7 +37,7 @@ class EyeTest(unittest.TestCase):
         self.root = self.dir.name
         self.db = FakeDB()
         self.store = Store(self.db)
-        self.fake = FakeChat()
+        self.fake = EyeChat()
         eye.CHAT = self.fake
 
     def frame(self, at, seq, path=None, write=True):
@@ -119,6 +127,58 @@ class EyeTest(unittest.TestCase):
         rec = self.run_at(s=s)
         self.assertEqual((rec["source"], self.fake.calls), ("budget", []))
 
+
+
+class EyeRunnerTest(EyeTest):
+    def switch(self, on):
+        self.db["switches"].update_one({"_id": "eye"}, {"$set": {"on": on}}, upsert=True)
+
+    def tick(self, now):
+        return eye_runner.tick(self.db, self.store, S, ENV, self.root, now)
+
+    def test_tick_waits_15_s_after_the_minute(self):
+        self.switch(True)
+        self.frame(T0 + 1000, 1)
+        self.db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": T0 - MIN}}, upsert=True)
+        self.assertNotIn(T0, self.tick(T0 + MIN + 14_000))
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(self.tick(T0 + MIN + 15_000), [T0])
+        self.assertEqual(len(self.fake.calls), 1)
+
+    def test_tick_processes_each_minute_once(self):
+        self.switch(True)
+        self.frame(T0 + 1000, 1)
+        self.db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": T0 - MIN}}, upsert=True)
+        self.tick(T0 + MIN + 20_000)
+        self.assertEqual(self.tick(T0 + MIN + 25_000), [])
+        self.assertEqual(len(self.fake.calls), 1)
+
+    def test_catch_up_is_capped_at_10_minutes(self):
+        self.switch(True)
+        self.db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": T0 - 3 * 3600_000}}, upsert=True)
+        for k in range(30):
+            self.frame(T0 - k * MIN + 1000, 100 + k)
+        done = self.tick(T0 + MIN + 20_000)
+        self.assertEqual(done, [T0 - k * MIN for k in range(9, -1, -1)])
+        self.assertEqual(len(self.fake.calls), 10)
+
+    def test_first_start_without_a_cursor_is_capped_too(self):
+        self.switch(True)
+        self.assertEqual(len(self.tick(T0 + MIN + 20_000)), 10)
+
+    def test_switch_off_moves_the_cursor_without_calls(self):
+        self.switch(False)
+        self.frame(T0 + 1000, 1)
+        self.assertEqual(self.tick(T0 + MIN + 20_000), [])
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(self.db["eye_state"].find_one({"_id": "live"})["cursor_minute"], T0)
+        self.switch(True)
+        self.assertEqual(self.tick(T0 + MIN + 25_000), [])      # the minute seen while off is not called later
+
+    def test_status_document(self):
+        eye_runner.write_status(self.db, True, False, T0)
+        st = self.db["switches"].find_one({"_id": "eye_status"})
+        self.assertEqual((st["running"], st["available"], st["at"]), (True, False, T0))
 
 if __name__ == "__main__":
     unittest.main()
