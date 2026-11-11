@@ -115,7 +115,7 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
         return carry("carried", reason)
 
     messages = prompts.render(prompt, s, pkg, strong, prev, segments or [], neighbours or {})
-    body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": 4000,
+    body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": prompts.MAX_TOKENS.get(prompt, 4000),
             "response_format": prompts.schema_format()}
     resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
     out, perr = _parse(resp) if not err else (None, err)

@@ -203,7 +203,7 @@ class ApiV1Test(unittest.TestCase):
         self.assertIs(self.call("/state").json()["enabled"], True)
 
     def test_v1_is_retired_but_old_records_stay_readable(self):
-        self.assertEqual(self.call("/prompts").json()["versions"], ["v2"])
+        self.assertEqual(self.call("/prompts").json()["versions"], ["v2", "v3"])
         self.assertEqual(self.post_json("/rerun", {"minute": T0, "prompt": "v1", "model": "gpt-6-luna"}).status, 400)
         s = self.call("/settings").json()
         old = copy.deepcopy(s["settings"]); old["fusion"]["prompt"] = "v1"

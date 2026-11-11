@@ -79,7 +79,26 @@ V2_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟�
 - 有人说话时写 topic：两个转写里一致出现的词说明了最可能的话题，就写出来（把握可以是 low）；完全听不清时才不写。
 - summary 不超过 20 个字。changes 写这一分钟变了什么（没变留空）。"""
 
-VERSIONS = {"v1": {"system": V1_SYSTEM}, "v2": {"system": V2_SYSTEM}}
+def _v3(v2):
+    """v3 (plan 2026-11-11-mind-v3): the eye result e1 is the main visual evidence; shorter output."""
+    out = v2
+    for old, new in (("总共不超过 8 条", "总共不超过 6 条，每条不超过 40 字"),
+                     ("（v 脸、a 声音事件、rule: 规则行）", "（e 视觉识别、v 脸、a 声音事件、rule: 规则行）"),
+                     ("seen、heard 必须引用本分钟的 s/t/a/v 代号。", "seen、heard 必须引用本分钟的 s/t/a/v/e 代号。")):
+        assert old in out, old
+        out = out.replace(old, new, 1)
+    return out + """
+
+【画面】
+- e1 是视觉识别：另一个模型看过这一分钟的画面后写的结果（几个人、谁、在哪、在做什么、环境）。画面以 e1 为主要依据：people、activity、vision 条目引用 e1，basis 可以是 seen；M12 的脸记录只用来补充名字。
+- e1 里“很可能是主人”的人，按主人在场来写，把握中。
+- 没有 e1 时，按脸记录（v 代号）来写。
+- who_am_i、where_am_i、people_doing 各一句，越短越好。"""
+
+
+V3_SYSTEM = _v3(V2_SYSTEM)
+VERSIONS = {"v1": {"system": V1_SYSTEM}, "v2": {"system": V2_SYSTEM}, "v3": {"system": V3_SYSTEM}}
+MAX_TOKENS = {"v1": 4000, "v2": 4000, "v3": 2000}
 RETIRED = {"v1"}             # v1 (negative wording) is kept only so old runs stay readable; not offered
 OFFERED = sorted(set(VERSIONS) - RETIRED)
 STATE_TEXT = {"seen": "看到主人", "just_left": "主人刚离开画面", "likely_present": "主人很可能在",
@@ -172,7 +191,16 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
         for g in pkg["sounds"]:
             loud = f"，最响 {g['max_loud_db']}" if g.get("max_loud_db") is not None else ""
             L.append(f"{','.join(g['codes'])} 声音事件：{g['label'] or g['kind']} × {g['count']}{loud}")
-    if src["vision"]:
+    eye = pkg.get("eye") if version == "v3" else None
+    if src["vision"] and eye:
+        r = eye["result"]
+        who = "；".join("·".join(x for x in (p.get("who"), p.get("where"), p.get("doing")) if x) for p in r.get("people", []))
+        L.append(f"{eye['code']} 视觉识别（{eye['frames']} 张画面）：{r.get('people_count', 0)} 人" + (f"；{who}" if who else "") +
+                 f"；活动：{r.get('activity', '')}；环境：{r.get('scene', '')}；变化：{r.get('changes') or '—'}")
+        named = sorted({_display(f["name"], owner, people) for f in pkg["faces"] if f["name"]})
+        unknown = sum(1 for f in pkg["faces"] if not f["name"])
+        L.append(f"M12：{'认出 ' + '、'.join(named) if named else '没认出名字'}；未认出的脸 {unknown} 张；人形 {pkg['persons']['seconds']} 秒")
+    elif src["vision"]:
         for f in pkg["faces"]:
             name = _display(f["name"], owner, people) if f["name"] else "未认出的脸"
             to = "仍在画面里" if f["open"] else f"{_hhmmss(f['to'], tz)} 离开画面"

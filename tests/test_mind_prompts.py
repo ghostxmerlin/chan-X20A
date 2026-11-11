@@ -6,7 +6,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mind_build import MIN, S, T0, build, sound, speech, tingwu, vision   # noqa: E402
 from mind import package                                                  # noqa: E402
-from mind.prompts import RULE_CODES, SCENE_SCHEMA, VERSIONS, render       # noqa: E402
+from mind.prompts import MAX_TOKENS, OFFERED, RULE_CODES, SCENE_SCHEMA, VERSIONS, render   # noqa: E402
+from mind import settings                                                 # noqa: E402
 
 DOCS = [("speech", speech("S", "s-1", T0 + 1000, text="今天下午开会", band="known", name="me", pos=[16000, 32000])),
         ("sounds", sound("S", "a-1", T0 + 2000)),
@@ -93,6 +94,42 @@ class PromptsTest(unittest.TestCase):
         self.assertTrue(any(x["text"] == "重复的听悟句" for x in pkg["tingwu_only"]))
         self.assertNotIn("重复的听悟句", render("v1", S, pkg, st, None, [], {"prev": prev_pkg})[1]["content"])
         self.assertIn("重复的听悟句", render("v1", S, pkg, st, None, [], {})[1]["content"])
+
+    def with_eye(self):
+        import copy
+        pkg = copy.deepcopy(self.pkg)
+        pkg["eye"] = {"code": "e1", "ref": {"c": "eye"}, "frames": 3,
+                      "result": {"people_count": 1, "people": [{"who": "很可能是主人（Dave）", "where": "桌前", "doing": "喝水"}],
+                                 "activity": "主人在桌前喝水", "scene": "办公室白墙", "changes": "拿起杯子", "confidence": "mid"}}
+        pkg["codes"]["e1"] = {"c": "eye"}
+        return pkg
+
+    def test_v3_uses_e1_and_drops_face_lines(self):
+        u = render("v3", S, self.with_eye(), self.strong, None, [], {})[1]["content"]
+        self.assertIn("e1 视觉识别（3 张画面）：1 人", u)
+        self.assertIn("很可能是主人（Dave）·桌前·喝水", u)
+        self.assertIn("活动：主人在桌前喝水", u)
+        self.assertNotRegex(u, r"\nv\d+ 脸：")
+        self.assertIn("M12：", u)
+
+    def test_v3_without_eye_lists_faces_like_v2(self):
+        self.assertIsNone(self.pkg.get("eye"))
+        v3 = render("v3", S, self.pkg, self.strong, None, [], {})[1]["content"]
+        v2 = render("v2", S, self.pkg, self.strong, None, [], {})[1]["content"]
+        self.assertEqual(v3, v2)
+
+    def test_v2_ignores_the_eye_result(self):
+        self.assertNotIn("e1", render("v2", S, self.with_eye(), self.strong, None, [], {})[1]["content"])
+
+    def test_v3_is_offered_and_v2_stays_default(self):
+        self.assertEqual(OFFERED, ["v2", "v3"])
+        self.assertEqual(settings.load(None)["fusion"]["prompt"], "v2")
+
+    def test_v3_asks_for_short_output_and_2000_tokens(self):
+        sys_text = render("v3", S, self.with_eye(), self.strong, None, [], {})[0]["content"]
+        self.assertIn("e1", sys_text)
+        self.assertIn("不超过 6 条", sys_text)
+        self.assertEqual((MAX_TOKENS["v2"], MAX_TOKENS["v3"]), (4000, 2000))
 
     def test_package_items_carry_pos(self):
         self.assertEqual(self.pkg["speech"][0]["pos"], [16000, 32000])
