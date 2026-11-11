@@ -164,4 +164,19 @@ test('eye card text', ()=>{
  assert.match(ui.eyeHtml(null),/还没有识别结果/);
  assert.match(ui.eyeHtml({minute:0,source:'model',result:{people_count:0,people:[],activity:'<b>',scene:'',changes:'',confidence:'low'}}),/&lt;b&gt;/);
 });
+test('conversation list html', ()=>{
+ const T=new Date(2026,10,11,10,20).getTime(),U=new Date(2026,10,11,14,30).getTime();
+ const html=ui.conversationsHtml([{cid:'cA',start_ms:T,end_ms:T+600000,title:'板子地线',notes:'两人讨论地线接机壳。',confidence:'mid',continues:''},
+  {cid:'cB',start_ms:U,end_ms:null,title:'又谈地线',notes:'又谈到上午的地线：要接机壳。',confidence:'high',continues:'cA'},
+  {cid:'cC',start_ms:U+60000,end_ms:U+90000,title:'',notes:'',confidence:'low',continues:''}]);
+ assert.match(html,/10:20–10:30/);assert.match(html,/板子地线/);assert.match(html,/接续 10:20/);assert.match(html,/进行中/);
+ assert.doesNotMatch(html,/style="/);assert.match(html,/没有归纳出话题/);
+ assert.match(ui.conversationsHtml([]),/今天还没有对话/);
+});
+test('now card shows c1', ()=>{
+ const base={minute:0,source:'model',version:1,scene:{summary:'s',who_am_i:{text:'a',confidence:'mid'},where_am_i:{text:'b',confidence:'mid'},people_doing:{text:'c',confidence:'mid'},entries:[],want_to_know:''}};
+ const html=ui.nowHtml({scene:base,strong:null,segment:null,conv:{title:'板子地线',notes:'两人讨论地线接机壳。',end_ms:null}});
+ assert.match(html,/对话：板子地线 — 两人讨论地线接机壳。/);
+ assert.doesNotMatch(ui.nowHtml({scene:base,strong:null,segment:null}),/对话：/);
+});
 

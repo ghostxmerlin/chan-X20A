@@ -68,6 +68,17 @@ export function eyeHtml(d){
  return `<div class="eye"><p class="meta">${t} · ${Number(r.people_count??0)} 人 · 把握 ${escapeHtml(CONF[r.confidence]||r.confidence||'')} · ${(d.frames||[]).length} 张图</p>`+
   (people?`<ul>${people}</ul>`:'')+`<p>${escapeHtml(r.activity||'')}</p><p class="alt">环境：${escapeHtml(r.scene||'—')} · 变化：${escapeHtml(r.changes||'—')}</p></div>`;
 }
+// 今天的对话 (conversation notes): one row per conversation, continuations marked.
+export function conversationsHtml(list){
+ if(!list||!list.length)return '<p class="alt">今天还没有对话</p>';
+ const byId=Object.fromEntries(list.map(c=>[c.cid,c]));
+ return '<ul class="convs">'+list.map(c=>{
+  const when=`${hhmm(c.start_ms)}–${c.end_ms?hhmm(c.end_ms):'进行中'}`;
+  const cont=c.continues&&byId[c.continues]?` <span class="alt">↳ 接续 ${hhmm(byId[c.continues].start_ms)}</span>`:c.continues?' <span class="alt">↳ 接续前面的讨论</span>':'';
+  const body=c.title||c.notes?`<b>${escapeHtml(c.title||'')}</b> ${escapeHtml(c.notes||'')} <span class="conf">把握${CONF[c.confidence]||''}</span>`:'<span class="alt">没有归纳出话题</span>';
+  return `<li><span class="t">${when}</span>${cont} ${body}</li>`;
+ }).join('')+'</ul>';
+}
 export function frameCaption(f){
  if(!f)return '还没有收到画面';
  return `${hhmmss(f.at)} 收到 · 变化 ${f.diff===255?'首张':f.diff+' 格'} · 今天 ${f.today} 张${f.missing?' · 文件缺失':''}`;
@@ -100,6 +111,7 @@ export function nowHtml(now){
  if(!sc)return `<div class="now"><p class="meta">${hhmm(rec.minute)} · ${sourceLabel(rec)}</p><p>${owner}</p>${seg}<p class="alt">这一分钟只有规则结果</p></div>`;
  return `<div class="now"><p class="meta">${hhmm(rec.minute)} · ${escapeHtml(sourceLabel(rec))} · ${escapeHtml(sc.summary)}</p>
  ${answer('我是谁',sc.who_am_i)}${answer('我在哪',sc.where_am_i)}${answer('旁边的人在干什么',sc.people_doing)}
+ ${now.conv&&(now.conv.title||now.conv.notes)?`<p class="topic">对话：${escapeHtml(now.conv.title||'')} — ${escapeHtml(now.conv.notes||'')}</p>`:''}
  <p>规则：${owner}${st?` · ${escapeHtml(coverageTitle(st.coverage))} · 地点：${escapeHtml(placeLabel(st.place))}`:''}</p>${seg}
  <div class="dims">${entriesHtml(sc.entries)}</div>
  ${sc.want_to_know?`<p class="alt">想确认：${escapeHtml(sc.want_to_know)}</p>`:''}</div>`;
@@ -287,6 +299,13 @@ export function start(doc){
   }
  }
  refreshFrame();setInterval(refreshFrame,15000);
+ async function refreshConvs(){
+  const d0=new Date();d0.setHours(0,0,0,0);
+  let list=null;
+  try{const r=await fetch(`/api/mind/notes?from=${d0.getTime()}&to=${Date.now()+60000}`,{signal:AbortSignal.timeout(10000)});list=r.ok?await r.json():null;}catch{list=null;}
+  el('mind-convs').innerHTML=list?conversationsHtml(list):'<p class="alt">纪要服务未连接</p>';
+ }
+ refreshConvs();setInterval(refreshConvs,15000);
  refresh();setInterval(refresh,10000);
 }
 if(typeof document!=='undefined'&&document.getElementById('mind-timeline'))start(document);

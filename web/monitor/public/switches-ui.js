@@ -41,6 +41,11 @@ export function switchView(robot,fresh,mind,switches=null){
  const senses=hearing.on||vision.on;
  const m={known:mindKnown,on:mindKnown&&mind.enabled,can:mindKnown,
   detail:!mindKnown?'情景服务未连接':!mind.enabled?'不调用模型':senses?'每分钟最多一次模型调用':'感官都关 · 不调用模型'};
+ const nKnown=!!switches?.notes&&!!switches?.notes_status,ns=switches?.notes_status||{};
+ const nOn=nKnown&&switches.notes.on===true,nAvail=nKnown&&typeof ns.available==='boolean'?ns.available:null;
+ const nRunning=!nKnown||ns.stale?null:ns.running===true;
+ const notes={known:nKnown,on:nOn,can:nKnown&&(nOn||nAvail!==false),running:nRunning,
+  detail:!nKnown?'纪要服务未连接':nAvail===false?'服务器未配置模型':!nOn?'不调用模型':nRunning===null?'状态未知':'有人说话时每分钟一次'};
  let cost;
  if(!hearingKnown||!mindKnown)cost='花费状态未知';
  else{
@@ -50,10 +55,12 @@ export function switchView(robot,fresh,mind,switches=null){
   if(m.on&&senses)paying.push('情景模型');
   const eyeSelected=eyeOn&&camOn&&eyeAvailable!==false;
   if(eyeSelected&&eyeRunning===true)paying.push('视觉识别（每分钟最多一次）');
-  const unknown=[tingwuUnknown&&'听悟状态未知',eyeSelected&&eyeRunning===null&&'识别状态未知'].filter(Boolean).join('；');
+  if(nOn&&nRunning===true)paying.push('对话纪要（有人说话时每分钟一次）');
+  const unknown=[tingwuUnknown&&'听悟状态未知',eyeSelected&&eyeRunning===null&&'识别状态未知',
+   nOn&&nAvail!==false&&nRunning===null&&'纪要状态未知'].filter(Boolean).join('；');
   cost=paying.length?'正在花钱：'+paying.join(' + ')+(unknown?'；'+unknown:''):unknown||'现在不花钱';
  }
- return {hearing,vision,mind:m,cost};
+ return {hearing,vision,mind:m,notes,cost};
 }
 
 // Hearing tiers: set the 听悟 switch first, so a connection that starts is already in the right tier.
@@ -105,12 +112,13 @@ export function levelButtons(v,pending){
 
 export function toggleRequest(which,robot,mindOrFresh){
  if(which==='mind')return {kind:'mind',body:{enabled:!(mindOrFresh?.enabled)}};
+ if(which==='notes')return {kind:'switch',body:{name:'notes',on:!(mindOrFresh?.notes?.on===true)}};
  const v=switchView(robot,mindOrFresh,null);
  if(which==='hearing')return {kind:'control',body:{action:'hearing_listen',enabled:!v.hearing.on,boot:robot?.boot}};
  return {kind:'control',body:{action:'m12',enabled:!v.vision.on,boot:robot?.boot}};
 }
 
-const NAMES={hearing:'听觉',vision:'视觉',mind:'情景'};
+const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要'};
 const LEVELS=[['off','关'],['local','本地'],['tingwu','听悟']];
 const VLEVELS=[['off','关'],['upload','上传'],['recognize','识别']];
 async function postJson(path,body){
@@ -127,11 +135,12 @@ export class SwitchBar{
    LEVELS.map(([k,label])=>`<button id="sw-hearing-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-hearing-detail">—</small></div>';
   const vision='<div class="switch switch-group" id="sw-vision" role="group" aria-label="视觉档位"><b>视觉</b><span id="sw-vision-state">—</span>'+
    VLEVELS.map(([k,label])=>`<button id="sw-vision-${k}" aria-pressed="false" disabled${k==='recognize'?' title="每分钟用 haiku 看一次画面（约 2 元/天）"':''}>${label}</button>`).join('')+'<small id="sw-vision-detail">—</small></div>';
-  root.innerHTML=hearing+vision+['mind'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
+  root.innerHTML=hearing+vision+['mind','notes'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
    '<span id="sw-cost" class="switch-cost" role="status">—</span>';
   for(const [k] of LEVELS)doc.getElementById('sw-hearing-'+k).addEventListener('click',()=>this.setLevel(k));
   for(const [k] of VLEVELS)doc.getElementById('sw-vision-'+k).addEventListener('click',()=>this.setVision(k));
   doc.getElementById('sw-mind').addEventListener('click',()=>this.toggle('mind'));
+  doc.getElementById('sw-notes').addEventListener('click',()=>this.toggle('notes'));
   this.pollMind();setInterval(()=>this.pollMind(),5000);
   if(pollRobot){this.pollRobot();setInterval(()=>this.pollRobot(),2000);}
  }
@@ -147,10 +156,11 @@ export class SwitchBar{
  render(robot,fresh){this.robot=robot;this.fresh=fresh;this.paint();}
  async toggle(which){
   if(this.pending)return;
-  const req=toggleRequest(which,this.robot,which==='mind'?this.mind:this.fresh);
+  const req=toggleRequest(which,this.robot,which==='mind'?this.mind:which==='notes'?this.switches:this.fresh);
   this.pending=which;this.msg='';this.paint();
   try{
    if(req.kind==='mind'){const r=await postJson('/api/mind/switch',req.body);this.mind={...(this.mind||{}),enabled:r.enabled};}
+   else if(req.kind==='switch')this.switches=await postJson('/api/mind/switches',req.body);
    else await postJson('/api/control',req.body);
   }catch(e){this.msg=`${NAMES[which]}：${e.name==='TimeoutError'?'结果未确认，请看状态':e.message}`;}
   this.pending=null;this.paint();
@@ -192,7 +202,7 @@ export class SwitchBar{
   for(const [k] of VLEVELS){const b=$('sw-vision-'+k);b.setAttribute('aria-pressed',String(vv.level===k));b.disabled=vdis[k];}
   $('sw-vision-state').textContent=this.pending==='vision'?'发送中…':{off:'关',upload:'上传',recognize:'识别',m12_only:'只有 M12',camera_only:'只有摄像头',unknown:'未知'}[vv.level];
   $('sw-vision-detail').textContent=vv.detail;
-  for(const k of ['mind']){
+  for(const k of ['mind','notes']){
    const s=v[k],b=$('sw-'+k);
    b.setAttribute('aria-pressed',String(s.on));b.classList.toggle('on',s.on);b.classList.toggle('unknown',!s.known);
    b.disabled=!!this.pending||!s.can;

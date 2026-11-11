@@ -125,6 +125,20 @@ test('vision 关 works with the M12 disconnected while the camera uploads', ()=>
  assert.equal(sw.visionButtons(v,false).off,false);
  assert.equal(v.vision.level,'camera_only');
 });
+const NOTES=(on,running,{available=true,stale=false}={})=>({tingwu:{on:false},tingwu_status:{running:[],available:true,stale:false,at:fresh},
+ notes:{on},notes_status:{running,available,stale,at:fresh}});
+test('notes switch toggles and counts in the cost line', ()=>{
+ const r=robot({listen:true,hstate:'listening'});
+ const v=sw.switchView(r,true,{enabled:false},NOTES(true,true));
+ assert.equal(v.notes.on,true);assert.match(v.cost,/对话纪要/);
+ assert.deepEqual(sw.toggleRequest('notes',r,NOTES(true,true)),{kind:'switch',body:{name:'notes',on:false}});
+ assert.equal(sw.switchView(r,true,{enabled:false},NOTES(false,false)).cost,'现在不花钱');
+});
+test('stale notes status says unknown', ()=>{
+ const v=sw.switchView(robot({listen:true}),true,{enabled:false},NOTES(true,true,{stale:true}));
+ assert.match(v.cost,/纪要状态未知/);assert.equal(v.notes.known,true);
+ assert.equal(sw.switchView(robot(),true,{enabled:false},null).notes.known,false);
+});
 test('toggle requests: m12 and the mind switch', ()=>{
  assert.deepEqual(sw.toggleRequest('vision',robot({m12:'detecting'}),true),{kind:'control',body:{action:'m12',enabled:false,boot:'b1'}});
  assert.deepEqual(sw.toggleRequest('mind',robot(),{enabled:true}),{kind:'mind',body:{enabled:false}});

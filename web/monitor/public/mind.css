@@ -64,3 +64,7 @@ dialog fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 8px
 /* 服务器收到的画面 (camera upload, step 2) */
 #mind-frame-img{display:block;width:100%;max-width:320px;aspect-ratio:4/3;object-fit:contain;background:#000;border:1px solid #444;border-radius:4px}
 #mind-frame-img[hidden]{display:none}
+
+/* conversation notes */
+.topic{margin:6px 0;padding:6px 10px;border-left:3px solid #3b7dd8;background:rgba(59,125,216,.08)}
+.convs{list-style:none;padding:0;margin:0}.convs li{padding:4px 0;border-bottom:1px solid rgba(128,128,128,.2)}.convs .t{display:inline-block;min-width:8em;color:#888}

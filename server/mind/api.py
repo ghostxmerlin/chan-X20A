@@ -153,6 +153,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             segs = segments.update(None, store, s, now - 24 * 3600_000 if not scene else scene["minute"] - 12 * 3600_000, now,
                                    LANE, summarize_now=False)
             return {"minute": scene["minute"] if scene else None, "scene": scene, "strong": pkg["strong"] if pkg else None,
+                    "conv": (pkg["package"].get("conv") if pkg else None),
                     "segment": segs[-1] if segs else None, "state": {**store.state(), "enabled": store.enabled()}}
         if path == "/segments":
             s, _ = current_settings()
