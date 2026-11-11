@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mind_fixtures import FakeDB, T0, session, speech, tingwu   # noqa: E402
-from mind import notes, selfvoice, settings                     # noqa: E402
+from mind import notes, notes_runner, selfvoice, settings       # noqa: E402
 from mind.records import Records                                # noqa: E402
 from mind.store import Store                                    # noqa: E402
 from test_mind_fusion import FakeChat                           # noqa: E402
@@ -147,6 +147,68 @@ class UpdateTest(unittest.TestCase):
         for phrase in ("约 50 字", "不要硬凑", "continues"):
             self.assertIn(phrase, system)
 
+
+
+class RunnerTest(unittest.TestCase):
+    def setUp(self):
+        self.db = FakeDB()
+        self.db.add("sessions", session("S", T0 - 3600_000))
+        self.rec, self.store = Records(self.db), Store(self.db)
+        self.fake = FakeChat()
+        notes.CHAT = self.fake
+        self.db["switches"].update_one({"_id": "notes"}, {"$set": {"on": True}}, upsert=True)
+        self.db["notes_state"].update_one({"_id": "live"}, {"$set": {"cursor_ms": T0}}, upsert=True)
+
+    def say(self, at, id, text="地线要接机壳"):
+        self.db.add("speech", speech("S", id, at, text=text))
+
+    def tick(self, now):
+        if not self.fake.queue:
+            self.fake.reply_next(notes_json())
+        return notes_runner.tick(self.db, self.store, self.rec, S, ENV, now)
+
+    def convs(self):
+        return sorted(self.db["conversations"].docs, key=lambda c: c["start_ms"])
+
+    def test_tick_waits_10_s_after_the_minute(self):
+        self.say(T0 + 5000, "s-1")
+        self.assertEqual(notes_runner.tick(self.db, self.store, self.rec, S, ENV, T0 + MIN + 9000), 0)
+        self.assertEqual(self.tick(T0 + MIN + 10_000), 1)
+        self.assertEqual(len(self.convs()), 1)
+
+    def test_one_call_per_tick_for_a_running_conversation_and_late_rows_join(self):
+        self.say(T0 + 5000, "s-1")
+        self.tick(T0 + MIN + 10_000)
+        self.say(T0 + 40_000, "s-late")                   # written after the first tick
+        self.say(T0 + 65_000, "s-2", "第二版要改走线")
+        self.assertEqual(self.tick(T0 + 2 * MIN + 10_000), 1)
+        c = self.convs()
+        self.assertEqual((len(c), len(c[0]["refs"])), (1, 3))
+        self.assertEqual(self.tick(T0 + 2 * MIN + 30_000), 0)    # same minute: nothing more
+
+    def test_silence_closes_and_the_next_talk_is_a_new_conversation(self):
+        self.say(T0 + 5000, "s-1")
+        self.tick(T0 + MIN + 10_000)
+        self.tick(T0 + 2 * MIN + 10_000)                   # 65 s of silence: closed without a call
+        self.assertIsNotNone(self.convs()[0]["end_ms"])
+        self.say(T0 + 3 * MIN + 1000, "s-3", "午饭吃什么")
+        self.tick(T0 + 4 * MIN + 10_000)
+        self.assertEqual([c["end_ms"] is None for c in self.convs()], [False, True])
+
+    def test_switch_off_no_calls_but_conversations_still_close(self):
+        self.say(T0 + 5000, "s-1")
+        self.tick(T0 + MIN + 10_000)
+        self.db["switches"].update_one({"_id": "notes"}, {"$set": {"on": False}})
+        n = len(self.fake.calls)
+        self.say(T0 + 70_000, "s-2")
+        notes_runner.tick(self.db, self.store, self.rec, S, ENV, T0 + 3 * MIN + 10_000)
+        self.assertEqual(len(self.fake.calls), n)
+        self.assertIsNotNone(self.convs()[0]["end_ms"])
+        self.assertEqual(len(self.convs()), 1)
+
+    def test_status_document(self):
+        notes_runner.write_status(self.db, True, True, T0)
+        self.assertEqual(self.db["switches"].find_one({"_id": "notes_status"})["running"], True)
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs ON the server (piped over ssh by deploy.sh). Creates ~/soul-mind/settings.json from the example
-# if it does not exist yet, then starts or restarts the transient units soul-mind and soul-eye (like the
-# ear's soul-spike). Writes nothing outside ~/soul-mind; deletes nothing.
+# if it does not exist yet, then starts or restarts the transient units soul-mind, soul-eye and soul-notes
+# (like the ear's soul-spike). Writes nothing outside ~/soul-mind; deletes nothing.
 #   ssh <host> "MIND_DIR=soul-mind UNIT=soul-mind EAR_UNIT=soul-spike bash -s" < server/mind/remote_setup.sh
 set -euo pipefail
 D="$HOME/${MIND_DIR:-soul-mind}"
@@ -47,3 +47,21 @@ for i in $(seq 20); do
 done
 echo "unit: $(systemctl is-active "$EYE_UNIT")"
 sudo journalctl -u "$EYE_UNIT" --since "$since" --no-pager -o cat | tail -n 3
+
+# soul-notes (plan 2026-11-11-conversation-notes): conversation notes with luna; its own unit, same code.
+NOTES_UNIT="${NOTES_UNIT:-soul-notes}"
+if [ "$(systemctl show "$NOTES_UNIT" -p LoadState --value 2>/dev/null)" = "loaded" ]; then
+  sudo systemctl restart "$NOTES_UNIT"
+else
+  sudo systemctl reset-failed "$NOTES_UNIT" 2>/dev/null || true
+  sudo systemd-run --unit "$NOTES_UNIT" --description "hello notes (conversation notes)" \
+    --uid "$(id -u)" --gid "$(id -g)" -p WorkingDirectory="$D" -p Restart=on-failure -p RestartSec=5s \
+    -p MemoryMax=512M -p CPUQuota=30% \
+    "$PY" -m mind.notes_runner --settings "$D/settings.json"
+fi
+for i in $(seq 20); do
+  if sudo journalctl -u "$NOTES_UNIT" --since "$since" --no-pager | grep -q 'notes: switch'; then break; fi
+  sleep 2
+done
+echo "unit: $(systemctl is-active "$NOTES_UNIT")"
+sudo journalctl -u "$NOTES_UNIT" --since "$since" --no-pager -o cat | tail -n 3
