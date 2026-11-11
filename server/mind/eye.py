@@ -14,7 +14,7 @@ from . import llm, settings as settings_mod
 
 CHAT = llm.chat                       # injectable in tests
 EYE_MODEL = "claude-haiku-5-5"
-EYE_PROMPT = "eye-v3"            # v3: field names spelled out, fenced JSON accepted (haiku via aihubmix, 2026-11-11 15:20)
+EYE_PROMPT = "eye-v4"            # v4: forced tool call (aihubmix stopped honouring json_schema for haiku, 2026-11-11 ~15:00)
 MIN_MS = 60_000
 MAX_FRAMES = 6
 MAX_EVENTS = 40
@@ -107,9 +107,11 @@ def _parse(resp):
     if not resp:
         return None, "no response"
     try:
-        content = resp["choices"][0]["message"].get("content")
+        msg = resp["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
         return None, "no choices in the response"
+    calls = msg.get("tool_calls") or []
+    content = ((calls[0].get("function") or {}).get("arguments") if calls else None) or msg.get("content")
     text = (content or "").strip() if isinstance(content, str) else content
     if isinstance(text, str) and text.startswith("```"):          # live 2026-11-11: fenced despite json_schema
         text = text.strip("`").strip()
@@ -178,8 +180,12 @@ def run_minute(env, store, s, minute_ms, recordings_root, now_ms=None):
         return _put(db, minute_ms, {**base, "source": "backoff"})
     prev = db["eye_minutes"].find_one({"minute": {"$lt": minute_ms}, "source": "model"}, {"_id": 0}, sort=[("minute", -1)])
     messages = messages_for(s, minute_ms, inputs, prev)
+    # a forced tool call, not response_format: via aihubmix, haiku ignores json_schema (2026-11-11 probe: 3/3 fenced,
+    # thinking on) but returns the exact schema as tool arguments (3/3, ~3 s, no thinking, ~40 % fewer tokens)
     body = {"model": EYE_MODEL, "messages": messages, "temperature": 0, "max_tokens": 1200,
-            "response_format": {"type": "json_schema", "json_schema": {"name": "eye", "strict": True, "schema": EYE_SCHEMA}}}
+            "tools": [{"type": "function", "function": {"name": "eye", "description": "这一分钟画面的视觉结果",
+                                                        "parameters": EYE_SCHEMA}}],
+            "tool_choice": {"type": "function", "function": {"name": "eye"}}}
     resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
     out, perr = _parse(resp) if not err else (None, err)
     usage, total_ms, retries = dict((resp or {}).get("usage") or {}), ms, 0

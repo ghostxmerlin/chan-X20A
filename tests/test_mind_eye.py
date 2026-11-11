@@ -76,7 +76,7 @@ class EyeTest(unittest.TestCase):
         self.assertTrue(self.images(call)[0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
         self.assertIn("认出 主人", self.text(call))
         self.assertNotIn("远处", self.text(call) + call["messages"][0]["content"])
-        self.assertTrue(call["response_format"]["json_schema"]["strict"])
+        self.assertEqual(call["tool_choice"]["function"]["name"], "eye")
         self.assertEqual(call["model"], "claude-haiku-5-5")
         self.assertEqual((rec["source"], rec["result"]["activity"], len(rec["frames"])), ("model", "主人在桌前喝水", 3))
         self.assertNotIn("b64", json.dumps(rec["frames"]))
@@ -134,6 +134,28 @@ class EyeTest(unittest.TestCase):
         self.run_at()
         system = self.fake.calls[0]["messages"][0]["content"]
         self.assertIn("很可能是主人", system)
+
+    def test_eye_uses_a_forced_tool_call(self):
+        # live 2026-11-11: haiku via aihubmix ignores response_format json_schema (3/3 fenced, thinking on)
+        # but a forced tool call returns the exact schema (3/3, ~3 s, no thinking)
+        self.frame(T0 + 1000, 1)
+        self.run_at()
+        body = self.fake.calls[0]
+        self.assertNotIn("response_format", body)
+        self.assertEqual(body["tool_choice"], {"type": "function", "function": {"name": "eye"}})
+        self.assertEqual(body["tools"][0]["function"]["parameters"], eye.EYE_SCHEMA)
+
+    def test_tool_call_arguments_are_parsed(self):
+        self.frame(T0 + 1000, 1)
+        reply = {"choices": [{"message": {"content": None, "tool_calls": [
+            {"type": "function", "function": {"name": "eye", "arguments": eye_json()}}]}}],
+                 "usage": {"prompt_tokens": 900, "completion_tokens": 300}}
+        eye.CHAT = lambda *a, **k: (reply, 3000, None)
+        try:
+            rec = self.run_at()
+        finally:
+            eye.CHAT = self.fake
+        self.assertEqual((rec["source"], rec["result"]["activity"]), ("model", "主人在桌前喝水"))
 
     def test_fenced_json_is_accepted(self):
         # live 2026-11-11 15:20+: haiku via aihubmix wrapped its answer in ```json fences despite strict json_schema
