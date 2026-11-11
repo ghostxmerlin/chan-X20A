@@ -45,6 +45,7 @@ import recorder
 import hello_db
 import vision_link
 import tingwu as tingwu_rt
+import tingwu_switch
 import sound_kinds
 import hearing_protocol as hp
 
@@ -282,8 +283,15 @@ class Ear:
         self.db = None             # hello_db.HelloDB, set by the connection handler (optional)
         self.session = None        # "YYYYMMDD/HHMMSS-source-cN": recording folder = database key
         self.tingwu_keys = None    # (api key, app id) when 听悟 realtime is on for robot sources
-        self.tingwu = None         # tingwu_rt.TingwuStream for this connection
+        self.tingwu = None         # tingwu_rt.TingwuStream for this connection (at most one at a time)
         self.tw_sentences = 0
+        self.tw_paragraphs = 0     # paragraph numbers keep counting across streams of this connection
+        self.tw_streams = 0
+        self.tw_retry_at = 0.0     # monotonic: no new stream before this (60 s after a start error)
+        self.tingwu_switch = tingwu_switch.SwitchReader(lambda: None)   # the server switch; off unless main injects one
+        self.on_tingwu_change = None   # main: called when a stream starts or stops (status document)
+        self.audio_declared = False
+        self._tw_box = None
         self.hello = {"type": "hello", "sr": SR, "tick_ms": ms(TICK), "speakers": sorted(m.speakers)[:64],
                       "speaker_hi": self.hi, "speaker_lo": self.lo, "sound_min_db": self.sound_min_db,
                       "voice_hi": self.voice_hi, "voice_lo": self.voice_lo,
@@ -336,7 +344,7 @@ class Ear:
 
     async def close(self):
         if self.tingwu is not None:
-            self.tingwu.close()               # finishes the task and fetches the diarized result later
+            self.stop_tingwu()                # finishes the task and fetches the diarized result later
         if self.db is not None and self.session:
             self.db.session_update(self.session, {"end_ms": int(time.time() * 1000), "utterances": self.sid,
                                                   "sounds": self.aid, "rx_bytes": self.rx_bytes})
@@ -346,41 +354,76 @@ class Ear:
         await asyncio.gather(*self.tasks, return_exceptions=True)
 
     # ---------- 听悟 realtime (robot sources) ----------
+    def tingwu_tick(self):
+        """Start or stop 听悟 so it follows the server switch (called every tick)."""
+        action = tingwu_switch.decide(self.tingwu_switch.on, self.tingwu is not None, self.tingwu_keys is not None,
+                                      self.device_profile and self.audio_declared and not self.closed,
+                                      time.monotonic() >= self.tw_retry_at)
+        if action == "start":
+            self.start_tingwu()
+        elif action == "stop":
+            self.stop_tingwu()
+
+    def _tingwu_changed(self):
+        if self.on_tingwu_change:
+            self.on_tingwu_change()
+
+    def stop_tingwu(self):
+        stream, self.tingwu = self.tingwu, None
+        if stream is not None:
+            self._tw_box["stopped_ms"] = int(time.time() * 1000)
+            stream.close()
+            self._tingwu_changed()
+
     def start_tingwu(self):
         key, app = self.tingwu_keys
+        self.tw_streams += 1
+        k, offset = self.tw_streams, self.ring.end       # 听悟 times count from here
         start_ms = int(time.time() * 1000)
+        box = {"stream": None, "sentences": 0, "stopped_ms": None}
 
         def sentence(s):
             if not s["final"]:
                 return
             self.tw_sentences += 1
-            b, e = s.get("begin_ms"), s.get("end_ms")
-            pos = [int(b * SR / 1000), int(e * SR / 1000)] if isinstance(b, (int, float)) and isinstance(e, (int, float)) else None
-            row = {"text": s["text"], "begin_ms": b, "end_ms": e, "pos": pos, "sentence_id": s.get("id"),
+            box["sentences"] += 1
+            pos = tingwu_switch.tingwu_pos(s.get("begin_ms"), s.get("end_ms"), offset)
+            row = {"text": s["text"], "begin_ms": s.get("begin_ms"), "end_ms": s.get("end_ms"), "pos": pos, "sentence_id": s.get("id"),
                    "self": self.self_history.overlap(*pos) if pos else None, "at": int(time.time() * 1000),
-                   "data_id": self.tingwu.data_id if self.tingwu else None}
+                   "data_id": box["stream"].data_id if box["stream"] else None, "stream": k}
             if self.db is not None and self.session:
                 self.db.tingwu(self.session, "sentence", self.tw_sentences, row)
             self.post({"type": "tingwu", "phase": "sentence", "n": self.tw_sentences, "text": s["text"][:300],
                        "pos": pos, "self": row["self"]})
 
         def final(paragraphs):
-            print(f"tingwu final {self.session}: {len(paragraphs)} paragraphs", flush=True)
+            print(f"tingwu final {self.session} #{k}: {len(paragraphs)} paragraphs", flush=True)
             if self.db is not None and self.session:
-                for i, p in enumerate(paragraphs, 1):
-                    self.db.tingwu(self.session, "paragraph", i, {**p, "at": int(time.time() * 1000)})
-                self.db.session_update(self.session, {"tingwu": {"sentences": self.tw_sentences, "paragraphs": len(paragraphs),
-                                                                 "audio_s": round(self.tingwu.audio_seconds(), 1),
-                                                                 "data_id": self.tingwu.data_id, "started_ms": start_ms}})
+                for p in paragraphs:
+                    self.tw_paragraphs += 1
+                    self.db.tingwu(self.session, "paragraph", self.tw_paragraphs, {**p, "stream": k, "at": int(time.time() * 1000)})
+                stream = box["stream"]
+                summary = {"sentences": box["sentences"], "paragraphs": len(paragraphs),
+                           "audio_s": round(stream.audio_seconds(), 1) if stream else None,
+                           "data_id": stream.data_id if stream else None, "started_ms": start_ms,
+                           "stopped_ms": box["stopped_ms"] or int(time.time() * 1000), "offset_samples": offset}
+                self.db.session_update(self.session, {"tingwu": {**summary, "streams": k}, f"tingwu_streams.{k}": summary})
 
         def error(message):
-            print(f"tingwu error {self.session}: {message}", flush=True)
+            print(f"tingwu error {self.session} #{k}: {message}", flush=True)
             self.post({"type": "tingwu", "phase": "error", "error": message[:160]})
             if self.db is not None and self.session:
                 self.db.session_update(self.session, {"tingwu_error": message[:300]})
+            self.tw_retry_at = time.monotonic() + 60
+            if self.tingwu is box["stream"] and self.tingwu is not None:
+                self.stop_tingwu()
 
-        self.tingwu = tingwu_rt.TingwuStream(key, app, sentence, final, error)
-        self.tingwu.start()
+        stream = tingwu_rt.TingwuStream(key, app, sentence, final, error)
+        box["stream"] = stream
+        self.tingwu, self._tw_box = stream, box
+        stream.start()
+        print(f"tingwu start {self.session} #{k} at sample {offset}", flush=True)
+        self._tingwu_changed()
 
     def arrival(self, sample):
         """(mono, epoch ms) when the chunk holding `sample` arrived."""
@@ -757,8 +800,7 @@ class Ear:
                             "source": msg.get("source"), "peer": self.rec.peer, "start_ms": self.rec.meta.get("start_ms"),
                             "start": self.rec.meta.get("start"), "audio": {k: msg.get(k) for k in ("format", "sample_rate", "frame_ms", "framing")},
                             "device": msg.get("device"), "recording": self.rec.dir, "models": self.hello.get("models")})
-                if self.device_profile and self.tingwu_keys and self.tingwu is None:
-                    self.start_tingwu()
+                self.audio_declared = True       # 听悟 starts from the ticker when the server switch is on
                 self.post({"type":"audio", "format":fmt, "sample_rate":SR,
                            "input_sample_rate":rate, "framing":framing, "frame_ms":msg.get("frame_ms"),
                            "sound_profile": "device" if self.device_profile else "default",
@@ -795,6 +837,7 @@ class Ear:
             if self.enroll.expired(now):
                 self.post({**self.enroll.progress(), 'phase':'error', 'error':'enrollment timed out'})
                 self.enroll.cancel()
+            self.tingwu_tick()
             level = db(math.sqrt(self.tick_sq / self.tick_n)) if self.tick_n else None
             if level is not None:
                 self.levels.append(level)
@@ -875,7 +918,27 @@ def main():
     ex = ThreadPoolExecutor(max_workers=1)
 
     active = set()
+    ears = set()                     # live Ear objects (for the 听悟 status document)
     vision_active = set()
+    tw_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("tingwu")) if database else (lambda: None))
+
+    def write_tingwu_status():
+        if database is not None:
+            database.switch_status("tingwu", {"running": sorted(e.session or "?" for e in ears if e.tingwu is not None),
+                                              "available": tingwu_keys is not None, "on": tw_switch.on,
+                                              "at": int(time.time() * 1000)})
+
+    async def watch_tingwu_switch():
+        """Read the server switch every 5 s (off the model thread); status on change and every 30 s."""
+        last, n = None, 0
+        while True:
+            await asyncio.to_thread(tw_switch.update)
+            if tw_switch.on != last:
+                print(f"tingwu switch: {'on' if tw_switch.on else 'off'}", flush=True)
+            if tw_switch.on != last or n % 6 == 0:
+                write_tingwu_status()
+            last, n = tw_switch.on, n + 1
+            await asyncio.sleep(5)
     vision_no = [0]
 
     async def handler(ws):
@@ -909,6 +972,8 @@ def main():
         ear.rec = recorder.Recorder(rec_root, conn_no[0], f"{peer[0]}:{peer[1]}", ear.hello)
         ear.db = database
         ear.tingwu_keys = tingwu_keys
+        ear.tingwu_switch, ear.on_tingwu_change = tw_switch, write_tingwu_status
+        ears.add(ear)
         ticker = asyncio.create_task(ear.ticker())
         try:
             async for data in ws:
@@ -922,12 +987,17 @@ def main():
             await asyncio.gather(ticker, return_exceptions=True)
             ear.rec.close()
             active.discard(ws)
+            ears.discard(ear)
             print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
 
     async def serve_forever():
         async with serve(handler, a.host, a.port, max_size=65536):
             print(f"listening on {a.host}:{a.port}", flush=True)
-            await asyncio.Future()
+            watcher = asyncio.create_task(watch_tingwu_switch())
+            try:
+                await asyncio.Future()
+            finally:
+                watcher.cancel()
 
     asyncio.run(serve_forever())
 

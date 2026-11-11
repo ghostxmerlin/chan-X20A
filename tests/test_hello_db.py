@@ -178,6 +178,8 @@ class EarTingwuTest(unittest.IsolatedAsyncioTestCase):
             ear.vad = SimpleNamespace(reset=lambda: None, accept_waveform=lambda w: None, is_speech_detected=lambda: False, empty=lambda: True)
             ear.next_tag = 10 ** 9
             await ear.on_text('{"type":"audio","format":"pcm16","sample_rate":16000,"channels":1,"source":"stackchan-x"}')
+            ear.tingwu_switch = SimpleNamespace(on=True)
+            ear.tingwu_tick()
             self.assertEqual(len(streams), 1); self.assertEqual(streams[0].args, ("k", "app"))
             self.assertTrue(ear.session.endswith("-stackchan-x-c1"))
             await ear.on_audio(b"\x01\x00" * 1600)
@@ -194,6 +196,139 @@ class EarTingwuTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([r[1:4] for r in rows if r[0] == "tingwu"][-1], (ear.session, "paragraph", 1))
             self.assertTrue(any(r[0] == "open" for r in rows) and any(r[0] == "update" for r in rows))
         ex.shutdown()
+
+    # ---- 听悟 follows the server switch (plan 2026-11-11-hearing-tiers, Task 3) ----
+    def switched_ear(self, ear_server, d, switch_on):
+        self.streams, self.rows = [], []
+        streams = self.streams
+
+        class FakeStream:
+            def __init__(self, key, app, on_sentence, on_final, on_error):
+                self.on_sentence, self.on_final, self.on_error = on_sentence, on_final, on_error
+                self.fed = bytearray(); self.closed = False; self.data_id = f"d-{len(streams) + 1}"; streams.append(self)
+            def start(self): pass
+            def feed(self, b): self.fed += b
+            def close(self): self.closed = True
+            def audio_seconds(self): return len(self.fed) / 32000
+
+        rows = self.rows
+        db = SimpleNamespace(event=lambda *a: None, session_open=lambda *a: None,
+                             session_update=lambda *a: rows.append(("update",) + a), tingwu=lambda *a: rows.append(("tingwu",) + a))
+        self.patches = [patch.object(ear_server.so, "VoiceActivityDetector", return_value=SimpleNamespace(reset=lambda: None)),
+                        patch.object(ear_server.tingwu_rt, "TingwuStream", FakeStream)]
+        for p in self.patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in self.patches])
+        models = SimpleNamespace(vad_cfg=None, speakers={}, lock=__import__("threading").Lock(), denoise_cfg=None, new_denoiser=lambda: None)
+        ear = ear_server.Ear(models, None, ThreadPoolExecutor(1))
+        ear.rec = ear_server.recorder.Recorder(d, 1, "peer", ear.hello)
+        ear.db, ear.tingwu_keys = db, ("k", "app")
+        ear.vad = SimpleNamespace(reset=lambda: None, accept_waveform=lambda w: None, is_speech_detected=lambda: False, empty=lambda: True)
+        ear.next_tag = 10 ** 9
+        ear.tingwu_switch = SimpleNamespace(on=switch_on)
+        return ear
+
+    async def audio_hello(self, ear):
+        await ear.on_text('{"type":"audio","format":"pcm16","sample_rate":16000,"channels":1,"source":"stackchan-x"}')
+
+    async def test_tingwu_waits_for_the_switch(self):
+        import ear_server
+        with tempfile.TemporaryDirectory() as d:
+            ear = self.switched_ear(ear_server, d, False)
+            await self.audio_hello(ear)
+            ear.tingwu_tick()
+            self.assertEqual(self.streams, [])
+            ear.tingwu_switch.on = True
+            ear.tingwu_tick()
+            self.assertEqual(len(self.streams), 1)
+            await ear.close(); ear.rec.close()
+
+    async def test_reconnect_with_the_switch_on_starts_at_once(self):
+        import ear_server
+        with tempfile.TemporaryDirectory() as d:
+            ear = self.switched_ear(ear_server, d, True)
+            ear.tingwu_tick()
+            self.assertEqual(self.streams, [])          # no audio message yet
+            await self.audio_hello(ear)
+            ear.tingwu_tick()
+            self.assertEqual(len(self.streams), 1)
+            await ear.close(); ear.rec.close()
+
+    async def test_switch_off_closes_the_stream_mid_session(self):
+        import ear_server
+        with tempfile.TemporaryDirectory() as d:
+            ear = self.switched_ear(ear_server, d, True)
+            await self.audio_hello(ear)
+            ear.tingwu_tick()
+            ear.tingwu_switch.on = False
+            ear.tingwu_tick()
+            self.assertTrue(self.streams[0].closed)
+            self.assertIsNone(ear.tingwu)
+            await ear.on_audio(b"\x01\x00" * 1600)
+            self.assertEqual(len(self.streams[0].fed), 0)
+            await ear.close(); ear.rec.close()
+
+    async def test_second_stream_positions_and_paragraphs_continue(self):
+        import ear_server
+        with tempfile.TemporaryDirectory() as d:
+            ear = self.switched_ear(ear_server, d, True)
+            await self.audio_hello(ear)
+            ear.tingwu_tick()
+            first = self.streams[0]
+            ear.tingwu_switch.on = False
+            ear.tingwu_tick()
+            for _ in range(3):
+                await ear.on_audio(b"\x01\x00" * 16000)       # 3 s = 48000 samples before the second stream
+            self.assertEqual(ear.ring.end, 48000)
+            ear.tingwu_switch.on = True
+            ear.tingwu_tick()
+            second = self.streams[1]
+            second.on_sentence({"id": 1, "begin_ms": 1000, "end_ms": 2000, "text": "第二段", "final": True})
+            posted = [e for e in ear.outbox if e.get("type") == "tingwu"]
+            self.assertEqual(posted[-1]["pos"], [48000 + 16000, 48000 + 32000])
+            first.on_final([{"speaker": "1", "text": "a"}, {"speaker": "1", "text": "b"}])
+            await ear.close()
+            second.on_final([{"speaker": "1", "text": "c"}])
+            ear.rec.close()
+            paragraphs = [r[3] for r in self.rows if r[0] == "tingwu" and r[2] == "paragraph"]
+            self.assertEqual(paragraphs, [1, 2, 3])
+            keys = {k for r in self.rows if r[0] == "update" for k in r[2]}
+            self.assertTrue({"tingwu_streams.1", "tingwu_streams.2", "tingwu"} <= keys)
+            s2 = next(r[2]["tingwu_streams.2"] for r in self.rows if r[0] == "update" and "tingwu_streams.2" in r[2])
+            self.assertEqual((s2["offset_samples"], s2["paragraphs"], s2["sentences"]), (48000, 1, 1))
+
+    async def test_start_error_backs_off_60_s(self):
+        import ear_server
+        with tempfile.TemporaryDirectory() as d:
+            ear = self.switched_ear(ear_server, d, True)
+            await self.audio_hello(ear)
+            clock = [1000.0]
+            with patch.object(ear_server.time, "monotonic", lambda: clock[0]):
+                ear.tingwu_tick()
+                self.streams[0].on_error("createTask failed")
+                self.assertIsNone(ear.tingwu)
+                for dt in (0.1, 30, 59.9):
+                    clock[0] = 1000.0 + dt
+                    ear.tingwu_tick()
+                self.assertEqual(len(self.streams), 1)
+                clock[0] = 1060.5
+                ear.tingwu_tick()
+                self.assertEqual(len(self.streams), 2)
+            await ear.close(); ear.rec.close()
+
+    async def test_rapid_toggle_keeps_one_stream(self):
+        import ear_server
+        with tempfile.TemporaryDirectory() as d:
+            ear = self.switched_ear(ear_server, d, True)
+            await self.audio_hello(ear)
+            for on in (True, False, True, False, True):
+                ear.tingwu_switch.on = on
+                ear.tingwu_tick()
+                self.assertLessEqual(sum(not s.closed for s in self.streams), 1)
+            self.assertEqual(len(self.streams), 3)
+            self.assertEqual([s.closed for s in self.streams], [True, True, False])
+            await ear.close(); ear.rec.close()
+            self.assertTrue(all(s.closed for s in self.streams))
 
     async def test_vision_message_is_stored_not_answered(self):
         import ear_server
