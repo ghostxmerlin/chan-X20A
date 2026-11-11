@@ -9,6 +9,7 @@
 #include "playback.h"
 #include "hearing.h"
 #include "vision_uplink.h"
+#include "mouth_link.h"
 #include "camera_frames.h"
 #include "interaction.h"
 #include "eyes/eyes.h"
@@ -1116,6 +1117,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     asr_json(doc["asr"].to<JsonObject>());
     m12_json(doc["m12"].to<JsonObject>());
     vision_uplink_json(doc["m12"]["uplink"].to<JsonObject>());
+    mouth::json(doc["mouth"].to<JsonObject>());
     interaction::json(doc["interaction"].to<JsonObject>());
     health["servo_commands_enabled"] = remote_enabled();
     wifi_ap_record_t ap{};
@@ -1839,6 +1841,7 @@ void run()
     playback_init();
     hearing::init(device_id,boot_id);
     vision_uplink_init(device_id, boot_id);
+    mouth::init(device_id, boot_id);
     update_screen({});
     ESP_ERROR_CHECK(create_psram_task(sensor_task, "collector_sensors", 6144, nullptr, 3) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(create_psram_task(environment_task, "collector_environment", 4096, nullptr, 2) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);

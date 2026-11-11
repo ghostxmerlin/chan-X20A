@@ -39,6 +39,9 @@ inline bool valid_token(const std::string& token) {
 // generated from config/voice-emotions.json. Every clip carries one of the backend's labels, so
 // neutral and unknown speech can answer too (user, 2026-11-09). Uniform among that label's clips,
 // avoiding `last` whenever another clip has the label.
+// 嘴 mode (2026-11-11): the ear sets respond=false in TTS or off mode; an older ear without the
+// field keeps answering as before.
+inline bool response_allowed(bool present,bool value){return !present||value;}
 template<class Tag> int emotion_clip(const char* emotion,uint32_t random,int count,Tag tag,int last=0) {
     if(!emotion||count<=0)return 0;
     int n=0;bool last_matches=false;

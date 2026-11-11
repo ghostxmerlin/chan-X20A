@@ -14,7 +14,10 @@ public:
     bool IsConnected()const;
     bool Send(const std::string&);
     bool Send(const void*,size_t,bool binary);
-    void Poll();
+    // true when a frame (or part of one) was read; call again until false to drain.
+    bool Poll();
+    // /mouth (0.4.77): also take binary messages up to max_bytes; hearing stays text only.
+    void AcceptBinary(size_t max_bytes);
     void Abort();
     const std::string& Error() const;
     void OnData(std::function<void(const char*,size_t,bool)>);

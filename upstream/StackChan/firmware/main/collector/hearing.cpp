@@ -47,6 +47,7 @@ std::string url,secret,device,boot;
 bool ready=false,connected=false,audio_ack=false,enroll_ack=false;
 ListeningControl control;
 uint32_t packets=0,reconnects=0,responses=0,asr_starts=0,asr_stops=0;
+uint32_t responses_muted=0;   // speech events with respond=false (嘴 in TTS or off mode)
 int64_t last_tick=0,last_speech=0;
 std::string state="idle",error,enroll_name,enroll_id,enroll_phase="idle",speaker,band="none",text,emotion;
 std::vector<std::string> speakers;
@@ -197,7 +198,10 @@ void receive(uint32_t session,const char* data,size_t len,bool binary) {
                 !std::strcmp(event["event"]|"","speech")&&!std::strcmp(event["voice"]["acoustic_band"]|"","voice")&&!text.empty();
             const bool self= !event["self"]["sounding"].is<bool>()||event["self"]["sounding"].as<bool>()||playback_self_sounding();
             if(quiet.pending())continue; // one response at a time; this utterance is not considered
-            const int clip=policy.consider(seq,emotion.c_str(),valid,self,valid?static_cast<int>(processing):-1,now,esp_random(),
+            // 嘴 mode (0.4.77): in TTS or off mode the ear sends respond=false and no clip is chosen.
+            const bool respond=response_allowed(event["respond"].is<bool>(),event["respond"]|true);
+            if(!respond)++responses_muted;
+            const int clip=!respond?0:policy.consider(seq,emotion.c_str(),valid,self,valid?static_cast<int>(processing):-1,now,esp_random(),
                 kVoiceCount,[](int clip_id){return voice_emotion(clip_id);});
             if(clip)quiet.hold(clip,now,utf8_prefix(text,120),emotion);
             // Normal eye mode: no response for this utterance → show its emotion once (vision on only;
@@ -471,7 +475,7 @@ void json(JsonObject out,bool with_events,uint32_t events_after) {
     out["last_encode_us"]=encode_us.load();out["last_send_us"]=send_us.load();out["last_poll_us"]=poll_us.load();
     out["session"]=control.generation();out["packets"]=packets;out["dropped_blocks"]=dropped.load();out["reconnects"]=reconnects;out["responses"]=responses;
     out["asr_starts"]=asr_starts;out["asr_stops"]=asr_stops;out["speaker"]=speaker;out["speaker_band"]=band;
-    out["text"]=text;out["emotion"]=emotion;out["emotion_reliable"]=false;out["respond_to"]="everyone";
+    out["text"]=text;out["emotion"]=emotion;out["emotion_reliable"]=false;out["respond_to"]="everyone";out["responses_muted"]=responses_muted;
     out["last_speech_age_ms"]=last_speech?(esp_timer_get_time()-last_speech)/1000:-1;
     auto list=out["speakers"].to<JsonArray>();for(const auto& name:speakers)list.add(name);
     auto forget=out["forget"].to<JsonObject>();forget["name"]=forget_name;forget["state"]=forget_state;forget["error"]=forget_error;

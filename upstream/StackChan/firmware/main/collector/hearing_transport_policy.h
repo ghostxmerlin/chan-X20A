@@ -22,14 +22,19 @@ struct SelfFlagGate {
     void reset(){known=false;}
     bool should_send(bool now){if(known&&now==sounding)return false;known=true;sounding=now;return true;}
 };
+// Hearing takes text only (8 KiB); the mouth (0.4.77) also takes binary audio packets up to its limit.
 struct MessageBuffer {
     enum Result {Invalid,More,Complete};
     std::string message;
     size_t remaining=0;bool fragmented=false;
-    void clear(){message.clear();remaining=0;fragmented=false;}
+    bool allow_binary=false;size_t max_bytes=8192;
+    bool binary=false;                                   // the message being assembled is binary
+    void clear(){message.clear();remaining=0;fragmented=false;binary=false;}
     Result add(int opcode,bool fin,size_t payload,const char* data,size_t len) {
         if(!remaining) {
-            if((opcode==1&&fragmented)||(opcode==0&&!fragmented)||(opcode!=0&&opcode!=1)||payload>8192-message.size())return Invalid;
+            const bool first=opcode==1||(opcode==2&&allow_binary);
+            if((first&&fragmented)||(opcode==0&&!fragmented)||(!first&&opcode!=0)||payload>max_bytes-message.size())return Invalid;
+            if(first)binary=opcode==2;
             remaining=payload;
         }
         if(len>remaining)return Invalid;

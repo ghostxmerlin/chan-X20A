@@ -87,7 +87,7 @@ CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
 # Two HTTP servers each need 3 internal sockets, plus 3+2 client sessions and
 # one UDP discovery socket. Keep headroom for an incoming connection to be accepted.
-CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_LWIP_MAX_SOCKETS=20
 
 # Collector face trial uses RGB888 input only; existing camera JPEG path is separate.
 CONFIG_FLASH_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y

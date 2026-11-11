@@ -76,27 +76,28 @@ struct HearingSocket::Impl {
         const int result=esp_transport_ws_send_raw(ws,opcode,static_cast<const char*>(data),size,kSendBudgetMs);
         if(result!=static_cast<int>(size)||deadline.cancelled){error="send_"+std::to_string(result);close();return false;}return true;
     }
-    void poll() {
-        if(!connected)return;
-        if(deadline.cancelled){close();return;}
+    bool poll() {
+        if(!connected)return false;
+        if(deadline.cancelled){close();return false;}
         // An idle poll must not spend the frame-read budget or stall capture.
         // Once readable, allow the complete header/payload a shared 200 ms.
         char bytes[2048];deadline.begin(esp_timer_get_time(),200);
         const int available=esp_transport_poll_read(ws,0);
-        if(available<0){error="poll";close();return;}
-        if(!available)return;
+        if(available<0){error="poll";close();return false;}
+        if(!available)return false;
         int n=esp_transport_read(ws,bytes,sizeof(bytes),200);
-        if(n<0||deadline.cancelled){error="read_"+std::to_string(n);close();return;}
-        if(!n)return;
+        if(n<0||deadline.cancelled){error="read_"+std::to_string(n);close();return false;}
+        if(!n)return true;                                   // a ping answered internally
         const auto result=buffer.add(esp_transport_ws_get_read_opcode(ws),esp_transport_ws_get_fin_flag(ws),
             esp_transport_ws_get_read_payload_len(ws),bytes,n);
-        if(result==MessageBuffer::Invalid){error="frame_"+std::to_string(esp_transport_ws_get_read_opcode(ws))+"_"+std::to_string(esp_transport_ws_get_read_payload_len(ws));close();return;}
+        if(result==MessageBuffer::Invalid){error="frame_"+std::to_string(esp_transport_ws_get_read_opcode(ws))+"_"+std::to_string(esp_transport_ws_get_read_payload_len(ws));close();return false;}
         if(result==MessageBuffer::Complete){
             // Callback executes synchronously on the worker and finishes before
             // any subsequent close/destruction; stop only sets cancellation.
-            if(on_data)on_data(buffer.message.data(),buffer.message.size(),false);
+            if(on_data)on_data(buffer.message.data(),buffer.message.size(),buffer.binary);
             buffer.clear();
         }
+        return true;
     }
 };
 HearingSocket::HearingSocket():impl_(std::make_unique<Impl>()){
@@ -110,7 +111,8 @@ bool HearingSocket::Connect(const char* uri){return impl_->connect(uri);}
 bool HearingSocket::IsConnected()const{return impl_->connected&&!impl_->deadline.cancelled;}
 bool HearingSocket::Send(const std::string& text){return impl_->send(text.data(),text.size(),false);}
 bool HearingSocket::Send(const void* data,size_t size,bool binary){return impl_->send(data,size,binary);}
-void HearingSocket::Poll(){impl_->poll();}
+bool HearingSocket::Poll(){return impl_->poll();}
+void HearingSocket::AcceptBinary(size_t max_bytes){impl_->buffer.allow_binary=true;impl_->buffer.max_bytes=max_bytes;}
 void HearingSocket::Abort(){impl_->abort();}
 const std::string& HearingSocket::Error()const{return impl_->error;}
 void HearingSocket::OnData(std::function<void(const char*,size_t,bool)> cb){impl_->on_data=std::move(cb);}
