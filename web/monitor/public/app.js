@@ -6,6 +6,7 @@ import { ServoTuningPanel } from '/servo-tuning-ui.js';
 import { WifiPanel } from '/wifi-ui.js';
 import { renderM12, renderThermal, M12LibraryPanel } from '/m12-ui.js';
 import { SwitchBar } from '/switches-ui.js';
+import { SayPanel } from '/say-ui.js';
 const $ = id => document.getElementById(id);
 const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) { el.textContent = next; el.title = next; } };
 const num = (n, digits = 1) => Number.isFinite(n) ? n.toFixed(digits) : '—';
@@ -21,6 +22,7 @@ const servoTuning = new ServoTuningPanel(document);
 const wifi = new WifiPanel(document);
 const m12Library = new M12LibraryPanel(document);
 const switches = new SwitchBar(document);
+const say = new SayPanel(document);
 for (const button of document.querySelectorAll('[data-open]')) {
   button.addEventListener('click', () => $(button.dataset.open).showModal());
 }

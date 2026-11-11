@@ -72,6 +72,9 @@
         <label class="sr-only" for="voice-select">选择台词</label><select id="voice-select" disabled aria-label="选择本体播放的台词"></select>
         <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div><p id="voice-asr-counts" data-detail-title class="note">ASR 计数：—</p>
         <div class="volume-row" title="所有播放共用；保存在机身，重启后保留。机身上可说 increase / decrease / maximum / medium / minimum volume。"><label for="volume-input">音量</label><input id="volume-input" type="range" min="10" max="100" step="10" value="80" disabled><span id="volume-value">—</span></div><p id="voice-command" class="command-result" role="status">由 StackChan 本体发声。</p>
+        <h3 class="say-heading">让 hello 说一句（TTS，嘴要切到 TTS）</h3><div id="say-buttons" class="say-buttons"></div>
+        <p class="note">试听音色：</p><div id="say-voices" class="say-buttons"></div>
+        <p id="say-msg" class="command-result" role="status"></p><div id="say-utterances"></div>
       </div>
     </section>
     <section class="panel eyes-panel" aria-labelledby="eyes-heading">

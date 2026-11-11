@@ -50,8 +50,9 @@ class SpeakTest(unittest.TestCase):
         self.now = int(time.time() * 1000)
 
     def test_roles_load_and_validate(self):
-        self.assertEqual(sorted(self.roles), ["comfort", "roast"])
-        self.assertEqual((self.roles["roast"]["voice"], self.roles["comfort"]["voice"]), ("tang", "anhuan"))
+        self.assertEqual(sorted(self.roles), ["comfort", "deadpan", "roast", "sad", "worst"])
+        self.assertEqual({k: r["voice"] for k, r in self.roles.items()},
+                         {"roast": "tang", "comfort": "anhuan", "deadpan": "wuxian", "worst": "me01", "sad": "xiaohei"})
         with tempfile.TemporaryDirectory() as d:
             Path(d, "bad.json").write_text(json.dumps({"id": "bad", "button": "x"}), encoding="utf-8")
             self.assertEqual(speak.load_roles(d), {})

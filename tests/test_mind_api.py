@@ -260,7 +260,7 @@ class ApiV1Test(unittest.TestCase):
 
     def test_roles_say_and_utterances(self):
         roles = self.call("/roles").json()
-        self.assertEqual(sorted(r["id"] for r in roles), ["comfort", "roast"])
+        self.assertEqual(sorted(r["id"] for r in roles), ["comfort", "deadpan", "roast", "sad", "worst"])
         self.assertEqual(self.post_json("/say", {"role": "roast"}).status, 409)      # mouth not connected
         self.assertEqual(self.post_json("/say", {"role": "nope"}).status, 400)
         self.tts.connected = True

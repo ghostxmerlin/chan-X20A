@@ -12,3 +12,9 @@
 #events li b.tingwu{color:#ffb86b}#events li.log-tingwu span{color:#ffd9ad}#events li.log-known{background:#0f3a1d}#events li.log-known span,#events li.log-known b{color:#5dff7e;font-weight:600}
 
 .button-link { display: inline-block; padding: 4px 10px; border: 1px solid currentColor; border-radius: 6px; color: inherit; text-decoration: none; font-size: 13px; }
+
+/* 让 hello 说一句 (say-ui.js) */
+.say-heading { font-size: 14px; margin: 14px 0 6px; }
+.say-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.utterances { list-style: none; padding: 0; margin: 6px 0; font-size: 13px; }
+.utterances li { padding: 2px 0; }
