@@ -60,9 +60,25 @@ test('switches unknown: no tingwu level is claimed', ()=>{
 });
 test('level requests set the tier before turning hearing on', ()=>{
  const r=robot();
- assert.deepEqual(sw.levelRequests('off',r),[{kind:'control',body:{action:'hearing_listen',enabled:false,boot:'b1'}},{kind:'switch',body:{name:'tingwu',on:false}}]);
+ assert.deepEqual(sw.levelRequests('off',r),[{kind:'switch',body:{name:'tingwu',on:false}},{kind:'control',body:{action:'hearing_listen',enabled:false,boot:'b1'}}]);
  assert.deepEqual(sw.levelRequests('local',r),[{kind:'switch',body:{name:'tingwu',on:false}},{kind:'control',body:{action:'hearing_listen',enabled:true,boot:'b1'}}]);
  assert.deepEqual(sw.levelRequests('tingwu',r),[{kind:'switch',body:{name:'tingwu',on:true}},{kind:'control',body:{action:'hearing_listen',enabled:true,boot:'b1'}}]);
+});
+test('off turns the paid tier off even when the robot request fails', async()=>{
+ const sent=[];
+ const post=async req=>{sent.push(req.kind);if(req.kind==='control')throw new Error('robot unreachable');return {};};
+ const errors=await sw.runLevel('off',robot(),post);
+ assert.deepEqual(sent,['switch','control']);assert.equal(errors.length,1);
+ const sent2=[];
+ const errors2=await sw.runLevel('tingwu',robot(),async req=>{sent2.push(req.kind);throw new Error('server down');});
+ assert.deepEqual(sent2,['switch']);assert.equal(errors2.length,1);       // never turn hearing on in an unknown tier
+});
+test('关 stays clickable when the robot state is unknown but the switch is known', ()=>{
+ const v=sw.switchView(null,false,{enabled:false},SW(true,['s1']));
+ const b=sw.levelButtons(v,false);
+ assert.equal(b.off,false);assert.equal(b.local,true);assert.equal(b.tingwu,true);
+ assert.equal(sw.levelButtons(sw.switchView(null,false,null,null),false).off,true);
+ assert.equal(sw.levelButtons(v,true).off,true);
 });
 test('toggle requests: m12 and the mind switch', ()=>{
  assert.deepEqual(sw.toggleRequest('vision',robot({m12:'detecting'}),true),{kind:'control',body:{action:'m12',enabled:false,boot:'b1'}});

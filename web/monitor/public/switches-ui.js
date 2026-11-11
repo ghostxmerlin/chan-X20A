@@ -48,8 +48,27 @@ export function switchView(robot,fresh,mind,switches=null){
 export function levelRequests(level,robot){
  const listen=enabled=>({kind:'control',body:{action:'hearing_listen',enabled,boot:robot?.boot}});
  const tier=on=>({kind:'switch',body:{name:'tingwu',on}});
- if(level==='off')return [listen(false),tier(false)];
+ if(level==='off')return [tier(false),listen(false)];    // the paid tier first: works even if the robot is unreachable
  return [tier(level==='tingwu'),listen(true)];
+}
+
+// Send a tier's requests in order. "off" tries every step; turning on stops at the first failure so
+// hearing never starts in an unknown tier. Returns [{kind, error}] for the failed steps.
+export async function runLevel(level,robot,post){
+ const errors=[];
+ for(const req of levelRequests(level,robot)){
+  try{await post(req);}
+  catch(e){errors.push({kind:req.kind,error:e});if(level!=='off')break;}
+ }
+ return errors;
+}
+
+// Disabled state of the three tier buttons. 关 needs only the server switch or the robot to be known.
+export function levelButtons(v,pending){
+ const h=v.hearing;
+ return {off:!!pending||(!h.known&&!h.switchesKnown),
+  local:!!pending||!h.known||!h.can||!h.switchesKnown,
+  tingwu:!!pending||!h.known||!h.can||!h.switchesKnown||h.tingwuAvailable===false};
 }
 
 export function toggleRequest(which,robot,mindOrFresh){
@@ -104,21 +123,20 @@ export class SwitchBar{
   if(this.pending)return;
   this.pending='hearing';this.msg='';this.paint();
   const steps={switch:'听悟档位',control:'本体听觉'};
-  for(const req of levelRequests(level,this.robot)){
-   try{
-    if(req.kind==='switch')this.switches=await postJson('/api/mind/switches',req.body);
-    else await postJson('/api/control',req.body);
-   }catch(e){this.msg=`听觉（${steps[req.kind]}）：${e.name==='TimeoutError'?'结果未确认，请看状态':e.message}`;break;}
-  }
+  const errors=await runLevel(level,this.robot,async req=>{
+   if(req.kind==='switch')this.switches=await postJson('/api/mind/switches',req.body);
+   else await postJson('/api/control',req.body);
+  });
+  this.msg=errors.map(({kind,error})=>`听觉（${steps[kind]}）：${error.name==='TimeoutError'?'结果未确认，请看状态':error.message}`).join('；');
   this.pending=null;this.paint();
  }
  paint(){
   const v=switchView(this.robot,this.fresh,this.mind,this.switches),$=id=>this.doc.getElementById(id);
   const hv=v.hearing,g=$('sw-hearing');
   g.classList.toggle('on',hv.on);g.classList.toggle('unknown',!hv.known||hv.level==='unknown');
+  const dis=levelButtons(v,this.pending);
   for(const [k] of LEVELS){
-   const b=$('sw-hearing-'+k);b.setAttribute('aria-pressed',String(hv.level===k));
-   b.disabled=!!this.pending||!hv.known||(k!=='off'&&!hv.can)||(k!=='off'&&!hv.switchesKnown)||(k==='tingwu'&&hv.tingwuAvailable===false);
+   const b=$('sw-hearing-'+k);b.setAttribute('aria-pressed',String(hv.level===k));b.disabled=dis[k];
   }
   $('sw-hearing-state').textContent=this.pending==='hearing'?'发送中…':{off:'关',local:'本地',tingwu:'听悟',unknown:'未知'}[hv.level];
   $('sw-hearing-detail').textContent=hv.detail;
