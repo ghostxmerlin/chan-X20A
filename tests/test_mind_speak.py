@@ -104,5 +104,32 @@ class SpeakTest(unittest.TestCase):
         self.assertFalse(selfvoice.is_hello("很久以前说的一句话呀", False))
 
 
+class TtsHttpTest(unittest.TestCase):
+    def test_busy_or_no_device_from_soul_tts_is_not_connected(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                code = 409 if self.path == "/v1/say" else 429
+                self.send_response(code); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"{}")
+        srv = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        c = speak.TtsHttp(f"http://127.0.0.1:{srv.server_address[1]}", "t" * 20)
+        with self.assertRaises(speak.NotConnected):
+            c.say("一句话", voice="tang")
+
+    def test_missing_token_file_means_no_client(self):
+        self.assertIsNone(speak.TtsHttp.from_file("http://127.0.0.1:1", "/nonexistent/api.token"))
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "t").write_text("tok-0123456789abcdef\n")
+            self.assertEqual(speak.TtsHttp.from_file("http://x", str(Path(d, "t"))).token, "tok-0123456789abcdef")
+
+
 if __name__ == "__main__":
     unittest.main()

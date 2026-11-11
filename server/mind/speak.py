@@ -160,12 +160,27 @@ class TtsHttp:
     def __init__(self, base, token, timeout=15):
         self.base, self.token, self.timeout = base.rstrip("/"), token, timeout
 
+    @classmethod
+    def from_file(cls, base, token_file):
+        """None when the token file is missing (soul-tts not deployed): /say then answers 409."""
+        try:
+            token = open(token_file).read().strip()
+        except OSError:
+            return None
+        return cls(base, token) if token else None
+
     def _call(self, method, path, body=None, timeout=None):
+        import urllib.error
         import urllib.request
         req = urllib.request.Request(self.base + path, method=method, data=json.dumps(body or {}).encode() if method == "POST" else None,
                                      headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
-            return json.loads(r.read() or b"{}")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
+                return json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            if e.code in (409, 429):         # no device on /mouth, or too many queued: nothing was paid for
+                raise NotConnected("hello 的嘴没连上" if e.code == 409 else "hello 还有话没说完") from None
+            raise
 
     def health(self):
         return self._call("GET", "/health")

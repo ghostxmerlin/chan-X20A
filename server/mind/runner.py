@@ -131,6 +131,7 @@ def main():
     ap.add_argument("--catch-up-max-hours", type=float, default=48)
     ap.add_argument("--roles", default=os.path.expanduser("~/soul-mind/roles"), help="hello's speaking roles (config/roles)")
     ap.add_argument("--tts-url", default="http://127.0.0.1:52750", help="soul-tts API on the loopback")
+    ap.add_argument("--tts-token-file", default=os.path.expanduser("~/soul-tts/api.token"), help="soul-tts API token")
     ap.add_argument("--clip-texts", default=os.path.expanduser("~/soul-mind/clip_texts.json"),
                     help="hello's voice clip texts (selfvoice); missing: nothing is treated as her voice")
     ap.add_argument("--recordings", default=os.path.expanduser("~/soul-spike/recordings"),
@@ -166,7 +167,7 @@ def main():
     threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port,
                                              {"env": env, "settings_store": settings_store,
                                                                          "recordings_root": a.recordings, "roles_dir": a.roles,
-                                                                         "tts": speak.TtsHttp(a.tts_url, token) if token else None}), daemon=True).start()
+                                                                         "tts": speak.TtsHttp.from_file(a.tts_url, a.tts_token_file)}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}", flush=True)
     while True:
