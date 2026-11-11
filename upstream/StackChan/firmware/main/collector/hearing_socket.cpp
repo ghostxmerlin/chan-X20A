@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "frame_change.h"
 #include "hearing_socket.h"
 #include "hearing_policy.h"
 #include "hearing_transport_policy.h"
@@ -69,7 +70,7 @@ struct HearingSocket::Impl {
         if(!connected||deadline.cancelled||size>(binary?32768u:8192u))return false;   // binary: camera frames (vision uplink)
         // 1 s, not 200 ms: the uplink to the backend sees RTT spikes past 300 ms (Mac wired ping,
         // 2026-11-09), and lwIP stops reporting the socket writable at 8 queued segments.
-        constexpr int kSendBudgetMs=1000;
+        const int kSendBudgetMs=frame_send_budget_ms(size);   // 1 s; 3 s for camera frames (frame_change.h)
         deadline.begin(esp_timer_get_time(),kSendBudgetMs);
         const auto opcode=static_cast<ws_transport_opcodes_t>((binary?WS_TRANSPORT_OPCODES_BINARY:WS_TRANSPORT_OPCODES_TEXT)|WS_TRANSPORT_OPCODES_FIN);
         const int result=esp_transport_ws_send_raw(ws,opcode,static_cast<const char*>(data),size,kSendBudgetMs);

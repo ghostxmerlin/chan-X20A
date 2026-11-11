@@ -133,6 +133,18 @@ class VisionFrameTest(unittest.TestCase):
         self.assertEqual(self.files(), [])
         self.assertFalse([c for c in self.db.calls if c[0] == "frame"])
 
+    def test_disk_error_answers_an_error_and_keeps_the_link(self):
+        blocker = os.path.join(self.dir.name, "frames")
+        with open(blocker, "w") as f:                  # a file where the frames folder should be
+            f.write("x")
+        reply = self.link.on_binary(frame_msg())
+        self.assertEqual(reply["type"], "error")
+        self.assertFalse([c for c in self.db.calls if c[0] == "frame"])
+        self.assertFalse([p for p in self.files() if p.endswith(".part")])
+        ws = FakeWS([json.dumps({"type": "hello", "source": "stackchan-x"}), frame_msg(), json.dumps({"type": "vision", "event": "face_found", "seq": 1})])
+        link = asyncio.run(vision_link.serve_link(ws, self.db, 10, "p", recordings_root=self.dir.name))
+        self.assertEqual(link.events, 1)               # the event after the failed frame still arrived
+
     def test_close_records_the_frame_count(self):
         self.link.on_binary(frame_msg(seq=1))
         self.link.on_binary(frame_msg(seq=2, t_us=2_000_000))

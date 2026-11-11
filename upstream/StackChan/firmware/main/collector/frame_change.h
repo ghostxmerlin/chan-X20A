@@ -58,4 +58,13 @@ inline bool frame_should_send(bool have_last, int diff, int64_t since_last_us)
 {
     return !have_last || (since_last_us >= kFrameMinGapUs && diff >= kFrameChangeThreshold);
 }
+
+// A frame send that failed (slow uplink, socket closed) holds frames for 60 s, so a link that cannot
+// carry a frame does not reconnect every 2 s re-sending it; M12 events keep flowing meanwhile.
+constexpr int64_t kFrameFailHoldUs = 60000000;
+inline bool frame_held(int64_t now_us, int64_t hold_until_us) { return now_us < hold_until_us; }
+
+// WebSocket send budget: 1 s for small messages, 3 s for frames (a 32 KB frame needs several RTTs
+// through the 5.7 KB TCP send buffer).
+inline int frame_send_budget_ms(size_t bytes) { return bytes > 8192 ? 3000 : 1000; }
 }

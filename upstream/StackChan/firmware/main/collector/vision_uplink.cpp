@@ -32,6 +32,8 @@ constexpr size_t kFrameMax = 32768;          // whole binary message; larger fra
 uint32_t frames_sent = 0, frames_too_big = 0, frames_no_memory = 0;
 int last_frame_diff = -1;
 int64_t last_frame_us = 0;
+int64_t frames_hold_until_us = 0;           // after a failed frame send (frame_change.h kFrameFailHoldUs)
+uint32_t frames_failed = 0;
 
 void set_state(const char* s, const std::string& err = {})
 {
@@ -157,13 +159,17 @@ void run(void*)
                 }
             }
             bool frame_sent = false;
-            if (ok) {
+            if (ok && !frame_held(esp_timer_get_time(), frames_hold_until_us)) {
                 const auto frame = camera_latest_frame();
                 if (frame && frame->seq != last_seen_seq && frame->bytes && frame->length) {
                     last_seen_seq = frame->seq;
                     const int diff = frame_diff(frame->thumb, last_thumb);
                     if (frame_should_send(have_last, diff, esp_timer_get_time() - last_frame_sent_us)) {
                         ok = send_frame(socket, *frame, diff, frame_sent);
+                        if (!ok) {
+                            frames_hold_until_us = esp_timer_get_time() + kFrameFailHoldUs;
+                            std::lock_guard<std::mutex> lock(mutex); ++frames_failed;
+                        }
                         if (frame_sent) {
                             have_last = true; last_thumb = frame->thumb; last_frame_sent_us = esp_timer_get_time();
                             std::lock_guard<std::mutex> lock(mutex);
@@ -220,6 +226,8 @@ void vision_uplink_json(ArduinoJson::JsonObject out)
     if (last_sent_us) out["last_sent_ms_ago"] = (esp_timer_get_time() - last_sent_us) / 1000;
     if (!last_error.empty()) out["last_error"] = last_error;
     out["frames_sent"] = frames_sent; out["frames_too_big"] = frames_too_big; out["frames_no_memory"] = frames_no_memory;
+    out["frames_failed"] = frames_failed;
+    if (frame_held(esp_timer_get_time(), frames_hold_until_us)) out["frames_held_ms"] = (frames_hold_until_us - esp_timer_get_time()) / 1000;
     if (last_frame_diff >= 0) out["last_frame_diff"] = last_frame_diff;
     if (last_frame_us) out["last_frame_age_ms"] = (esp_timer_get_time() - last_frame_us) / 1000;
 }

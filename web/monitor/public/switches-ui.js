@@ -28,7 +28,8 @@ export function switchView(robot,fresh,mind,switches=null){
  const vOn=visionKnown&&VISION_ON.has(status);
  const camKnown=typeof t.health?.camera_enabled==='boolean',camOn=t.health?.camera_enabled===true;
  const vLevel=!visionKnown||!camKnown?'unknown':camOn&&vOn?'upload':vOn?'m12_only':camOn?'camera_only':'off';
- const vision={known:visionKnown&&camKnown,on:vOn,level:vLevel,camera:camOn,
+ const vLevelAny=vLevel==='unknown'&&!!fresh&&camKnown?(camOn?'camera_only':'off'):vLevel;   // M12 link down: the camera alone
+ const vision={known:visionKnown&&camKnown,offKnown:!!fresh&&(camKnown||visionKnown),on:vOn,level:vLevelAny,camera:camOn,
   can:visionKnown&&(vOn||(!!t.m12?.valid&&t.m12?.online!==false)),
   detail:!fresh?'状态未知（数据过期）':`${VISION[status]||status} · 摄像头${!camKnown?'未知':camOn?'开（变化时上传）':'关'}`};
  const mindKnown=!!mind&&typeof mind.enabled==='boolean';
@@ -62,7 +63,7 @@ export function visionRequests(level,robot){
 }
 export function visionButtons(v,pending){
  const s=v.vision;
- return {off:!!pending||!s.known,upload:!!pending||!s.known||!s.can,recognize:true};
+ return {off:!!pending||!s.offKnown,upload:!!pending||!s.known||!s.can,recognize:true};
 }
 async function runRequests(reqs,keepGoing,post){
  const errors=[];

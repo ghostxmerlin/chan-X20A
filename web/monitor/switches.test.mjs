@@ -101,6 +101,12 @@ test('recognize is never clickable in this step', ()=>{
  assert.equal(b.recognize,true);assert.equal(b.off,false);assert.equal(b.upload,false);
  assert.equal(sw.visionButtons(sw.switchView(null,false,null),false).upload,true);
 });
+test('vision 关 works with the M12 disconnected while the camera uploads', ()=>{
+ const r=cam(robot({m12:'disconnected'}),true);
+ const v=sw.switchView(r,true,{enabled:false});
+ assert.equal(sw.visionButtons(v,false).off,false);
+ assert.equal(v.vision.level,'camera_only');
+});
 test('toggle requests: m12 and the mind switch', ()=>{
  assert.deepEqual(sw.toggleRequest('vision',robot({m12:'detecting'}),true),{kind:'control',body:{action:'m12',enabled:false,boot:'b1'}});
  assert.deepEqual(sw.toggleRequest('mind',robot(),{enabled:true}),{kind:'mind',body:{enabled:false}});

@@ -96,11 +96,19 @@ class VisionLink:
             return {"type": "error", "message": "frame is not a JPEG"}
         rel = f"frames/{self.session}/{head['t_us']}-{head['seq']}.jpg"
         path = os.path.join(self.recordings_root, rel)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".part"
-        with open(tmp, "wb") as f:
-            f.write(jpeg)
-        os.replace(tmp, path)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(tmp, "wb") as f:
+                f.write(jpeg)
+            os.replace(tmp, path)
+        except OSError as e:                   # disk full, permissions: answer, keep the link (events still flow)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            print(f"vision frame not stored ({self.session}): {type(e).__name__}: {e}", flush=True)
+            return {"type": "error", "message": f"frame not stored: {type(e).__name__}"}
         received = int(time.time() * 1000)
         wait_ms = max(0, (head["now_us"] - head["t_us"]) // 1000)
         num = lambda k: head.get(k) if isinstance(head.get(k), int) and not isinstance(head.get(k), bool) else None  # noqa: E731
