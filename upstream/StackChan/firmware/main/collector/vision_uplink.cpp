@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 #include "vision_uplink.h"
+#include "camera_frames.h"
 #include "hearing.h"
 #include "hearing_socket.h"
 #include "m12_unit.h"
 #include "psram_task.h"
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
@@ -25,6 +27,11 @@ std::string state = "idle", last_error;
 bool connected = false;
 uint32_t connects = 0, failures = 0, sent = 0;
 int64_t connected_us = 0, last_sent_us = 0;
+// Camera frames (0.4.75): sent when the picture changed and 10 s passed, plus the first after connect.
+constexpr size_t kFrameMax = 32768;          // whole binary message; larger frames are skipped
+uint32_t frames_sent = 0, frames_too_big = 0, frames_no_memory = 0;
+int last_frame_diff = -1;
+int64_t last_frame_us = 0;
 
 void set_state(const char* s, const std::string& err = {})
 {
@@ -61,7 +68,37 @@ void fill(ArduinoJson::JsonDocument& msg, const M12VisionEvent& v, uint32_t seq)
     if (v.reason[0]) msg["reason"] = std::string(v.reason);
 }
 
-bool wanted() { return m12_snapshot().online || m12_vision_pending() > 0; }
+bool wanted() { return m12_snapshot().online || m12_vision_pending() > 0 || camera_streaming(); }
+
+// "SVF1" + u16le header length + JSON header + JPEG, built in PSRAM. false only when the socket
+// failed; a frame that is too big or finds no memory is skipped (counted) and the link stays.
+bool send_frame(hearing::HearingSocket& socket, const CameraFrame& f, int diff, bool& sent_out)
+{
+    sent_out = false;
+    ArduinoJson::JsonDocument head;
+    head["type"] = "frame"; head["seq"] = f.seq; head["t_us"] = f.timestamp_us; head["now_us"] = esp_timer_get_time();
+    head["w"] = f.width; head["h"] = f.height; head["diff"] = diff; head["bytes"] = f.length;
+    std::string text;
+    ArduinoJson::serializeJson(head, text);
+    const size_t total = 6 + text.size() + f.length;
+    if (text.size() > 512 || total > kFrameMax) {
+        std::lock_guard<std::mutex> lock(mutex); ++frames_too_big;
+        return true;
+    }
+    auto* buf = static_cast<uint8_t*>(heap_caps_malloc(total, MALLOC_CAP_SPIRAM));
+    if (!buf) {
+        std::lock_guard<std::mutex> lock(mutex); ++frames_no_memory;
+        return true;
+    }
+    std::memcpy(buf, "SVF1", 4);
+    buf[4] = static_cast<uint8_t>(text.size() & 0xff); buf[5] = static_cast<uint8_t>(text.size() >> 8);
+    std::memcpy(buf + 6, text.data(), text.size());
+    std::memcpy(buf + 6 + text.size(), f.bytes, f.length);
+    const bool ok = socket.Send(buf, total, true);
+    heap_caps_free(buf);
+    sent_out = ok;
+    return ok;
+}
 
 void run(void*)
 {
@@ -101,6 +138,10 @@ void run(void*)
             ESP_LOGI(kTag, "connected");
         }
         int64_t last_tx = esp_timer_get_time(), idle_since = 0;
+        FrameThumb last_thumb;                 // reset per connection: the first frame always goes
+        bool have_last = false;
+        uint32_t last_seen_seq = 0;
+        int64_t last_frame_sent_us = 0;
         while (ok && socket.IsConnected()) {
             socket.Poll();
             M12VisionEvent events[kBatch];
@@ -115,8 +156,24 @@ void run(void*)
                     std::lock_guard<std::mutex> lock(mutex); ++sent; last_sent_us = esp_timer_get_time();
                 }
             }
+            bool frame_sent = false;
+            if (ok) {
+                const auto frame = camera_latest_frame();
+                if (frame && frame->seq != last_seen_seq && frame->bytes && frame->length) {
+                    last_seen_seq = frame->seq;
+                    const int diff = frame_diff(frame->thumb, last_thumb);
+                    if (frame_should_send(have_last, diff, esp_timer_get_time() - last_frame_sent_us)) {
+                        ok = send_frame(socket, *frame, diff, frame_sent);
+                        if (frame_sent) {
+                            have_last = true; last_thumb = frame->thumb; last_frame_sent_us = esp_timer_get_time();
+                            std::lock_guard<std::mutex> lock(mutex);
+                            ++frames_sent; last_frame_diff = diff; last_frame_us = last_frame_sent_us;
+                        }
+                    }
+                }
+            }
             const int64_t now = esp_timer_get_time();
-            if (n) last_tx = now;
+            if (n || frame_sent) last_tx = now;
             if (ok && now - last_tx >= kPingUs) {
                 ArduinoJson::JsonDocument ping; ping["type"] = "ping";
                 ok = send_doc(socket, ping); last_tx = now;
@@ -162,5 +219,8 @@ void vision_uplink_json(ArduinoJson::JsonObject out)
     if (connected) out["connected_ms"] = (esp_timer_get_time() - connected_us) / 1000;
     if (last_sent_us) out["last_sent_ms_ago"] = (esp_timer_get_time() - last_sent_us) / 1000;
     if (!last_error.empty()) out["last_error"] = last_error;
+    out["frames_sent"] = frames_sent; out["frames_too_big"] = frames_too_big; out["frames_no_memory"] = frames_no_memory;
+    if (last_frame_diff >= 0) out["last_frame_diff"] = last_frame_diff;
+    if (last_frame_us) out["last_frame_age_ms"] = (esp_timer_get_time() - last_frame_us) / 1000;
 }
 }

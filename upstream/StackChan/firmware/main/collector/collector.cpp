@@ -9,6 +9,7 @@
 #include "playback.h"
 #include "hearing.h"
 #include "vision_uplink.h"
+#include "camera_frames.h"
 #include "interaction.h"
 #include "eyes/eyes.h"
 #include "eyes/http.h"
@@ -112,15 +113,7 @@ struct AudioBlock {
 };
 AudioBlock* audio_ring = nullptr;
 uint32_t audio_sequence = 0;
-struct Frame {
-    uint8_t* bytes = nullptr;
-    size_t length = 0;
-    uint32_t seq = 0;
-    int64_t timestamp_us = 0;
-    int width = 0, height = 0;
-    std::string faces;
-    ~Frame() { free(bytes); }
-};
+using Frame = CameraFrame;           // camera_frames.h: shared with the vision uplink
 std::shared_ptr<Frame> latest_frame;
 struct Sensors {
     uint32_t seq = 0;
@@ -531,6 +524,13 @@ void camera_task(void*)
             frame->seq = seq;
             frame->faces = face_detect_frame(camera->GetFrameData(), camera->GetFrameSize(),
                 frame->width, frame->height, camera->GetFrameFormat(), seq, frame->timestamp_us);
+            {
+                const uint32_t format = camera->GetFrameFormat();
+                const FacePixelFormat pixels = format == V4L2_PIX_FMT_YUYV ? FacePixelFormat::Yuyv :
+                    format == V4L2_PIX_FMT_RGB565 ? FacePixelFormat::Rgb565 :
+                    format == V4L2_PIX_FMT_RGB24 ? FacePixelFormat::Rgb888 : FacePixelFormat::Unsupported;
+                frame->thumb = frame_thumb(camera->GetFrameData(), camera->GetFrameSize(), frame->width, frame->height, pixels);
+            }
             const int64_t encode_start = esp_timer_get_time();
             if (image_to_jpeg(const_cast<uint8_t*>(camera->GetFrameData()), camera->GetFrameSize(),
                               frame->width, frame->height, (v4l2_pix_fmt_t)camera->GetFrameFormat(),
@@ -1805,6 +1805,17 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
     display->LvglUnlock();
 }
 } // namespace
+
+std::shared_ptr<const CameraFrame> camera_latest_frame()
+{
+    if (!camera_enabled) return nullptr;
+    std::shared_ptr<Frame> frame;
+    { std::lock_guard<std::mutex> lock(frame_mutex); frame = latest_frame; }
+    if (!frame || esp_timer_get_time() - frame->timestamp_us > 3000000) return nullptr;
+    return frame;
+}
+
+bool camera_streaming() { return camera_enabled; }
 
 void run()
 {

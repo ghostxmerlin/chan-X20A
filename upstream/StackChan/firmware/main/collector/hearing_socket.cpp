@@ -66,7 +66,7 @@ struct HearingSocket::Impl {
         return connected;
     }
     bool send(const void* data,size_t size,bool binary) {
-        if(!connected||deadline.cancelled||size>8192)return false;
+        if(!connected||deadline.cancelled||size>(binary?32768u:8192u))return false;   // binary: camera frames (vision uplink)
         // 1 s, not 200 ms: the uplink to the backend sees RTT spikes past 300 ms (Mac wired ping,
         // 2026-11-09), and lwIP stops reporting the socket writable at 8 queued segments.
         constexpr int kSendBudgetMs=1000;
