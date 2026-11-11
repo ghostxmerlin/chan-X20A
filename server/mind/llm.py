@@ -4,7 +4,8 @@ import time
 import urllib.error
 import urllib.request
 
-PRICES = {"gpt-6-luna": (0.1, 0.5), "gpt-6.1-terra": (1.0, 5.0)}     # USD per million tokens, list price
+PRICES = {"gpt-6-luna": (0.1, 0.5), "gpt-6.1-terra": (1.0, 5.0),   # USD per million tokens, list price
+          "claude-haiku-5-5": (0.1, 0.5)}                     # eye (aihubmix list, 2026-11-11)
 
 
 def cost_usd(model, usage):
