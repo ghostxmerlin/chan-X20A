@@ -21,6 +21,7 @@ PROCESS_DELAY_MS = 30_000     # v3 (2026-11-11): first version 30 s after the mi
 LOOKBACK_MS = 30 * MIN_MS
 VISION_LOOKBACK_CAP_MS = 12 * 3600_000
 RECHECK_MINUTES = 10
+REVISE_MAX_PER_TICK = 3        # a builder or settings change can rewrite the whole recheck window: never a burst
 
 
 def lookback_start(records, minute_ms):
@@ -104,7 +105,8 @@ def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000, env=None, sett
             store.set_state(cursor_minute=m, processed=done, skipped_same=same)
         store.set_state(last_run_ms=now_ms, last_error="", skipped_same=same)
         age_limit = s["fusion"]["max_age_min"] * MIN_MS + MIN_MS + PROCESS_DELAY_MS
-        fuse(env, store, s, [m for m in rewritten if now_ms - m <= age_limit], now_ms, settings_version, revise=True)
+        fuse(env, store, s, [m for m in rewritten if now_ms - m <= age_limit][-REVISE_MAX_PER_TICK:], now_ms,
+             settings_version, revise=True)
         fuse(env, store, s, [m for m in new if now_ms - m <= age_limit], now_ms, settings_version)
     except Exception as e:                       # noqa: BLE001 - recorded, then the caller retries
         try:

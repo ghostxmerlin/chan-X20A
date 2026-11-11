@@ -62,13 +62,24 @@ class FingerprintTest(unittest.TestCase):
         b = build(face, minute=T0 + MIN)
         self.assertEqual(fusion.content_fp(*a), fusion.content_fp(*b))
 
-    def test_eye_result_changes_the_content_fp(self):
+    def test_eye_bin_in_content_fp_only_when_given(self):
         pkg, strong = minute_input(T, same=True)
         before = fusion.content_fp(pkg, strong)
         pkg["eye"] = {"code": "e1", "result": {"people_count": 1, "activity": "喝水"}, "frames": 2}
-        after = fusion.content_fp(pkg, strong)
-        pkg["eye"]["result"]["activity"] = "打字"
-        self.assertEqual(len({before, after, fusion.content_fp(pkg, strong)}), 3)
+        self.assertEqual(fusion.content_fp(pkg, strong), before)          # v2 never sees e1: unchanged, same formula as before
+        self.assertNotEqual(fusion.content_fp(pkg, strong, eye_bin=1), before)
+        self.assertEqual(fusion.content_fp(pkg, strong, eye_bin=1), fusion.content_fp(pkg, strong, eye_bin=1))
+
+    def test_v3_minute_without_eye_keeps_the_last_eye_bin(self):
+        s3 = copy.deepcopy(S); s3["fusion"]["prompt"] = "v3"
+        self.store = Store(FakeDB())
+        fusion.CHAT = FakeChat()
+        pkg, strong = minute_input(T, same=True)
+        pkg["eye"] = {"code": "e1", "result": {"people_count": 1, "activity": "a"}, "frames": 2}
+        first = fusion.run_minute(ENV, self.store, s3, 3, T, pkg, strong, {}, now_ms=T + 2 * MIN)
+        pkg2, strong2 = minute_input(T + MIN, same=True)                   # next minute: no new frames, no eye record
+        second = fusion.run_minute(ENV, self.store, s3, 3, T + MIN, pkg2, strong2, {}, now_ms=T + 3 * MIN)
+        self.assertEqual((first["eye_bin"], second["eye_bin"], second["source"]), (1, 1, "carried"))
 
     def test_new_speech_changes_the_content_fp(self):
         face = [("vision", vision("V", "face_found", T0 - 20 * MIN, face=4))]

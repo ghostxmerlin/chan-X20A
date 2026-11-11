@@ -213,7 +213,27 @@ class RunnerFusionTest(RunnerTest):
                                     "result": {"people_count": 1, "people": [{"who": "主人", "where": "桌前", "doing": "打字"}],
                                                "activity": "主人在打字", "scene": "办公室", "changes": "", "confidence": "high"}})
 
+    def test_late_eye_result_does_not_revise_under_v2(self):
+        self.store.set_state(cursor_minute=T0 - MIN)
+        runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.eye_result(T0)
+        runner.tick(self.rec, self.store, S, T0 + 2 * MIN + 30_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(len(self.scene_versions(T0)), 1)
+
+    def test_at_most_3_revisions_per_tick(self):
+        import copy
+        s3 = copy.deepcopy(S); s3["fusion"]["prompt"] = "v3"
+        self.store.set_state(cursor_minute=T0 - MIN)
+        runner.tick(self.rec, self.store, s3, T0 + 8 * MIN + 30_000, 48 * 3600_000, env=ENV)
+        for k in range(8):
+            self.eye_result(T0 + k * MIN)
+        runner.tick(self.rec, self.store, s3, T0 + 9 * MIN + 30_000, 48 * 3600_000, env=ENV)
+        revised = [d for d in self.db["mind_scenes"].docs if d.get("reason") == "revised"]
+        self.assertEqual(len(revised), 3)
+
     def test_late_eye_result_revises_the_minute_once(self):
+        import copy
+        S = copy.deepcopy(globals()["S"]); S["fusion"]["prompt"] = "v3"
         self.store.set_state(cursor_minute=T0 - MIN)
         runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
         self.assertEqual(len(self.scene_versions(T0)), 1)
@@ -241,6 +261,8 @@ class RunnerFusionTest(RunnerTest):
         self.assertEqual(len(self.scene_versions(T0)), 1)
 
     def test_revision_runs_are_logged(self):
+        import copy
+        S = copy.deepcopy(globals()["S"]); S["fusion"]["prompt"] = "v3"
         self.store.set_state(cursor_minute=T0 - MIN)
         runner.tick(self.rec, self.store, S, T0 + MIN + 30_000, 48 * 3600_000, env=ENV)
         before = sum(1 for d in self.db["mind_runs"].docs if d.get("minute") == T0 and d["step"] == "fusion")

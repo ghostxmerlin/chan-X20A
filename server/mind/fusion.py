@@ -17,7 +17,7 @@ def _bin(seconds):
     return 0 if seconds <= 0 else (2 if seconds >= 60 else 1)
 
 
-def content_fp(pkg, strong):
+def content_fp(pkg, strong, eye_bin=None):
     """What the model would see, in bins (spec 3.3): owner state, coverage, who is in view, which kinds
     of sound, whether a person shape was seen, and the new sentences themselves (new words are new
     evidence). Record ids and face end times are left out, so a quiet minute matches the last one."""
@@ -27,12 +27,13 @@ def content_fp(pkg, strong):
            sorted({g.get("kind") for g in pkg.get("sounds", [])}),
            (pkg.get("persons") or {}).get("seconds", 0) > 0,
            sorted([x["ref"].get("session"), x["ref"].get("id")] for x in pkg.get("speech", [])),
-           bool(pkg.get("tingwu_only")),
-           [(pkg["eye"]["result"].get("people_count"), pkg["eye"]["result"].get("activity"))] if pkg.get("eye") else None]
+           bool(pkg.get("tingwu_only"))]
+    if eye_bin is not None:             # v3 only (the prompt that shows e1): people count, not the eye wording
+        raw.append(["eye", eye_bin])
     return hashlib.sha1(json.dumps(raw, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
-def decide(prev, pkg, strong, s, minute_ms, review_level):
+def decide(prev, pkg, strong, s, minute_ms, review_level, fp=None):
     """("call" | "carry", reason). review_level: re-checks in a row that found nothing new."""
     if prev is None:
         return "call", "first"
@@ -44,7 +45,7 @@ def decide(prev, pkg, strong, s, minute_ms, review_level):
     cov = strong["coverage"]["hearing_s"] + strong["coverage"]["vision_s"]
     if prev.get("coverage_sum", 0) == 0 and cov > 0:
         return "call", "sensors_on"
-    fp = content_fp(pkg, strong)
+    fp = fp if fp is not None else content_fp(pkg, strong)
     if prev.get("last_call_minute") is None:
         return "call", "changed"
     since = (minute_ms - prev["last_call_minute"]) / MIN_MS
@@ -83,10 +84,15 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
     level = prev.get("review_level", 0) if prev else 0
     prompt = force_prompt or s["fusion"]["prompt"]
     model = force_model or s["fusion"]["model"]
+    # e1 counts as content only for v3 (the prompt that shows it), binned to the people count; a minute without
+    # an eye record (no new frames) keeps the last count, so a settled picture is not a change.
+    eye_bin = None
+    if prompt == "v3" and s.get("sources", {}).get("vision", True):
+        eye_bin = (pkg["eye"]["result"].get("people_count") if pkg.get("eye") else (prev or {}).get("eye_bin"))
     base = {"source": None, "reason": None, "prompt": prompt, "model": model, "settings_version": settings_version,
             "run_id": None, "carried_from": None, "owner_state": strong["owner"]["state"],
             "coverage_sum": strong["coverage"]["hearing_s"] + strong["coverage"]["vision_s"],
-            "content_fp": content_fp(pkg, strong), "last_call_minute": prev.get("last_call_minute") if prev else None,
+            "content_fp": content_fp(pkg, strong, eye_bin), "eye_bin": eye_bin, "last_call_minute": prev.get("last_call_minute") if prev else None,
             "last_call_fp": prev.get("last_call_fp") if prev else None, "review_level": level,
             "last_call_prompt": (prev["last_call_prompt"] if "last_call_prompt" in prev else prev.get("prompt")) if prev else None,
             "scene": None, "checks": None, "package_version": package_version, "package_fingerprint": pkg.get("fingerprint")}
@@ -112,7 +118,7 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
     if forced:
         action, reason = "call", "rerun"
     else:
-        action, reason = ("call", "revised") if revise else decide(prev, pkg, strong, s, minute_ms, level)
+        action, reason = ("call", "revised") if revise else decide(prev, pkg, strong, s, minute_ms, level, base["content_fp"])
         state = store.state()
         if action == "call" and (state.get("fusion_backoff_until") or 0) >= now_ms:   # a 1-min backoff skips the next minute
             action, reason = "carry", "backoff"
