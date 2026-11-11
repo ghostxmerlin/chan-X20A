@@ -84,10 +84,10 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
     level = prev.get("review_level", 0) if prev else 0
     prompt = force_prompt or s["fusion"]["prompt"]
     model = force_model or s["fusion"]["model"]
-    # e1 counts as content only for v3 (the prompt that shows it), binned to the people count; a minute without
-    # an eye record (no new frames) keeps the last count, so a settled picture is not a change.
+    # e1 counts as content binned to the people count (not the eye wording); a minute without an eye record
+    # (no new frames) keeps the last count, so a settled picture is not a change.
     eye_bin = None
-    if prompt == "v3" and s.get("sources", {}).get("vision", True):
+    if s.get("sources", {}).get("vision", True):
         eye_bin = (pkg["eye"]["result"].get("people_count") if pkg.get("eye") else (prev or {}).get("eye_bin"))
     base = {"source": None, "reason": None, "prompt": prompt, "model": model, "settings_version": settings_version,
             "run_id": None, "carried_from": None, "owner_state": strong["owner"]["state"],

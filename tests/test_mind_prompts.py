@@ -32,24 +32,17 @@ class PromptsTest(unittest.TestCase):
         self.assertEqual(item["properties"]["dimension"]["enum"],
                          ["people", "activity", "sound_scene", "vision", "self", "time_place", "topic", "contradiction"])
         self.assertEqual(set(SCENE_SCHEMA["required"]), set(SCENE_SCHEMA["properties"]))
-        self.assertIn("v1", VERSIONS)
+        self.assertEqual(list(VERSIONS), ["v3"])
 
-    def test_system_prompt_has_the_discipline(self):
-        sys_text = render("v1", S, self.pkg, self.strong, None, [], {})[0]["content"]
-        for phrase in ("在证据范围内说出最可能的情况", "几句话不等于几个人", "活动不等于在说什么",
-                       "有语言以外的证据时必须引用", "规则算出的主人状态是底稿"):
-            self.assertIn(phrase, sys_text)
-
-    def test_v2_asks_for_positive_likely_statements(self):
-        sys_text = render("v2", S, self.pkg, self.strong, None, [], {})[0]["content"]
-        for phrase in ("用正向的话说出最可能的情况", "大概在桌前工作", "附近大概没人", "不要写否定式", "总共不超过 8 条",
+    def test_v3_asks_for_positive_likely_statements(self):
+        sys_text = render("v3", S, self.pkg, self.strong, None, [], {})[0]["content"]
+        for phrase in ("用正向的话说出最可能的情况", "大概在桌前工作", "附近大概没人", "不要写否定式", "总共不超过 6 条",
                        "规则算出的主人状态是底稿", "有语言以外的证据时必须引用",
                        "who_am_i 写 hello 自己", "有人说话时写 topic"):
             self.assertIn(phrase, sys_text)
-        self.assertEqual(render("v2", S, self.pkg, self.strong, None, [], {})[1], render("v1", S, self.pkg, self.strong, None, [], {})[1])
 
     def test_user_block_has_codes_rules_and_settings_card(self):
-        u = render("v1", S, self.pkg, self.strong, None, [], {})[1]["content"]
+        u = render("v3", S, self.pkg, self.strong, None, [], {})[1]["content"]
         for code in ("rule:owner", "rule:coverage", "rule:time", "rule:place", "rule:self", "s1", "a1", "v1"):
             self.assertIn(code, u)
         self.assertTrue(RULE_CODES >= {"rule:owner", "rule:coverage"})
@@ -60,31 +53,31 @@ class PromptsTest(unittest.TestCase):
 
     def test_owner_alias_used_in_the_prompt(self):
         s2 = copy.deepcopy(S); s2["owner"]["aliases"] = ["Dave"]
-        u = render("v1", s2, self.pkg, self.strong, None, [], {})[1]["content"]
+        u = render("v3", s2, self.pkg, self.strong, None, [], {})[1]["content"]
         self.assertIn("主人：Dave", u)
         self.assertIn("主人（Dave）", u)
 
     def test_reported_place_in_the_prompt(self):
         st = copy.deepcopy(self.strong); st["place"] = {"label": "办公室", "source": "owner_report", "at": T0 - 3600_000}
-        u = render("v1", S, self.pkg, st, None, [], {})[1]["content"]
+        u = render("v3", S, self.pkg, st, None, [], {})[1]["content"]
         self.assertIn("rule:place 地点：办公室（主人报告", u)
 
     def test_speech_text_off_hides_words(self):
         s2 = deep(S, sources={"speech_text": False})
-        u = render("v1", s2, self.pkg, self.strong, None, [], {})[1]["content"]
+        u = render("v3", s2, self.pkg, self.strong, None, [], {})[1]["content"]
         self.assertNotIn("今天下午开会", u)
         self.assertIn("s1", u)
 
     def test_previous_entries_marked_as_possibly_wrong_with_age(self):
         prev = {"minute": T0 - MIN, "scene": {"entries": [{"key": "activity.desk", "dimension": "activity", "text": "在桌前打字",
                                                             "confidence": "mid", "basis": "inferred", "last_evidence": T0 - 4 * MIN}]}}
-        u = render("v1", S, self.pkg, self.strong, prev, [], {})[1]["content"]
+        u = render("v3", S, self.pkg, self.strong, prev, [], {})[1]["content"]
         self.assertIn("上一分钟的判断，可能有错", u)
         self.assertIn("activity.desk", u)
         self.assertIn("4 分钟前", u)
 
     def test_segments_listed(self):
-        u = render("v1", S, self.pkg, self.strong, None, [{"start": T0 - 60 * MIN, "end": T0 - 10 * MIN, "cls": "present", "title": "午后在桌前"}], {})[1]["content"]
+        u = render("v3", S, self.pkg, self.strong, None, [{"start": T0 - 60 * MIN, "end": T0 - 10 * MIN, "cls": "present", "title": "午后在桌前"}], {})[1]["content"]
         self.assertIn("午后在桌前", u)
 
     def test_tingwu_only_duplicate_of_previous_minute_is_not_rendered(self):
@@ -92,8 +85,8 @@ class PromptsTest(unittest.TestCase):
         prev_pkg, _ = build([("speech", speech("S", "s-0", T0 - 30_000, text="上一句", pos=[57_600_000, 57_700_000]))], minute=T0 - MIN)
         pkg, st = build(DOCS + [("tingwu", tingwu("S", 7, T0 + 9000, "重复的听悟句", pos=[57_650_000, 57_720_000]))])
         self.assertTrue(any(x["text"] == "重复的听悟句" for x in pkg["tingwu_only"]))
-        self.assertNotIn("重复的听悟句", render("v1", S, pkg, st, None, [], {"prev": prev_pkg})[1]["content"])
-        self.assertIn("重复的听悟句", render("v1", S, pkg, st, None, [], {})[1]["content"])
+        self.assertNotIn("重复的听悟句", render("v3", S, pkg, st, None, [], {"prev": prev_pkg})[1]["content"])
+        self.assertIn("重复的听悟句", render("v3", S, pkg, st, None, [], {})[1]["content"])
 
     def with_eye(self):
         import copy
@@ -112,27 +105,23 @@ class PromptsTest(unittest.TestCase):
         self.assertNotRegex(u, r"\nv\d+ 脸：")
         self.assertIn("M12：", u)
 
-    def test_v3_without_eye_lists_faces_like_v2(self):
+    def test_without_eye_the_faces_are_listed(self):
         self.assertIsNone(self.pkg.get("eye"))
-        v3 = render("v3", S, self.pkg, self.strong, None, [], {})[1]["content"]
-        v2 = render("v2", S, self.pkg, self.strong, None, [], {})[1]["content"]
-        self.assertEqual(v3, v2)
+        u = render("v3", S, self.pkg, self.strong, None, [], {})[1]["content"]
+        self.assertRegex(u, r"\nv1 脸：")
+        self.assertNotIn("e1 ", u)
 
-    def test_v2_ignores_the_eye_result(self):
-        self.assertNotIn("e1", render("v2", S, self.with_eye(), self.strong, None, [], {})[1]["content"])
+    def test_only_v3_is_offered_and_default(self):
+        self.assertEqual(OFFERED, ["v3"])
+        self.assertEqual(settings.load(None)["fusion"]["prompt"], "v3")
 
-    def test_v3_is_offered_and_v2_stays_default(self):
-        self.assertEqual(OFFERED, ["v2", "v3"])
-        self.assertEqual(settings.load(None)["fusion"]["prompt"], "v2")
-
-    def test_v3_asks_for_short_output_and_2000_tokens(self):
+    def test_v3_asks_for_short_output_4000_tokens_low_effort(self):
         sys_text = render("v3", S, self.with_eye(), self.strong, None, [], {})[0]["content"]
         self.assertIn("e1", sys_text)
         self.assertIn("不超过 6 条", sys_text)
         # luna spends about half its output tokens reasoning (live 2026-11-11: 940 of 1739), so a 2000 cap
         # truncated v3; v3 keeps 4000 and asks for low reasoning effort instead
-        self.assertEqual((MAX_TOKENS["v2"], MAX_TOKENS["v3"]), (4000, 4000))
-        self.assertEqual((REASONING_EFFORT.get("v2"), REASONING_EFFORT["v3"]), (None, "low"))
+        self.assertEqual((MAX_TOKENS["v3"], REASONING_EFFORT["v3"]), (4000, "low"))
 
     def test_package_items_carry_pos(self):
         self.assertEqual(self.pkg["speech"][0]["pos"], [16000, 32000])

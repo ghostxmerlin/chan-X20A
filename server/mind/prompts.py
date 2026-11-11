@@ -27,41 +27,16 @@ SCENE_SCHEMA = {"type": "object", "additionalProperties": False,
                                "summary": {"type": "string"}, "want_to_know": {"type": "string"}}}
 RULE_CODES = {"rule:owner", "rule:coverage", "rule:time", "rule:place", "rule:self"}
 
-V1_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
-
-【任务纪律】
-- 情景要全面，按维度写：people 人（谁在、在哪、远近）、activity 在做什么、sound_scene 声音环境、vision 画面、self hello 自身和各感官的状态、time_place 时间地点、topic 话题、contradiction 矛盾。话题只是其中一项，活动不等于在说什么。
-- 在证据范围内说出最可能的情况，并标明把握；只有确实没有证据时才写“不知道”，同时写出要什么证据才能知道（want_to_know）。不要因为不完全确定就处处写“不明”。
-- 有语言以外的证据时必须引用：脸（v 代号）、声音事件（a 代号）、感官覆盖和规则（rule: 代号）。几句话不等于几个人，不能只凭几句话判断人数或活动。
-- 规则算出的主人状态是底稿（rule:owner），你不能改它；owner_view 写你自己的看法，与规则不同时另写一条 contradiction 说明为什么。
-
-【感官说明书（已知毛病）】
-- 麦克风增益开到最大，有持续的风扇嗡嗡声；远处的话常被转写错或漏掉。响度低的句子只能当“有人在说话”的证据，内容不可靠。
-- 声纹在办公室里多半认不出人；“不确定，最像某人”不等于就是那个人。
-- 两个转写（SenseVoice 和听悟）常给出不同的字；一致的部分可信，不一致的部分都存疑。
-- 人脸认出名字很快也比较稳；年龄、性别不稳，不要引用。
-- 脸消失 1.5 秒就算“离开画面”，低头、转身、hello 自己转头都会这样，不代表人走了。
-- 头会追着脸转，画面只是 hello 正看着的方向，画面外有没有人看不到，只能靠声音。
-- 感官关着的时候，“没看到、没听到”不是证据。
-- hello 自己会播台词；标为“hello 自己出的声”的不是别人说的话。
-
-【证据规则】
-- basis：seen 看到（本分钟的脸或画面）、heard 听到（本分钟的话或声音）、inferred 推断（从证据推出）、assumed 猜测（没有直接证据，按常理或上下文）。
-- confidence：high / mid / low。要把一条的把握调高，必须引用本分钟的新证据。
-- evidence 只写给出的代号：s 话、t 听悟、a 声音、v 脸、rule: 规则行。seen 和 heard 必须引用本分钟的 s/t/a/v 代号。
-
-【输出】
-- entries 里每条带稳定的 key（如 people.owner、people.others、activity.desk、sound_scene.room、self.senses、time_place.now、topic.1），op 表示相对上一分钟：keep 不变、update 改写、add 新增、end 结束。上一分钟的条目没变就写 keep，不要换个说法重写。
-- who_am_i / where_am_i / people_doing 各一两句，带把握。summary 不超过 20 个字，给时间轴用。changes 写这一分钟相对上一分钟变了什么（没变就留空）。"""
-
-V2_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
+# Only v3 is kept (2026-11-11, user: "有了v3，我们不必再管v2 v1了"); old runs keep their prompt name.
+# v3: positive, most-likely wording (v2) + the eye result e1 as the main visual evidence, shorter output.
+V3_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
 
 【怎么写】
 - 用正向的话说出最可能的情况，再用把握高低表示有多确定。例如：主人在画面里、又有打字声 → “主人大概在桌前工作（在打字）”，把握中；画面里没人、也没人说话 → “附近大概没人”，把握中；有人来回说话 → “旁边有人在聊天”；音乐声 → “有人在放音乐”。
 - 不要写否定式、免责式的句子，例如“无法确认……”“不能据此判断……”“画面外看不到……”“没有提供……”。感官的局限你心里有数就行，用把握的高低体现，不要写进条目。真正缺的关键信息只写进 want_to_know，一句话。
 - 证据弱就用“可能”“大概”，把握标 low；证据多、互相印证就标 high。
-- 情景要全面，按维度写：people 人（谁在、远近）、activity 在做什么、sound_scene 声音环境、vision 画面、self hello 自身、time_place 时间地点、topic 话题、contradiction 矛盾。话题只是其中一项，活动不等于在说什么；有语言以外的证据时必须引用（v 脸、a 声音事件、rule: 规则行）。几句话不等于几个人。
-- 条目要少而准：每个维度最多 1–2 条，总共不超过 8 条，没有内容的维度不写。self 只在感官关了、断了或 hello 自己出声时写；time_place 一条即可。
+- 情景要全面，按维度写：people 人（谁在、远近）、activity 在做什么、sound_scene 声音环境、vision 画面、self hello 自身、time_place 时间地点、topic 话题、contradiction 矛盾。话题只是其中一项，活动不等于在说什么；有语言以外的证据时必须引用（e 视觉识别、v 脸、a 声音事件、rule: 规则行）。几句话不等于几个人。
+- 条目要少而准：每个维度最多 1–2 条，总共不超过 6 条，每条不超过 40 字，没有内容的维度不写。self 只在感官关了、断了或 hello 自己出声时写；time_place 一条即可。
 - 规则算出的主人状态是底稿（rule:owner），你不能改它；owner_view 写你自己的看法，与规则不同时另写一条 contradiction。
 
 【感官的已知毛病（据此掂量把握，不要写进条目）】
@@ -73,37 +48,23 @@ V2_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟�
 - 感官关着的时候，“没看到、没听到”不是证据；标为“hello 自己出的声”的不是别人说话。
 
 【证据和输出】
-- basis：seen 看到 / heard 听到 / inferred 推断 / assumed 猜测；confidence：high / mid / low；要把把握调高，必须引用本分钟的新证据。evidence 只写给出的代号；seen、heard 必须引用本分钟的 s/t/a/v 代号。
+- basis：seen 看到 / heard 听到 / inferred 推断 / assumed 猜测；confidence：high / mid / low；要把把握调高，必须引用本分钟的新证据。evidence 只写给出的代号；seen、heard 必须引用本分钟的 s/t/a/v/e 代号。
 - entries 每条带稳定的 key（如 people.owner、people.others、activity.desk、sound_scene.room、time_place.now、topic.1），op 相对上一分钟：keep 不变、update 改写、add 新增、end 结束。没变就写 keep，不要换个说法重写。
 - who_am_i 写 hello 自己（我是谁、此刻感官怎样），不要写别人；where_am_i 写 hello 在哪；people_doing 写旁边的人在干什么。各一句正向陈述，带把握。
 - 有人说话时写 topic：两个转写里一致出现的词说明了最可能的话题，就写出来（把握可以是 low）；完全听不清时才不写。
-- summary 不超过 20 个字。changes 写这一分钟变了什么（没变留空）。"""
-
-def _v3(v2):
-    """v3 (plan 2026-11-11-mind-v3): the eye result e1 is the main visual evidence; shorter output."""
-    out = v2
-    for old, new in (("总共不超过 8 条", "总共不超过 6 条，每条不超过 40 字"),
-                     ("（v 脸、a 声音事件、rule: 规则行）", "（e 视觉识别、v 脸、a 声音事件、rule: 规则行）"),
-                     ("seen、heard 必须引用本分钟的 s/t/a/v 代号。", "seen、heard 必须引用本分钟的 s/t/a/v/e 代号。")):
-        assert old in out, old
-        out = out.replace(old, new, 1)
-    return out + """
+- summary 不超过 20 个字。changes 写这一分钟变了什么（没变留空）。
 
 【画面】
 - e1 是视觉识别：另一个模型看过这一分钟的画面后写的结果（几个人、谁、在哪、在做什么、环境）。画面以 e1 为主要依据：people、activity、vision 条目引用 e1，basis 可以是 seen；M12 的脸记录只用来补充名字。
 - e1 里“很可能是主人”的人，按主人在场来写，把握中。
 - 没有 e1 时，按脸记录（v 代号）来写。
 - who_am_i、where_am_i、people_doing 各一句，越短越好。"""
-
-
-V3_SYSTEM = _v3(V2_SYSTEM)
-VERSIONS = {"v1": {"system": V1_SYSTEM}, "v2": {"system": V2_SYSTEM}, "v3": {"system": V3_SYSTEM}}
-MAX_TOKENS = {"v1": 4000, "v2": 4000, "v3": 4000}
+VERSIONS = {"v3": {"system": V3_SYSTEM}}
+MAX_TOKENS = {"v3": 4000}
 # luna reasons before answering and the reasoning counts as output (live 2026-11-11: 940 of 1739 tokens);
 # v3 asks for low effort: 216 reasoning / 776 output tokens, complete answer, about 12.7 s.
 REASONING_EFFORT = {"v3": "low"}
-RETIRED = {"v1"}             # v1 (negative wording) is kept only so old runs stay readable; not offered
-OFFERED = sorted(set(VERSIONS) - RETIRED)
+OFFERED = sorted(VERSIONS)
 STATE_TEXT = {"seen": "看到主人", "just_left": "主人刚离开画面", "likely_present": "主人很可能在",
               "unknown": "不知道主人在不在", "likely_absent": "主人很可能不在", "sensors_off": "感官全关，无法判断"}
 
@@ -194,7 +155,7 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
         for g in pkg["sounds"]:
             loud = f"，最响 {g['max_loud_db']}" if g.get("max_loud_db") is not None else ""
             L.append(f"{','.join(g['codes'])} 声音事件：{g['label'] or g['kind']} × {g['count']}{loud}")
-    eye = pkg.get("eye") if version == "v3" else None
+    eye = pkg.get("eye")
     if src["vision"] and eye:
         r = eye["result"]
         who = "；".join("·".join(x for x in (p.get("who"), p.get("where"), p.get("doing")) if x) for p in r.get("people", []))
