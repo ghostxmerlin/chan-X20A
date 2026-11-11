@@ -137,9 +137,20 @@ class PromptsTest(unittest.TestCase):
         self.assertIn("环境：公司做指纹识别芯片；右边是冰箱和微波炉。", u)
         self.assertNotIn("环境：", render("v3", S, self.pkg, self.strong, None, [], {})[1]["content"])
 
+    def test_prompt_shows_c1_and_asks_topic_to_cite_it(self):
+        import copy
+        pkg = copy.deepcopy(self.pkg)
+        pkg["conv"] = {"code": "c1", "cid": "cX", "title": "板子地线", "notes": "两人讨论地线要接到机壳上。", "confidence": "mid",
+                       "start_ms": T0 - 3 * MIN, "end_ms": None, "continues": "cA", "continues_start_ms": T0 - 60 * MIN}
+        msgs = render("v3", S, pkg, self.strong, None, [], {})
+        self.assertIn("c1 对话纪要", msgs[1]["content"])
+        self.assertIn("板子地线：两人讨论地线要接到机壳上。", msgs[1]["content"])
+        self.assertIn("接续", msgs[1]["content"])
+        self.assertIn("c1", msgs[0]["content"])
+
     def test_package_items_carry_pos(self):
         self.assertEqual(self.pkg["speech"][0]["pos"], [16000, 32000])
-        self.assertEqual(package.BUILDER_VERSION, 4)          # 4: hello's own voice by clip text, not by overlap
+        self.assertEqual(package.BUILDER_VERSION, 5)          # 5: the conversation notes as c1
 
 
 if __name__ == "__main__":

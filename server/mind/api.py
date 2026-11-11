@@ -3,7 +3,7 @@
 mind tables (settings versions, labels/marks, rerun lane) — never raw records, never the live
 scenes. Sentence text only leaves through this API; nothing is logged.
 
-GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye
+GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes
 POST /settings /mark /label /rerun /place /switch /switches
 """
 import base64
@@ -101,7 +101,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 "today_cost_usd": round(sum(r["cost_usd"] for r in out if r["day"] == today), 6),
                 "today_calls": sum(r["calls"] for r in out if r["day"] == today)}
 
-    SWITCHES = ("tingwu", "eye")    # spec 2026-11-11 §3
+    SWITCHES = ("tingwu", "eye", "notes")    # spec 2026-11-11 §3
 
     def switches():
         now = int(time.time() * 1000)
@@ -188,6 +188,9 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if not doc:
                 raise NotFound("no eye result yet")
             return doc
+        if path == "/notes":
+            lo, hi = _range(q)
+            return list(db["conversations"].find({"start_ms": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("start_ms", 1).limit(500))
         if path == "/eye":
             lo, hi = _range(q)
             return list(db["eye_minutes"].find({"minute": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("minute", 1).limit(1440))

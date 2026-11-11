@@ -211,6 +211,21 @@ class ApiV1Test(unittest.TestCase):
             self.assertEqual(self.post_json("/settings", {"settings": old, "note": ""}).status, 400)
         self.assertEqual(settings.load(None)["fusion"]["prompt"], "v3")
 
+    def test_notes_switch_and_list_api(self):
+        try:
+            self.assertIs(self.post_json("/switches", {"name": "notes", "on": True}).json()["notes"]["on"], True)
+        finally:
+            self.post_json("/switches", {"name": "notes", "on": False})
+        coll = self.db["conversations"]
+        try:
+            coll.insert_one({"cid": "c1", "start_ms": T0, "last_ms": T0 + 1000, "end_ms": None, "title": "地线", "notes": "n", "version": 1})
+            coll.insert_one({"cid": "c0", "start_ms": T0 - 3600_000, "last_ms": T0 - 3500_000, "end_ms": T0 - 3500_000, "title": "早", "notes": "n", "version": 1})
+            rows = self.call(f"/notes?from={T0 - 60_000}&to={T0 + 60_000}").json()
+            self.assertEqual([r["cid"] for r in rows], ["c1"])
+            self.assertNotIn("_id", rows[0])
+        finally:
+            coll.docs[:] = []
+
     def test_place_report(self):
         self.assertEqual(self.post_json("/place", {"label": "办公室"}).status, 200)
         self.assertEqual(self.post_json("/place", {"label": ""}).status, 400)

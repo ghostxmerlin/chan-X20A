@@ -68,4 +68,9 @@ class Records:
             d["_wall"], d["_drift"] = int(d["at"]), None
         out["vision"] = vision
         out["eye"] = list(self.db["eye_minutes"].find({"minute": {"$gte": start_ms, "$lt": end_ms}}, {"_id": 0}))
+        # conversation notes (soul-notes): recent conversations, and the note versions written by this window's end + 30 s
+        convs = list(self.db["conversations"].find({"start_ms": {"$gte": end_ms - 12 * 3600_000, "$lt": end_ms}}, {"_id": 0}))
+        out["conversations"] = convs
+        out["conversation_versions"] = list(self.db["conversation_versions"].find(
+            {"cid": {"$in": [c["cid"] for c in convs]}, "at": {"$lte": end_ms + 30_000}}, {"_id": 0})) if convs else []
         return out

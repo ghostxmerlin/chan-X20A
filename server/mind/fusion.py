@@ -28,8 +28,10 @@ def content_fp(pkg, strong, eye_bin=None):
            (pkg.get("persons") or {}).get("seconds", 0) > 0,
            sorted([x["ref"].get("session"), x["ref"].get("id")] for x in pkg.get("speech", [])),
            bool(pkg.get("tingwu_only"))]
-    if eye_bin is not None:             # v3 only (the prompt that shows e1): people count, not the eye wording
+    if eye_bin is not None:             # people count, not the eye wording
         raw.append(["eye", eye_bin])
+    if pkg.get("conv"):                 # the notes version this minute saw (fixed once the minute is built)
+        raw.append(["conv", pkg["conv"]["cid"], pkg["conv"]["ref"].get("version")])
     return hashlib.sha1(json.dumps(raw, ensure_ascii=False).encode()).hexdigest()[:16]
 
 

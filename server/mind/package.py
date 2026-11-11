@@ -9,7 +9,7 @@ from collections import Counter
 
 from . import selfvoice
 
-BUILDER_VERSION = 4            # 2: pos; 3: the eye result as e1; 4: hello's own voice by clip text (selfvoice)
+BUILDER_VERSION = 5            # 2: pos; 3: eye e1; 4: hello's own voice by clip text; 5: conversation notes c1
 MINUTE_MS = 60_000
 STATUS_EVENTS = ("vision_on", "vision_off", "m12_online", "m12_offline")
 CLOSERS = {"m12_offline": "m12_offline", "vision_off": "vision_off"}
@@ -222,11 +222,29 @@ def build(window, minute_ms, s, lookback):
         ref = {"c": "eye", "minute": minute_ms, "version": d.get("version")}
         eye = {"code": code("e", 1, ref, {}), "ref": ref, "result": d["result"], "frames": len(d.get("frames") or [])}
 
+    conv = None
+    all_convs = window.get("conversations", [])
+    live = [c for c in all_convs if c["start_ms"] < end and (c.get("end_ms") is None or c["end_ms"] >= end - 5 * MINUTE_MS)]
+    for c in sorted(live, key=lambda c: -c["start_ms"]):
+        vs = [v for v in window.get("conversation_versions", []) if v.get("cid") == c["cid"] and v.get("at", 0) <= end + 30_000]
+        if not vs:
+            continue
+        v = max(vs, key=lambda v: v.get("version", 0))
+        if not (v.get("title") or v.get("notes")):
+            continue
+        ref = {"c": "conv", "cid": c["cid"], "version": v.get("version")}
+        prior = next((o for o in all_convs if o["cid"] == v.get("continues")), None) if v.get("continues") else None
+        conv = {"code": code("c", 1, ref, {}), "ref": ref, "cid": c["cid"], "title": v.get("title") or "",
+                "notes": v.get("notes") or "", "confidence": v.get("confidence"), "start_ms": c["start_ms"],
+                "end_ms": c["end_ms"] if c.get("end_ms") is not None and c["end_ms"] < end else None,
+                "continues": v.get("continues") or "", "continues_start_ms": prior["start_ms"] if prior else None}
+        break
+
     refs = sorted(json.dumps(r, sort_keys=True, ensure_ascii=False) for r in codes.values())
     face_keys = sorted((f["face"], f["name"] or "", f["from"], f["to"]) for f in faces)
     digest = hashlib.sha1(json.dumps([refs, face_keys, BUILDER_VERSION], ensure_ascii=False).encode()).hexdigest()
     return {"minute": minute_ms, "builder": BUILDER_VERSION, "speech": speech, "tingwu_only": tingwu_only,
-            "self_speech": self_speech, "sounds": sounds, "faces": faces, "eye": eye,
+            "self_speech": self_speech, "sounds": sounds, "faces": faces, "eye": eye, "conv": conv,
             "persons": {"seconds": round(person_ms / 1000), "ids": len({p["person"] for p in persons})},
             "unknown_faces": sum(1 for f in faces if not f["name"]), "events": events, "codes": codes,
             "warnings": warnings, "fingerprint": digest[:16]}

@@ -58,7 +58,12 @@ V3_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟�
 - e1 是视觉识别：另一个模型看过这一分钟的画面后写的结果（几个人、谁、在哪、在做什么、环境）。画面以 e1 为主要依据：people、activity、vision 条目引用 e1，basis 可以是 seen；M12 的脸记录只用来补充名字。
 - e1 里“很可能是主人”的人，按主人在场来写，把握中。
 - 没有 e1 时，按脸记录（v 代号）来写。
-- who_am_i、where_am_i、people_doing 各一句，越短越好。"""
+- who_am_i、where_am_i、people_doing 各一句，越短越好。
+
+【对话】
+- c1 是听觉笔记写的当前对话纪要：它跟着整段对话（可能已经好几分钟，可能接续了今天前面的讨论），比这一分钟零散的几句话可靠。
+- 话题（topic）以 c1 为依据并引用 c1，写成具体的一句：谁在谈什么、说到了什么；people_doing 也可以引用它。
+- 没有 c1 时，按本分钟的话写话题。"""
 VERSIONS = {"v3": {"system": V3_SYSTEM}}
 MAX_TOKENS = {"v3": 4000}
 # luna reasons before answering and the reasoning counts as output (live 2026-11-11: 940 of 1739 tokens);
@@ -173,6 +178,12 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
             to = "仍在画面里" if f["open"] else f"{_hhmmss(f['to'], tz)} 离开画面"
             L.append(f"{f['code']} 脸：{name}，{_hhmmss(f['from'], tz)} 起，{to}")
         L.append(f"人形检测：本分钟 {pkg['persons']['seconds']} 秒，{pkg['persons']['ids']} 个编号")
+    conv = pkg.get("conv")
+    if conv and src["speech_text"]:
+        state = "已结束" if conv.get("end_ms") else "进行中"
+        cont = f"，接续 {_hhmm(conv['continues_start_ms'], tz)} 的讨论" if conv.get("continues_start_ms") else ""
+        L.append(f"{conv['code']} 对话纪要（{_hhmm(conv['start_ms'], tz)} 起，{state}{cont}）："
+                 f"{conv.get('title') or '（无标题）'}：{conv.get('notes') or ''}（把握 {conv.get('confidence') or 'low'}）")
     for c in st.get("contradictions", []):
         L.append(f"规则发现的矛盾：{c['kind']}（{','.join(c['codes'])}）")
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(L)}]

@@ -60,7 +60,7 @@ class PackageTest(unittest.TestCase):
         tw["self"] = {"sounding": True, "moving": False}
         p = build_minute([("tingwu", tw), ("tingwu", tingwu("S", 2, T0 + 9000, "地线要接到机壳上"))])
         self.assertEqual([t["text"] for t in p["tingwu_only"]], ["地线要接到机壳上"])
-        self.assertEqual(p["builder"], 4)
+        self.assertEqual(p["builder"], 5)
 
     def test_tingwu_attaches_by_pos_overlap_else_alone(self):
         at1, pos1 = at_pos(2000, 3000)
@@ -140,7 +140,7 @@ class PackageTest(unittest.TestCase):
         pkg = build_minute([self.eye_doc(1, activity="旧"), self.eye_doc(2, activity="新")])
         self.assertEqual((pkg["eye"]["code"], pkg["eye"]["result"]["activity"], pkg["eye"]["frames"]), ("e1", "新", 2))
         self.assertEqual(pkg["codes"]["e1"], {"c": "eye", "minute": T0, "version": 2})
-        self.assertEqual(pkg["builder"], 4)
+        self.assertEqual(pkg["builder"], 5)
 
     def test_failed_eye_is_not_e1(self):
         for src in ("failed", "budget", "backoff"):
@@ -150,6 +150,34 @@ class PackageTest(unittest.TestCase):
 
     def test_eye_changes_the_fingerprint(self):
         self.assertNotEqual(build_minute([])["fingerprint"], build_minute([self.eye_doc(1)])["fingerprint"])
+
+    def conv_docs(self, start, end, versions):
+        docs = [("conversations", {"cid": "cX", "start_ms": start, "last_ms": end or start, "end_ms": end, "title": "x",
+                                   "notes": "x", "version": len(versions), "continues": ""})]
+        for i, (at, title) in enumerate(versions, 1):
+            docs.append(("conversation_versions", {"cid": "cX", "version": i, "title": title, "notes": (title + "的纪要") if title else "",
+                                                   "confidence": "mid", "continues": "", "at": at}))
+        return docs
+
+    def test_package_carries_the_current_conversation_as_c1(self):
+        pkg = build_minute(self.conv_docs(T0 - 3 * 60_000, None, [(T0 - 60_000, "板子地线")]))
+        self.assertEqual((pkg["conv"]["code"], pkg["conv"]["title"], pkg["conv"]["notes"]), ("c1", "板子地线", "板子地线的纪要"))
+        self.assertEqual(pkg["codes"]["c1"], {"c": "conv", "cid": "cX", "version": 1})
+        self.assertEqual(pkg["builder"], 5)
+
+    def test_a_minute_uses_the_notes_written_by_its_end(self):
+        pkg = build_minute(self.conv_docs(T0 - 3 * 60_000, None, [(T0 + 20_000, "早"), (T0 + 60_000 + 25_000, "末"),
+                                                                  (T0 + 5 * 60_000, "以后")]))
+        self.assertEqual(pkg["conv"]["title"], "末")
+
+    def test_closed_more_than_5_minutes_ago_is_not_c1(self):
+        pkg = build_minute(self.conv_docs(T0 - 20 * 60_000, T0 - 5 * 60_000 + 60_000 - 1, [(T0 - 10 * 60_000, "旧")]))
+        self.assertIsNone(pkg["conv"])
+        recent = build_minute(self.conv_docs(T0 - 20 * 60_000, T0 - 60_000, [(T0 - 10 * 60_000, "近")]))
+        self.assertEqual(recent["conv"]["title"], "近")
+
+    def test_conversation_without_notes_is_not_c1(self):
+        self.assertIsNone(build_minute(self.conv_docs(T0 - 60_000, None, [(T0, "")]))["conv"])
 
     def test_fingerprint_stable_and_sensitive(self):
         recs = [sp(1000, "s-1"), sp(2000, "s-2")]
