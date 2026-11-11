@@ -115,7 +115,12 @@ class ApiV1Test(unittest.TestCase):
         fusion.run_minute({"base_url": "x", "api_key": "k"}, cls.store, s, 0, T0, doc["package"], doc["strong"], {}, now_ms=T0 + 2 * MIN)
         cls.settings_store = SettingsStore(db, "/nonexistent.json")
         cls.recordings = __import__("tempfile").TemporaryDirectory()
-        ctx = {"env": {"base_url": "x", "api_key": "k"}, "settings_store": cls.settings_store, "recordings_root": cls.recordings.name}
+        from test_mind_speak import FakeTts
+        cls.tts = FakeTts(connected=False)
+        from mind import speak
+        speak.CHAT = cls.fake
+        ctx = {"env": {"base_url": "x", "api_key": "k"}, "settings_store": cls.settings_store, "recordings_root": cls.recordings.name,
+               "tts": cls.tts, "roles_dir": str(Path(__file__).resolve().parents[1] / "config" / "roles")}
         cls.server = api.make_server(cls.store, "k", "127.0.0.1", 0, ctx)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -225,6 +230,23 @@ class ApiV1Test(unittest.TestCase):
             self.assertNotIn("_id", rows[0])
         finally:
             coll.docs[:] = []
+
+    def test_roles_say_and_utterances(self):
+        roles = self.call("/roles").json()
+        self.assertEqual(sorted(r["id"] for r in roles), ["comfort", "roast"])
+        self.assertEqual(self.post_json("/say", {"role": "roast"}).status, 409)      # mouth not connected
+        self.assertEqual(self.post_json("/say", {"role": "nope"}).status, 400)
+        self.tts.connected = True
+        try:
+            self.fake.reply_next(json.dumps({"text": "这板子焊得，比我的发型还有个性。"}, ensure_ascii=False))
+            r = self.post_json("/say", {"role": "roast"})
+            self.assertEqual((r.status, r.json()["text"]), (200, "这板子焊得，比我的发型还有个性。"))
+        finally:
+            self.tts.connected = False
+        now = int(__import__("time").time() * 1000)
+        rows = self.call(f"/utterances?from={now - 60_000}&to={now + 60_000}").json()
+        self.assertEqual(rows[-1]["role"], "roast")
+        self.assertEqual(self.post_json("/say/stop", {}).status, 200)
 
     def test_place_report(self):
         self.assertEqual(self.post_json("/place", {"label": "办公室"}).status, 200)

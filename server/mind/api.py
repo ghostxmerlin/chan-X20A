@@ -3,8 +3,8 @@
 mind tables (settings versions, labels/marks, rerun lane) — never raw records, never the live
 scenes. Sentence text only leaves through this API; nothing is logged.
 
-GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes
-POST /settings /mark /label /rerun /place /switch /switches
+GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes /roles /utterances
+POST /settings /mark /label /rerun /place /switch /switches /say /say/stop
 """
 import base64
 import hmac
@@ -14,7 +14,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from . import fusion, prompts, segments, settings as settings_mod
+from . import fusion, prompts, segments, settings as settings_mod, speak
 from .settings_store import MODELS
 from .store import LANE
 
@@ -189,6 +189,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if not doc:
                 raise NotFound("no eye result yet")
             return doc
+        if path == "/roles":
+            return [{k: r.get(k) for k in ("id", "button", "name", "voice")} for r in speak.load_roles(ctx.get("roles_dir") or "").values()]
+        if path == "/utterances":
+            lo, hi = _range(q)
+            return list(db["utterances"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0, "context": 0}).sort("at", 1).limit(200))
         if path == "/notes":
             lo, hi = _range(q)
             return list(db["conversations"].find({"start_ms": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("start_ms", 1).limit(500))
@@ -210,6 +215,22 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 return {"version": ss.save(body.get("settings"), _str(body.get("note"), 200))}
             except ValueError as e:
                 raise BadRequest(str(e)) from None
+        if path == "/say":
+            tts = ctx.get("tts")
+            if not tts or not ctx.get("env"):
+                raise Conflict("soul-tts or model access not configured")
+            roles = speak.load_roles(ctx.get("roles_dir") or "")
+            if body.get("role") not in roles:
+                raise BadRequest(f"role must be one of {', '.join(sorted(roles))}")
+            s, _ = current_settings()
+            try:
+                rec = speak.say(ctx["env"], store, s, roles, body["role"], tts, now)
+            except speak.NotConnected as e:
+                raise Conflict(str(e)) from None
+            return {k: v for k, v in rec.items() if k != "context"}
+        if path == "/say/stop":
+            tts = ctx.get("tts")
+            return {"cancelled": tts.stop() if tts else []}
         if path == "/switches":
             if body.get("name") not in SWITCHES or not isinstance(body.get("on"), bool):
                 raise BadRequest(f"name ({'/'.join(SWITCHES)}) and on (true/false) required")
@@ -310,7 +331,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches"):
+            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop"):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:

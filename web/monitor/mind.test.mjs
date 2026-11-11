@@ -88,6 +88,10 @@ test('proxy forwards whitelisted POSTs with the token and rejects others', async
  assert.equal((await proxy.get('/eye/latest')).status,200);
  assert.equal((await proxy.get('/eye?from=1&to=2')).status,200);
  assert.equal((await proxy.get('/notes?from=1&to=2')).status,200);
+ assert.equal((await proxy.get('/roles')).status,200);
+ assert.equal((await proxy.get('/utterances?from=1&to=2')).status,200);
+ assert.equal((await proxy.post('/say','{"role":"roast"}')).status,200);
+ assert.equal((await proxy.post('/say/stop','{}')).status,200);
  assert.equal((await proxy.post('/switches','{"name":"eye","on":true}')).status,200);
  assert.equal((await proxy.post('/mark','x'.repeat(16385))).status,413);
  assert.equal((await proxy.get('/scene?t=5&lane=rerun')).status,200);

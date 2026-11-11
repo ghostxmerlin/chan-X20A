@@ -11,7 +11,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 
-from . import fusion, package, segments, selfvoice, settings, strong
+from . import fusion, package, segments, selfvoice, settings, speak, strong
 from .records import Records
 from .settings_store import SettingsStore
 from .store import LANE, Store
@@ -129,6 +129,8 @@ def main():
     ap.add_argument("--rebuild", nargs=2, metavar=("FROM", "TO"))
     ap.add_argument("--fusion", action="store_true", help="with --rebuild: also run the model over the range")
     ap.add_argument("--catch-up-max-hours", type=float, default=48)
+    ap.add_argument("--roles", default=os.path.expanduser("~/soul-mind/roles"), help="hello's speaking roles (config/roles)")
+    ap.add_argument("--tts-url", default="http://127.0.0.1:52750", help="soul-tts API on the loopback")
     ap.add_argument("--clip-texts", default=os.path.expanduser("~/soul-mind/clip_texts.json"),
                     help="hello's voice clip texts (selfvoice); missing: nothing is treated as her voice")
     ap.add_argument("--recordings", default=os.path.expanduser("~/soul-spike/recordings"),
@@ -163,12 +165,14 @@ def main():
     from . import api
     threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port,
                                              {"env": env, "settings_store": settings_store,
-                                                                         "recordings_root": a.recordings}), daemon=True).start()
+                                                                         "recordings_root": a.recordings, "roles_dir": a.roles,
+                                                                         "tts": speak.TtsHttp(a.tts_url, token) if token else None}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}", flush=True)
     while True:
         try:
             good, version = settings_store.current()      # settings are versioned in the database (phase 1)
+            selfvoice.refresh_spoken(db, int(time.time() * 1000))   # hello's own lines count as her voice
             store.set_state(settings_version=version)
             n = tick(records, store, good, int(time.time() * 1000), int(a.catch_up_max_hours * 3600_000), env, version)
             if n:

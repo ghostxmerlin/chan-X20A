@@ -37,11 +37,28 @@ def load(path):
     return len(clips)
 
 
+SPOKEN = []                 # [(None, normalized text)] of what hello said through soul-tts in the last hour
+SPOKEN_KEEP_MS = 3600_000
+
+
+def set_spoken(texts):
+    global SPOKEN
+    SPOKEN = [(None, _norm(t)) for t in texts if len(_norm(t)) >= MIN_OVERLAP]
+
+
+def refresh_spoken(db, now_ms):
+    """Reload hello's own spoken lines (hello.utterances, last hour); errors keep the old list."""
+    try:
+        set_spoken([u.get("text", "") for u in db["utterances"].find({"at": {"$gte": now_ms - SPOKEN_KEEP_MS}}, {"text": 1})])
+    except Exception:                    # noqa: BLE001
+        pass
+
+
 def is_hello(text, overlapped):
     n = _norm(text)
     if len(n) < (MIN_OVERLAP if overlapped else MIN_ECHO):
         return False
-    for _, t in CLIPS:
+    for _, t in CLIPS + SPOKEN:
         if (t in n or n in t) and min(len(n), len(t)) >= MIN_OVERLAP:
             return True
         if difflib.SequenceMatcher(None, n, t).ratio() >= RATIO:

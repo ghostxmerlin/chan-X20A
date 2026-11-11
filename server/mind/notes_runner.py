@@ -153,6 +153,7 @@ def main():
                 write_status(db, on and env is not None, env is not None, int(time.time() * 1000))
                 last_status = time.monotonic()
             s, _ = settings_store.current()
+            selfvoice.refresh_spoken(db, int(time.time() * 1000))
             n = tick(db, store, records, s, env, int(time.time() * 1000))
             if n:
                 print(f"notes: {n} update(s)", flush=True)
