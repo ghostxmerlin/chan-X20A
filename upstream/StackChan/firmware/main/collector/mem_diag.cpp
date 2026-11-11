@@ -22,6 +22,7 @@
 #include <freertos/semphr.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/idf_additions.h>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -38,10 +39,11 @@ std::atomic<uint32_t> ping_ok{0}, ping_timeout{0}, ping_last_ms{0};
 esp_ping_handle_t ping_session = nullptr;
 uint32_t previous_runtime[kMaxTasks]; char previous_names[kMaxTasks][configMAX_TASK_NAME_LEN];
 // CPU sampler for telemetry (0.4.79): top tasks by run time over each 5 s window.
-struct CpuRow { char name[configMAX_TASK_NAME_LEN]; uint8_t prio; uint16_t permille; bool psram; };
+struct CpuRow { char name[configMAX_TASK_NAME_LEN]; uint8_t prio; uint16_t permille; bool psram; int8_t core; };
 constexpr size_t kCpuRows = 10;
 CpuRow cpu_rows[kCpuRows]; size_t cpu_n = 0; portMUX_TYPE cpu_lock = portMUX_INITIALIZER_UNLOCKED;
-uint32_t cpu_prev[kMaxTasks]; char cpu_prev_names[kMaxTasks][configMAX_TASK_NAME_LEN]; int64_t cpu_prev_us = 0;
+// Matched by task handle: two tasks share the name "httpd" (main and audio servers).
+uint32_t cpu_prev[kMaxTasks]; TaskHandle_t cpu_prev_handles[kMaxTasks]; int64_t cpu_prev_us = 0;
 
 void sample_cpu()
 {
@@ -53,12 +55,14 @@ void sample_cpu()
     size_t m = 0;
     for (UBaseType_t i = 0; i < n && cpu_prev_us; ++i) {
         uint32_t before = tasks[i].ulRunTimeCounter;           // a new task: no history, counts 0
-        for (uint32_t k = 0; k < kMaxTasks; ++k) if (!strncmp(cpu_prev_names[k], tasks[i].pcTaskName, configMAX_TASK_NAME_LEN)) { before = cpu_prev[k]; break; }
+        for (uint32_t k = 0; k < kMaxTasks; ++k) if (cpu_prev_handles[k] == tasks[i].xHandle) { before = cpu_prev[k]; break; }
         CpuRow r{};
         strncpy(r.name, tasks[i].pcTaskName, configMAX_TASK_NAME_LEN - 1);
         r.prio = static_cast<uint8_t>(tasks[i].uxCurrentPriority);
         r.permille = static_cast<uint16_t>(std::min<int64_t>(1000, window > 0 ? int64_t(tasks[i].ulRunTimeCounter - before) * 1000 / window : 0));
         r.psram = esp_ptr_external_ram(tasks[i].pxStackBase);
+        const BaseType_t core = xTaskGetCoreID(tasks[i].xHandle);
+        r.core = core == tskNO_AFFINITY ? -1 : static_cast<int8_t>(core);
         rows[m++] = r;
     }
     std::sort(rows, rows + m, [](const CpuRow& a, const CpuRow& b) { return a.permille > b.permille; });
@@ -66,7 +70,7 @@ void sample_cpu()
     cpu_n = std::min(m, kCpuRows); std::copy(rows, rows + cpu_n, cpu_rows);
     portEXIT_CRITICAL(&cpu_lock);
     for (UBaseType_t i = 0; i < n && i < kMaxTasks; ++i) {
-        strncpy(cpu_prev_names[i], tasks[i].pcTaskName, configMAX_TASK_NAME_LEN); cpu_prev[i] = tasks[i].ulRunTimeCounter;
+        cpu_prev_handles[i] = tasks[i].xHandle; cpu_prev[i] = tasks[i].ulRunTimeCounter;
     }
     cpu_prev_us = now;
 }
@@ -200,7 +204,7 @@ void mem_diag_cpu_json(ArduinoJson::JsonArray out)
     portENTER_CRITICAL(&cpu_lock); n = cpu_n; std::copy(cpu_rows, cpu_rows + n, rows); portEXIT_CRITICAL(&cpu_lock);
     for (size_t i = 0; i < n; ++i) {
         auto o = out.add<ArduinoJson::JsonObject>();
-        o["name"] = rows[i].name; o["prio"] = rows[i].prio; o["core_pct"] = rows[i].permille / 10.0; o["stack"] = rows[i].psram ? "psram" : "internal";
+        o["name"] = rows[i].name; o["prio"] = rows[i].prio; o["core"] = rows[i].core; o["core_pct"] = rows[i].permille / 10.0; o["stack"] = rows[i].psram ? "psram" : "internal";
     }
 }
 

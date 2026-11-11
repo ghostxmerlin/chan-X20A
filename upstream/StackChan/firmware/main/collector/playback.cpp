@@ -278,7 +278,7 @@ PcmQueue* pcm_queue = nullptr;
 struct StreamStats {
     uint32_t sessions = 0, streams = 0, frames = 0, decode_errors = 0, underruns = 0, gate_timeouts = 0, amp_errors = 0;
     uint32_t decode_us_max = 0, decode_us_avg = 0, decodes = 0, decodes_over_60ms = 0, decoder_late = 0;
-    uint32_t decode_cpu_us_avg = 0, decode_cpu_us_max = 0;
+    uint32_t decode_cpu_us_avg = 0, decode_cpu_us_max = 0, amp_retries = 0;
     const char* amp_failed_step = "";
     uint32_t decoder_stack_free = 0, writer_stack_free = 0;
     bool decoder_ok = false;
@@ -453,7 +453,13 @@ void stream_worker(void*)
             source = "mouth_stream"; state = "starting"; error_code = cleanup_error = 0; error_stage = "none";
             expected_bytes = received_bytes = submitted_bytes = 0;
         }
-        const auto err = amp_begin(codec);
+        auto err = amp_begin(codec);
+        if (err != ESP_OK) {          // one retry from a clean reset (0.4.78 saw an I2C timeout, 263)
+            { std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.amp_retries; stream_stats.amp_failed_step = amp_step; }
+            amp_finish(codec);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            err = amp_begin(codec);
+        }
         if (err == ESP_OK) stream_session(codec, pcm, zeros);
         else {
             stream_report(mouth::Report::Error, pv.stream, 0, 0, 0, 0, "speaker_start");
@@ -510,10 +516,12 @@ void playback_init() {
     playback_queue=xQueueCreateStatic(1,sizeof(Job*),reinterpret_cast<uint8_t*>(playback_slot),&playback_queue_control);
     if(playback_queue&&xTaskCreateStatic(playback_worker,"collector_playback",kPlaybackStackBytes,nullptr,3,playback_stack,&playback_worker_control)) {
         // /mouth player: I2S/I2C and Opus work only, no flash access, so both stacks are in PSRAM.
-        // The writer runs above the ear worker (4) so the speaker never waits; the decoder below it.
+        // Writer and decoder both at 6: above httpd (5), the ear's encoder (4), LVGL/eyes (3) and the
+        // camera (2), below mic capture (7). On 0.4.78/79 the decoder at 3 needed 12 ms of CPU per 60 ms
+        // frame but waited up to 244 ms to get it; at ~20 % of one core it cannot starve the others.
         auto* store=static_cast<int16_t*>(heap_caps_malloc(kPcmFrames*kStreamFrame*sizeof(int16_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
         if(store)pcm_queue=new (std::nothrow) PcmQueue(store);
-        if(!pcm_queue||create_psram_task(decoder_worker,"mouth_dec",kDecoderStackBytes,nullptr,3)!=pdPASS||
+        if(!pcm_queue||create_psram_task(decoder_worker,"mouth_dec",kDecoderStackBytes,nullptr,6)!=pdPASS||
            create_psram_task(stream_worker,"mouth_play",kWriterStackBytes,nullptr,6)!=pdPASS)ESP_LOGE(kTag,"stream player tasks failed");
         return;
     }
@@ -726,7 +734,7 @@ void playback_json(ArduinoJson::JsonObject target)
     st["gate_timeouts"] = stream_stats.gate_timeouts; st["amp_errors"] = stream_stats.amp_errors;
     st["decode_us_max"] = stream_stats.decode_us_max; st["decode_us_avg"] = stream_stats.decode_us_avg;
     st["decode_cpu_us_avg"] = stream_stats.decode_cpu_us_avg; st["decode_cpu_us_max"] = stream_stats.decode_cpu_us_max;
-    st["amp_failed_step"] = stream_stats.amp_failed_step;
+    st["amp_failed_step"] = stream_stats.amp_failed_step; st["amp_retries"] = stream_stats.amp_retries;
     st["decodes"] = stream_stats.decodes; st["decodes_over_60ms"] = stream_stats.decodes_over_60ms; st["decoder_late"] = stream_stats.decoder_late;
     st["decoder_stack_free_bytes"] = stream_stats.decoder_stack_free; st["writer_stack_free_bytes"] = stream_stats.writer_stack_free;
     const int reset = hal_bridge::board_speaker_reset_state();

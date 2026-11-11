@@ -3,6 +3,9 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { M12Tracker } from './m12.mjs';
 import { M12System } from './m12-system.mjs';
+// One telemetry + frame poll per second (2026-11-11): at 4/s the robot's httpd took 70-100 % of a core
+// and starved the /mouth Opus decoder (own CPU 12 ms per 60 ms frame, wall time up to 244 ms).
+export const POLL_MS = 1000;
 
 export function validateBinding(value) {
   const url = new URL(value.address);
@@ -358,7 +361,7 @@ export class Monitor extends EventEmitter {
       }
       if (epoch !== this.epoch) break;
       this.emit('state', this.snapshot());
-      await sleep(this.online ? Math.max(20, 250 - (Date.now() - began)) : 1500);
+      await sleep(this.online ? Math.max(20, POLL_MS - (Date.now() - began)) : 1500);
     }
   }
 }
