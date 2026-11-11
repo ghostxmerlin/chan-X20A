@@ -67,4 +67,5 @@ class Records:
         for d in vision:
             d["_wall"], d["_drift"] = int(d["at"]), None
         out["vision"] = vision
+        out["eye"] = list(self.db["eye_minutes"].find({"minute": {"$gte": start_ms, "$lt": end_ms}}, {"_id": 0}))
         return out

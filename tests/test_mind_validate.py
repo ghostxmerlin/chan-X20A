@@ -74,6 +74,13 @@ class ValidateTest(unittest.TestCase):
         _, c2 = apply(out([entry("activity.a", dimension="activity", evidence=["s1"])]), [], PKG, STRONG, T)
         self.assertEqual(c2["language_only"], 0.0)          # no non-speech evidence existed this minute
 
+    def test_e_code_is_non_language_evidence(self):
+        pkg_e = {**PKG, "codes": {**PKG["codes"], "e1": {"c": "eye"}}}
+        _, c = apply(out([entry("activity.a", dimension="activity", evidence=["s1"])]), [], pkg_e, STRONG, T)
+        self.assertEqual(c["language_only"], 1.0)           # the eye result existed, the entry cited only speech
+        scene, c2 = apply(out([entry("activity.a", dimension="activity", basis="seen", evidence=["e1"])]), [], pkg_e, STRONG, T)
+        self.assertEqual((c2["language_only"], scene["entries"][0]["basis"]), (0.0, "seen"))
+
     def test_since_and_last_evidence(self):
         scene, _ = apply(out([entry("people.owner", op="update", evidence=["rule:owner"])]),
                          [prev("people.owner", since=T - 600_000, last_evidence=T - 300_000)], PKG, STRONG, T)

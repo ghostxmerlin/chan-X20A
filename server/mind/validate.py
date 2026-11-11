@@ -72,7 +72,7 @@ def apply(out, prev_entries, pkg, strong, minute_ms):
 
     if merged:
         checks["negative_ratio"] = round(sum(1 for e in merged if any(w in e.get("text", "") for w in NEGATIVE)) / len(merged), 3)
-    has_other = any(c[0] in "av" for c in pkg.get("codes", {}))
+    has_other = any(c[0] in "ave" for c in pkg.get("codes", {}))     # e1: the eye result
     judged = [e for e in merged if e.get("dimension") in ("people", "activity")]
     if has_other and judged:
         only_lang = sum(1 for e in judged if e["evidence"] and all(c[0] in "st" and not c.startswith("rule:") for c in e["evidence"]))

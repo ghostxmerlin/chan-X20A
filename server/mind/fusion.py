@@ -27,7 +27,8 @@ def content_fp(pkg, strong):
            sorted({g.get("kind") for g in pkg.get("sounds", [])}),
            (pkg.get("persons") or {}).get("seconds", 0) > 0,
            sorted([x["ref"].get("session"), x["ref"].get("id")] for x in pkg.get("speech", [])),
-           bool(pkg.get("tingwu_only"))]
+           bool(pkg.get("tingwu_only")),
+           [(pkg["eye"]["result"].get("people_count"), pkg["eye"]["result"].get("activity"))] if pkg.get("eye") else None]
     return hashlib.sha1(json.dumps(raw, ensure_ascii=False).encode()).hexdigest()[:16]
 
 

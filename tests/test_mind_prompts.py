@@ -96,7 +96,7 @@ class PromptsTest(unittest.TestCase):
 
     def test_package_items_carry_pos(self):
         self.assertEqual(self.pkg["speech"][0]["pos"], [16000, 32000])
-        self.assertEqual(package.BUILDER_VERSION, 2)
+        self.assertEqual(package.BUILDER_VERSION, 3)          # 3: the eye result as e1
 
 
 if __name__ == "__main__":

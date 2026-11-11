@@ -112,6 +112,26 @@ class PackageTest(unittest.TestCase):
         p = build_minute([("speech", speech("S", "s-1", at + 9000, pos=pos))])
         self.assertEqual(p["warnings"], [{"kind": "drift", "code": "s1", "seconds": 9.0}])
 
+    def eye_doc(self, version, source="model", activity="主人在桌前"):
+        return ("eye_minutes", {"minute": T0, "version": version, "source": source, "frames": [{"seq": 1}, {"seq": 2}],
+                                "result": {"people_count": 1, "people": [{"who": "主人", "where": "桌前", "doing": "打字"}],
+                                           "activity": activity, "scene": "办公室", "changes": "", "confidence": "high"}})
+
+    def test_eye_result_becomes_e1(self):
+        pkg = build_minute([self.eye_doc(1, activity="旧"), self.eye_doc(2, activity="新")])
+        self.assertEqual((pkg["eye"]["code"], pkg["eye"]["result"]["activity"], pkg["eye"]["frames"]), ("e1", "新", 2))
+        self.assertEqual(pkg["codes"]["e1"], {"c": "eye", "minute": T0, "version": 2})
+        self.assertEqual(pkg["builder"], 3)
+
+    def test_failed_eye_is_not_e1(self):
+        for src in ("failed", "budget", "backoff"):
+            pkg = build_minute([self.eye_doc(1, source=src)])
+            self.assertIsNone(pkg["eye"], src)
+            self.assertNotIn("e1", pkg["codes"])
+
+    def test_eye_changes_the_fingerprint(self):
+        self.assertNotEqual(build_minute([])["fingerprint"], build_minute([self.eye_doc(1)])["fingerprint"])
+
     def test_fingerprint_stable_and_sensitive(self):
         recs = [sp(1000, "s-1"), sp(2000, "s-2")]
         self.assertEqual(build_minute(recs)["fingerprint"], build_minute(list(reversed(recs)))["fingerprint"])

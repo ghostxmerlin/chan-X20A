@@ -7,7 +7,7 @@ import hashlib
 import json
 from collections import Counter
 
-BUILDER_VERSION = 2            # 2: speech / tingwu items carry pos
+BUILDER_VERSION = 3            # 2: speech / tingwu items carry pos; 3: the eye result as e1
 MINUTE_MS = 60_000
 STATUS_EVENTS = ("vision_on", "vision_off", "m12_online", "m12_offline")
 CLOSERS = {"m12_offline": "m12_offline", "vision_off": "vision_off"}
@@ -206,11 +206,18 @@ def build(window, minute_ms, s, lookback):
         if e.get("event") in events:
             events[e["event"]].append(e["_wall"])
 
+    eye_docs = [d for d in window.get("eye", []) if d.get("minute") == minute_ms and d.get("source") == "model" and d.get("result")]
+    eye = None
+    if eye_docs:
+        d = max(eye_docs, key=lambda d: d.get("version", 0))
+        ref = {"c": "eye", "minute": minute_ms, "version": d.get("version")}
+        eye = {"code": code("e", 1, ref, {}), "ref": ref, "result": d["result"], "frames": len(d.get("frames") or [])}
+
     refs = sorted(json.dumps(r, sort_keys=True, ensure_ascii=False) for r in codes.values())
     face_keys = sorted((f["face"], f["name"] or "", f["from"], f["to"]) for f in faces)
     digest = hashlib.sha1(json.dumps([refs, face_keys, BUILDER_VERSION], ensure_ascii=False).encode()).hexdigest()
     return {"minute": minute_ms, "builder": BUILDER_VERSION, "speech": speech, "tingwu_only": tingwu_only,
-            "self_speech": self_speech, "sounds": sounds, "faces": faces,
+            "self_speech": self_speech, "sounds": sounds, "faces": faces, "eye": eye,
             "persons": {"seconds": round(person_ms / 1000), "ids": len({p["person"] for p in persons})},
             "unknown_faces": sum(1 for f in faces if not f["name"]), "events": events, "codes": codes,
             "warnings": warnings, "fingerprint": digest[:16]}

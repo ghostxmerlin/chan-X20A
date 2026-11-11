@@ -62,6 +62,14 @@ class FingerprintTest(unittest.TestCase):
         b = build(face, minute=T0 + MIN)
         self.assertEqual(fusion.content_fp(*a), fusion.content_fp(*b))
 
+    def test_eye_result_changes_the_content_fp(self):
+        pkg, strong = minute_input(T, same=True)
+        before = fusion.content_fp(pkg, strong)
+        pkg["eye"] = {"code": "e1", "result": {"people_count": 1, "activity": "喝水"}, "frames": 2}
+        after = fusion.content_fp(pkg, strong)
+        pkg["eye"]["result"]["activity"] = "打字"
+        self.assertEqual(len({before, after, fusion.content_fp(pkg, strong)}), 3)
+
     def test_new_speech_changes_the_content_fp(self):
         face = [("vision", vision("V", "face_found", T0 - 20 * MIN, face=4))]
         a = build(face + [("speech", speech("S", "s-1", T0 + 1000))], minute=T0)
