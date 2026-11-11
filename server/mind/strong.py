@@ -6,6 +6,7 @@ Rules: docs/superpowers/plans/2026-11-10-mind-phase0.md, Task 3.
 """
 import re
 
+from . import selfvoice
 from . import settings as settings_mod
 from .package import face_intervals
 
@@ -135,7 +136,7 @@ def evaluate(pkg, lookback, minute_ms, s, now_ms):
 
     known_last = likely_last = None
     for d in lookback.get("speech", []):
-        if d["_wall"] >= m1 or (d.get("self") or {}).get("sounding"):
+        if d["_wall"] >= m1 or selfvoice.is_hello(d.get("text"), bool((d.get("self") or {}).get("sounding"))):
             continue
         sp = d.get("speaker") or {}
         if sp.get("band") == "known" and sp.get("name") in owner_voice_names:

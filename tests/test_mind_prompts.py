@@ -123,9 +123,16 @@ class PromptsTest(unittest.TestCase):
         # truncated v3; v3 keeps 4000 and asks for low reasoning effort instead
         self.assertEqual((MAX_TOKENS["v3"], REASONING_EFFORT["v3"]), (4000, "low"))
 
+    def test_speech_while_hello_sounds_is_marked(self):
+        import copy
+        pkg = copy.deepcopy(self.pkg)
+        pkg["speech"][0]["hello_sounding"] = True
+        u = render("v3", S, pkg, self.strong, None, [], {})[1]["content"]
+        self.assertIn("（说这句时 hello 也在出声）", u)
+
     def test_package_items_carry_pos(self):
         self.assertEqual(self.pkg["speech"][0]["pos"], [16000, 32000])
-        self.assertEqual(package.BUILDER_VERSION, 3)          # 3: the eye result as e1
+        self.assertEqual(package.BUILDER_VERSION, 4)          # 4: hello's own voice by clip text, not by overlap
 
 
 if __name__ == "__main__":

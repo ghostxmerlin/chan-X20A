@@ -140,7 +140,8 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
         loud = f"，响度 {x['loud_db']}" if x.get("loud_db") is not None else ""
         if src["speech_text"]:
             alt = "".join(f"（{t['code']} 听悟听成：{t['text']}）" for t in x["tingwu"]) if src["tingwu"] else ""
-            L.append(f"{x['code']} {_hhmmss(x['at'], tz)} 说话 [{who}{loud}]：{x['text']}{alt}")
+            also = "（说这句时 hello 也在出声）" if x.get("hello_sounding") else ""
+            L.append(f"{x['code']} {_hhmmss(x['at'], tz)} 说话 [{who}{loud}]：{x['text']}{alt}{also}")
         else:
             L.append(f"{x['code']} {_hhmmss(x['at'], tz)} 有人说了一句话 [{who}{loud}]")
     if src["speech_text"] and src["tingwu"]:

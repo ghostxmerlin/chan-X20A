@@ -7,7 +7,9 @@ import hashlib
 import json
 from collections import Counter
 
-BUILDER_VERSION = 3            # 2: speech / tingwu items carry pos; 3: the eye result as e1
+from . import selfvoice
+
+BUILDER_VERSION = 4            # 2: pos; 3: the eye result as e1; 4: hello's own voice by clip text (selfvoice)
 MINUTE_MS = 60_000
 STATUS_EVENTS = ("vision_on", "vision_off", "m12_online", "m12_offline")
 CLOSERS = {"m12_offline": "m12_offline", "vision_off": "vision_off"}
@@ -23,10 +25,14 @@ def _dedupe(docs, key):
     return out
 
 
+def _sounding(d):
+    return bool((d.get("self") or {}).get("sounding"))
+
+
 def _who(d):
     sp = d.get("speaker") or {}
     band = sp.get("band")
-    if (d.get("self") or {}).get("sounding"):
+    if selfvoice.is_hello(d.get("text"), _sounding(d)):
         kind = "self"
     elif band == "known":
         kind = "known"
@@ -143,7 +149,8 @@ def build(window, minute_ms, s, lookback):
 
     speech_docs = _dedupe(sorted(window.get("speech", []), key=lambda d: d["_wall"]),
                           lambda d: (d.get("session"), d.get("id")))
-    tingwu_docs = _dedupe(sorted([d for d in window.get("tingwu", []) if d.get("kind", "sentence") == "sentence"],
+    tingwu_docs = _dedupe(sorted([d for d in window.get("tingwu", []) if d.get("kind", "sentence") == "sentence"
+                                  and not selfvoice.is_hello(d.get("text"), _sounding(d))],
                                  key=lambda d: d["_wall"]), lambda d: (d.get("session"), d.get("kind"), d.get("n")))
     attach = {}
     for t in tingwu_docs:
@@ -173,6 +180,8 @@ def build(window, minute_ms, s, lookback):
         item = {"code": code("s", i + 1, ref, d), "ref": ref, "at": d["_wall"], "text": d.get("text", ""), "pos": d.get("pos"),
                 "dur": d.get("dur"), "who": _who(d), "loud_db": voice.get("loud_db"), "voice_p": voice.get("p"),
                 "emotion": d.get("emotion"), "tingwu": [tingwu_item(t, False) for t in attach.get(i, [])]}
+        if _sounding(d) and item["who"]["kind"] != "self":
+            item["hello_sounding"] = True      # people spoke while hello made sound (that part was silence)
         (self_speech if item["who"]["kind"] == "self" else speech).append(item)
     tingwu_only = [tingwu_item(t, True) for t in attach.get(None, [])]
 

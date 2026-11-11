@@ -11,7 +11,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 
-from . import fusion, package, segments, settings, strong
+from . import fusion, package, segments, selfvoice, settings, strong
 from .records import Records
 from .settings_store import SettingsStore
 from .store import LANE, Store
@@ -129,6 +129,8 @@ def main():
     ap.add_argument("--rebuild", nargs=2, metavar=("FROM", "TO"))
     ap.add_argument("--fusion", action="store_true", help="with --rebuild: also run the model over the range")
     ap.add_argument("--catch-up-max-hours", type=float, default=48)
+    ap.add_argument("--clip-texts", default=os.path.expanduser("~/soul-mind/clip_texts.json"),
+                    help="hello's voice clip texts (selfvoice); missing: nothing is treated as her voice")
     ap.add_argument("--recordings", default=os.path.expanduser("~/soul-spike/recordings"),
                     help="the ear's recordings folder (body-camera frames live under frames/)")
     a = ap.parse_args()
@@ -139,6 +141,7 @@ def main():
     if not uri:
         raise SystemExit("MONGO_URI missing in the hubmix env file")
     db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
+    print(f"mind: {selfvoice.load(a.clip_texts)} hello voice clips from {a.clip_texts}", flush=True)
     records, store = Records(db), Store(db)
     store.ensure_indexes()
     settings_store = SettingsStore(db, a.settings)

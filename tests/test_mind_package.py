@@ -34,14 +34,33 @@ def sp(offset, id, **kw):
 
 class PackageTest(unittest.TestCase):
     def test_speech_bands_and_self_split(self):
+        from mind import selfvoice
+        old = selfvoice.CLIPS
+        selfvoice.set_clips([{"id": "PLAY-001", "texts": ["你是猴子请来的救兵吗？"]}])
+        self.addCleanup(lambda: selfvoice.set_clips(old))
         p = build_minute([sp(1000, "s-1", text="a", band="known", name="me"),
                           sp(5000, "s-2", text="b", band="unsure", best="me", score=0.55),
-                          sp(9000, "s-3", text="c", self_sounding=True)])
-        self.assertEqual([x["who"]["kind"] for x in p["speech"]], ["known", "unsure"])
+                          sp(9000, "s-3", text="你是猴子请来的救兵吗", self_sounding=True),
+                          sp(13000, "s-4", text="是还有2403和2402", self_sounding=True)])
+        self.assertEqual([x["who"]["kind"] for x in p["speech"]], ["known", "unsure", "unknown"])
         self.assertEqual(p["speech"][0]["who"]["name"], "me")
         self.assertEqual(p["speech"][1]["who"]["best"], "me")
         self.assertEqual(p["self_speech"][0]["who"]["kind"], "self")
-        self.assertEqual([x["code"] for x in p["speech"] + p["self_speech"]], ["s1", "s2", "s3"])
+        # SenseVoice hears silence while hello sounds: other words overlapping her sound are people's
+        self.assertEqual((p["speech"][2]["text"], p["speech"][2]["hello_sounding"]), ("是还有2403和2402", True))
+        self.assertFalse(p["speech"][0].get("hello_sounding"))
+        self.assertEqual(sorted(x["code"] for x in p["speech"] + p["self_speech"]), ["s1", "s2", "s3", "s4"])
+
+    def test_hello_clip_heard_by_tingwu_is_dropped(self):
+        from mind import selfvoice
+        old = selfvoice.CLIPS
+        selfvoice.set_clips([{"id": "PLAY-001", "texts": ["你是猴子请来的救兵吗？"]}])
+        self.addCleanup(lambda: selfvoice.set_clips(old))
+        tw = tingwu("S", 1, T0 + 2000, "你是猴子请来的救兵吗")
+        tw["self"] = {"sounding": True, "moving": False}
+        p = build_minute([("tingwu", tw), ("tingwu", tingwu("S", 2, T0 + 9000, "地线要接到机壳上"))])
+        self.assertEqual([t["text"] for t in p["tingwu_only"]], ["地线要接到机壳上"])
+        self.assertEqual(p["builder"], 4)
 
     def test_tingwu_attaches_by_pos_overlap_else_alone(self):
         at1, pos1 = at_pos(2000, 3000)
@@ -121,7 +140,7 @@ class PackageTest(unittest.TestCase):
         pkg = build_minute([self.eye_doc(1, activity="旧"), self.eye_doc(2, activity="新")])
         self.assertEqual((pkg["eye"]["code"], pkg["eye"]["result"]["activity"], pkg["eye"]["frames"]), ("e1", "新", 2))
         self.assertEqual(pkg["codes"]["e1"], {"c": "eye", "minute": T0, "version": 2})
-        self.assertEqual(pkg["builder"], 3)
+        self.assertEqual(pkg["builder"], 4)
 
     def test_failed_eye_is_not_e1(self):
         for src in ("failed", "budget", "backoff"):
