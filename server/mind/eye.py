@@ -14,7 +14,7 @@ from . import llm, settings as settings_mod
 
 CHAT = llm.chat                       # injectable in tests
 EYE_MODEL = "claude-haiku-5-5"
-EYE_PROMPT = "eye-v2"            # v2: an unrecognised face at the desk is most likely the owner; hollow answers retried
+EYE_PROMPT = "eye-v3"            # v3: field names spelled out, fenced JSON accepted (haiku via aihubmix, 2026-11-11 15:20)
 MIN_MS = 60_000
 MAX_FRAMES = 6
 MAX_EVENTS = 40
@@ -39,7 +39,9 @@ SYSTEM = ("你是桌面宠物机器人 hello 的视觉整理者。hello 放在�
           "- 每个看到的人在 people 里写一条，条数等于 people_count；activity 和 scene 都要写成完整的一句话。\n"
           "- M12 的“人形”是人体检测，近处的人也算在里面，人形数不代表另外还有人。人数以画面为准。\n"
           "- 画面只在有变化时才拍，所以几张之间可能隔了几十秒。\n"
-          "- 用最可能的正向说法，不要堆否定句；拿不准就把 confidence 调低。只描述，不提建议。")
+          "- 用最可能的正向说法，不要堆否定句；拿不准就把 confidence 调低。只描述，不提建议。\n"
+          "只输出一个 JSON 对象，不要代码块，字段名一字不改：people_count（整数）、people（数组，每项 who、where、doing）、"
+          "activity、scene、changes、confidence（high / mid / low）。")
 
 
 def _hms(ms, tz):
@@ -108,8 +110,12 @@ def _parse(resp):
         content = resp["choices"][0]["message"].get("content")
     except (KeyError, IndexError, TypeError):
         return None, "no choices in the response"
+    text = (content or "").strip() if isinstance(content, str) else content
+    if isinstance(text, str) and text.startswith("```"):          # live 2026-11-11: fenced despite json_schema
+        text = text.strip("`").strip()
+        text = text[text.find("{"):text.rfind("}") + 1] if "{" in text else text
     try:
-        out = json.loads(content or "")
+        out = json.loads(text or "")
     except (ValueError, TypeError) as e:          # TypeError: content came back as a list of parts
         return None, f"not valid JSON: {e}"
     if not isinstance(out, dict):

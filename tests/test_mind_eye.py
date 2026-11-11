@@ -135,6 +135,20 @@ class EyeTest(unittest.TestCase):
         system = self.fake.calls[0]["messages"][0]["content"]
         self.assertIn("很可能是主人", system)
 
+    def test_fenced_json_is_accepted(self):
+        # live 2026-11-11 15:20+: haiku via aihubmix wrapped its answer in ```json fences despite strict json_schema
+        self.frame(T0 + 1000, 1)
+        self.fake.reply_next("```json\n" + eye_json() + "\n```")
+        rec = self.run_at()
+        self.assertEqual((rec["source"], len(self.fake.calls)), ("model", 1))
+
+    def test_prompt_spells_out_the_fields(self):
+        self.frame(T0 + 1000, 1)
+        self.run_at()
+        system = self.fake.calls[0]["messages"][0]["content"]
+        for field in ("people_count", "who", "where", "doing", "activity", "scene", "changes", "confidence"):
+            self.assertIn(field, system)
+
     def test_budget_reached_records_budget_without_calling(self):
         import copy
         s = copy.deepcopy(S)
