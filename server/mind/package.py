@@ -226,7 +226,9 @@ def build(window, minute_ms, s, lookback):
     all_convs = window.get("conversations", [])
     live = [c for c in all_convs if c["start_ms"] < end and (c.get("end_ms") is None or c["end_ms"] >= end - 5 * MINUTE_MS)]
     for c in sorted(live, key=lambda c: -c["start_ms"]):
-        vs = [v for v in window.get("conversation_versions", []) if v.get("cid") == c["cid"] and v.get("at", 0) <= end + 30_000]
+        # the newest version covering up to this minute's end (until_ms; older versions without it: written by end + 30 s)
+        vs = [v for v in window.get("conversation_versions", []) if v.get("cid") == c["cid"] and
+              (v["until_ms"] <= end if v.get("until_ms") is not None else v.get("at", 0) <= end + 30_000)]
         if not vs:
             continue
         v = max(vs, key=lambda v: v.get("version", 0))

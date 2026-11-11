@@ -170,10 +170,10 @@ class RunnerTest(unittest.TestCase):
     def convs(self):
         return sorted(self.db["conversations"].docs, key=lambda c: c["start_ms"])
 
-    def test_tick_waits_10_s_after_the_minute(self):
+    def test_tick_waits_5_s_after_the_minute(self):
         self.say(T0 + 5000, "s-1")
-        self.assertEqual(notes_runner.tick(self.db, self.store, self.rec, S, ENV, T0 + MIN + 9000), 0)
-        self.assertEqual(self.tick(T0 + MIN + 10_000), 1)
+        self.assertEqual(notes_runner.tick(self.db, self.store, self.rec, S, ENV, T0 + MIN + 4000), 0)
+        self.assertEqual(self.tick(T0 + MIN + 5_000), 1)
         self.assertEqual(len(self.convs()), 1)
 
     def test_one_call_per_tick_for_a_running_conversation_and_late_rows_join(self):
@@ -205,6 +205,63 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(len(self.fake.calls), n)
         self.assertIsNotNone(self.convs()[0]["end_ms"])
         self.assertEqual(len(self.convs()), 1)
+
+    # ---- final review fixes ----
+    def test_close_waits_a_margin_for_rows_written_after_a_long_utterance(self):
+        self.say(T0 + 5000, "s-1")
+        self.tick(T0 + MIN + 5_000)
+        self.tick(T0 + 2 * MIN + 5_000)                    # last sentence 115 s ago at until=T0+2min: within 60 + 30? no
+        self.assertIsNotNone(self.convs()[0]["end_ms"])
+        self.db["conversations"].docs[:] = []
+        self.db["notes_state"].update_one({"_id": "live"}, {"$set": {"cursor_ms": T0, "seen": []}}, upsert=True)
+        self.say(T0 + 50_000, "s-9")
+        self.tick(T0 + MIN + 5_000)
+        self.tick(T0 + 2 * MIN + 5_000)                    # 70 s after the last start: a long utterance may still land
+        self.assertIsNone(self.convs()[0]["end_ms"])
+
+    def test_late_row_of_a_closed_conversation_goes_back_to_it_without_a_call(self):
+        self.say(T0 + 5000, "s-1")
+        self.tick(T0 + MIN + 5_000)                        # A open
+        self.say(T0 + 100_000, "s-B", "午饭吃什么")         # 95 s later: B starts, A closes
+        self.tick(T0 + 2 * MIN + 5_000)
+        n = len(self.fake.calls)
+        self.say(T0 + 50_000, "s-late-A")                  # spoken during A, written late
+        self.tick(T0 + 3 * MIN + 5_000)
+        a, b = self.convs()
+        self.assertIn(["speech", "S", "s-late-A"], a["refs"])
+        self.assertNotIn(["speech", "S", "s-late-A"], b["refs"])
+        self.assertEqual(len(self.fake.calls), n + 0)
+
+    def test_a_crash_after_an_update_does_not_send_the_sentences_again(self):
+        self.say(T0 + 5000, "s-1")
+        real = notes_runner._close
+        notes_runner._close = lambda db, conv: (_ for _ in ()).throw(RuntimeError("mongo blip"))
+        try:
+            self.say(T0 + 3 * MIN, "s-2")              # a second group: the first one gets closed (crash)
+            with self.assertRaises(RuntimeError):
+                self.tick(T0 + 4 * MIN + 5_000)
+        finally:
+            notes_runner._close = real
+        n = len(self.fake.calls)
+        self.tick(T0 + 4 * MIN + 5_000)
+        refs = [r for c in self.convs() for r in c["refs"]]
+        self.assertEqual(len(refs), len(set(map(tuple, refs))))
+        self.assertLessEqual(len(self.fake.calls) - n, 1)
+
+    def test_catch_up_is_capped_and_old_conversations_are_only_recorded(self):
+        self.db["notes_state"].update_one({"_id": "live"}, {"$set": {"cursor_ms": T0 - 30 * MIN, "seen": []}}, upsert=True)
+        for k in range(8):                                 # 8 separate conversations over the last 30 minutes
+            self.say(T0 - 30 * MIN + k * 3 * MIN + 1000, f"s-{k}")
+        self.say(T0 + 30_000, "s-now")
+        self.assertLessEqual(self.tick(T0 + MIN + 5_000), notes_runner.MAX_CALLS_PER_TICK)
+        old = [c for c in self.convs() if c["last_ms"] < T0 - 10 * MIN]
+        self.assertTrue(old and all(c["version"] == 0 for c in old))
+
+    def test_versions_record_the_minute_they_cover(self):
+        self.say(T0 + 5000, "s-1")
+        self.tick(T0 + MIN + 5_000)
+        v = self.db["conversation_versions"].docs[-1]
+        self.assertEqual(v["until_ms"], T0 + MIN)
 
     def test_status_document(self):
         notes_runner.write_status(self.db, True, True, T0)

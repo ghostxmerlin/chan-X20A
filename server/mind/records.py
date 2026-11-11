@@ -72,5 +72,5 @@ class Records:
         convs = list(self.db["conversations"].find({"start_ms": {"$gte": end_ms - 12 * 3600_000, "$lt": end_ms}}, {"_id": 0}))
         out["conversations"] = convs
         out["conversation_versions"] = list(self.db["conversation_versions"].find(
-            {"cid": {"$in": [c["cid"] for c in convs]}, "at": {"$lte": end_ms + 30_000}}, {"_id": 0})) if convs else []
+            {"cid": {"$in": [c["cid"] for c in convs]}, "at": {"$lte": end_ms + 3 * 60_000}}, {"_id": 0})) if convs else []
         return out

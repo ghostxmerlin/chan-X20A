@@ -37,7 +37,7 @@ def new_sentences(db, records, since_ms, until_ms, seen):
     return sorted(out, key=lambda x: x["at"])
 
 
-def segment(open_conv, sentences, now_ms):
+def segment(open_conv, sentences, now_ms, close_after=GAP_MS):
     """{"close": the open conversation is over, "append": its new sentences, "new": [[sentences], ...]}.
     Every group in "new" but the last is already over (a gap followed it)."""
     last = open_conv["last_ms"] if open_conv else None
@@ -50,7 +50,7 @@ def segment(open_conv, sentences, now_ms):
                 close = True             # the open conversation ended before this sentence
             new.append([s])
         last = s["at"]
-    if open_conv and not new and not append and now_ms - open_conv["last_ms"] > GAP_MS:
+    if open_conv and not new and not append and now_ms - open_conv["last_ms"] > close_after:
         close = True                     # silence for a minute: over
     return {"close": close, "append": append, "new": new}
 
@@ -164,15 +164,17 @@ def _set_state(db, **fields):
     db["notes_state"].update_one({"_id": "live"}, {"$set": fields}, upsert=True)
 
 
-def _save(db, conv, run_id, now_ms, changed):
+def _save(db, conv, run_id, now_ms, changed, until_ms=None):
     db["conversations"].replace_one({"cid": conv["cid"]}, dict(conv), upsert=True)
     if changed:
+        # until_ms: the minute boundary these notes cover (mind picks the version covering its minute)
         db["conversation_versions"].insert_one({k: conv.get(k) for k in ("cid", "version", "title", "notes", "confidence",
                                                                          "continues")} | {"run_id": run_id, "at": now_ms,
+                                                                                          "until_ms": until_ms,
                                                                                           "refs": len(conv["refs"])})
 
 
-def update(env, store, s, conv, sentences, now_ms, recent=None):
+def update(env, store, s, conv, sentences, now_ms, recent=None, until_ms=None, call=True):
     """Add `sentences` to `conv` (None: a new conversation) and rewrite its notes. The sentences always
     count as handled; a skipped or failed call leaves the notes as they were (the next update also gets
     the recent raw speech)."""
@@ -184,7 +186,7 @@ def update(env, store, s, conv, sentences, now_ms, recent=None):
                 "title": "", "notes": "", "confidence": "low", "version": 0, "prompt": NOTES_PROMPT}
     conv = dict(conv, refs=list(conv["refs"]) + [list(x["ref"]) for x in sentences],
                 last_ms=max([conv["last_ms"]] + [x["at"] for x in sentences]))
-    if store.cost_today(s["tz"], now_ms) >= s["budget_usd_per_day"] or (_state(db).get("backoff_until") or 0) > now_ms:
+    if not call or store.cost_today(s["tz"], now_ms) >= s["budget_usd_per_day"] or (_state(db).get("backoff_until") or 0) > now_ms:
         _save(db, conv, None, now_ms, False)
         return conv
     cands = candidates(db, day_start(conv["start_ms"], s["tz"]), conv["start_ms"],
@@ -223,5 +225,5 @@ def update(env, store, s, conv, sentences, now_ms, recent=None):
     conv = dict(conv, title=str(out.get("title") or "")[:40], notes=str(out.get("notes") or "")[:200],
                 confidence=out.get("confidence") if out.get("confidence") in ("high", "mid", "low") else "low",
                 continues=cont, version=conv["version"] + 1, updated_at=now_ms, run_id=run_id)
-    _save(db, conv, run_id, now_ms, True)
+    _save(db, conv, run_id, now_ms, True, until_ms)
     return conv

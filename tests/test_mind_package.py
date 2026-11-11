@@ -156,7 +156,7 @@ class PackageTest(unittest.TestCase):
                                    "notes": "x", "version": len(versions), "continues": ""})]
         for i, (at, title) in enumerate(versions, 1):
             docs.append(("conversation_versions", {"cid": "cX", "version": i, "title": title, "notes": (title + "的纪要") if title else "",
-                                                   "confidence": "mid", "continues": "", "at": at}))
+                                                   "confidence": "mid", "continues": "", "at": at + 8000, "until_ms": at}))
         return docs
 
     def test_package_carries_the_current_conversation_as_c1(self):
@@ -166,8 +166,8 @@ class PackageTest(unittest.TestCase):
         self.assertEqual(pkg["builder"], 5)
 
     def test_a_minute_uses_the_notes_written_by_its_end(self):
-        pkg = build_minute(self.conv_docs(T0 - 3 * 60_000, None, [(T0 + 20_000, "早"), (T0 + 60_000 + 25_000, "末"),
-                                                                  (T0 + 5 * 60_000, "以后")]))
+        # a version covers sentences up to until_ms; the minute uses the newest one covering up to its end
+        pkg = build_minute(self.conv_docs(T0 - 3 * 60_000, None, [(T0, "早"), (T0 + 60_000, "末"), (T0 + 2 * 60_000, "以后")]))
         self.assertEqual(pkg["conv"]["title"], "末")
 
     def test_closed_more_than_5_minutes_ago_is_not_c1(self):
