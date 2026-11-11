@@ -25,14 +25,33 @@ class FakeCollection:
     def __init__(self, store, name): self.store, self.name = store, name
     def replace_one(self, key, doc, upsert=False): self.store.append(("replace", self.name, key, doc))
     def update_one(self, key, update, upsert=False): self.store.append(("update", self.name, key, update["$set"]))
+    def find_one(self, flt): return self.store.docs.get((self.name, flt.get("_id")))
+
+
+class Ops(list):
+    def __init__(self): super().__init__(); self.docs = {}
 
 
 class FakeDB(dict):
-    def __init__(self): super().__init__(); self.ops = []
+    def __init__(self): super().__init__(); self.ops = Ops()
     def __getitem__(self, name): return FakeCollection(self.ops, name)
 
 
 class HelloDBTest(unittest.TestCase):
+    def test_read_switch_reads_the_switches_collection(self):
+        fake = FakeDB()
+        db = hello_db.HelloDB("unused", client_factory=lambda: fake)
+        self.assertIsNone(db.read_switch("tingwu"))
+        fake.ops.docs[("switches", "tingwu")] = {"_id": "tingwu", "on": True}
+        self.assertEqual(db.read_switch("tingwu"), {"_id": "tingwu", "on": True})
+
+    def test_switch_status_is_queued_as_an_update(self):
+        fake = FakeDB()
+        db = hello_db.HelloDB("unused", client_factory=lambda: fake)
+        db.switch_status("tingwu", {"running": ["s1"], "available": True, "at": 5})
+        db.flush()
+        self.assertIn(("update", "switches", {"_id": "tingwu_status"}, {"running": ["s1"], "available": True, "at": 5}), fake.ops)
+
     def test_session_key_points_at_the_recording_folder(self):
         self.assertEqual(hello_db.session_key("/home/u/soul-spike/recordings/20261110/154417-stackchan-x-c75/"),
                          "20261110/154417-stackchan-x-c75")

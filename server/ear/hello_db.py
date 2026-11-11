@@ -73,6 +73,7 @@ class HelloDB:
         self.error = ""
         self._uri = uri
         self._factory = client_factory
+        self._reader = None
         self._thread = threading.Thread(target=self._run, name="hello-db", daemon=True)
         self._thread.start()
 
@@ -108,6 +109,25 @@ class HelloDB:
         key = {"session": session, "t_us": doc.get("t_us"), "event": doc.get("event"), "face": doc.get("face"),
                "person": doc.get("person")}
         self._put("upsert", "vision", key, doc)
+
+    def read_switch(self, name):
+        """The switch document hello.switches {_id: name}, or None. Synchronous (call it from a worker
+        thread); its own connection, so it never waits behind the write queue. Errors are raised."""
+        if self._reader is None:
+            if self._factory:
+                self._reader = self._factory()
+            else:
+                from pymongo import MongoClient
+                self._reader = MongoClient(self._uri, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)[DB_NAME]
+        try:
+            return self._reader["switches"].find_one({"_id": name})
+        except Exception:
+            self._reader = None                  # reconnect next time
+            raise
+
+    def switch_status(self, name, fields):
+        """What the ear is actually doing for switch `name` (hello.switches {_id: name + "_status"})."""
+        self._put("update", "switches", {"_id": name + "_status"}, fields)
 
     def event(self, session, ev):
         """Route one ear event; speech/sound 'end' rows only."""
