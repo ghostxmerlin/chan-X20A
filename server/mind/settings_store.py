@@ -67,6 +67,7 @@ def validate(s):
             _names(errs, f"people[{i}].voice_names", p.get("voice_names", []), 0, 8)
             _names(errs, f"people[{i}].face_names", p.get("face_names", []), 0, 8)
     _text(errs, "self_facts", s.get("self_facts", ""), 0, 2000)
+    _text(errs, "environment", s.get("environment", ""), 0, 3000)
     _text(errs, "persona", s.get("persona", ""), 0, 2000)
     _text(errs, "place.default", (s.get("place") or {}).get("default", ""), 0, 100)
     w = s.get("work") or {}

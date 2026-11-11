@@ -47,6 +47,8 @@ class SettingsStoreTest(unittest.TestCase):
     def test_validate_rules(self):
         s = settings.load(None)
         self.assertEqual(validate(s), [])
+        self.assertEqual(validate({**s, "environment": "办公室布局……"}), [])
+        self.assertTrue(any("environment" in e for e in validate({**s, "environment": "x" * 3001})))
         self.assertTrue(any("self_facts" in e for e in validate({**s, "self_facts": "x" * 2001})))
         self.assertTrue(any("start" in e for e in validate({**s, "work": {"days": [1], "start": "19:00", "end": "09:00"}})))
         self.assertTrue(any("unknown" in e for e in validate({**s, "colour": 1})))

@@ -138,7 +138,8 @@ def _parse(resp):
 
 def messages_for(s, minute_ms, inputs, prev):
     owner = settings_mod.owner_name(s, minute_ms)
-    lines = [f"时间：{settings_mod.local_label(minute_ms, s['tz'])}；主人的称呼：{owner}",
+    env_text = (s.get("environment") or "").strip()
+    lines = ([f"环境：{env_text}"] if env_text else []) + [f"时间：{settings_mod.local_label(minute_ms, s['tz'])}；主人的称呼：{owner}",
              "M12 人脸模块这一分钟的记录：", *(inputs["events"] or ["（没有事件）"])]
     if prev and prev.get("result"):
         r = prev["result"]

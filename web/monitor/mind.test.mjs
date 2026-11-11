@@ -119,11 +119,12 @@ test('source label shows 修订', ()=>{
 });
 test('settings form round trip keeps lists and numbers', ()=>{
  const s={tz:'Asia/Shanghai',owner:{display:'主人',aliases:['Kira','Dave'],voice_names:['me','主人'],face_names:['me']},people:[{display:'同事A',voice_names:['a'],face_names:[]}],
-  work:{days:[1,2,3,4,5],start:'09:00',end:'19:00'},thresholds:{just_left_min:2},self_facts:'我',place:{default:'办公室'},persona:'',
+  work:{days:[1,2,3,4,5],start:'09:00',end:'19:00'},thresholds:{just_left_min:2},self_facts:'我',environment:'公司做指纹芯片',place:{default:'办公室'},persona:'',
   sources:{speech_text:true,tingwu:true,sounds:false,vision:true},fusion:{enabled:true,model:'gpt-6-luna',prompt:'v1',max_age_min:60,review_after_min:[5,10,20,30]},budget_usd_per_day:20};
  assert.deepEqual(ui.settingsFromForm(ui.formFromSettings(s),s),s);
  assert.equal(ui.formFromSettings(s).owner_aliases,'Kira,Dave');
  assert.deepEqual(ui.settingsFromForm({...ui.formFromSettings(s),owner_aliases:'Kira，无限'},s).owner.aliases,['Kira','无限']);
+ assert.match(ui.settingsHtml(ui.formFromSettings(s),{voice:[],face:[]}),/name="environment"/);
 });
 test('new markup carries no style attributes (CSP)', ()=>{
  const scene={minute:0,source:'model',scene:{who_am_i:{text:'a',confidence:'high'},where_am_i:{text:'b',confidence:'mid'},people_doing:{text:'c',confidence:'low'},owner_view:'present',

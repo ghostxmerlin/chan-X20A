@@ -103,6 +103,8 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
     owner = {**s["owner"], "display": settings_mod.owner_name(s, pkg["minute"])}
     system = VERSIONS[version]["system"]
     L = ["【设置】", f"关于我：{s['self_facts']}", f"默认地点：{s['place']['default']}", f"主人：{owner['display']}"]
+    if (s.get("environment") or "").strip():
+        L.append(f"环境：{s['environment'].strip()}")
     if people:
         L.append("认识的人：" + "、".join(p["display"] for p in people))
     L.append("")

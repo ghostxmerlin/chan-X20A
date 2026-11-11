@@ -130,6 +130,13 @@ class PromptsTest(unittest.TestCase):
         u = render("v3", S, pkg, self.strong, None, [], {})[1]["content"]
         self.assertIn("（说这句时 hello 也在出声）", u)
 
+    def test_environment_is_in_the_settings_card(self):
+        import copy
+        s2 = copy.deepcopy(S); s2["environment"] = "公司做指纹识别芯片；右边是冰箱和微波炉。"
+        u = render("v3", s2, self.pkg, self.strong, None, [], {})[1]["content"]
+        self.assertIn("环境：公司做指纹识别芯片；右边是冰箱和微波炉。", u)
+        self.assertNotIn("环境：", render("v3", S, self.pkg, self.strong, None, [], {})[1]["content"])
+
     def test_package_items_carry_pos(self):
         self.assertEqual(self.pkg["speech"][0]["pos"], [16000, 32000])
         self.assertEqual(package.BUILDER_VERSION, 4)          # 4: hello's own voice by clip text, not by overlap

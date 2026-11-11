@@ -171,6 +171,13 @@ class EyeTest(unittest.TestCase):
         for field in ("people_count", "who", "where", "doing", "activity", "scene", "changes", "confidence"):
             self.assertIn(field, system)
 
+    def test_environment_reaches_the_eye_prompt(self):
+        import copy
+        s2 = copy.deepcopy(S); s2["environment"] = "右边是冰箱和微波炉，同事常来热饭。"
+        self.frame(T0 + 1000, 1)
+        self.run_at(s=s2)
+        self.assertIn("环境：右边是冰箱和微波炉，同事常来热饭。", self.text(self.fake.calls[0]))
+
     def test_budget_reached_records_budget_without_calling(self):
         import copy
         s = copy.deepcopy(S)
