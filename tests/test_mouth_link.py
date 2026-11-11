@@ -54,6 +54,21 @@ class MouthLinkTest(unittest.IsolatedAsyncioTestCase):
             await c.send("x"); await c.recv()
         await asyncio.wait_for(self.up_closed.wait(), 3)
 
+    async def test_a_dropped_device_leaves_no_unretrieved_task_errors(self):
+        import gc
+        complaints = []
+        asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: complaints.append(ctx.get("message")))
+        c = await connect(self.front_url)
+        await c.send("x"); await c.recv()
+        c.transport.abort()                                    # no close frame: the pump fails
+        for _ in range(100):
+            if self.results:
+                break
+            await asyncio.sleep(0.02)
+        gc.collect(); await asyncio.sleep(0.05); gc.collect()
+        self.assertEqual(self.results, ["device_closed"])
+        self.assertEqual([m for m in complaints if "never retrieved" in (m or "")], [])
+
     async def test_upstream_down_closes_the_device_side(self):
         self.up.close(); await self.up.wait_closed()
         async with connect(self.front_url) as c:

@@ -31,6 +31,8 @@ async def relay(client, upstream_url, token, connect=None):
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
+    for task in done:
+        task.exception()                        # a dropped link ends a pump with ConnectionClosed: read, not logged
     await upstream.close()
     await client.close()
     return "device_closed" if down in done else "upstream_closed"
