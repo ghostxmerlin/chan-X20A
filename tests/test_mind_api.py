@@ -203,6 +203,29 @@ class ApiV1Test(unittest.TestCase):
         self.assertEqual(self.post_json("/settings", {"settings": old, "note": ""}).status, 400)
         self.assertEqual(settings.load(None)["fusion"]["prompt"], "v2")
 
+    def test_switches_default_off_and_stale(self):
+        r = self.call("/switches").json()
+        self.assertEqual(r["tingwu"]["on"], False)
+        self.assertIs(r["tingwu_status"]["stale"], True)
+
+    def test_post_switch_tingwu(self):
+        try:
+            r = self.post_json("/switches", {"name": "tingwu", "on": True})
+            self.assertEqual((r.status, r.json()["tingwu"]["on"]), (200, True))
+            self.assertIs(self.call("/switches").json()["tingwu"]["on"], True)
+            now = int(__import__("time").time() * 1000)
+            self.db["switches"].update_one({"_id": "tingwu_status"}, {"$set": {"running": ["s1"], "available": True, "at": now}}, upsert=True)
+            st = self.call("/switches").json()["tingwu_status"]
+            self.assertEqual((st["running"], st["available"], st["stale"]), (["s1"], True, False))
+            self.db["switches"].update_one({"_id": "tingwu_status"}, {"$set": {"at": now - 91_000}})
+            self.assertIs(self.call("/switches").json()["tingwu_status"]["stale"], True)
+        finally:
+            self.post_json("/switches", {"name": "tingwu", "on": False})
+
+    def test_switch_rejects_unknown_name_and_non_bool(self):
+        self.assertEqual(self.post_json("/switches", {"name": "eye", "on": True}).status, 400)
+        self.assertEqual(self.post_json("/switches", {"name": "tingwu", "on": "yes"}).status, 400)
+
     def test_place_report(self):
         self.assertEqual(self.post_json("/place", {"label": "办公室"}).status, 200)
         self.assertEqual(self.post_json("/place", {"label": ""}).status, 400)

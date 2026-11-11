@@ -3,8 +3,8 @@
 mind tables (settings versions, labels/marks, rerun lane) — never raw records, never the live
 scenes. Sentence text only leaves through this API; nothing is logged.
 
-GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats
-POST /settings /mark /label /rerun /place /switch
+GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches
+POST /settings /mark /label /rerun /place /switch /switches
 """
 import hmac
 import json
@@ -99,6 +99,19 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 "today_cost_usd": round(sum(r["cost_usd"] for r in out if r["day"] == today), 6),
                 "today_calls": sum(r["calls"] for r in out if r["day"] == today)}
 
+    SWITCHES = ("tingwu",)          # spec 2026-11-11 §3; eye comes in step 3
+
+    def switches():
+        now = int(time.time() * 1000)
+        out = {}
+        for name in SWITCHES:
+            sw = db["switches"].find_one({"_id": name}) or {}
+            st = db["switches"].find_one({"_id": name + "_status"}) or {}
+            out[name] = {"on": sw.get("on") is True, "at": sw.get("at")}
+            out[name + "_status"] = {"running": st.get("running") or [], "available": st.get("available"), "at": st.get("at"),
+                                     "stale": not isinstance(st.get("at"), int) or now - st["at"] > 90_000}
+        return out
+
     def get(path, q):
         if path == "/state":
             return {**store.state(), "enabled": store.enabled(), "lane": LANE, "now_ms": int(time.time() * 1000)}
@@ -144,6 +157,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == "/labels":
             lo, hi = _range(q)
             return list(db["mind_labels"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("at", 1))
+        if path == "/switches":
+            return switches()
         if path == "/stats":
             days = _int(q, "days", required=False) or 7
             return stats(max(1, min(days, 3650)))
@@ -159,6 +174,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 return {"version": ss.save(body.get("settings"), _str(body.get("note"), 200))}
             except ValueError as e:
                 raise BadRequest(str(e)) from None
+        if path == "/switches":
+            if body.get("name") not in SWITCHES or not isinstance(body.get("on"), bool):
+                raise BadRequest(f"name ({'/'.join(SWITCHES)}) and on (true/false) required")
+            db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page"}}, upsert=True)
+            return switches()
         if path == "/switch":
             if not isinstance(body.get("enabled"), bool):
                 raise BadRequest("enabled (true/false) required")
@@ -254,7 +274,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch"):
+            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches"):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:

@@ -82,6 +82,8 @@ test('proxy forwards whitelisted POSTs with the token and rejects others', async
  assert.equal((await proxy.post('/state','{}')).status,400);
  assert.equal((await proxy.post('/place','{"label":"办公室"}')).status,200);
  assert.equal((await proxy.post('/switch','{"enabled":false}')).status,200);
+ assert.equal((await proxy.post('/switches','{"name":"tingwu","on":true}')).status,200);
+ assert.equal((await proxy.get('/switches')).status,200);
  assert.equal((await proxy.post('/mark','x'.repeat(16385))).status,413);
  assert.equal((await proxy.get('/scene?t=5&lane=rerun')).status,200);
  assert.equal((await proxy.get('/scene?t=5&lane=evil')).status,400);
