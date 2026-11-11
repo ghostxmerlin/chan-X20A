@@ -155,6 +155,35 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False):
     return rec
 
 
+TRY_TEXT = "我是{label}。这是一句试听：今天的调试就到这里，大家辛苦了。"
+
+
+def voice_list(tts):
+    """soul-tts's voice aliases for the page: id, label, rate (never the cloned voice ids)."""
+    v = tts.voices().get("voices") or {}
+    return [{"id": k, "label": x.get("label") or k, "rate": x.get("rate")} for k, x in v.items()]
+
+
+def try_voice(store, tts, voice_id, now_ms, wait=False):
+    """One fixed sample sentence in `voice_id` through the robot's mouth (voice audition, user 2026-11-11)."""
+    voices = (tts.voices().get("voices") or {})
+    if voice_id not in voices:
+        raise KeyError(voice_id)
+    if not ((tts.health().get("mouth") or {}).get("device")):
+        raise NotConnected("hello 的嘴没连上")
+    label = re.sub(r"[（(].*?[）)]", "", voices[voice_id].get("label") or voice_id).split("·")[0].strip()
+    text = TRY_TEXT.format(label=label)
+    tts_id = tts.say(text, voice=voice_id, interrupt=True)
+    uid = f"u{now_ms}"
+    rec = {"uid": uid, "role": "try", "text": text, "voice": voice_id, "tts_id": tts_id, "at": now_ms, "state": "sent"}
+    store.db["utterances"].insert_one(dict(rec))       # selfvoice treats it as hello's own voice
+    if wait:
+        _finish(store.db, tts, uid, tts_id)
+    else:
+        threading.Thread(target=_finish, args=(store.db, tts, uid, tts_id), daemon=True).start()
+    return rec
+
+
 class TtsHttp:
     """Minimal client for soul-tts on the loopback (standard library only)."""
     def __init__(self, base, token, timeout=15):
@@ -184,6 +213,9 @@ class TtsHttp:
 
     def health(self):
         return self._call("GET", "/health")
+
+    def voices(self):
+        return self._call("GET", "/v1/voices")
 
     def say(self, text, **kw):
         return self._call("POST", "/v1/say", {"text": text, **kw})["id"]

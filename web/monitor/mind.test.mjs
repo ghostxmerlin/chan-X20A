@@ -89,6 +89,8 @@ test('proxy forwards whitelisted POSTs with the token and rejects others', async
  assert.equal((await proxy.get('/eye?from=1&to=2')).status,200);
  assert.equal((await proxy.get('/notes?from=1&to=2')).status,200);
  assert.equal((await proxy.get('/roles')).status,200);
+ assert.equal((await proxy.get('/voices')).status,200);
+ assert.equal((await proxy.post('/voice/try','{"voice":"tang"}')).status,200);
  assert.equal((await proxy.get('/utterances?from=1&to=2')).status,200);
  assert.equal((await proxy.post('/say','{"role":"roast"}')).status,200);
  assert.equal((await proxy.post('/say/stop','{}')).status,200);
@@ -192,5 +194,10 @@ test('say panel html', ()=>{
  assert.match(list,/17:05:03/);assert.match(list,/吐槽/);assert.match(list,/这板子焊得/);assert.match(list,/说完了/);assert.match(list,/1.2 秒开口/);
  assert.match(ui.utterancesHtml([],roles),/还没说过话/);
  assert.match(ui.utterancesHtml([{at,role:'roast',text:'<b>',state:'sent'}],roles),/&lt;b&gt;/);
+});
+test('voice try list html', ()=>{
+ const html=ui.voiceButtonsHtml([{id:'tang',label:'汤师爷',rate:1.15},{id:'xiaohei',label:'小黑',rate:1.4},{id:'x',label:'<b>',rate:1}]);
+ assert.match(html,/data-voice="xiaohei"/);assert.match(html,/小黑 · 1.4×/);assert.match(html,/&lt;b&gt;/);assert.doesNotMatch(html,/style="/);
+ assert.match(ui.voiceButtonsHtml([]),/没有音色/);
 });
 

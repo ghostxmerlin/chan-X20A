@@ -28,6 +28,10 @@ class FakeTts:
         self.said.append((text, kw))
         return f"u{len(self.said)}"
 
+    def voices(self):
+        return {"default": "tang", "voices": {"tang": {"label": "汤师爷", "rate": 1.15, "voice": "secret-id"},
+                                              "xiaohei": {"label": "小黑", "rate": 1.4, "voice": "secret-id-2"}}}
+
     def stop(self):
         self.stops.append(1)
         return []
@@ -103,6 +107,36 @@ class SpeakTest(unittest.TestCase):
         self.addCleanup(lambda: selfvoice.set_spoken([]))
         self.assertTrue(selfvoice.is_hello("这板子焊得比我的发型还有个性", False))
         self.assertFalse(selfvoice.is_hello("很久以前说的一句话呀", False))
+
+
+class VoiceTryTest(unittest.TestCase):
+    def setUp(self):
+        self.db = FakeDB()
+        self.store = Store(self.db)
+        self.now = int(time.time() * 1000)
+
+    def test_voice_list_has_labels_and_rates_but_no_voice_ids(self):
+        rows = speak.voice_list(FakeTts())
+        self.assertEqual(rows, [{"id": "tang", "label": "汤师爷", "rate": 1.15}, {"id": "xiaohei", "label": "小黑", "rate": 1.4}])
+
+    def test_try_voice_says_the_sample_in_that_voice_and_logs_it(self):
+        tts = FakeTts()
+        rec = speak.try_voice(self.store, tts, "xiaohei", self.now, wait=True)
+        text, kw = tts.said[0]
+        self.assertEqual((kw["voice"], kw["interrupt"]), ("xiaohei", True))
+        self.assertIn("小黑", text)
+        self.assertNotIn("rate", kw)                      # the voice's own rate (1.4) applies
+        u = self.db["utterances"].docs[-1]
+        self.assertEqual((u["role"], u["voice"], u["text"], u["state"]), ("try", "xiaohei", text, "done"))
+        self.assertEqual(rec["text"], text)
+
+    def test_try_voice_refuses_unknown_voices_and_a_missing_device(self):
+        with self.assertRaises(KeyError):
+            speak.try_voice(self.store, FakeTts(), "nobody", self.now)
+        tts = FakeTts(connected=False)
+        with self.assertRaises(speak.NotConnected):
+            speak.try_voice(self.store, tts, "tang", self.now)
+        self.assertEqual(tts.said, [])
 
 
 class TtsHttpTest(unittest.TestCase):

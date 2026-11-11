@@ -3,8 +3,8 @@
 mind tables (settings versions, labels/marks, rerun lane) — never raw records, never the live
 scenes. Sentence text only leaves through this API; nothing is logged.
 
-GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes /roles /utterances
-POST /settings /mark /label /rerun /place /switch /switches /say /say/stop
+GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes /roles /utterances /voices
+POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voice/try
 """
 import base64
 import hmac
@@ -197,6 +197,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return doc
         if path == "/roles":
             return [{k: r.get(k) for k in ("id", "button", "name", "voice")} for r in speak.load_roles(ctx.get("roles_dir") or "").values()]
+        if path == "/voices":
+            tts = ctx.get("tts")
+            if not tts:
+                raise Conflict("soul-tts not configured")
+            return speak.voice_list(tts)
         if path == "/utterances":
             lo, hi = _range(q)
             return list(db["utterances"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0, "context": 0}).sort("at", 1).limit(200))
@@ -236,6 +241,19 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             except speak.NotConnected as e:
                 raise Conflict(str(e)) from None
             return {k: v for k, v in rec.items() if k != "context"}
+        if path == "/voice/try":
+            tts = ctx.get("tts")
+            if not tts:
+                raise Conflict("soul-tts not configured")
+            if not isinstance(body.get("voice"), str) or body["voice"] not in {v["id"] for v in speak.voice_list(tts)}:
+                raise BadRequest("voice must be one of the soul-tts voices")
+            if mouth_mode() != "tts":
+                raise Conflict("嘴没切到 TTS 模式")
+            try:
+                rec = speak.try_voice(store, tts, body["voice"], now)
+            except speak.NotConnected as e:
+                raise Conflict(str(e)) from None
+            return {k: v for k, v in rec.items() if k != "_id"}
         if path == "/say/stop":
             tts = ctx.get("tts")
             return {"cancelled": tts.stop() if tts else []}
@@ -350,7 +368,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop"):
+            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try"):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:

@@ -84,10 +84,15 @@ export function roleButtonsHtml(roles){
  return (roles||[]).map(r=>`<button data-role="${escapeHtml(r.id)}" title="${escapeHtml(r.name)}">${escapeHtml(r.button)}</button>`).join('')+
   '<button data-say-stop="1" class="stop-button">别说了</button>';
 }
+// 试听音色 (2026-11-11): one button per soul-tts voice; plays a fixed sample sentence on the robot.
+export function voiceButtonsHtml(voices){
+ if(!voices||!voices.length)return '<span class="alt">没有音色</span>';
+ return voices.map(v=>`<button data-voice="${escapeHtml(v.id)}">${escapeHtml(v.label)}${v.rate&&v.rate!==1?` · ${escapeHtml(String(v.rate))}×`:''}</button>`).join('');
+}
 const SAY_STATE={sent:'合成中',synthesizing:'合成中',playing:'正在说',done:'说完了',failed:'失败',cancelled:'被打断',unknown:'状态未知'};
 export function utterancesHtml(list,roles){
  if(!list||!list.length)return '<p class="alt">还没说过话</p>';
- const name=Object.fromEntries((roles||[]).map(r=>[r.id,r.button]));
+ const name={try:'试听',...Object.fromEntries((roles||[]).map(r=>[r.id,r.button]))};
  return '<ul class="utterances">'+list.slice(-5).reverse().map(u=>{
   const extra=[SAY_STATE[u.state]||escapeHtml(u.state||''),u.timings_s?.first_accepted!=null?`${Number(u.timings_s.first_accepted).toFixed(1)} 秒开口`:'',
    u.tts_cost_cny!=null?`¥${Number(u.tts_cost_cny).toFixed(4)}`:''].filter(Boolean).join(' · ');
@@ -340,6 +345,14 @@ export function start(doc){
   refreshSay();
  });
  setInterval(refreshSay,5000);
+ getJson('/voices').then(v=>{el('mind-voice-buttons').innerHTML=voiceButtonsHtml(v);},()=>{el('mind-voice-buttons').innerHTML='<span class="alt">音色读不到</span>';});
+ el('mind-voice-buttons').addEventListener('click',async ev=>{
+  const b=ev.target.closest('button');if(!b)return;
+  const msg=el('mind-say-msg');
+  try{msg.textContent='试听中…';const r=await postJson('/voice/try',{voice:b.dataset.voice});msg.textContent=`试听：${r.text}`;}
+  catch(e){const m=String(e.message||e);msg.textContent=m.includes('TTS 模式')?'先把顶上的「嘴」切到 TTS':m.includes('嘴没连上')?'hello 的嘴还没连上':`没说成：${m}`;}
+  refreshSay();
+ });
  refresh();setInterval(refresh,10000);
 }
 if(typeof document!=='undefined'&&document.getElementById('mind-timeline'))start(document);

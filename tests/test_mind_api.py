@@ -216,6 +216,21 @@ class ApiV1Test(unittest.TestCase):
             self.assertEqual(self.post_json("/settings", {"settings": old, "note": ""}).status, 400)
         self.assertEqual(settings.load(None)["fusion"]["prompt"], "v3")
 
+    def test_voices_and_voice_try(self):
+        self.assertEqual([v["id"] for v in self.call("/voices").json()], ["tang", "xiaohei"])
+        self.tts.connected = True
+        try:
+            self.post_json("/switches", {"name": "mouth", "mode": "clips"})
+            self.assertEqual(self.post_json("/voice/try", {"voice": "xiaohei"}).status, 409)   # not in TTS mode
+            self.post_json("/switches", {"name": "mouth", "mode": "tts"})
+            self.assertEqual(self.post_json("/voice/try", {"voice": "nobody"}).status, 400)
+            r = self.post_json("/voice/try", {"voice": "xiaohei"})
+            self.assertEqual(r.status, 200)
+            self.assertIn("小黑", r.json()["text"])
+        finally:
+            self.tts.connected = False
+            self.post_json("/switches", {"name": "mouth", "mode": "clips"})
+
     def test_mouth_mode_switch(self):
         self.assertEqual(self.call("/switches").json()["mouth"]["mode"], "clips")        # no document: today's clips
         try:
