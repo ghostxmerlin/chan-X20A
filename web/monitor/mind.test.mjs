@@ -141,7 +141,7 @@ test('place line shows the reported place', ()=>{
 test('frame caption and panel markup', ()=>{
  assert.equal(ui.frameCaption(null),'还没有收到画面');
  const at=new Date(2026,10,11,10,5,7).getTime();
- assert.equal(ui.frameCaption({at,diff:12,today:34,missing:false}),'10:05:07 收到 · 变化 12 · 今天 34 张');
+ assert.equal(ui.frameCaption({at,diff:12,today:34,missing:false}),'10:05:07 收到 · 变化 12 格 · 今天 34 张');
  assert.match(ui.frameCaption({at,diff:255,today:1,missing:true}),/文件缺失/);
  const html=readFileSync(new URL('./public/mind.html',import.meta.url),'utf8');
  assert.match(html,/id="mind-frame-img"/);assert.doesNotMatch(html,/style="/);

@@ -31,12 +31,20 @@ int main()
     assert(!frame_thumb(a.data(), a.size(), 0, h, FacePixelFormat::Rgb888).valid);
     const FrameThumb bad{};
     assert(frame_diff(ta, bad) == 255 && frame_diff(bad, ta) == 255);
-    // policy: first frame after connecting, 10 s gap, change threshold
+    // changed cells: overall brightness removed first, then cells off by >= 30 (live 2026-11-11:
+    // empty room with light/shadows 3-4 cells, a person moving 5-26, leaving/arriving 144-170)
+    assert(frame_changed_cells(ta, tb) == 0);              // whole picture 20 brighter: no change
+    FrameThumb tc = ta;
+    for (int i = 0; i < 10; ++i) tc.cell[i] = static_cast<uint8_t>(tc.cell[i] + 90);
+    assert(frame_changed_cells(ta, tc) == 10);
+    assert(frame_changed_cells(ta, bad) == 255);
+    assert(kFrameChangeCells == 6 && kCellChange == 30);
+    // policy: first frame after connecting, 10 s gap, changed-cells threshold
     assert(frame_should_send(false, 0, 0));
     assert(!frame_should_send(true, 30, 9999999));
     assert(!frame_should_send(true, 5, 60000000));
     assert(frame_should_send(true, 6, 10000000));
-    assert(kFrameChangeThreshold == 6 && kFrameMinGapUs == 10000000);
+    assert(kFrameMinGapUs == 10000000);
     // a failed frame send holds frames for 60 s (no reconnect storm); big messages get 3 s to send
     assert(kFrameFailHoldUs == 60000000);
     assert(frame_held(1000, 2000) && !frame_held(2000, 2000) && !frame_held(5, 0));

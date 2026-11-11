@@ -58,7 +58,7 @@ const CLASS_COLOURS={present:'#2e9d4f',absent:'#e8912d',unknown:'#9aa0a6',off:'#
 const CLASS_LABEL={present:'主人在',absent:'主人不在',unknown:'不确定',off:'感官关',gap:'mind 没在运行'};
 export function frameCaption(f){
  if(!f)return '还没有收到画面';
- return `${hhmmss(f.at)} 收到 · 变化 ${f.diff===255?'首张':f.diff} · 今天 ${f.today} 张${f.missing?' · 文件缺失':''}`;
+ return `${hhmmss(f.at)} 收到 · 变化 ${f.diff===255?'首张':f.diff+' 格'} · 今天 ${f.today} 张${f.missing?' · 文件缺失':''}`;
 }
 export const placeLabel=p=>p?.label?`${p.label}（${p.source==='owner_report'?`你报告，${hhmm(p.at)}`:'来自 Wi-Fi'}）`:'未知（还没有报告）';
 export const basisLabel=b=>BASIS[b]||escapeHtml(b||'');

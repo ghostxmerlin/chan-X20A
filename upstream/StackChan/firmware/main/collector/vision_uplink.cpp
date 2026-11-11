@@ -163,7 +163,7 @@ void run(void*)
                 const auto frame = camera_latest_frame();
                 if (frame && frame->seq != last_seen_seq && frame->bytes && frame->length) {
                     last_seen_seq = frame->seq;
-                    const int diff = frame_diff(frame->thumb, last_thumb);
+                    const int diff = frame_changed_cells(frame->thumb, last_thumb);   // reported as "diff" (cells)
                     if (frame_should_send(have_last, diff, esp_timer_get_time() - last_frame_sent_us)) {
                         ok = send_frame(socket, *frame, diff, frame_sent);
                         if (!ok) {

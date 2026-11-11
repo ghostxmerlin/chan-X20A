@@ -10,7 +10,11 @@
 
 namespace collector {
 constexpr int kThumbW = 16, kThumbH = 12;
-constexpr int kFrameChangeThreshold = 6;          // mean |Δluma| per cell, 0–255 (provisional, tune live)
+// A frame "changed" when at least 6 of the 192 cells moved by 30 or more after removing the overall
+// brightness change. Tuned on the first live run (2026-11-11): empty room with light and a passing
+// shadow 3–4 cells, a person moving at the desk 5–26, someone leaving or arriving 144–170.
+constexpr int kFrameChangeCells = 6;
+constexpr int kCellChange = 30;
 constexpr int64_t kFrameMinGapUs = 10000000;      // at most one frame per 10 s
 
 struct FrameThumb {
@@ -54,9 +58,23 @@ inline int frame_diff(const FrameThumb& a, const FrameThumb& b)
     return (sum + kThumbW * kThumbH / 2) / (kThumbW * kThumbH);
 }
 
-inline bool frame_should_send(bool have_last, int diff, int64_t since_last_us)
+// Cells that changed by >= kCellChange once each signature's mean is removed; 255 when either is invalid.
+inline int frame_changed_cells(const FrameThumb& a, const FrameThumb& b)
 {
-    return !have_last || (since_last_us >= kFrameMinGapUs && diff >= kFrameChangeThreshold);
+    if (!a.valid || !b.valid) return 255;
+    constexpr int n = kThumbW * kThumbH;
+    int sa = 0, sb = 0;
+    for (int i = 0; i < n; ++i) { sa += a.cell[i]; sb += b.cell[i]; }
+    int changed = 0;
+    for (int i = 0; i < n; ++i)    // compare (a − mean a) with (b − mean b), all scaled by n to stay integer
+        if (std::abs((a.cell[i] * n - sa) - (b.cell[i] * n - sb)) >= kCellChange * n) ++changed;
+    return changed;
+}
+
+// `changed`: frame_changed_cells against the last frame sent.
+inline bool frame_should_send(bool have_last, int changed, int64_t since_last_us)
+{
+    return !have_last || (since_last_us >= kFrameMinGapUs && changed >= kFrameChangeCells);
 }
 
 // A frame send that failed (slow uplink, socket closed) holds frames for 60 s, so a link that cannot
