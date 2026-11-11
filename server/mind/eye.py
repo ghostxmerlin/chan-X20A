@@ -108,7 +108,7 @@ def _parse(resp):
         return None, "no choices in the response"
     try:
         out = json.loads(content or "")
-    except ValueError as e:
+    except (ValueError, TypeError) as e:          # TypeError: content came back as a list of parts
         return None, f"not valid JSON: {e}"
     if not isinstance(out, dict):
         return None, "not a JSON object"

@@ -114,6 +114,11 @@ test('unavailable eye disables recognize; unknown switches too', ()=>{
  assert.equal(sw.visionButtons(sw.switchView(r,true,{enabled:false},EYE(false,false,{available:false})),false).recognize,true);
  assert.equal(sw.visionButtons(sw.switchView(r,true,{enabled:false},null),false).recognize,true);
 });
+test('vision 关 stays clickable with the robot offline while the eye switch is on', ()=>{
+ const v=sw.switchView(null,false,{enabled:false},EYE(true,false));
+ assert.equal(sw.visionButtons(v,false).off,false);
+ assert.equal(sw.visionButtons(sw.switchView(null,false,{enabled:false},EYE(false,false)),false).off,true);
+});
 test('vision 关 works with the M12 disconnected while the camera uploads', ()=>{
  const r=cam(robot({m12:'disconnected'}),true);
  const v=sw.switchView(r,true,{enabled:false});

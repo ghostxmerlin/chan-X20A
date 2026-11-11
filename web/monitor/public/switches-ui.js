@@ -74,7 +74,7 @@ export function visionRequests(level,robot){
 }
 export function visionButtons(v,pending){
  const s=v.vision;
- return {off:!!pending||!s.offKnown,upload:!!pending||!s.known||!s.can,
+ return {off:!!pending||!(s.offKnown||(s.eyeKnown&&s.eyeOn)),upload:!!pending||!s.known||!s.can,
   recognize:!!pending||!s.known||!s.can||!s.eyeKnown||s.eyeAvailable===false};
 }
 async function runRequests(reqs,keepGoing,post){

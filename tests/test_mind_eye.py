@@ -175,6 +175,50 @@ class EyeRunnerTest(EyeTest):
         self.switch(True)
         self.assertEqual(self.tick(T0 + MIN + 25_000), [])      # the minute seen while off is not called later
 
+    def test_switch_off_during_a_catch_up_stops_further_calls(self):
+        self.switch(True)
+        self.db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": T0 - 10 * MIN}}, upsert=True)
+        for k in range(10):
+            self.frame(T0 - k * MIN + 1000, 200 + k)
+        orig = eye.run_minute
+
+        def run_then_switch_off(*a, **k):
+            out = orig(*a, **k)
+            self.switch(False)                         # the user presses 关 after the first minute
+            return out
+        eye_runner.eye.run_minute = run_then_switch_off
+        try:
+            self.tick(T0 + MIN + 20_000)
+        finally:
+            eye_runner.eye.run_minute = orig
+        self.assertEqual(len(self.fake.calls), 1)
+
+    def test_an_error_after_the_call_is_recorded_and_the_minute_not_repeated(self):
+        self.switch(True)
+        self.frame(T0 + 1000, 1)
+        self.db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": T0 - MIN}}, upsert=True)
+        real = self.store.put_run
+        self.store.put_run = lambda doc: (_ for _ in ()).throw(RuntimeError("mongo blip"))
+        try:
+            self.tick(T0 + MIN + 20_000)                 # must not raise
+        finally:
+            self.store.put_run = real
+        state = self.db["eye_state"].find_one({"_id": "live"})
+        self.assertEqual(state["cursor_minute"], T0)
+        self.assertGreater(state["backoff_until"], T0 + MIN)
+        self.tick(T0 + MIN + 50_000)
+        self.assertEqual(len(self.fake.calls), 1)
+
+    def test_list_content_is_a_failure_not_a_crash(self):
+        self.frame(T0 + 1000, 1)
+        bad = {"choices": [{"message": {"content": [{"type": "text", "text": "x"}]}}], "usage": {}}
+        eye.CHAT = lambda *a, **k: (bad, 10, None)
+        try:
+            rec = self.run_at()
+        finally:
+            eye.CHAT = self.fake
+        self.assertEqual(rec["source"], "failed")
+
     def test_status_document(self):
         eye_runner.write_status(self.db, True, False, T0)
         st = self.db["switches"].find_one({"_id": "eye_status"})

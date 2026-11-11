@@ -42,7 +42,16 @@ def tick(db, store, s, env, recordings_root, now_ms):
         first = max(first, cursor + MIN_MS)
     done = []
     for m in range(first, last_ready + MIN_MS, MIN_MS):
-        eye.run_minute(env, store, s, m, recordings_root, now_ms)
+        if not switch_on(db):                    # 关 pressed during a catch-up: stop before the next paid call
+            break
+        try:
+            eye.run_minute(env, store, s, m, recordings_root, now_ms)
+        except Exception as e:                   # noqa: BLE001 - a call may already be paid: never repeat the minute
+            failures = (db["eye_state"].find_one({"_id": "live"}) or {}).get("failures", 0) + 1
+            db["eye_state"].update_one({"_id": "live"}, {"$set": {
+                "failures": failures, "last_error": f"{type(e).__name__}: {str(e)[:160]}",
+                "backoff_until": now_ms + eye.BACKOFF_MIN[min(failures - 1, 3)] * MIN_MS}}, upsert=True)
+            print(f"eye error in minute {m}: {type(e).__name__}: {str(e)[:160]}", flush=True)
         db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": m}}, upsert=True)
         done.append(m)
     return done
