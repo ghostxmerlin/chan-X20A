@@ -323,6 +323,20 @@ class EarTingwuTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(self.streams), 2)
             await ear.close(); ear.rec.close()
 
+    async def test_tingwu_gets_silence_while_hello_makes_sound(self):
+        import ear_server
+        with tempfile.TemporaryDirectory() as d:
+            ear = self.switched_ear(ear_server, d, True)
+            await self.audio_hello(ear)
+            ear.tingwu_tick()
+            await ear.on_text('{"type":"self","sounding":true,"moving":false}')
+            await ear.on_audio(b"\x01\x00" * 1600)
+            await ear.on_text('{"type":"self","sounding":false,"moving":false}')
+            await ear.on_audio(b"\x01\x00" * 1600)
+            fed = bytes(self.streams[0].fed)
+            self.assertEqual((len(fed), fed[:3200], fed[3200:]), (6400, b"\x00" * 3200, b"\x01\x00" * 1600))
+            await ear.close(); ear.rec.close()
+
     async def test_rapid_toggle_keeps_one_stream(self):
         import ear_server
         with tempfile.TemporaryDirectory() as d:

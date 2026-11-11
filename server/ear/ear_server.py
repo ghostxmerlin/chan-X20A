@@ -521,7 +521,9 @@ class Ear:
         if self.rec:
             self.rec.audio_in(raw, data, self.opus is not None)
         if self.tingwu is not None:
-            self.tingwu.feed(data)             # raw 16 kHz mic, before denoise and self-silencing
+            # raw 16 kHz mic (no denoise), but silence while hello makes sound, like VAD/ASR: 听悟 never hears
+            # her own voice (user 2026-11-11: "hello发声时不收音"; it used to get everything, then be flagged)
+            self.tingwu.feed(bytes(len(data)) if self.self_flags.get("sounding") else data)
         x = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
         self.tick_sq += float(np.sum(x ** 2))      # level meter reports what the mic really heard
         self.tick_n += len(x)
