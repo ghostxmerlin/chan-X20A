@@ -119,6 +119,22 @@ class EyeTest(unittest.TestCase):
         nxt = self.run_at(T0 + MIN, now + 30_000)
         self.assertEqual((nxt["source"], len(self.fake.calls)), ("backoff", 2))
 
+    def test_hollow_answer_is_retried(self):
+        self.frame(T0 + 1000, 1)
+        hollow = json.dumps({"activity": "", "changes": "", "confidence": "mid", "people": [], "people_count": 1, "scene": "x"})
+        self.fake.reply_next(hollow)
+        self.fake.reply_next(eye_json())
+        rec = self.run_at()
+        self.assertEqual((len(self.fake.calls), rec["source"]), (2, "model"))
+        self.assertIn("people_count", self.fake.calls[1]["messages"][-1]["content"])
+
+    def test_prompt_says_an_unrecognised_face_at_the_desk_is_likely_the_owner(self):
+        self.frame(T0 + 1000, 1)
+        self.fake.reply_next(eye_json())
+        self.run_at()
+        system = self.fake.calls[0]["messages"][0]["content"]
+        self.assertIn("很可能是主人", system)
+
     def test_budget_reached_records_budget_without_calling(self):
         import copy
         s = copy.deepcopy(S)

@@ -14,7 +14,7 @@ from . import llm, settings as settings_mod
 
 CHAT = llm.chat                       # injectable in tests
 EYE_MODEL = "claude-haiku-5-5"
-EYE_PROMPT = "eye-v1"
+EYE_PROMPT = "eye-v2"            # v2: an unrecognised face at the desk is most likely the owner; hollow answers retried
 MIN_MS = 60_000
 MAX_FRAMES = 6
 MAX_EVENTS = 40
@@ -34,7 +34,9 @@ EYE_SCHEMA = {"type": "object", "additionalProperties": False,
 SYSTEM = ("你是桌面宠物机器人 hello 的视觉整理者。hello 放在主人的办公桌上，机身摄像头 320×240，头会转向看到的脸，"
           "所以画面只是 hello 正看着的方向。你根据这一分钟按时间排列的几张画面和 M12 人脸模块的记录，写出画面里有几个人、"
           "各是谁、在哪、在做什么、画面环境，以及这一分钟里的变化。\n"
-          "- M12 认出的名字可信，写成给出的称呼；没认出的脸写“未认出的人”。年龄、性别不可靠，不要写。\n"
+          "- M12 认出的名字可信，写成给出的称呼。坐在桌前、离镜头近、M12 没认出的人，最可能就是主人："
+          "who 写“很可能是主人（称呼）”，把握放低一档；其他没认出的人写“未认出的人”。年龄、性别不可靠，不要写。\n"
+          "- 每个看到的人在 people 里写一条，条数等于 people_count；activity 和 scene 都要写成完整的一句话。\n"
           "- M12 的“人形”是人体检测，近处的人也算在里面，人形数不代表另外还有人。人数以画面为准。\n"
           "- 画面只在有变化时才拍，所以几张之间可能隔了几十秒。\n"
           "- 用最可能的正向说法，不要堆否定句；拿不准就把 confidence 调低。只描述，不提建议。")
@@ -113,7 +115,17 @@ def _parse(resp):
     if not isinstance(out, dict):
         return None, "not a JSON object"
     missing = [k for k in EYE_SCHEMA["required"] if k not in out]
-    return (None, f"JSON missing fields: {', '.join(missing)}") if missing else (out, None)
+    if missing:
+        return None, f"JSON missing fields: {', '.join(missing)}"
+    # strict json_schema still lets a hollow answer through (seen live 2026-11-11 12:28: count 1, people [], scene "x")
+    people, count = out.get("people"), out.get("people_count")
+    if not isinstance(people, list) or not isinstance(count, int) or len(people) != count:
+        return None, "people 的条数必须等于 people_count"
+    if count > 0 and not str(out.get("activity") or "").strip():
+        return None, "有人时 activity 不能为空"
+    if len(str(out.get("scene") or "").strip()) < 2:
+        return None, "scene 要写成一句话"
+    return out, None
 
 
 def messages_for(s, minute_ms, inputs, prev):
