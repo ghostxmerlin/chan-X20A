@@ -956,10 +956,10 @@ def main():
             peer = ws.remote_address
             print(f"+ {peer} vision v{vision_no[0]}", flush=True)
             try:
-                link = await vision_link.serve_link(ws, database, vision_no[0], f"{peer[0]}:{peer[1]}")
+                link = await vision_link.serve_link(ws, database, vision_no[0], f"{peer[0]}:{peer[1]}", rec_root)
             finally:
                 vision_active.discard(ws)
-            print(f"- {peer} vision v{vision_no[0]}: {link.events} events ({link.session})", flush=True)
+            print(f"- {peer} vision v{vision_no[0]}: {link.events} events, {link.frames} frames ({link.session})", flush=True)
             return
         if len(active) >= 4:
             await ws.close(code=1013, reason="server busy")

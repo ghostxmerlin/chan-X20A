@@ -52,6 +52,13 @@ class HelloDBTest(unittest.TestCase):
         db.flush()
         self.assertIn(("update", "switches", {"_id": "tingwu_status"}, {"running": ["s1"], "available": True, "at": 5}), fake.ops)
 
+    def test_frame_is_upserted_by_session_and_seq(self):
+        fake = FakeDB()
+        db = hello_db.HelloDB("unused", client_factory=lambda: fake)
+        db.frame({"session": "s1", "seq": 4, "path": "frames/s1/1-4.jpg"})
+        db.flush()
+        self.assertIn(("replace", "frames", {"session": "s1", "seq": 4}, {"session": "s1", "seq": 4, "path": "frames/s1/1-4.jpg"}), fake.ops)
+
     def test_session_key_points_at_the_recording_folder(self):
         self.assertEqual(hello_db.session_key("/home/u/soul-spike/recordings/20261110/154417-stackchan-x-c75/"),
                          "20261110/154417-stackchan-x-c75")

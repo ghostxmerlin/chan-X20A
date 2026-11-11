@@ -62,6 +62,8 @@ def open_db(uri):
     db.vision.create_index([("session", ASCENDING), ("t_us", ASCENDING), ("event", ASCENDING), ("face", ASCENDING),
                             ("person", ASCENDING)], unique=True)
     db.vision.create_index([("at", ASCENDING)])
+    db.frames.create_index([("session", ASCENDING), ("seq", ASCENDING)], unique=True)
+    db.frames.create_index([("at", ASCENDING)])
     return db
 
 
@@ -109,6 +111,10 @@ class HelloDB:
         key = {"session": session, "t_us": doc.get("t_us"), "event": doc.get("event"), "face": doc.get("face"),
                "person": doc.get("person")}
         self._put("upsert", "vision", key, doc)
+
+    def frame(self, doc):
+        """One body-camera frame index row (the JPEG itself is a file under recordings/frames/)."""
+        self._put("upsert", "frames", {"session": doc["session"], "seq": doc["seq"]}, doc)
 
     def read_switch(self, name):
         """The switch document hello.switches {_id: name}, or None. Synchronous (call it from a worker
