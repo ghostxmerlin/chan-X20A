@@ -109,6 +109,26 @@ class FusionTest(unittest.TestCase):
         self.run_at(T, same=True, coverage=(0, 0))
         self.assertEqual(self.run_at(T + MIN, same=True, coverage=(60, 0))["reason"], "sensors_on")
 
+    def test_new_prompt_version_calls_instead_of_carrying_the_old_scene(self):
+        self.run_at(T, same=True)
+        self.run_at(T + MIN, same=True)                      # carried (prompt v1 scene)
+        s2 = copy.deepcopy(S); s2["fusion"]["prompt"] = "v2"
+        rec = self.run_at(T + 2 * MIN, s=s2, same=True)
+        self.assertEqual((rec["source"], rec["reason"], rec["prompt"]), ("model", "prompt", "v2"))
+        self.assertEqual(self.run_at(T + 3 * MIN, s=s2, same=True)["source"], "carried")
+
+    def test_sensors_off_minutes_never_call_the_model(self):
+        self.run_at(T)
+        got = [self.run_at(T + k * MIN, same=True, owner="sensors_off", coverage=(0, 0)) for k in range(1, 45)]
+        self.assertEqual(len(self.fake.calls), 1)          # no owner_state call, no 30-min review while both senses are off
+        self.assertEqual({(g["source"], g["reason"]) for g in got}, {("rules_only", "sensors_off")})
+        self.assertIsNone(got[0]["scene"])
+
+    def test_rerun_of_a_sensors_off_minute_still_calls(self):
+        pkg, strong = minute_input(T, owner="sensors_off", coverage=(0, 0))
+        rec = fusion.run_minute(ENV, self.store, S, 3, T, pkg, strong, {}, lane="rerun", force_prompt="v1", now_ms=T + 5 * MIN)
+        self.assertEqual((rec["source"], len(self.fake.calls)), ("model", 1))
+
     def test_timeout_retries_once_then_fails_and_backs_off(self):
         self.fake.fail_next(2)
         rec = self.run_at(T)

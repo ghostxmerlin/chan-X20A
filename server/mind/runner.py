@@ -51,23 +51,27 @@ def day_start(ms, tz):
 
 
 def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE):
-    """Model fusion for these minutes, in order (packages must exist), then segment summaries."""
-    if env is None or not s["fusion"]["enabled"] or not minutes:
+    """Model fusion for these minutes, in order (packages must exist), then segment summaries.
+    Nothing is called while the mind switch is off; segment summaries only when a sense was on in
+    one of these minutes (both senses off: no model call of any kind)."""
+    if env is None or not s["fusion"]["enabled"] or not minutes or not store.enabled():
         return 0
     segs = segments.update(env, store, s, day_start(minutes[0], s["tz"]), now_ms, lane, summarize_now=False)
     titled = [{"start": g["start"], "end": g["end"], "cls": g["cls"], "title": (g.get("summary") or {}).get("title")}
               for g in segs if g["cls"] != "gap"]
-    done = 0
+    done, sensed = 0, False
     for m in minutes:
         doc = store.latest(lane, m)
         if not doc:
             continue
+        cov = doc["strong"]["coverage"]
+        sensed = sensed or cov["hearing_s"] + cov["vision_s"] > 0
         prev = store.latest(lane, m - MIN_MS)
         fusion.run_minute(env, store, s, settings_version, m, doc["package"], doc["strong"],
                           {"prev": prev["package"] if prev else None}, lane=lane, now_ms=now_ms,
                           segments=[g for g in titled if g["start"] < m], package_version=doc["version"])
         done += 1
-    segments.update(env, store, s, day_start(now_ms, s["tz"]), now_ms, lane)
+    segments.update(env, store, s, day_start(now_ms, s["tz"]), now_ms, lane, summarize_now=sensed)
     store.set_state(cost_today=round(store.cost_today(s["tz"], now_ms), 4))
     return done
 
@@ -138,7 +142,9 @@ def main():
         minutes = list(range(settings.minute_floor(lo), hi, MIN_MS))
         written = sum(process_minute(records, store, m, s, int(time.time() * 1000)) == "written" for m in minutes)
         print(f"rebuilt {a.rebuild[0]}–{a.rebuild[1]}: {written} new versions", flush=True)
-        if a.fusion:
+        if a.fusion and not store.enabled():
+            print("mind is switched off: no model calls (turn 情景 on first)", flush=True)
+        elif a.fusion:
             before = store.cost_today(s["tz"], int(time.time() * 1000))
             n = fuse(env, store, s, minutes, int(time.time() * 1000), version)
             print(f"fused {n} minutes, cost ${store.cost_today(s['tz'], int(time.time() * 1000)) - before:.4f}", flush=True)

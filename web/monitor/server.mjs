@@ -14,7 +14,8 @@ export const root = path.resolve(directory, '../..');
 export function createMonitorServer(monitor, controls = new Controls(monitor,{loadHearingConfig:()=>existingHearingConfig(path.join(root,'.env'))}), mind = null) {
   const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']],
     ['/hearing-ui.js', ['hearing-ui.js','text/javascript; charset=utf-8']], ['/servo-tuning-ui.js', ['servo-tuning-ui.js','text/javascript; charset=utf-8']], ['/wifi-ui.js', ['wifi-ui.js','text/javascript; charset=utf-8']], ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
-    ['/mind.html', ['mind.html', 'text/html; charset=utf-8']], ['/mind-ui.js', ['mind-ui.js', 'text/javascript; charset=utf-8']], ['/mind.css', ['mind.css', 'text/css; charset=utf-8']]]);
+    ['/mind.html', ['mind.html', 'text/html; charset=utf-8']], ['/mind-ui.js', ['mind-ui.js', 'text/javascript; charset=utf-8']], ['/mind.css', ['mind.css', 'text/css; charset=utf-8']],
+    ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -47,7 +48,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (req.method === 'POST' && url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/settings', '/mark', '/label', '/rerun', '/place'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/settings', '/mark', '/label', '/rerun', '/place', '/switch'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (origin !== 'http://' + req.headers.host) { respond(403, '写入必须来自当前观察页面'); return; }
       if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') { respond(415, '只接受 JSON'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }

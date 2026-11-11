@@ -113,6 +113,10 @@ class Store:
         doc.pop("_id", None)
         return doc
 
+    def enabled(self):
+        """The mind switch (the page's 情景 switch). Off: packages are still built, no model call is made."""
+        return self.state().get("enabled") is not False
+
     def set_state(self, **fields):
         self.state_coll.update_one({"_id": LANE}, {"$set": fields}, upsert=True)
 

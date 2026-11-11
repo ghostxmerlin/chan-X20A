@@ -37,6 +37,9 @@ def decide(prev, pkg, strong, s, minute_ms, review_level):
         return "call", "first"
     if prev.get("owner_state") != strong["owner"]["state"]:
         return "call", "owner_state"
+    called_with = prev["last_call_prompt"] if "last_call_prompt" in prev else prev.get("prompt")   # older records: prompt
+    if called_with is not None and called_with != s["fusion"]["prompt"]:
+        return "call", "prompt"                  # a new prompt version never carries a scene the old one wrote
     cov = strong["coverage"]["hearing_s"] + strong["coverage"]["vision_s"]
     if prev.get("coverage_sum", 0) == 0 and cov > 0:
         return "call", "sensors_on"
@@ -82,6 +85,7 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
             "coverage_sum": strong["coverage"]["hearing_s"] + strong["coverage"]["vision_s"],
             "content_fp": content_fp(pkg, strong), "last_call_minute": prev.get("last_call_minute") if prev else None,
             "last_call_fp": prev.get("last_call_fp") if prev else None, "review_level": level,
+            "last_call_prompt": (prev["last_call_prompt"] if "last_call_prompt" in prev else prev.get("prompt")) if prev else None,
             "scene": None, "checks": None, "package_version": package_version, "package_fingerprint": pkg.get("fingerprint")}
 
     def carry(source, reason):
@@ -93,6 +97,10 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
         version = store.put_scene(lane, minute_ms, rec)
         return {**rec, "lane": lane, "minute": minute_ms, "version": version}
 
+    if not forced and base["coverage_sum"] == 0:     # both senses off: nothing new to see, never pay for a call
+        rec = dict(base, source="rules_only", reason="sensors_off")
+        version = store.put_scene(lane, minute_ms, rec)
+        return {**rec, "lane": lane, "minute": minute_ms, "version": version}
     if forced:
         action, reason = "call", "rerun"
     else:
@@ -138,6 +146,6 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
                                    pkg, strong, minute_ms)
     new_level = level + 1 if reason == "review" else 0
     rec = dict(base, source="model", reason=reason, run_id=run_id, scene=scene, checks=checks,
-               last_call_minute=minute_ms, last_call_fp=base["content_fp"], review_level=new_level)
+               last_call_minute=minute_ms, last_call_fp=base["content_fp"], last_call_prompt=prompt, review_level=new_level)
     version = store.put_scene(lane, minute_ms, rec)
     return {**rec, "lane": lane, "minute": minute_ms, "version": version}

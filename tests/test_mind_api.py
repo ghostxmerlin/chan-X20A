@@ -180,6 +180,21 @@ class ApiV1Test(unittest.TestCase):
         self.assertEqual(r["settings_version"], live["settings_version"])
         self.assertNotIn("别处", self.fake.calls[-1]["messages"][1]["content"])
 
+    def test_switch_turns_mind_off_and_rerun_is_refused(self):
+        try:
+            self.assertEqual(self.call("/state").json().get("enabled"), True)
+            self.assertEqual(self.post_json("/switch", {"enabled": "no"}).status, 400)
+            r = self.post_json("/switch", {"enabled": False})
+            self.assertEqual((r.status, r.json()["enabled"]), (200, False))
+            self.assertIs(self.call("/state").json()["enabled"], False)
+            n = len(self.fake.calls)
+            r = self.post_json("/rerun", {"minute": T0, "prompt": "v1", "model": "gpt-6-luna"})
+            self.assertEqual(r.status, 409)
+            self.assertEqual(len(self.fake.calls), n)
+        finally:
+            self.post_json("/switch", {"enabled": True})
+        self.assertIs(self.call("/state").json()["enabled"], True)
+
     def test_place_report(self):
         self.assertEqual(self.post_json("/place", {"label": "办公室"}).status, 200)
         self.assertEqual(self.post_json("/place", {"label": ""}).status, 400)

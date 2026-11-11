@@ -4,7 +4,7 @@ mind tables (settings versions, labels/marks, rerun lane) — never raw records,
 scenes. Sentence text only leaves through this API; nothing is logged.
 
 GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats
-POST /settings /mark /label /rerun
+POST /settings /mark /label /rerun /place /switch
 """
 import hmac
 import json
@@ -28,6 +28,10 @@ class BadRequest(Exception):
 
 
 class NotFound(Exception):
+    pass
+
+
+class Conflict(Exception):
     pass
 
 
@@ -97,7 +101,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
 
     def get(path, q):
         if path == "/state":
-            return {**store.state(), "lane": LANE, "now_ms": int(time.time() * 1000)}
+            return {**store.state(), "enabled": store.enabled(), "lane": LANE, "now_ms": int(time.time() * 1000)}
         if path == "/timeline":
             return store.timeline(LANE, *_range(q))
         if path == "/minute":
@@ -114,7 +118,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             segs = segments.update(None, store, s, now - 24 * 3600_000 if not scene else scene["minute"] - 12 * 3600_000, now,
                                    LANE, summarize_now=False)
             return {"minute": scene["minute"] if scene else None, "scene": scene, "strong": pkg["strong"] if pkg else None,
-                    "segment": segs[-1] if segs else None, "state": store.state()}
+                    "segment": segs[-1] if segs else None, "state": {**store.state(), "enabled": store.enabled()}}
         if path == "/segments":
             s, _ = current_settings()
             lo, hi = _range(q)
@@ -155,6 +159,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 return {"version": ss.save(body.get("settings"), _str(body.get("note"), 200))}
             except ValueError as e:
                 raise BadRequest(str(e)) from None
+        if path == "/switch":
+            if not isinstance(body.get("enabled"), bool):
+                raise BadRequest("enabled (true/false) required")
+            store.set_state(enabled=body["enabled"], switched_at=now)
+            return {"enabled": store.enabled(), "at": now}
         if path == "/mark":
             if body.get("kind") not in MARKS:
                 raise BadRequest(f"kind must be one of {', '.join(MARKS)}")
@@ -183,6 +192,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise BadRequest("minute (int), prompt (known version) and model (known model) required")
             if not ctx.get("env"):
                 raise BadRequest("no model access configured")
+            if not store.enabled():
+                raise Conflict("mind is switched off: no model calls")
             doc = store.latest(LANE, minute)
             if not doc:
                 raise NotFound("no package for this minute")
@@ -226,6 +237,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(400, {"error": str(e)})
             except NotFound as e:
                 self._send(404, {"error": str(e)})
+            except Conflict as e:
+                self._send(409, {"error": str(e)})
             except Exception as e:               # noqa: BLE001 - database trouble shows as 503
                 self._send(503, {"error": f"{type(e).__name__}"})
 
@@ -241,7 +254,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place"):
+            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch"):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:

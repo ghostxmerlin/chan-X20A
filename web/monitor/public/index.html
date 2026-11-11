@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>StackChan 观察台</title>
-  <link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script>
+  <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/switches.css"><script type="module" src="/app.js"></script>
 </head>
 <body>
 <main>
@@ -11,6 +11,7 @@
     <div class="connection"><span class="brand">STACKCHAN /</span><span id="status-dot" class="dot"></span><strong id="status" role="status">连接中</strong><span id="firmware" class="muted">StackChan</span></div>
     <div class="actions"><a class="button-link" href="/mind.html" target="_blank" rel="noopener">情景</a><button data-open="hearing-config">配置 / 声纹</button><button id="pause" aria-pressed="false">暂停监控</button></div>
   </header>
+  <nav id="switches" class="switches" aria-label="总开关"></nav>
   <div class="status-line"><p id="notice" class="notice" role="status">正在连接本机数据桥…</p><span id="freshness">尚未收到数据</span></div>
   <div class="dashboard">
     <section class="panel system-panel" id="system-panel">

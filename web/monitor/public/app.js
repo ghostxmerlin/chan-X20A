@@ -5,6 +5,7 @@ import { HearingPanel } from '/hearing-ui.js';
 import { ServoTuningPanel } from '/servo-tuning-ui.js';
 import { WifiPanel } from '/wifi-ui.js';
 import { renderM12, renderThermal, M12LibraryPanel } from '/m12-ui.js';
+import { SwitchBar } from '/switches-ui.js';
 const $ = id => document.getElementById(id);
 const text = (id, value) => { const el = $(id); const next = String(value ?? '—'); if (el.textContent !== next) { el.textContent = next; el.title = next; } };
 const num = (n, digits = 1) => Number.isFinite(n) ? n.toFixed(digits) : '—';
@@ -19,6 +20,7 @@ const hearing = new HearingPanel(document);
 const servoTuning = new ServoTuningPanel(document);
 const wifi = new WifiPanel(document);
 const m12Library = new M12LibraryPanel(document);
+const switches = new SwitchBar(document);
 for (const button of document.querySelectorAll('[data-open]')) {
   button.addEventListener('click', () => $(button.dataset.open).showModal());
 }
@@ -110,6 +112,7 @@ function render() {
   servoTuning.render(state, fresh && !document.hidden);
   wifi.render(state, fresh && !document.hidden);
   m12Library.render(state, fresh && !document.hidden);
+  switches.render(state, fresh && !document.hidden);
   for (const mirror of document.querySelectorAll('[data-mirror]')) {
     const value = $(mirror.dataset.mirror).textContent;
     if (mirror.textContent !== value) mirror.textContent = value;

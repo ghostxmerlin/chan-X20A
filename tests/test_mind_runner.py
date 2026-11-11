@@ -171,5 +171,30 @@ class RunnerFusionTest(RunnerTest):
         self.assertIn("segment", {d["step"] for d in self.db["mind_runs"].docs})
 
 
+    def test_mind_switched_off_builds_packages_but_calls_nothing(self):
+        self.store.set_state(cursor_minute=T0, enabled=False)
+        runner.tick(self.rec, self.store, S, T0 + 10 * MIN + 80_000, 48 * 3600_000, env=ENV)
+        self.assertGreater(self.db.count("mind_packages"), 5)
+        self.assertEqual((self.db.count("mind_scenes"), self.db.count("mind_runs"), self.fake.calls), (0, 0, []))
+
+    def test_mind_switched_back_on_calls_again(self):
+        self.store.set_state(cursor_minute=T0, enabled=False)
+        runner.tick(self.rec, self.store, S, T0 + 10 * MIN + 80_000, 48 * 3600_000, env=ENV)
+        self.store.set_state(enabled=True)
+        runner.tick(self.rec, self.store, S, T0 + 11 * MIN + 80_000, 48 * 3600_000, env=ENV)
+        self.assertTrue(self.fake.calls)
+
+    def test_both_senses_off_calls_nothing_not_even_segment_summaries(self):
+        db = FakeDB()
+        db.add("sessions", session("H", T0 - 3600_000, end_ms=T0 - 1800_000, source="stackchan-dev"))
+        db.add("speech", speech("H", "s-old", T0 - 3000_000, band="known", name="me"))
+        store = Store(db)
+        store.ensure_indexes()
+        store.set_state(cursor_minute=T0)
+        runner.tick(Records(db), store, S, T0 + 10 * MIN + 80_000, 48 * 3600_000, env=ENV)
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual({d["reason"] for d in db["mind_scenes"].docs}, {"sensors_off"})
+
+
 if __name__ == "__main__":
     unittest.main()
