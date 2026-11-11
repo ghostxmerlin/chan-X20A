@@ -1063,6 +1063,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     health["dma_largest_free"] = heap_caps_get_largest_free_block(dma_caps);
     health["reset_reason_code"] = static_cast<int>(esp_reset_reason());
     health["psram_free"] = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    mem_diag_cpu_json(health["cpu_top"].to<JsonArray>());
     health["alloc_failures"] = mem_diag_failed_allocs(); health["alloc_failures_internal"] = mem_diag_failed_internal();
     health["heap_min_free"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     health["camera_enabled"] = camera_enabled.load();

@@ -37,6 +37,39 @@ std::atomic<uint32_t> last_fail_size{0}, last_fail_caps{0};
 std::atomic<uint32_t> ping_ok{0}, ping_timeout{0}, ping_last_ms{0};
 esp_ping_handle_t ping_session = nullptr;
 uint32_t previous_runtime[kMaxTasks]; char previous_names[kMaxTasks][configMAX_TASK_NAME_LEN];
+// CPU sampler for telemetry (0.4.79): top tasks by run time over each 5 s window.
+struct CpuRow { char name[configMAX_TASK_NAME_LEN]; uint8_t prio; uint16_t permille; bool psram; };
+constexpr size_t kCpuRows = 10;
+CpuRow cpu_rows[kCpuRows]; size_t cpu_n = 0; portMUX_TYPE cpu_lock = portMUX_INITIALIZER_UNLOCKED;
+uint32_t cpu_prev[kMaxTasks]; char cpu_prev_names[kMaxTasks][configMAX_TASK_NAME_LEN]; int64_t cpu_prev_us = 0;
+
+void sample_cpu()
+{
+    static TaskStatus_t tasks[kMaxTasks];
+    static CpuRow rows[kMaxTasks];
+    const UBaseType_t n = uxTaskGetSystemState(tasks, kMaxTasks, nullptr);
+    const int64_t now = esp_timer_get_time();
+    const int64_t window = now - cpu_prev_us;
+    size_t m = 0;
+    for (UBaseType_t i = 0; i < n && cpu_prev_us; ++i) {
+        uint32_t before = tasks[i].ulRunTimeCounter;           // a new task: no history, counts 0
+        for (uint32_t k = 0; k < kMaxTasks; ++k) if (!strncmp(cpu_prev_names[k], tasks[i].pcTaskName, configMAX_TASK_NAME_LEN)) { before = cpu_prev[k]; break; }
+        CpuRow r{};
+        strncpy(r.name, tasks[i].pcTaskName, configMAX_TASK_NAME_LEN - 1);
+        r.prio = static_cast<uint8_t>(tasks[i].uxCurrentPriority);
+        r.permille = static_cast<uint16_t>(std::min<int64_t>(1000, window > 0 ? int64_t(tasks[i].ulRunTimeCounter - before) * 1000 / window : 0));
+        r.psram = esp_ptr_external_ram(tasks[i].pxStackBase);
+        rows[m++] = r;
+    }
+    std::sort(rows, rows + m, [](const CpuRow& a, const CpuRow& b) { return a.permille > b.permille; });
+    portENTER_CRITICAL(&cpu_lock);
+    cpu_n = std::min(m, kCpuRows); std::copy(rows, rows + cpu_n, cpu_rows);
+    portEXIT_CRITICAL(&cpu_lock);
+    for (UBaseType_t i = 0; i < n && i < kMaxTasks; ++i) {
+        strncpy(cpu_prev_names[i], tasks[i].pcTaskName, configMAX_TASK_NAME_LEN); cpu_prev[i] = tasks[i].ulRunTimeCounter;
+    }
+    cpu_prev_us = now;
+}
 
 void on_ping_ok(esp_ping_handle_t h, void*)
 {
@@ -147,6 +180,7 @@ void diag_task(void*)
         const int64_t now = esp_timer_get_time();
         const bool low = int_free < kLowInternal;
         if (now - last_tasks >= 60000000 || (low && !was_low)) { last_tasks = now; print_tasks(); }
+        sample_cpu();
         was_low = low;
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
@@ -158,6 +192,16 @@ void mem_diag_start()
     heap_caps_register_failed_alloc_callback(on_failed_alloc);
     if (xTaskCreateWithCaps(diag_task, "mem_diag", kStackBytes, nullptr, 1, nullptr, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS)
         ESP_LOGE(kTag, "diagnostics task not started");
+}
+
+void mem_diag_cpu_json(ArduinoJson::JsonArray out)
+{
+    CpuRow rows[kCpuRows]; size_t n;
+    portENTER_CRITICAL(&cpu_lock); n = cpu_n; std::copy(cpu_rows, cpu_rows + n, rows); portEXIT_CRITICAL(&cpu_lock);
+    for (size_t i = 0; i < n; ++i) {
+        auto o = out.add<ArduinoJson::JsonObject>();
+        o["name"] = rows[i].name; o["prio"] = rows[i].prio; o["core_pct"] = rows[i].permille / 10.0; o["stack"] = rows[i].psram ? "psram" : "internal";
+    }
 }
 
 uint32_t mem_diag_failed_allocs() { return failed_allocs.load(); }

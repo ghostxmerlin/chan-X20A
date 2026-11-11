@@ -112,18 +112,21 @@ std::atomic<uint32_t> playback_stack_free{0};
 bool enqueue_playback(Job* job) {return playback_queue&&xQueueSend(playback_queue,&job,0)==pdTRUE;}
 
 // Speaker power sequence shared by clip jobs and the /mouth stream (AW88298, playback.cpp:Output).
+const char* amp_step = "";   // last amp_begin step that failed (telemetry)
 esp_err_t amp_begin(CoreS3AudioCodec* codec)
 {
     auto err = hal_bridge::board_set_speaker_reset(true);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) { amp_step = "reset_hold"; return err; }
     err = codec->PrepareCollectorOutput();
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) { amp_step = "prepare"; return err; }
     // The complete zero-filled TX ring must drain while RESET_N is low.
     vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(100)));
     err = hal_bridge::board_set_speaker_reset(false);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) { amp_step = "reset_release"; return err; }
     vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(50)));
-    return codec->BeginCollectorOutput(volume_now.load());
+    err = codec->BeginCollectorOutput(volume_now.load());
+    if (err != ESP_OK) amp_step = "begin";
+    return err;
 }
 esp_err_t amp_finish(CoreS3AudioCodec* codec)
 {
@@ -275,6 +278,8 @@ PcmQueue* pcm_queue = nullptr;
 struct StreamStats {
     uint32_t sessions = 0, streams = 0, frames = 0, decode_errors = 0, underruns = 0, gate_timeouts = 0, amp_errors = 0;
     uint32_t decode_us_max = 0, decode_us_avg = 0, decodes = 0, decodes_over_60ms = 0, decoder_late = 0;
+    uint32_t decode_cpu_us_avg = 0, decode_cpu_us_max = 0;
+    const char* amp_failed_step = "";
     uint32_t decoder_stack_free = 0, writer_stack_free = 0;
     bool decoder_ok = false;
 } stream_stats;
@@ -296,7 +301,7 @@ void decoder_worker(void*)
     }
     { std::lock_guard<std::mutex> lock(status_mutex); stream_stats.decoder_ok = true; }
     uint32_t current = 0;
-    uint64_t total_us = 0;
+    uint64_t total_us = 0, total_cpu_us = 0;
     for (uint32_t loops = 0;; ++loops) {
         mouth::PlayerView pv;
         if (!mouth::player_view(pv) || pv.stopped || !pv.buffered) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
@@ -309,14 +314,21 @@ void decoder_worker(void*)
         esp_audio_dec_in_raw_t raw{packet, static_cast<uint32_t>(n), 0, ESP_AUDIO_DEC_RECOVERY_NONE};
         esp_audio_dec_out_frame_t out{reinterpret_cast<uint8_t*>(pcm), kStreamFrame * sizeof(int16_t), 0, 0};
         esp_audio_dec_info_t info{};
+        // Wall time and this task's own run time: tells a slow decode from a decoder kept off the CPU.
+        TaskStatus_t before{}, after{};
+        vTaskGetInfo(nullptr, &before, pdFALSE, eRunning);
         const int64_t t0 = esp_timer_get_time();
         const bool ok = esp_opus_dec_decode(decoder, &raw, &out, &info) == ESP_AUDIO_ERR_OK && out.decoded_size == kStreamFrame * sizeof(int16_t);
         const auto took = static_cast<uint32_t>(esp_timer_get_time() - t0);
+        vTaskGetInfo(nullptr, &after, pdFALSE, eRunning);
+        const uint32_t cpu = after.ulRunTimeCounter - before.ulRunTimeCounter;
         if (!ok) std::memset(pcm, 0, kStreamFrame * sizeof(int16_t));
         { std::lock_guard<std::mutex> lock(pcm_mutex); pcm_queue->push(pv.stream, pcm); }
         std::lock_guard<std::mutex> lock(status_mutex);
-        ++stream_stats.decodes; total_us += took;
+        ++stream_stats.decodes; total_us += took; total_cpu_us += cpu;
         stream_stats.decode_us_avg = static_cast<uint32_t>(total_us / stream_stats.decodes);
+        stream_stats.decode_cpu_us_avg = static_cast<uint32_t>(total_cpu_us / stream_stats.decodes);
+        stream_stats.decode_cpu_us_max = std::max(stream_stats.decode_cpu_us_max, cpu);
         stream_stats.decode_us_max = std::max(stream_stats.decode_us_max, took);
         if (took > 60000) ++stream_stats.decodes_over_60ms;
         if (!ok) ++stream_stats.decode_errors;
@@ -445,7 +457,7 @@ void stream_worker(void*)
         if (err == ESP_OK) stream_session(codec, pcm, zeros);
         else {
             stream_report(mouth::Report::Error, pv.stream, 0, 0, 0, 0, "speaker_start");
-            std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.amp_errors;
+            std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.amp_errors; stream_stats.amp_failed_step = amp_step;
         }
         const auto cleanup = amp_finish(codec);
         {
@@ -713,6 +725,8 @@ void playback_json(ArduinoJson::JsonObject target)
     st["frames"] = stream_stats.frames; st["decode_errors"] = stream_stats.decode_errors; st["underruns"] = stream_stats.underruns;
     st["gate_timeouts"] = stream_stats.gate_timeouts; st["amp_errors"] = stream_stats.amp_errors;
     st["decode_us_max"] = stream_stats.decode_us_max; st["decode_us_avg"] = stream_stats.decode_us_avg;
+    st["decode_cpu_us_avg"] = stream_stats.decode_cpu_us_avg; st["decode_cpu_us_max"] = stream_stats.decode_cpu_us_max;
+    st["amp_failed_step"] = stream_stats.amp_failed_step;
     st["decodes"] = stream_stats.decodes; st["decodes_over_60ms"] = stream_stats.decodes_over_60ms; st["decoder_late"] = stream_stats.decoder_late;
     st["decoder_stack_free_bytes"] = stream_stats.decoder_stack_free; st["writer_stack_free_bytes"] = stream_stats.writer_stack_free;
     const int reset = hal_bridge::board_speaker_reset_state();
