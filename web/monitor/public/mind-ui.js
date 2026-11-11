@@ -79,6 +79,21 @@ export function conversationsHtml(list){
   return `<li><span class="t">${when}</span>${cont} ${body}</li>`;
  }).join('')+'</ul>';
 }
+// "让 hello 说一句" (speak): one button per role, a stop button, the last lines and their state.
+export function roleButtonsHtml(roles){
+ return (roles||[]).map(r=>`<button data-role="${escapeHtml(r.id)}" title="${escapeHtml(r.name)}">${escapeHtml(r.button)}</button>`).join('')+
+  '<button data-say-stop="1" class="stop-button">别说了</button>';
+}
+const SAY_STATE={sent:'合成中',synthesizing:'合成中',playing:'正在说',done:'说完了',failed:'失败',cancelled:'被打断',unknown:'状态未知'};
+export function utterancesHtml(list,roles){
+ if(!list||!list.length)return '<p class="alt">还没说过话</p>';
+ const name=Object.fromEntries((roles||[]).map(r=>[r.id,r.button]));
+ return '<ul class="utterances">'+list.slice(-5).reverse().map(u=>{
+  const extra=[SAY_STATE[u.state]||escapeHtml(u.state||''),u.timings_s?.first_accepted!=null?`${Number(u.timings_s.first_accepted).toFixed(1)} 秒开口`:'',
+   u.tts_cost_cny!=null?`¥${Number(u.tts_cost_cny).toFixed(4)}`:''].filter(Boolean).join(' · ');
+  return `<li><span class="t">${hhmmss(u.at)}</span> <b>${escapeHtml(name[u.role]||u.role||'')}</b> ${escapeHtml(u.text||'')} <span class="alt">${extra}</span></li>`;
+ }).join('')+'</ul>';
+}
 export function frameCaption(f){
  if(!f)return '还没有收到画面';
  return `${hhmmss(f.at)} 收到 · 变化 ${f.diff===255?'首张':f.diff+' 格'} · 今天 ${f.today} 张${f.missing?' · 文件缺失':''}`;
@@ -306,6 +321,24 @@ export function start(doc){
   el('mind-convs').innerHTML=list?conversationsHtml(list):'<p class="alt">纪要服务未连接</p>';
  }
  refreshConvs();setInterval(refreshConvs,15000);
+ // 让 hello 说一句
+ let roles=[];
+ async function refreshSay(){
+  const d0=new Date();d0.setHours(0,0,0,0);
+  try{const r=await fetch(`/api/mind/utterances?from=${d0.getTime()}&to=${Date.now()+60000}`,{signal:AbortSignal.timeout(10000)});
+   if(r.ok)el('mind-utterances').innerHTML=utterancesHtml(await r.json(),roles);}catch{}
+ }
+ getJson('/roles').then(r=>{roles=r;el('mind-say-buttons').innerHTML=roleButtonsHtml(r);refreshSay();},()=>{el('mind-say-buttons').innerHTML='<span class="alt">角色读不到</span>';});
+ el('mind-say-buttons').addEventListener('click',async ev=>{
+  const b=ev.target.closest('button');if(!b)return;
+  const msg=el('mind-say-msg');
+  try{
+   if(b.dataset.sayStop){await postJson('/say/stop',{});msg.textContent='已叫停';}
+   else{msg.textContent='正在想…';const r=await postJson('/say',{role:b.dataset.role});msg.textContent=`说：${r.text}`;}
+  }catch(e){msg.textContent=String(e.message||e).includes('嘴没连上')?'hello 的嘴还没连上（固件 /mouth 未就绪）':`没说成：${e.message||e}`;}
+  refreshSay();
+ });
+ setInterval(refreshSay,5000);
  refresh();setInterval(refresh,10000);
 }
 if(typeof document!=='undefined'&&document.getElementById('mind-timeline'))start(document);

@@ -183,4 +183,14 @@ test('now card shows c1', ()=>{
  assert.match(html,/对话：板子地线 — 两人讨论地线接机壳。/);
  assert.doesNotMatch(ui.nowHtml({scene:base,strong:null,segment:null}),/对话：/);
 });
+test('say panel html', ()=>{
+ const roles=[{id:'roast',button:'吐槽',name:'毒舌脱口秀演员'},{id:'comfort',button:'鼓励',name:'程序员安慰师小姐姐'}];
+ const b=ui.roleButtonsHtml(roles);
+ assert.match(b,/data-role="roast"/);assert.match(b,/吐槽/);assert.match(b,/data-say-stop/);assert.doesNotMatch(b,/style="/);
+ const at=new Date(2026,10,11,17,5,3).getTime();
+ const list=ui.utterancesHtml([{at,role:'roast',text:'这板子焊得，比我的发型还有个性。',state:'done',tts_cost_cny:0.0036,timings_s:{first_accepted:1.2}}],roles);
+ assert.match(list,/17:05:03/);assert.match(list,/吐槽/);assert.match(list,/这板子焊得/);assert.match(list,/说完了/);assert.match(list,/1.2 秒开口/);
+ assert.match(ui.utterancesHtml([],roles),/还没说过话/);
+ assert.match(ui.utterancesHtml([{at,role:'roast',text:'<b>',state:'sent'}],roles),/&lt;b&gt;/);
+});
 
