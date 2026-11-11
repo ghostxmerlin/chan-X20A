@@ -59,6 +59,9 @@ class ApiTest(unittest.TestCase):
             with e:
                 return Reply(e.code, e.read())
 
+    def test_latest_frame_404_without_frames(self):
+        self.assertEqual(self.call("/frames/latest").status, 404)
+
     def test_requires_token(self):
         self.assertEqual(self.call("/state", token=None).status, 401)
         self.assertEqual(self.call("/state", token="wrong").status, 401)
@@ -108,7 +111,8 @@ class ApiV1Test(unittest.TestCase):
         doc = cls.store.latest("live", T0)
         fusion.run_minute({"base_url": "x", "api_key": "k"}, cls.store, s, 0, T0, doc["package"], doc["strong"], {}, now_ms=T0 + 2 * MIN)
         cls.settings_store = SettingsStore(db, "/nonexistent.json")
-        ctx = {"env": {"base_url": "x", "api_key": "k"}, "settings_store": cls.settings_store}
+        cls.recordings = __import__("tempfile").TemporaryDirectory()
+        ctx = {"env": {"base_url": "x", "api_key": "k"}, "settings_store": cls.settings_store, "recordings_root": cls.recordings.name}
         cls.server = api.make_server(cls.store, "k", "127.0.0.1", 0, ctx)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -225,6 +229,37 @@ class ApiV1Test(unittest.TestCase):
     def test_switch_rejects_unknown_name_and_non_bool(self):
         self.assertEqual(self.post_json("/switches", {"name": "eye", "on": True}).status, 400)
         self.assertEqual(self.post_json("/switches", {"name": "tingwu", "on": "yes"}).status, 400)
+
+    def put_frame(self, at, seq, data=b"\xff\xd8x\xff\xd9", path=None):
+        import os
+        rel = path or f"frames/20261111/x-v1/{at}-{seq}.jpg"
+        full = os.path.join(self.recordings.name, rel)
+        if path is None:
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "wb") as f:
+                f.write(data)
+        self.db["frames"].insert_one({"session": "20261111/x-v1", "seq": seq, "t_us": seq, "at": at, "received": at,
+                                      "path": rel, "bytes": len(data), "w": 320, "h": 240, "diff": 9})
+
+    def test_latest_frame_returns_the_newest_image(self):
+        import base64
+        now = int(__import__("time").time() * 1000)
+        self.put_frame(now - 20_000, 101, b"\xff\xd8old\xff\xd9")
+        self.put_frame(now - 5_000, 102, b"\xff\xd8new\xff\xd9")
+        r = self.call("/frames/latest").json()
+        self.assertEqual((r["seq"], r["diff"], r["w"], r["h"]), (102, 9, 320, 240))
+        self.assertEqual(base64.b64decode(r["jpeg_b64"]), b"\xff\xd8new\xff\xd9")
+        self.assertGreaterEqual(r["today"], 2)
+
+    def test_frame_path_outside_root_is_refused(self):
+        now = int(__import__("time").time() * 1000)
+        self.put_frame(now + 60_000, 103, path="../outside.jpg")
+        try:
+            r = self.call("/frames/latest").json()
+            self.assertEqual((r["seq"], r["missing"], r["jpeg_b64"]), (103, True, None))
+        finally:
+            coll = self.db["frames"]
+            coll.docs[:] = [d for d in coll.docs if d.get("seq") != 103]
 
     def test_place_report(self):
         self.assertEqual(self.post_json("/place", {"label": "办公室"}).status, 200)

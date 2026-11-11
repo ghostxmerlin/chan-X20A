@@ -124,6 +124,8 @@ def main():
     ap.add_argument("--rebuild", nargs=2, metavar=("FROM", "TO"))
     ap.add_argument("--fusion", action="store_true", help="with --rebuild: also run the model over the range")
     ap.add_argument("--catch-up-max-hours", type=float, default=48)
+    ap.add_argument("--recordings", default=os.path.expanduser("~/soul-spike/recordings"),
+                    help="the ear's recordings folder (body-camera frames live under frames/)")
     a = ap.parse_args()
     from pymongo import MongoClient
     hub = settings.load_env(a.hubmix_env)
@@ -152,7 +154,8 @@ def main():
     token = open(a.token_file).read().strip() if a.token_file else ""
     from . import api
     threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port,
-                                             {"env": env, "settings_store": settings_store}), daemon=True).start()
+                                             {"env": env, "settings_store": settings_store,
+                                                                         "recordings_root": a.recordings}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}", flush=True)
     while True:

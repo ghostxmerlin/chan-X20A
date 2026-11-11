@@ -3,11 +3,13 @@
 mind tables (settings versions, labels/marks, rerun lane) — never raw records, never the live
 scenes. Sentence text only leaves through this API; nothing is logged.
 
-GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches
+GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest
 POST /settings /mark /label /rerun /place /switch /switches
 """
+import base64
 import hmac
 import json
+import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -112,6 +114,26 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                                      "stale": not isinstance(st.get("at"), int) or now - st["at"] > 90_000}
         return out
 
+    def latest_frame():
+        """Newest body-camera frame the ear stored (hello.frames + the file under recordings/)."""
+        doc = db["frames"].find_one({}, sort=[("at", -1)])
+        if not doc:
+            raise NotFound("no frames yet")
+        now = int(time.time() * 1000)
+        tz = current_settings()[0]["tz"]
+        day0 = int(settings_mod.local_time(now, tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+        out = {k: doc.get(k) for k in ("at", "session", "seq", "diff", "bytes", "w", "h")}
+        out["today"] = db["frames"].count_documents({"at": {"$gte": day0}})
+        out["jpeg_b64"], out["missing"] = None, True
+        root = ctx.get("recordings_root")
+        if root and isinstance(doc.get("path"), str):
+            base = os.path.realpath(root)
+            full = os.path.realpath(os.path.join(base, doc["path"]))
+            if full.startswith(base + os.sep) and os.path.isfile(full):
+                with open(full, "rb") as f:
+                    out["jpeg_b64"], out["missing"] = base64.b64encode(f.read()).decode(), False
+        return out
+
     def get(path, q):
         if path == "/state":
             return {**store.state(), "enabled": store.enabled(), "lane": LANE, "now_ms": int(time.time() * 1000)}
@@ -159,6 +181,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return list(db["mind_labels"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("at", 1))
         if path == "/switches":
             return switches()
+        if path == "/frames/latest":
+            return latest_frame()
         if path == "/stats":
             days = _int(q, "days", required=False) or 7
             return stats(max(1, min(days, 3650)))

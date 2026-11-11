@@ -100,8 +100,9 @@ test('server routes GET and POST /api/mind/switches', async t=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
  const url=`http://127.0.0.1:${server.address().port}`;
  assert.equal((await fetch(url+'/api/mind/switches')).status,200);
+ assert.equal((await fetch(url+'/api/mind/frames/latest')).status,200);
  assert.equal((await fetch(url+'/api/mind/switches',{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{"name":"tingwu","on":true}'})).status,200);
- assert.deepEqual(seen,[['GET','/switches'],['POST','/switches','{"name":"tingwu","on":true}']]);
+ assert.deepEqual(seen,[['GET','/switches'],['GET','/frames/latest'],['POST','/switches','{"name":"tingwu","on":true}']]);
 });
 test('both pages carry the switch bar', ()=>{
  for(const f of ['index.html','mind.html']){
