@@ -2,13 +2,13 @@
 # Copy the ear server code to the server and restart its systemd unit. Settings come from .env.
 #   server/ear/deploy.sh            copy changed files, restart, wait until it listens again
 #   server/ear/deploy.sh --dry-run  only list what would be copied; changes nothing
-# Only the four code files are copied. Models, token, speakers.npz and recordings on the server
+# Only the code files listed below are copied. Models, token, speakers.npz and recordings on the server
 # are never touched, and nothing is deleted there.
 set -eu
 . "$(dirname "$0")/_env.sh"
 need SOUL_SERVER_SSH SOUL_SERVER_DIR SOUL_SERVER_UNIT
 cd "$HERE"
-FILES="ear_server.py recorder.py sound_kinds.py hearing_protocol.py tingwu.py hello_db.py hello_db_import.py vision_link.py"
+FILES="ear_server.py recorder.py sound_kinds.py hearing_protocol.py tingwu.py tingwu_switch.py hello_db.py hello_db_import.py vision_link.py"
 
 if [ "${1:-}" = "--dry-run" ]; then
   # shellcheck disable=SC2086
