@@ -27,7 +27,9 @@ struct PsramAllocator:Allocator {
 } allocator;
 std::string device_id,boot_id,secret;
 MonitorHooks hooks{};
-std::atomic_bool subscribed{false};
+std::atomic_bool subscribed{false},camera_requested{false},servo_diagnostics{false};
+std::atomic<int64_t> stream_lease_until{0};
+int64_t camera_requested_since=0;
 std::atomic<uint32_t> tx_bytes{0},tx_dropped{0},logs_dropped{0},rx_bad{0};
 struct LogLine {char text[384];};
 QueueHandle_t logs=nullptr;
@@ -90,6 +92,27 @@ void reply(uint32_t id,int status,JsonVariantConst body){
     JsonDocument out(&allocator);out["type"]="reply";out["id"]=id;out["status"]=status;out["body"].set(body);send_doc(out);
 }
 void error(uint32_t id,int code,const char* message){JsonDocument d(&allocator);d.set(message);reply(id,code,d.as<JsonVariantConst>());}
+void renew_subscription(int64_t now){
+    lease.renew(now);stream_lease_until.store(lease.until);
+}
+void stop_subscription(){
+    subscribed=false;camera_requested=false;servo_diagnostics=false;stream_lease_until=0;lease.stop();
+}
+bool valid_stream_options(JsonObjectConst req){
+    for(JsonPairConst pair:req){
+        const char* key=pair.key().c_str();
+        if(!std::strcmp(key,"camera")||!std::strcmp(key,"servo_diagnostics")){
+            if(!pair.value().is<bool>())return false;
+        }else if(std::strcmp(key,"id")&&std::strcmp(key,"op")&&std::strcmp(key,"token")&&std::strcmp(key,"boot_id"))return false;
+    }
+    return true;
+}
+void apply_stream_options(JsonObjectConst req,int64_t now){
+    const bool camera=req["camera"]|false,diagnostics=req["servo_diagnostics"]|false;
+    if(camera&&!camera_requested.load()){last_frame=0;camera_requested_since=now;}
+    camera_requested=camera;
+    if(servo_diagnostics.exchange(diagnostics)!=diagnostics)want_full=true;
+}
 void command(const uint8_t* p,size_t n){
     JsonDocument req(&allocator);
     if(deserializeJson(req,p,n)||!req.is<JsonObject>()||!req["id"].is<uint32_t>()||!req["id"].as<uint32_t>()){++rx_bad;return;}
@@ -109,14 +132,22 @@ void command(const uint8_t* p,size_t n){
         if(xQueueSend(controls,&job,0)!=pdTRUE){control_busy=false;error(id,503,"control queue unavailable");}
         return;
     }
-    if(!std::strcmp(op,"subscribe")||!std::strcmp(op,"snapshot")){
-        lease.renew(esp_timer_get_time());subscribed=true;want_full=true;
-        // New subscription receives independent recent event cursors; snapshot resync preserves them.
-        if(!std::strcmp(op,"subscribe")){asr_cursor=hearing_cursor=last_frame=0;}
-    }else if(!std::strcmp(op,"ping")){
-        if(!subscribed.load()){error(id,409,"subscription expired");return;}
-        lease.renew(esp_timer_get_time());
-    }else if(!std::strcmp(op,"unsubscribe")){lease.stop();subscribed=false;}
+    const int64_t now=esp_timer_get_time();
+    if(!std::strcmp(op,"subscribe")){
+        if(!valid_stream_options(req.as<JsonObjectConst>())){error(id,400,"invalid stream options");return;}
+        if(!lease.active(now))stop_subscription();
+        apply_stream_options(req.as<JsonObjectConst>(),now);
+        renew_subscription(now);subscribed=true;want_full=true;
+        asr_cursor=hearing_cursor=last_frame=0;
+    }else if(!std::strcmp(op,"streams")){
+        if(!valid_stream_options(req.as<JsonObjectConst>())){error(id,400,"invalid stream options");return;}
+        if(!subscribed.load()||!lease.active(now)){error(id,409,"subscription expired");return;}
+        apply_stream_options(req.as<JsonObjectConst>(),now);renew_subscription(now);
+    }else if(!std::strcmp(op,"snapshot")||!std::strcmp(op,"ping")){
+        if(!subscribed.load()||!lease.active(now)){error(id,409,"subscription expired");return;}
+        renew_subscription(now);
+        if(!std::strcmp(op,"snapshot"))want_full=true;
+    }else if(!std::strcmp(op,"unsubscribe")){stop_subscription();}
     else {error(id,400,"unknown operation");return;}
     JsonDocument result(&allocator);result["accepted"]=true;reply(id,200,result.as<JsonVariantConst>());
 }
@@ -139,10 +170,10 @@ void run(void*){
             reply(control_id,control_result.code(),body.as<JsonVariantConst>());
             result_ready=false;control_busy=false;
         }
-        if(!lease.active(now))subscribed=false;
+        if(!lease.active(now))stop_subscription();
         if(!subscribed.load()){previous.clear();want_full=true;LogLine discard;while(logs&&xQueueReceive(logs,&discard,0)==pdTRUE){}continue;}
         if(want_full||now-last_state_us>=1000000){
-            JsonDocument state(&allocator),out(&allocator);hooks.state(state);
+            JsonDocument state(&allocator),out(&allocator);hooks.state(state,servo_diagnostics.load());
             out["type"]="state";out["boot_id"]=boot_id;out["revision"]=revision+1;out["base_revision"]=revision;
             const bool full=want_full||now-last_full_us>=30000000;out["full"]=full;
             if(full)out["data"].set(state);else difference(previous.as<JsonObjectConst>(),state.as<JsonObjectConst>(),out["data"].to<JsonObject>());
@@ -162,9 +193,9 @@ void run(void*){
                 }
             }last_events_us=now;
         }
-        if(now-last_frame_us>=200000){
+        if(serial_monitor_camera_requested()&&now-last_frame_us>=200000){
             auto frame=camera_latest_frame();
-            if(frame&&frame->seq!=last_frame&&frame->length+12<=kMaxPayload){
+            if(frame&&frame->timestamp_us>=camera_requested_since&&frame->seq!=last_frame&&frame->length+12<=kMaxPayload){
                 auto* p=static_cast<uint8_t*>(allocator.allocate(frame->length+12));
                 if(p){put32(p,frame->seq);put32(p+4,uint32_t(frame->timestamp_us));put32(p+8,uint64_t(frame->timestamp_us)>>32);
                     std::memcpy(p+12,frame->bytes,frame->length);if(send_packet(2,p,frame->length+12))last_frame=frame->seq;allocator.deallocate(p);}
@@ -184,8 +215,12 @@ void serial_monitor_start(const std::string& device,const std::string& boot,cons
     ESP_ERROR_CHECK(xTaskCreate(control_worker,"monitor_control",6144,nullptr,2,nullptr)==pdPASS?ESP_OK:ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(create_psram_task(run,"collector_usb",12288,nullptr,2,1)==pdPASS?ESP_OK:ESP_ERR_NO_MEM);
 }
+bool serial_monitor_camera_requested(){
+    return subscribed.load()&&camera_requested.load()&&esp_timer_get_time()<stream_lease_until.load();
+}
 void serial_monitor_stats(ArduinoJson::JsonObject out){
     out["control_stack_free_bytes"]=control_stack_free.load();
+    out["camera_requested"]=serial_monitor_camera_requested();out["servo_diagnostics"]=subscribed.load()&&servo_diagnostics.load();
     out["transport"]="usb";out["subscribed"]=subscribed.load();out["tx_bytes"]=tx_bytes.load();out["tx_dropped"]=tx_dropped.load();
     out["logs_dropped"]=logs_dropped.load();out["rx_bad"]=rx_bad.load();out["tx_buffer_bytes"]=2048;out["rx_buffer_bytes"]=1024;
 #ifdef CONFIG_COLLECTOR_NETWORK_MONITOR

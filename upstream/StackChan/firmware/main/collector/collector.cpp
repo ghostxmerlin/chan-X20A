@@ -23,6 +23,7 @@
 #include "remote_actuation.h"
 #include "connection_protocol.h"
 #include "web_control.h"
+#include "timed_yaw_turn.h"
 #include "mic_gain.h"
 #include "mem_diag.h"
 #include "psram_task.h"
@@ -515,7 +516,7 @@ void camera_task(void*)
 {
     auto camera = hal_bridge::board_get_camera();
     while (true) {
-        if (!camera_enabled) {
+        if (!camera_enabled && !serial_monitor_camera_requested()) {
             // Disabled by default: no capture, no JPEG work, nothing to serve.
             { std::lock_guard<std::mutex> lock(frame_mutex); latest_frame.reset(); }
             vTaskDelay(pdMS_TO_TICKS(200));
@@ -937,6 +938,9 @@ void fill_info(JsonDocument& doc)
     camera["endpoint"] = "/v1/control";
     camera["target"] = "camera";
     capabilities["camera_control"] = "supported";
+    capabilities["monitor_streams"] = "supported";
+    capabilities["yaw_turn"] = "supported";
+    capabilities["yaw_step_45"] = "supported";
     capabilities["yaw_step_diagnostics"] = "supported"; // target yaw_step: whole-degree steps, speed and path
     capabilities["servo_tuning"] = "supported"; // target servo: EEPROM P/D/I/punch/deadband/max torque, runtime goal profile, release policy
     capabilities["wifi_profiles"] = "supported"; // target wifi: saved networks, scan; telemetry wifi carries the state
@@ -1071,6 +1075,7 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     health["alloc_failures"] = mem_diag_failed_allocs(); health["alloc_failures_internal"] = mem_diag_failed_internal();
     health["heap_min_free"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     health["camera_enabled"] = camera_enabled.load();
+    health["camera_preview"] = serial_monitor_camera_requested();
     health["camera_errors"] = camera_errors.load();
     health["camera_capture_seq"] = frame_seq.load();
     health["camera_processing_us"] = camera_processing_us.load();
@@ -1210,11 +1215,11 @@ esp_err_t web_control(ControlReply* request, JsonObject doc, const char* target)
         result["job_id"]=job; result["clip_id"]=selected;
     } else {
         const int delta_deg = doc["delta_deg"] | 0;
-        if (!slot_request && (!doc["delta_deg"].is<int>() || delta_deg == 0 || delta_deg < -kWebYawMaxDeltaTenths / 10 || delta_deg > kWebYawMaxDeltaTenths / 10)) {
-            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected delta_deg (-30..30, buttons use ±20) or slot (-3..3)"); return ESP_OK;
+        if (!slot_request && (!doc["delta_deg"].is<int>() || delta_deg == 0 || (std::abs(delta_deg) > kWebYawMaxDeltaTenths / 10 && std::abs(delta_deg) != kWebYawStepTenths / 10))) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected delta_deg (+/-1..30 or +/-45) or slot (-2..2)"); return ESP_OK;
         }
         if (slot_request && (doc["slot"].as<int>() < -kWebYawSlots || doc["slot"].as<int>() > kWebYawSlots)) {
-            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected slot -3..3"); return ESP_OK;
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected slot -2..2"); return ESP_OK;
         }
         bool remote_like = false;
         if (doc["path"].is<const char*>()) {
@@ -1234,7 +1239,7 @@ esp_err_t web_control(ControlReply* request, JsonObject doc, const char* target)
                                         : remote_step_yaw(delta_deg * 10, speed, remote_like, &seq);
         if (error != ESP_OK) {
             httpd_resp_set_status(request, "409 Conflict");
-            return httpd_resp_sendstr(request, "Yaw unavailable: enable control, wait for valid settled feedback, stay within the ±60° range");
+            return httpd_resp_sendstr(request, "Yaw unavailable: enable control, wait for valid settled feedback, stay within the ±90° range");
         }
         result["request_seq"] = seq;
         result["speed"] = speed;
@@ -1242,6 +1247,21 @@ esp_err_t web_control(ControlReply* request, JsonObject doc, const char* target)
         if (slot_request) result["slot"] = doc["slot"].as<int>();
     }
     result["accepted"] = true;
+    httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
+}
+
+esp_err_t yaw_turn_control(ControlReply* request, JsonObject doc, const char*)
+{
+    if (doc.size() != 1 || !doc["duration_ms"].is<int>() ||
+        doc["duration_ms"].as<int>() < TimedYawTurn::kMinMs || doc["duration_ms"].as<int>() > TimedYawTurn::kMaxMs) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected duration_ms 100..2000"); return ESP_OK;
+    }
+    uint32_t sequence = 0;
+    if (remote_turn_yaw(doc["duration_ms"].as<int>(), &sequence) != ESP_OK) {
+        httpd_resp_set_status(request, "409 Conflict");
+        return httpd_resp_sendstr(request, "Turn unavailable: enable control and wait for current motion or tuning");
+    }
+    JsonDocument result; result["accepted"] = true; result["request_seq"] = sequence;
     httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
 }
 
@@ -1396,7 +1416,7 @@ esp_err_t servo_control(ControlReply* request, JsonObject doc, const char*)
 
 struct ControlTarget { const char* name; ControlHandler handle; };
 const ControlTarget kControlTargets[] = {
-    {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control},
+    {"yaw_turn", yaw_turn_control}, {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control},
     {"servo", servo_control}, {"wifi", wifi_control},
     {"m12_view", web_control}, {"m12_mode", web_control}, {"yaw_step", web_control}, {"voice_play", web_control},
     {"m12_request", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t {
@@ -1834,7 +1854,7 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
 
 std::shared_ptr<const CameraFrame> camera_latest_frame()
 {
-    if (!camera_enabled) return nullptr;
+    if (!camera_enabled && !serial_monitor_camera_requested()) return nullptr;
     std::shared_ptr<Frame> frame;
     { std::lock_guard<std::mutex> lock(frame_mutex); frame = latest_frame; }
     if (!frame || esp_timer_get_time() - frame->timestamp_us > 3000000) return nullptr;
@@ -1878,7 +1898,7 @@ void run()
     ESP_ERROR_CHECK(create_psram_task(camera_task, "collector_camera", 8192, nullptr, 2, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     serial_monitor_start(device_id,boot_id,token,MonitorHooks{
         fill_info,
-        +[](JsonDocument& d){fill_telemetry(d);},
+        +[](JsonDocument& d,bool diag){fill_telemetry(d,0,false,0,false,diag);},
         +[](JsonDocument& d,uint32_t asr_after,uint32_t hearing_after){
             asr_json(d["asr"].to<JsonObject>(),asr_after);
             hearing::events_json(d["hearing"].to<JsonObject>(),hearing_after);

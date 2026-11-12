@@ -238,6 +238,7 @@ public:
 
     /* ---------------------------------- Power --------------------------------- */
     void setServoPowerEnabled(bool enabled);
+    bool servoPowerControlReady() const;
 
     /* -------------------------------- Websocket ------------------------------- */
     uitk::Signal<std::string_view> onWsMotionData;

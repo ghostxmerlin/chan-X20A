@@ -106,9 +106,10 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
       };
       const drain = () => { waitingForDrain = false; if (pending) send(); };
       res.on('drain', drain);
-      monitor.addViewer(); monitor.on('state', send); send();
+      const viewer = monitor.addViewer({ camera: url.searchParams.get('camera') === '1', servo_diagnostics: url.searchParams.get('servo') === '1' });
+      monitor.on('state', send); send();
       const heartbeat = setInterval(send, 1000);
-      res.on('close', () => { clearInterval(heartbeat); res.off('drain', drain); monitor.off('state', send); monitor.removeViewer(); });
+      res.on('close', () => { clearInterval(heartbeat); res.off('drain', drain); monitor.off('state', send); monitor.removeViewer(viewer); });
       return;
     }
     // /api/listen (browser playback of the raw mic stream) was removed with the stream itself.

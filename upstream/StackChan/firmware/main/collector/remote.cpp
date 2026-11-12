@@ -10,6 +10,7 @@
 #include "pitch_setting.h"
 #include "pitch_motion.h"
 #include "web_control.h"
+#include "timed_yaw_turn.h"
 #include "motion_trace.h"
 #include "servo_tuning.h"
 #include <hal/hal.h>
@@ -60,6 +61,7 @@ int64_t feedback_timestamp = 0, yaw_feedback_timestamp = 0;
 bool control_requested = true;
 RemoteStopLatch stop_latch;
 ManualYaw manual_yaw;
+TimedYawTurn yaw_turn;
 MotionTrace yaw_trace, pitch_trace;
 // Operator tuning: one pending request, applied only by motor_task.
 ServoTuneRequest pending_tune;
@@ -198,7 +200,7 @@ void motor_task(void*)
     TickType_t wake = xTaskGetTickCount();
     while (true) {
         const int64_t now = esp_timer_get_time();
-        bool active;
+        bool active, rotation_busy = false;
         bool stop_pending = false;
         bool pitch_cancelled = false;
         PitchSettingRequest latest_pitch;
@@ -220,13 +222,31 @@ void motor_task(void*)
             vTaskDelay(pdMS_TO_TICKS(20));wake = xTaskGetTickCount();continue;
         }
         auto& motion = GetStackChan().motion();
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (motion.yawServo().rotationPowerFaulted()) {
+                control_requested = active = false;
+                yaw_turn.phase = TimedYawTurn::Phase::PowerCut;
+                stop_latch.request(); pitch_requests.stop(); manual_yaw.cancel();
+                tracking.request(false, now);
+            }
+            if (yaw_turn.busy()) {
+                // Consume tracking cancellation before starting PWM, never after it.
+                tracking.take_cancel();
+                web_yaw_active = false;
+                yaw_command_started = false;
+                yaw_trace.close(now);
+                yaw_turn.tick(motion.yawServo(), now, control_requested);
+            }
+        }
         stackchan::motion::ServoFeedback startup_feedback;
         stackchan::motion::ServoFeedback sampled_yaw;
         {
             // Fast while anything uses the axes (tracking, web moves, trajectories, holds, boot pose)
             // and for 3 s after; otherwise 2 Hz for telemetry only.
             std::lock_guard<std::mutex> lock(mutex);
-            const bool busy = tracking.requested() || web_yaw_active || manual_yaw.pending ||
+            rotation_busy = yaw_turn.busy();
+            const bool busy = rotation_busy || tracking.requested() || web_yaw_active || manual_yaw.pending ||
                 // Passive init can leave the spring "not done" without any motion: only a started
                 // yaw command counts; pitch motion is covered by the boot pose / pitch request states.
                 !manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()) ||
@@ -284,7 +304,7 @@ void motor_task(void*)
             ServoTuneRequest tune; bool run = false;
             {
                 std::lock_guard<std::mutex> lock(mutex);
-                if (tune_pending) {
+                if (tune_pending && !yaw_turn.busy()) {
                     const bool idle = pending_tune.axis == 0
                         ? (!manual_yaw.pending && !tracking.active() &&
                            manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()))
@@ -353,7 +373,7 @@ void motor_task(void*)
                 motion.pitchServo().cancelMotion();
             }
             enabled = false;
-            { std::lock_guard<std::mutex> lock(mutex); motor_state = "disarmed"; }
+            { std::lock_guard<std::mutex> lock(mutex); motor_state = motion.yawServo().rotationPowerFaulted() ? "power_cut" : "disarmed"; }
         } else {
             enabled = true;
             // The M12 snapshot is passive; mode requests belong to interaction.
@@ -362,7 +382,7 @@ void motor_task(void*)
                 std::lock_guard<std::mutex> lock(mutex);
                 TrackingInput input;
                 input.now_us = esp_timer_get_time();
-                input.control_enabled = control_requested;
+                input.control_enabled = control_requested && !yaw_turn.busy();
                 input.feedback_valid = yaw_feedback.valid;
                 input.feedback_us = yaw_feedback_timestamp;
                 input.measured = yaw_feedback.angle;
@@ -414,13 +434,13 @@ void motor_task(void*)
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 // Recheck stop after feedback reads; do not move from HTTP or a second UART owner.
-                if (tracking.take_cancel()) {
+                if (!yaw_turn.busy() && tracking.take_cancel()) {
                     yaw_tracking_torque.beforeCancel(motion.yawServo());
                     motion.yawServo().cancelMotion();
                     yaw_trace.close(esp_timer_get_time());
                     yaw_command_started = false;
                 }
-                if (control_requested && manual_yaw.take(esp_timer_get_time(), manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()))) {
+                if (control_requested && !yaw_turn.busy() && manual_yaw.take(esp_timer_get_time(), manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()))) {
                     const bool fresh = yaw_feedback.valid && yaw_feedback_timestamp > 0 &&
                         esp_timer_get_time() - yaw_feedback_timestamp < 1000000;
                     const auto limits = motion.yawServo().getAngleLimit();
@@ -444,7 +464,9 @@ void motor_task(void*)
                 // Serialize explicit stop with the final update, not only with
                 // admission. No stale tracking action can write after stop wins.
                 std::lock_guard<std::mutex> lock(mutex);
-                if (control_requested && (tracking.active() || web_yaw_active)) {
+                if (yaw_turn.busy()) {
+                    motor_state = yaw_turn.state();
+                } else if (control_requested && (tracking.active() || web_yaw_active)) {
                     motion.yawServo().update();
                     yaw_tracking_torque.afterUpdate(motion.yawServo());
                     motor_state = tracking.active() ? "tracking" : "web_yaw";
@@ -462,7 +484,7 @@ void motor_task(void*)
         // The motor task remains the sole UART owner; HTTP only reads the copy.
         // Passive init leaves the yaw animation "not done" until its first
         // update, so gate on the web/tracking idle predicate instead.
-        if (now >= 5000000 && !yaw_deadband_attempted && sampled_yaw.valid &&
+        if (!rotation_busy && now >= 5000000 && !yaw_deadband_attempted && sampled_yaw.valid &&
             manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete())) {
             const auto snapshot = motion.yawServo().readDeadbandSnapshot();
             yaw_deadband_attempted = true;
@@ -484,7 +506,7 @@ void motor_task(void*)
             pitch_diagnostics = motion.pitchServo().diagnostics();
             yaw_trace.note(yaw_diagnostics);
             pitch_trace.note(pitch_diagnostics);
-            yaw_trajectory_complete = manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete());
+            yaw_trajectory_complete = !yaw_turn.busy() && manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete());
             if (yaw_trajectory_complete) manual_yaw.complete();
             pitch_trajectory_complete = motion.pitchServo().isTrajectoryComplete();
             diagnostics_timestamp = esp_timer_get_time();
@@ -513,9 +535,11 @@ void add_packet(ArduinoJson::JsonObject object, const Packet& packet)
     snprintf(source, sizeof(source), "%02x:%02x:%02x:%02x:%02x:%02x", packet.source[0], packet.source[1], packet.source[2], packet.source[3], packet.source[4], packet.source[5]);
     object["source_mac"] = source;
 }
-void add_feedback(ArduinoJson::JsonObject object, const stackchan::motion::ServoFeedback& feedback)
+void add_feedback(ArduinoJson::JsonObject object, const stackchan::motion::ServoFeedback& feedback, bool diagnostic = true)
 {
     object["valid"] = feedback.valid;
+    if (feedback.valid) object["angle_deg"] = feedback.angle / 10.0f;
+    if (!diagnostic) return;
     object["transport_error"] = feedback.transport_error;
     object["servo_status"] = feedback.servo_status;
     object["position_raw"] = feedback.position_raw;
@@ -802,8 +826,8 @@ bool remote_arm(bool active)
 {
     std::lock_guard<std::mutex> storage_lock(pitch_storage_mutex);
     std::lock_guard<std::mutex> lock(mutex);
-    if (active && !ready) return false;
-    if (!active) { stop_latch.request(); pitch_requests.stop(); manual_yaw.cancel(); web_yaw_active = false;
+    if (active && (!ready || (motor_ready && GetStackChan().motion().yawServo().rotationPowerFaulted()))) return false;
+    if (!active) { yaw_turn.cancel(); stop_latch.request(); pitch_requests.stop(); manual_yaw.cancel(); web_yaw_active = false;
         tracking.request(false, esp_timer_get_time()); }
     control_requested = active;
     return true;
@@ -812,7 +836,7 @@ bool remote_enabled() { return enabled; }
 esp_err_t remote_set_tracking(bool active)
 {
     std::lock_guard<std::mutex> lock(mutex);
-    if (active && (!control_requested || !motor_ready || manual_yaw.pending || manual_yaw.state == ManualYaw::moving))
+    if (active && (!control_requested || !motor_ready || yaw_turn.busy() || manual_yaw.pending || manual_yaw.state == ManualYaw::moving))
         return ESP_ERR_INVALID_STATE;
     tracking.request(active, esp_timer_get_time());
     return ESP_OK;
@@ -892,14 +916,32 @@ void remote_tracking_json(ArduinoJson::JsonObject target)
     }
     target["calibration"]["assumed_px_per_deg"] = FaceTracking::kFrameWidth * 10.0f / FaceTracking::kFovTenths;
 }
+esp_err_t remote_turn_yaw(int duration_ms, uint32_t* request_seq)
+{
+    if (duration_ms < TimedYawTurn::kMinMs || duration_ms > TimedYawTurn::kMaxMs) return ESP_ERR_INVALID_ARG;
+    // Serialize with pitch commits; a queued pitch request must not appear mid-turn.
+    std::lock_guard<std::mutex> storage_lock(pitch_storage_mutex);
+    std::lock_guard<std::mutex> lock(mutex);
+    const bool allowed = control_requested && enabled && motor_ready && !tune_pending &&
+        !manual_yaw.pending && manual_yaw.state != ManualYaw::moving &&
+        strcmp(pitch_state, "queued") && strcmp(pitch_state, "moving") && strcmp(pitch_state, "waiting_feedback");
+    const int64_t now = esp_timer_get_time();
+    if (!yaw_turn.submit(duration_ms, allowed, now)) return ESP_ERR_INVALID_STATE;
+    manual_yaw.cancel(); web_yaw_active = false;
+    tracking.request(false, now, "manual_override");
+    if (request_seq) *request_seq = yaw_turn.sequence;
+    return ESP_OK;
+}
+
 esp_err_t remote_step_yaw(int delta_tenths, int speed, bool remote_like, uint32_t* request_seq)
 {
-    if (delta_tenths == 0 || delta_tenths % 10 != 0 || delta_tenths < -kWebYawMaxDeltaTenths || delta_tenths > kWebYawMaxDeltaTenths) return ESP_ERR_INVALID_ARG;
+    if (delta_tenths != kWebYawStepTenths && delta_tenths != -kWebYawStepTenths &&
+        (delta_tenths == 0 || delta_tenths % 10 != 0 || delta_tenths < -kWebYawMaxDeltaTenths || delta_tenths > kWebYawMaxDeltaTenths)) return ESP_ERR_INVALID_ARG;
     if (speed < kWebYawMinSpeed || speed > kWebYawMaxSpeed) return ESP_ERR_INVALID_ARG;
     std::lock_guard<std::mutex> lock(mutex);
     // Manual yaw may take over an in-flight tracking command; motor_task first
     // consumes tracking's cancellation and then starts this measured step.
-    const bool allowed = control_requested && enabled && motor_ready;
+    const bool allowed = control_requested && enabled && motor_ready && !yaw_turn.busy();
     const bool settled = tracking.active() || yaw_trajectory_complete;
     const int64_t now = esp_timer_get_time();
     const bool accepted = (delta_tenths == kWebYawStepTenths || delta_tenths == -kWebYawStepTenths)
@@ -917,7 +959,7 @@ esp_err_t remote_yaw_slot(int slot, int speed, uint32_t* request_seq)
     if (speed < kWebYawMinSpeed || speed > kWebYawMaxSpeed) return ESP_ERR_INVALID_ARG;
     std::lock_guard<std::mutex> lock(mutex);
     const int64_t now = esp_timer_get_time();
-    if (!manual_yaw.submit_slot(slot, speed, false, control_requested && enabled && motor_ready, yaw_feedback.valid,
+    if (!manual_yaw.submit_slot(slot, speed, false, control_requested && enabled && motor_ready && !yaw_turn.busy(), yaw_feedback.valid,
             tracking.active() || yaw_trajectory_complete, yaw_feedback.angle, yaw_feedback_timestamp, now)) return ESP_ERR_INVALID_STATE;
     tracking.request(false, now, "manual_override");
     if (request_seq) *request_seq = manual_yaw.sequence;
@@ -931,7 +973,7 @@ esp_err_t remote_set_pitch(int angle_tenths, uint32_t* request_seq)
     bool already_saved;
     {
         std::lock_guard<std::mutex> lock(mutex);
-        if (!control_requested || !motor_ready) return ESP_ERR_INVALID_STATE;
+        if (!control_requested || !motor_ready || yaw_turn.busy()) return ESP_ERR_INVALID_STATE;
         already_saved = pitch_persisted && pitch_configured == angle_tenths;
     }
     esp_err_t error = ESP_OK;
@@ -965,7 +1007,7 @@ esp_err_t remote_servo_tune(ServoTuneRequest request, uint32_t* request_seq)
 {
     if (!servo_tune_request_valid(request)) return ESP_ERR_INVALID_ARG;
     std::lock_guard<std::mutex> lock(mutex);
-    if (!motor_ready || tune_pending) return ESP_ERR_INVALID_STATE;
+    if (!motor_ready || tune_pending || yaw_turn.busy()) return ESP_ERR_INVALID_STATE;
     request.sequence = ++tune_sequence;
     request.requested_us = esp_timer_get_time();
     pending_tune = request; tune_pending = true; tune_state[request.axis] = "queued";
@@ -1116,41 +1158,49 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     web_yaw["range_deg"] = kWebYawRangeTenths / 10;
     web_yaw["target_slot"] = manual_yaw.sequence ? web_yaw_slot(manual_yaw.target) : 0;
     web_yaw["measured_slot"] = yaw_feedback.valid ? web_yaw_slot(yaw_feedback.angle) : 0;
+    auto turn = motor["yaw_turn"].to<ArduinoJson::JsonObject>();
+    turn["request_seq"] = yaw_turn.sequence;
+    turn["state"] = yaw_turn.state(); turn["busy"] = yaw_turn.busy();
+    turn["duration_ms"] = yaw_turn.duration_ms;
+    turn["default_duration_ms"] = TimedYawTurn::kDefaultMs;
+    turn["pwm"] = TimedYawTurn::kPwm; turn["direction"] = yaw_turn.direction;
     motor["yaw_trajectory_complete"] = yaw_trajectory_complete;
     motor["enabled"] = enabled.load();
     motor["requested"] = control_requested;
     motor["feedback_valid"] = yaw_feedback.valid && pitch_feedback.valid;
     motor["state"] = motor_state;
     motor["timestamp_us"] = feedback_timestamp;
-    motor["feedback_age_ms"] = feedback_timestamp ? (esp_timer_get_time() - feedback_timestamp) / 1000 : -1;
-    motor["feedback_period_ms"] = feedback_period_us / 1000;
-    motor["feedback_reads"] = feedback_reads; motor["feedback_retries"] = feedback_retries;
-    motor["feedback_masked"] = feedback_masked; // single bad samples hidden behind the last valid one
-    // Legacy packet application fields are intentionally zero/null: receiving
-    // a mode event does not mean an actuator command has been applied.
-    motor["applied_seq"] = 0;
-    motor["yaw_target_deg"] = nullptr; motor["applied_speed"] = nullptr;
-    motor["pitch_target_deg"] = nullptr;
-    motor["pitch_owner"] = "setting";
-    motor["pitch_motion_profile"] = kPitchMotionProfile;
-    motor["speed_limit"] = kRemoteSpeedLimit;
-    motor["startup_pitch_target_deg"] = boot_pitch_target / 10.0f;
-    motor["startup_pose_state"] = startup_state;
-    auto nod = motor["nod"].to<ArduinoJson::JsonObject>();
-    nod["state"] = "disabled";
-    nod["request_seq"] = 0; nod["phase"] = 0; nod["completed_trajectories"] = 0;
-    nod["speed"] = nullptr; nod["leg_ms"] = nullptr;
-    nod["low_deg"] = nullptr; nod["high_deg"] = nullptr; nod["target_deg"] = nullptr;
-    add_feedback(motor["yaw"].to<ArduinoJson::JsonObject>(), yaw_feedback);
-    add_feedback(motor["pitch"].to<ArduinoJson::JsonObject>(), pitch_feedback);
-    add_motion_summary(motor["yaw"]["motion_summary"].to<ArduinoJson::JsonObject>(), yaw_trace);
-    add_motion_summary(motor["pitch"]["motion_summary"].to<ArduinoJson::JsonObject>(), pitch_trace);
-    if (motor_ready) {
-        auto& motion = GetStackChan().motion();
-        add_servo_tuning(motor["yaw"]["tuning"].to<ArduinoJson::JsonObject>(), 0, motion.yawServo(), yaw_deadband);
-        add_servo_tuning(motor["pitch"]["tuning"].to<ArduinoJson::JsonObject>(), 1, motion.pitchServo(), pitch_deadband);
-    }
     if (include_servo_diagnostics) {
+        motor["feedback_age_ms"] = feedback_timestamp ? (esp_timer_get_time() - feedback_timestamp) / 1000 : -1;
+        motor["feedback_period_ms"] = feedback_period_us / 1000;
+        motor["feedback_reads"] = feedback_reads; motor["feedback_retries"] = feedback_retries;
+        motor["feedback_masked"] = feedback_masked; // single bad samples hidden behind the last valid one
+        // Legacy packet application fields are intentionally zero/null: receiving
+        // a mode event does not mean an actuator command has been applied.
+        motor["applied_seq"] = 0;
+        motor["yaw_target_deg"] = nullptr; motor["applied_speed"] = nullptr;
+        motor["pitch_target_deg"] = nullptr;
+        motor["pitch_owner"] = "setting";
+        motor["pitch_motion_profile"] = kPitchMotionProfile;
+        motor["speed_limit"] = kRemoteSpeedLimit;
+        motor["startup_pitch_target_deg"] = boot_pitch_target / 10.0f;
+        motor["startup_pose_state"] = startup_state;
+        auto nod = motor["nod"].to<ArduinoJson::JsonObject>();
+        nod["state"] = "disabled";
+        nod["request_seq"] = 0; nod["phase"] = 0; nod["completed_trajectories"] = 0;
+        nod["speed"] = nullptr; nod["leg_ms"] = nullptr;
+        nod["low_deg"] = nullptr; nod["high_deg"] = nullptr; nod["target_deg"] = nullptr;
+    }
+    add_feedback(motor["yaw"].to<ArduinoJson::JsonObject>(), yaw_feedback, include_servo_diagnostics);
+    add_feedback(motor["pitch"].to<ArduinoJson::JsonObject>(), pitch_feedback, include_servo_diagnostics);
+    if (include_servo_diagnostics) {
+        add_motion_summary(motor["yaw"]["motion_summary"].to<ArduinoJson::JsonObject>(), yaw_trace);
+        add_motion_summary(motor["pitch"]["motion_summary"].to<ArduinoJson::JsonObject>(), pitch_trace);
+        if (motor_ready) {
+            auto& motion = GetStackChan().motion();
+            add_servo_tuning(motor["yaw"]["tuning"].to<ArduinoJson::JsonObject>(), 0, motion.yawServo(), yaw_deadband);
+            add_servo_tuning(motor["pitch"]["tuning"].to<ArduinoJson::JsonObject>(), 1, motion.pitchServo(), pitch_deadband);
+        }
         add_servo_diagnostics(motor["yaw"]["diagnostics"].to<ArduinoJson::JsonObject>(), yaw_diagnostics);
         add_servo_diagnostics(motor["pitch"]["diagnostics"].to<ArduinoJson::JsonObject>(), pitch_diagnostics);
         motor["yaw"]["diagnostics"]["trajectory_complete"] = yaw_trajectory_complete;

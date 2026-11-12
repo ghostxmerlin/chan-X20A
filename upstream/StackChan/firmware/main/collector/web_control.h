@@ -4,11 +4,11 @@
 namespace collector {
 // Passive initialization may leave AnimateValue.done() false without any requested motion.
 inline bool manual_yaw_idle(bool command_started, bool trajectory_complete) { return !command_started || trajectory_complete; }
-// Web yaw moves in 20-degree slots around center, three per side (±60°), at
+// Web yaw moves in 45-degree slots around center, two per side (±90°), at
 // the fastest spring mapping: the SCS0009 stalls at 4-5° of error under this
-// head, so small precise steps are pointless while 20° swings move reliably.
+// head, so small precise steps are pointless while larger swings move reliably.
 constexpr int kWebYawDefaultSpeed = 1000, kWebYawMinSpeed = 50, kWebYawMaxSpeed = 1000;
-constexpr int kWebYawStepTenths = 200, kWebYawSlots = 3;
+constexpr int kWebYawStepTenths = 450, kWebYawSlots = 2;
 constexpr int kWebYawRangeTenths = kWebYawSlots * kWebYawStepTenths;
 // Whole-degree relative steps up to ±30° remain for diagnostics (same range clamp).
 constexpr int kWebYawMaxDeltaTenths = 300;
@@ -33,7 +33,7 @@ struct ManualYaw {
     // feedback-reset web path; same servo writes otherwise.
     bool remote_like = false;
     const char* state = "idle";
-    // Absolute target within the ±60° web range; all entry points funnel here.
+    // Absolute target within the ±90° web range; all entry points funnel here.
     bool submit_target(int target_angle, int requested_speed, bool remote, bool enabled, bool valid, bool settled, int measured, int64_t stamp, int64_t now) {
         if (target_angle < -kWebYawRangeTenths || target_angle > kWebYawRangeTenths ||
             requested_speed < kWebYawMinSpeed || requested_speed > kWebYawMaxSpeed ||

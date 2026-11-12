@@ -30,7 +30,7 @@ export class ServoTuningPanel {
   this.state=state;this.fresh=fresh;
   const supported=state?.capabilities?.servo_tuning==='supported';
   const t=state?.telemetry||{},m=t.remote?.motor||{},axis=this.axis(),a=m[axis]||{},tuning=a.tuning||{},eeprom=tuning.eeprom||{},runtime=tuning.runtime||{},summary=a.motion_summary||{};
-  this.ready=!!fresh&&supported&&!!tuning.state;
+  this.ready=!!fresh&&supported&&!!tuning.state&&!m.yaw_turn?.busy;
   const blocked=!this.ready||this.pending||!!tuning.pending;
   for(const id of ['tune-read','tune-restore','tune-write','tune-apply-runtime',...eepromFields.map(f=>'tune-'+f),...runtimeFields.map(f=>'tune-'+f)])this.el(id).disabled=blocked;
   this.el('tune-write').disabled=blocked||!eeprom.valid;
@@ -41,7 +41,7 @@ export class ServoTuningPanel {
    this.loaded=key;
   }
   const w=tuning.last_write||{};
-  this.el('tune-status').textContent=!fresh?'状态已过期':!supported?'当前固件不支持舵机参数调节':`${states[tuning.state]||tuning.state||'—'}${tuning.pending?' · 排队中':''}${w.attempted?` · 最近写入 ${w.writes} 项，失败 ${w.failed_writes}${w.failed_register>=0?'（寄存器 '+w.failed_register+'）':''}`:''}`;
+  this.el('tune-status').textContent=!fresh?'状态已过期':!supported?'当前固件不支持舵机参数调节':m.yaw_turn?.busy?'转身期间暂停参数操作':`${states[tuning.state]||tuning.state||'—'}${tuning.pending?' · 排队中':''}${w.attempted?` · 最近写入 ${w.writes} 项，失败 ${w.failed_writes}${w.failed_register>=0?'（寄存器 '+w.failed_register+'）':''}`:''}`;
   this.el('tune-eeprom-extra').textContent=eeprom.valid?`只读：角度限位 ${eeprom.min_angle}–${eeprom.max_angle} 步 · 相位 ${eeprom.phase} · 卸载条件 ${eeprom.unloading} · LED 报警 ${eeprom.led_alarm} · 温度上限 ${eeprom.max_temperature}°C · 电压 ${eeprom.min_voltage/10}–${eeprom.max_voltage/10} V`:'EEPROM 尚未读到（开机 5 秒后自动读一次，或点“重新读取”）';
   this.el('tune-feedback').textContent=a.valid?`实测 ${Number(a.angle_deg).toFixed(1)}° / raw ${a.position_raw} · 负载 ${a.load_raw??'—'}‰ · 电压 ${a.voltage_raw!==undefined?(a.voltage_raw/10).toFixed(1)+' V':'—'} · 温度 ${a.temperature_c??'—'}°C · 运动标志 ${a.moving??'—'}`:'反馈无效';
   const d=v=>Number.isFinite(v)?Number(v).toFixed(1)+'°':'—';

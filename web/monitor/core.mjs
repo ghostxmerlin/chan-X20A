@@ -64,7 +64,7 @@ export function deviceRequest(url, { token, maxBytes = 524288, signal, method = 
 }
 
 export class DeviceClient {
-  constructor(binding) { this.binding = validateBinding(binding); this.verified = false; this.requestTail = Promise.resolve(); }
+  constructor(binding) { this.binding = validateBinding(binding); this.verified = false; this.requestTail = Promise.resolve(); this.stopGeneration = 0; }
   async connect(signal) {
     this.verified = false;
     const nonce = randomBytes(16).toString('hex');
@@ -94,11 +94,18 @@ export class DeviceClient {
     const next = this.requestTail.then(work); this.requestTail = next.catch(() => {}); return next;
   }
   async control(path, body, boot, check) {
-    return this.serialRequest(async () => {
+    const stopping = path === '/v1/control' && body?.target === 'remote' && body.enabled === false && Object.keys(body).length === 2;
+    const generation = this.stopGeneration;
+    const send = async () => {
       check();
       if (!this.verified || this.info?.boot_id !== boot || path!=='/v1/control') throw new Error('控制状态已变化');
+      if (!stopping && generation !== this.stopGeneration) throw Object.assign(new Error('停止请求已取消此前排队的控制'), { status: 409 });
+      if (stopping) this.stopGeneration++;
       return JSON.parse((await deviceRequest(this.binding.address+path, {token:this.binding.token, method:'POST', body, boot, maxBytes:16384})).body);
-    });
+    };
+    // Stop must not wait behind a blocked frame/control HTTP response. Reject
+    // older queued writes even if telemetry has not caught up with the stop yet.
+    return stopping ? send() : this.serialRequest(send);
   }
   async json(path, signal) { return JSON.parse((await this.request(path, signal)).body); }
   openAudio() {
@@ -185,6 +192,7 @@ export class Monitor extends EventEmitter {
     this.frame = null; this.motion = []; this.audio = { at: 0, db: -96, gaps: 0, history: [] };
     this.events = []; this.eventSeq = 0; this.asrSeq = 0; this.hearingSeq = 0; this.filteredSpeech = 0; this.online = false; this.running = false;
     this.m12Tracker = new M12Tracker(); this.thermalHistory = [];
+    this.viewerStreams = new Map(); this.streams = { camera: false, servo_diagnostics: false };
     this.viewers = 0; this.epoch = 0; this.error = ''; this.audioError = ''; this.cameraError = '';
   }
   event(kind, text, at = Date.now()) {
@@ -206,7 +214,9 @@ export class Monitor extends EventEmitter {
   }
   acceptTelemetry(data, now = Date.now()) {
     if (data.boot_id !== this.info?.boot_id || !Number.isSafeInteger(data.seq)) throw new Error('遥测启动标识不匹配');
-    if (data.seq === this.telemetry?.seq) return;
+    // Stream-detail changes may share the current sensor sequence. Apply the
+    // replacement (including removed diagnostics) without refreshing sensor age.
+    if (data.seq === this.telemetry?.seq) { this.telemetry = data; return; }
     const previous = this.telemetry; this.telemetry = data; this.telemetryAt = now;
     this.m12Tracker.accept(data);
     const thermal = data.temperature;
@@ -258,8 +268,8 @@ export class Monitor extends EventEmitter {
   }
   snapshot(now = Date.now()) {
     const fresh = { telemetry: !!this.telemetryAt && now - this.telemetryAt < 1500,
-      camera: !!this.frame?.at && now - this.frame.at < 1500, audio: !!this.audio.at && now - this.audio.at < 1000 };
-    return { online: this.online, active: this.running, error: this.error, viewers: this.viewers,
+      camera: this.streams.camera && !!this.frame?.at && now - this.frame.at < 1500, audio: !!this.audio.at && now - this.audio.at < 1000 };
+    return { online: this.online, active: this.running, error: this.error, viewers: this.viewers, streams: { ...this.streams },
       capabilities: this.info?.capabilities || {}, firmware: this.info?.firmware || '', boot: this.info?.boot_id || '', address: this.client.push ? 'USB Serial/JTAG' : (this.client.binding?.address || ''),
       receivedAt: this.telemetryAt, fresh, telemetry: this.telemetry,
       voiceLibrary: this.info?.voice_library || {clips:[]},
@@ -271,13 +281,32 @@ export class Monitor extends EventEmitter {
         system: this.m12System.snapshot(now) }, thermalHistory: this.thermalHistory,
       motion: this.motion, events: this.events, filteredSpeech: this.filteredSpeech, now };
   }
-  addViewer() {
-    this.viewers++; clearTimeout(this.idleTimer);
+  addViewer(options = {}) {
+    const viewer = Symbol('viewer');
+    this.viewerStreams.set(viewer, { camera: options.camera === true, servo_diagnostics: options.servo_diagnostics === true });
+    this.viewers = this.viewerStreams.size; clearTimeout(this.idleTimer);
+    this.updateStreams();
     if (!this.running) this.start();
+    return viewer;
   }
-  removeViewer() {
-    this.viewers = Math.max(0, this.viewers - 1);
+  removeViewer(viewer = this.viewerStreams.keys().next().value) {
+    if (!this.viewerStreams.delete(viewer)) return;
+    this.viewers = this.viewerStreams.size; this.updateStreams();
     if (!this.viewers) this.idleTimer = setTimeout(() => { if (!this.viewers) this.stop(); }, 1500);
+  }
+  updateStreams() {
+    const demands = [...this.viewerStreams.values()];
+    const next = { camera: demands.some(v => v.camera), servo_diagnostics: demands.some(v => v.servo_diagnostics) };
+    if (next.camera === this.streams.camera && next.servo_diagnostics === this.streams.servo_diagnostics) return;
+    this.streams = next;
+    if (!next.camera) { this.frame = null; this.cameraError = ''; }
+    // Preferences may change during hello/info: the serial client queues only
+    // the latest demand and sends it after the authenticated subscription.
+    const epoch = this.epoch;
+    Promise.resolve(this.client.setStreams?.(next)).catch(error => {
+      if (this.running && this.epoch === epoch) { this.cameraError = error.message; this.emit('state', this.snapshot()); }
+    });
+    this.emit('state', this.snapshot());
   }
   start() {
     if (this.running) return;
@@ -342,13 +371,13 @@ export class Monitor extends EventEmitter {
         this.acceptInfo(info);
         let end;const disconnected=new Promise(resolve=>{end=resolve;});
         on('disconnect',e=>{if(current()){this.online=false;this.error=e.message;this.clearStreams();this.emit('state',this.snapshot());}end();});
-        on('state',data=>{if(!current())return;this.acceptTelemetry(data);this.online=true;this.error='';if(data.health?.camera_enabled===false)this.frame=null;this.emit('state',this.snapshot());});
+        on('state',data=>{if(!current())return;this.acceptTelemetry(data);this.online=true;this.error='';this.emit('state',this.snapshot());});
         on('events',data=>{if(current()){this.acceptEvents(data);this.emit('state',this.snapshot());}});
-        on('frame',frame=>{if(current()){this.frame=frame;this.cameraError='';this.emit('state',this.snapshot());}});
+        on('frame',frame=>{if(current()&&this.streams.camera){this.frame=frame;this.cameraError='';this.emit('state',this.snapshot());}});
         on('log',line=>{if(current()){this.event('system',line.replace(/\x1b\[[0-9;]*m/g,''));this.emit('state',this.snapshot());}});
         on('stale',()=>{if(current()){this.online=false;this.error='串口状态缺帧，正在重新同步';this.clearStreams();this.emit('state',this.snapshot());}});
         abort=()=>end();signal.addEventListener('abort',abort,{once:true});
-        await client.subscribe();if(current())await disconnected;
+        await client.subscribe(this.streams);if(current())await disconnected;
       } catch(e){if(current()){this.online=false;this.error=e.message;this.clearStreams();this.emit('state',this.snapshot());}}
       finally{if(abort)signal.removeEventListener('abort',abort);for(const [name,fn] of listeners)client.off(name,fn);await client.close();}
       if(current())await sleep(1500);
@@ -365,7 +394,7 @@ export class Monitor extends EventEmitter {
           this.acceptInfo(info); lastInfo = Date.now();
         }
         // No IMU batch and no raw audio stream: the page shows neither (user, 2026-11-09).
-        const query = `/v1/telemetry?remote_after=${this.telemetry?.remote?.rx_packets || 0}&hearing_after=${this.hearingSeq}`;
+        const query = `/v1/telemetry?remote_after=${this.telemetry?.remote?.rx_packets || 0}&hearing_after=${this.hearingSeq}${this.streams.servo_diagnostics ? '&servo_diag=1' : ''}`;
         const data = await this.client.json(query, signal);
         if (epoch !== this.epoch || signal.aborted) break;
         if (data.boot_id !== this.info.boot_id) { this.client.verified = false; continue; }
@@ -374,12 +403,15 @@ export class Monitor extends EventEmitter {
         this.online = true; this.error = '';
         // A single sequential main-port poll leaves room for Android's two requests.
         // The body camera is off by default; do not poll frames the robot will refuse.
-        if (this.telemetry?.health?.camera_enabled === false) {
+        if (!this.streams.camera) {
+          this.frame = null; this.cameraError = '';
+        } else if (this.telemetry?.health?.camera_enabled === false) {
           if (this.frame) this.frame = null;
-          this.cameraError = '机身相机已关闭（默认）；需要时在相机面板开启';
+          this.cameraError = '此连接不支持独立预览；业务相机当前关闭';
         } else try {
           const image = await this.client.request('/v1/frame', signal);
           if (epoch !== this.epoch || signal.aborted) break;
+          if (!this.streams.camera) continue;
           const seq = Number(image.headers['x-seq']);
           if (image.headers['x-boot-id'] === this.info.boot_id && Number.isSafeInteger(seq) &&
               image.body.length > 4 && image.body[0] === 255 && image.body[1] === 216) {

@@ -34,7 +34,7 @@ const tooltipObserver = new MutationObserver(records => {
   }
 });
 tooltipObserver.observe(document.querySelector('.dashboard'), { subtree: true, childList: true, characterData: true });
-let source, state, received = 0, paused = false, generation = 0, frameSeq = null, frameURL = null, framePending = false;
+let source, state, received = 0, paused = false, pageHidden = false, previewRequested = false, generation = 0, frameSeq = null, frameURL = null, framePending = false;
 let lastBoot = '', lastEvent = -1, lastFiltered = 0, logFilter = 'all';
 // Combined log: ASR commands, hearing (speech / link / gaps), sound events and system state changes.
 const LOG_GROUPS = { asr: ['asr'], hearing: ['hearing', 'response'], response: ['response'], sound: ['sound'], tingwu: ['tingwu'] };
@@ -66,10 +66,10 @@ async function updateFrame(s, fresh) {
     const res = await fetch('/api/frame', { cache: 'no-store' });
     if (!res.ok) throw new Error('画面不可用');
     const blob = await res.blob();
-    if (own !== generation || paused) return;
+    if (own !== generation || paused || !previewRequested) return;
     const nextURL = URL.createObjectURL(blob); const img = new Image(); img.src = nextURL;
     try { await img.decode(); } catch { URL.revokeObjectURL(nextURL); throw new Error('画面解码失败'); }
-    if (own !== generation || paused) { URL.revokeObjectURL(nextURL); return; }
+    if (own !== generation || paused || !previewRequested) { URL.revokeObjectURL(nextURL); return; }
     const previous = frameURL; frameURL = nextURL; frameSeq = Number(res.headers.get('X-Frame-Seq'));
     $('camera').src = nextURL; $('camera').hidden = false; $('camera-empty').hidden = true;
     if (previous) URL.revokeObjectURL(previous);
@@ -80,14 +80,18 @@ function render() {
   const bridge = !paused && Date.now() - received < 2500;
   const connected = bridge && state?.online;
   const fresh = connected && state.fresh.telemetry;
-  const cameraFresh = connected && state.fresh.camera;
+  const cameraFresh = previewRequested && connected && state.fresh.camera;
   const t = fresh ? state.telemetry : {}, motor = t.remote?.motor || {};
   $('status-dot').classList.toggle('live', !!fresh);
   text('status', paused ? '监控已暂停' : fresh ? '实时连接' : connected ? '数据过期' : '等待机器人');
   text('firmware', state?.firmware || 'StackChan');
   text('notice', paused ? '此页面已暂停；其他已打开的观察页面仍可继续采集。' : !bridge ? '本机数据桥未连接，正在重试…' : !connected ? (state?.error || '正在验证机器人并建立连接…') : !fresh ? '遥测未更新，旧数据已隐藏。' : '实时监控 · 点击控制按钮才发送操作');
   $('notice').classList.toggle('warn', !paused && !fresh);
-  text('camera-status', cameraFresh ? '实时画面' : paused ? '已暂停' : t.health?.camera_enabled === false ? '相机已关闭' : (state?.cameraError || '等待新画面'));
+  text('camera-toggle', previewRequested ? '停止传输' : '开始传输');
+  $('camera-toggle').disabled = paused;
+  $('camera-toggle').setAttribute('aria-pressed', String(previewRequested));
+  text('camera-status', paused ? '已暂停' : !previewRequested ? '画面传输已停止' : cameraFresh ? '实时画面' : (state?.cameraError || '等待新画面'));
+  text('camera-empty', previewRequested ? '等待机身画面' : '点击开始传输以查看机身画面');
   text('frame-meta', cameraFresh ? `#${state.frame.seq} · ${num(state.frame.bytes / 1024, 1)} KB` : '—');
   void updateFrame(state, cameraFresh);
   text('uptime', fresh ? '运行 ' + duration(t.timestamp_us / 1e6) : '—');
@@ -102,9 +106,11 @@ function render() {
   text('remote', t.remote ? `${bool(t.remote.valid, '收到数据', '等待数据')} · ${t.remote.rx_packets ?? 0} 包` : '—');
   text('display', bool(t.display?.enabled, '开启', '关闭'));
   text('motor-status', bool(motor.enabled, '控制启用', '控制停用'));
-  text('yaw', motor.yaw?.valid ? `${num(motor.yaw.angle_deg)}°` : '无有效反馈');
+  const turnBusy = motor.yaw_turn?.busy === true || ['queued', 'rotating', 'stopping'].includes(motor.yaw_turn?.state);
+  const yawInRange = motor.yaw?.valid && Number.isFinite(motor.yaw.angle_deg) && Math.abs(motor.yaw.angle_deg) <= 128;
+  text('yaw', motor.yaw_turn?.state==='power_cut' ? '断电保护' : turnBusy ? '旋转中' : yawInRange ? `${num(motor.yaw.angle_deg)}°` : motor.yaw?.valid && Number.isFinite(motor.yaw.angle_deg) ? '超出定位范围' : '无有效反馈');
   text('pitch', motor.pitch?.valid ? `${num(motor.pitch.angle_deg)}°` : '无有效反馈');
-  $('yaw').classList.toggle('warn', !!fresh && !motor.yaw?.valid); $('pitch').classList.toggle('warn', !!fresh && !motor.pitch?.valid);
+  $('yaw').classList.toggle('warn', !!fresh && !yawInRange && !turnBusy); $('pitch').classList.toggle('warn', !!fresh && !motor.pitch?.valid);
   const pose = { feedback_unavailable: '反馈不可用', complete: '动作已完成', completed: '动作已完成', moving: '运动中', waiting: '等待反馈', idle: '空闲', superseded: '已由新设置替代', cancelled: '已取消' };
   text('startup-pose', pose[motor.startup_pose_state] || motor.startup_pose_state);
   text('pitch-saved', t.pitch_setting ? `${num(t.pitch_setting.configured_deg)}° · ${bool(t.pitch_setting.persisted, '已保存', '未保存')}` : '—');
@@ -143,10 +149,17 @@ function render() {
   }
   text('freshness', fresh ? `更新于 ${new Date(state.receivedAt).toLocaleTimeString('zh-CN', { hour12: false })}` : '实时读数不可用');
 }
+function streamURL() {
+  const servo = ['servo-tuning', 'servo-settings'].some(id => $(id).open);
+  return `/api/events?camera=${previewRequested ? 1 : 0}&servo=${servo ? 1 : 0}`;
+}
 function connect() {
-  source?.close(); source = new EventSource('/api/events');
-  source.onopen = () => { lastEvent = -1; };
-  source.onmessage = event => {
+  source?.close();
+  if (paused || pageHidden) return;
+  const ownSource = source = new EventSource(streamURL());
+  ownSource.onopen = () => { if (source === ownSource) lastEvent = -1; };
+  ownSource.onmessage = event => {
+    if (source !== ownSource || paused || pageHidden) return;
     try {
       const next = JSON.parse(event.data);
       if (next.boot && lastBoot && next.boot !== lastBoot) clearFrame();
@@ -154,15 +167,28 @@ function connect() {
       state = next; received = Date.now(); render();
     } catch { text('notice', '数据格式异常，等待下一帧'); }
   };
-  source.onerror = () => { received = 0; clearFrame(); render(); };
+  ownSource.onerror = () => { if (source === ownSource) { received = 0; clearFrame(); render(); } };
 }
+$('camera-toggle').addEventListener('click', () => {
+  if (paused) return;
+  previewRequested = !previewRequested; clearFrame(); connect(); render();
+});
+// The open attribute covers showModal(), Escape, form method=dialog and
+// programmatic close; unrelated dialogs never request servo diagnostics.
+let diagnosticsRequested = false;
+const dialogObserver = new MutationObserver(() => {
+  const next = ['servo-tuning', 'servo-settings'].some(id => $(id).open);
+  if (next === diagnosticsRequested) return;
+  diagnosticsRequested = next; connect();
+});
+for (const id of ['servo-tuning', 'servo-settings']) dialogObserver.observe($(id), { attributes: true, attributeFilter: ['open'] });
 $('pause').addEventListener('click', () => {
   paused = !paused; $('pause').setAttribute('aria-pressed', String(paused)); text('pause', paused ? '恢复监控' : '暂停监控');
   clearFrame(); received = 0;
   if (paused) source?.close(); else connect(); render();
 });
-window.addEventListener('pagehide', () => { source?.close(); clearFrame(); });
-window.addEventListener('pageshow', event => { if (event.persisted && !paused) connect(); });
+window.addEventListener('pagehide', () => { pageHidden = true; source?.close(); clearFrame(); });
+window.addEventListener('pageshow', event => { pageHidden = false; if (event.persisted && !paused) connect(); });
 window.addEventListener('resize', render);
 setInterval(render, 500);
 connect(); render();

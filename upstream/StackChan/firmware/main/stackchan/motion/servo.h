@@ -220,6 +220,12 @@ public:
      *
      * @return int
      */
+    // Checked, bounded rotation entry points for the collector motor owner.
+    virtual bool beginTimedRotation(int) { return false; }
+    virtual bool endTimedRotation() { return false; }
+    virtual void cutRotationPower() {}
+    virtual bool rotationPowerFaulted() const { return false; }
+
     virtual int getCurrentAngle();
 
     // A failed bus read must never be presented as a measured angle.

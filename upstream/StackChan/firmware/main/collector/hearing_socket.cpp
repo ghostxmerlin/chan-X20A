@@ -3,6 +3,7 @@
 #include "hearing_socket.h"
 #include "hearing_policy.h"
 #include "hearing_transport_policy.h"
+#include "hearing_frame_write.h"
 #include <esp_transport.h>
 #include <esp_transport_tcp.h>
 #include <esp_transport_ssl.h>
@@ -10,6 +11,8 @@
 #include <esp_crt_bundle.h>
 #include <esp_timer.h>
 #include <esp_log.h>
+#include <esp_random.h>
+#include <esp_heap_caps.h>
 #include <lwip/sockets.h>
 #include <algorithm>
 #include <mutex>
@@ -72,9 +75,21 @@ struct HearingSocket::Impl {
         // 2026-11-09), and lwIP stops reporting the socket writable at 8 queued segments.
         const int kSendBudgetMs=frame_send_budget_ms(size);   // 1 s; 3 s for camera frames (frame_change.h)
         deadline.begin(esp_timer_get_time(),kSendBudgetMs);
-        const auto opcode=static_cast<ws_transport_opcodes_t>((binary?WS_TRANSPORT_OPCODES_BINARY:WS_TRANSPORT_OPCODES_TEXT)|WS_TRANSPORT_OPCODES_FIN);
-        const int result=esp_transport_ws_send_raw(ws,opcode,static_cast<const char*>(data),size,kSendBudgetMs);
-        if(result!=static_cast<int>(size)||deadline.cancelled){error="send_"+std::to_string(result);close();return false;}return true;
+        // IDF's WS sender writes the header and payload separately. TCP_NODELAY
+        // turns those into two segments, halving the small lwIP queue's capacity.
+        // Normal Opus packets fit on the worker stack; large messages use PSRAM.
+        uint8_t small[512],mask[4];esp_fill_random(mask,sizeof(mask));
+        std::unique_ptr<uint8_t,decltype(&heap_caps_free)> large(nullptr,heap_caps_free);
+        if(size+8>sizeof(small))large.reset(static_cast<uint8_t*>(heap_caps_malloc(size+8,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)));
+        auto* frame=size+8<=sizeof(small)?small:large.get();
+        if(!frame){error="send_memory";close();return false;}
+        const size_t length=pack_ws_frame(frame,size+8,data,size,binary,mask);
+        int result=0;
+        const bool sent=write_ws_frame(frame,length,[&]{return deadline.remaining(esp_timer_get_time());},
+            [&](const uint8_t* bytes,size_t count,int ms){
+                result=esp_transport_write(native,reinterpret_cast<const char*>(bytes),count,ms);return result;
+            });
+        if(!sent||deadline.cancelled){error="send_"+std::to_string(result);close();return false;}return true;
     }
     bool poll() {
         if(!connected)return false;

@@ -38,7 +38,7 @@ public:
     // command rate grows with distance (43° → ~390°/s). Keep every turn at or
     // below the peak of the validated 20° web slot (~4° per 20 ms tick): full
     // speed up to 20°, proportionally slower beyond, never below 300.
-    static constexpr int kServoSpeed=kWebYawDefaultSpeed,kRateRefTenths=kWebYawStepTenths,kMinTurnSpeed=300;
+    static constexpr int kServoSpeed=kWebYawDefaultSpeed,kRateRefTenths=200,kMinTurnSpeed=300;
     static int turn_speed(int distance) {
         const int d=std::abs(distance);
         return d<=kRateRefTenths?kServoSpeed:std::max(kMinTurnSpeed,kServoSpeed*kRateRefTenths/d);

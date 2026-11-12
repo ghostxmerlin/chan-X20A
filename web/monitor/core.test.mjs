@@ -107,10 +107,26 @@ test('stopping while a frame is pending cannot resurrect cached video or audio',
     request() { signalFrame(); return new Promise(resolve => { releaseFrame = resolve; }); },
     openAudio() { assert.fail('stale loop must not open audio'); }
   };
-  const monitor = new Monitor(client); monitor.start(); await frameRequested; monitor.stop();
+  const monitor = new Monitor(client); monitor.addViewer({ camera: true }); await frameRequested; monitor.stop();
   releaseFrame({ headers: { 'x-boot-id': 'a', 'x-seq': '1' }, body: Buffer.from([255,216,1,2,3]) });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(monitor.frame, null); assert.equal(monitor.online, false);
+});
+
+test('HTTP motor stop bypasses blocked reads and invalidates older queued controls before sending',async t=>{
+  const writes=[];
+  const server=http.createServer((req,res)=>{const data=[];req.on('data',chunk=>data.push(chunk));req.on('end',()=>{writes.push(JSON.parse(Buffer.concat(data)));res.writeHead(200,{'Content-Type':'application/json'});res.end('{"accepted":true}');});});
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+  const client=new DeviceClient({address:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(32),device_id:'test'});
+  client.verified=true;client.info={boot_id:'b'};
+  let release;client.requestTail=new Promise(r=>{release=r;});
+  let validated=0;const queued=client.control('/v1/control',{target:'yaw_turn',duration_ms:1000},'b',()=>{validated++;});
+  const rejected=assert.rejects(queued,error=>error.status===409);
+  await client.control('/v1/control',{target:'remote',enabled:false},'b',()=>{validated++;});
+  assert.deepEqual(writes,[{target:'remote',enabled:false}]);
+  release();await rejected;assert.equal(validated,2);assert.equal(writes.length,1);
+  await client.control('/v1/control',{target:'camera',enabled:false},'b',()=>{validated++;});
+  assert.equal(writes.length,2);assert.equal(writes[1].target,'camera');
 });
 
 

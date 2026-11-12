@@ -9,12 +9,14 @@
 #include <smooth_ui_toolkit.hpp>
 #include <mooncake_log.h>
 #include <settings.h>
+#include <stackchan/motion/timed_rotation_io.h>
 #include <esp_timer.h>
 
 using namespace smooth_ui_toolkit;
 using namespace stackchan::motion;
 
 static SCSCL _scs_bus;
+static bool _rotation_power_fault = false; // shared VM; never auto re-enable after a stop fault
 
 struct ServoConfig_t {
     int id             = -1;
@@ -41,6 +43,16 @@ public:
         reset_runtime_limits();
         set_angle_limit(_config.angleLimit);
         get_zero_pos_from_nvs();
+        if (!_config.persistDefaults) {
+            // ESP soft reset need not reset the separately powered SCS0009.
+            // Never trust the software Mode default when wheel mode survived.
+            setTorqueEnabled(false);
+            const auto timeout = _scs_bus.IOTimeOut; _scs_bus.IOTimeOut = 10;
+            _position_mode_verified = TimedRotationIO::positionMode(_scs_bus, _config.id);
+            if (!_position_mode_verified) _position_mode_verified = TimedRotationIO::positionMode(_scs_bus, _config.id);
+            _scs_bus.IOTimeOut = timeout;
+            if (!_position_mode_verified) cutRotationPower();
+        }
         if (_config.persistDefaults) Servo::init();
         else initPassive();
     }
@@ -78,6 +90,7 @@ public:
 
     void set_angle_impl(int angle) override
     {
+        if (_rotation_power_fault || !_position_mode_verified) return;
         int mapped_angle = _zero_pos + angle * 16 / 5 / 10;  // 一步对应 0.3125度, 0.3125 = 5/16
         mapped_angle     = uitk::clamp(mapped_angle, _runtime_raw_pos_limit.x, _runtime_raw_pos_limit.y);
 
@@ -163,7 +176,7 @@ public:
             result.moving_raw = _scs_bus.ReadMove(-1);
             result.current_raw = _scs_bus.ReadCurrent(-1);
         }
-        result.valid = block && result.transport_error == 0 && result.servo_status == 0 && is_raw_pos_valid(result.position_raw);
+        result.valid = !_rotation_power_fault && (_position_mode_verified || _timed_rotation.saved) && block && result.transport_error == 0 && result.servo_status == 0 && is_raw_pos_valid(result.position_raw);
         if (result.valid) {
             result.angle = raw_pos_to_angle(result.position_raw);
             result.load_valid = result.current_valid = true;
@@ -192,6 +205,7 @@ public:
 
     void setTorqueEnabled(bool enabled) override
     {
+        if (enabled && (_rotation_power_fault || !_position_mode_verified)) return;
         Servo::setTorqueEnabled(enabled);
         _scs_bus.EnableTorque(_config.id, enabled ? 1 : 0);
         // mclog::tagInfo(_tag, "id: {} set torque: {}", _id, enabled);
@@ -253,7 +267,39 @@ public:
         _scs_bus.WritePWM(_config.id, mapped_velocity);
     }
 
+    bool beginTimedRotation(int velocity) override
+    {
+        if (!_config.enablePwmMode || _rotation_power_fault || !GetHAL().servoPowerControlReady()) return false;
+        const auto timeout = _scs_bus.IOTimeOut;
+        _scs_bus.IOTimeOut = 10;
+        _position_mode_verified = false;
+        const bool ok = _timed_rotation.begin(_scs_bus, _config.id, velocity);
+        _scs_bus.IOTimeOut = timeout;
+        return ok;
+    }
+    bool endTimedRotation() override
+    {
+        if (!_config.enablePwmMode) return false;
+        const auto timeout = _scs_bus.IOTimeOut;
+        _scs_bus.IOTimeOut = 10;
+        const bool ok = _timed_rotation.end(_scs_bus, _config.id);
+        if (ok) _position_mode_verified = TimedRotationIO::positionMode(_scs_bus, _config.id);
+        _scs_bus.IOTimeOut = timeout;
+        if (ok && _position_mode_verified) _current_mode = Mode::Position;
+        return ok && _position_mode_verified;
+    }
+
+    void cutRotationPower() override
+    {
+        _rotation_power_fault = true;
+        _position_mode_verified = false;
+        GetHAL().setServoPowerEnabled(false);
+    }
+    bool rotationPowerFaulted() const override { return _rotation_power_fault; }
+
 private:
+    bool _position_mode_verified = true;
+    TimedRotationIO _timed_rotation;
     enum class Mode { Position = 0, PWM = 1 };
 
     ServoConfig_t _config;

@@ -159,7 +159,7 @@ void run(void*)
                 }
             }
             bool frame_sent = false;
-            if (ok && !frame_held(esp_timer_get_time(), frames_hold_until_us)) {
+            if (ok && camera_streaming() && !frame_held(esp_timer_get_time(), frames_hold_until_us)) {
                 const auto frame = camera_latest_frame();
                 if (frame && frame->seq != last_seen_seq && frame->bytes && frame->length) {
                     last_seen_seq = frame->seq;

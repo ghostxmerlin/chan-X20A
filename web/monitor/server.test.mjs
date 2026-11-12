@@ -65,3 +65,20 @@ test('local read-only API does not disclose binding secret and rejects foreign o
   assert.equal((await fetch(url + '/api/frame')).status, 503);
   assert.equal(monitor.running, false);
 });
+
+test('SSE query preferences aggregate per connection and stop JPEG serving when the final preview closes',async t=>{
+ const calls=[],monitor=new Monitor({binding:{},setStreams:options=>calls.push({...options})});monitor.running=true;
+ const server=createMonitorServer(monitor);await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const base=`http://127.0.0.1:${server.address().port}`,readers=[];
+ t.after(async()=>{for(const reader of readers)reader.destroy();server.closeAllConnections();await new Promise(r=>server.close(r));clearTimeout(monitor.idleTimer);});
+ const open=query=>new Promise((resolve,reject)=>{const request=http.get(base+'/api/events'+query,res=>{res.on('error',()=>{});res.resume();readers.push(res);resolve(res);});request.on('error',reject);});
+ const until=async fn=>{for(let i=0;i<100&&!fn();i++)await new Promise(r=>setTimeout(r,5));assert.ok(fn());};
+ const idle=await open(''),a=await open('?camera=1'),b=await open('?camera=1&servo=1');
+ assert.deepEqual(monitor.streams,{camera:true,servo_diagnostics:true});
+ monitor.frame={seq:4,at:Date.now(),bytes:Buffer.from([255,216,1,2])};
+ assert.equal((await fetch(base+'/api/frame')).status,200);
+ a.destroy();await until(()=>monitor.viewers===2);assert.equal(monitor.streams.camera,true);
+ b.destroy();await until(()=>monitor.viewers===1);assert.deepEqual(monitor.streams,{camera:false,servo_diagnostics:false});
+ assert.equal(monitor.frame,null);assert.equal((await fetch(base+'/api/frame')).status,503);
+ assert.deepEqual(calls.at(-1),{camera:false,servo_diagnostics:false});assert.equal(monitor.running,true);idle.destroy();
+});

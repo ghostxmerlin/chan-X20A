@@ -65,6 +65,8 @@ void Hal::io_expander_init(bool collectorOnly)
     else if (collectorOnly) ESP_LOGE("CollectorMotion", "Base IO expander unavailable; VM not enabled");
 }
 
+bool Hal::servoPowerControlReady() const { return bool(_io_expander); }
+
 void Hal::setServoPowerEnabled(bool enabled)
 {
     if (!_io_expander) {

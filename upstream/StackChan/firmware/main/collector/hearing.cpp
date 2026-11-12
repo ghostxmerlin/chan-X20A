@@ -42,6 +42,7 @@ StaticTask_t worker_control;
 StackType_t* worker_stack=nullptr;
 std::atomic<uint32_t> worker_stack_free{0},encode_us{0},send_us{0},poll_us{0};
 std::atomic<uint32_t> capture_session{0},dropped{0};
+std::atomic<uint32_t> queue_overflow{0},stale_blocks{0},sequence_gaps{0},queue_high_water{0},block_age_us{0};
 std::atomic<int64_t> quiet_until{0};
 std::string url,secret,device,boot;
 bool ready=false,connected=false,audio_ack=false,enroll_ack=false;
@@ -299,8 +300,9 @@ void worker(void*) {
             }
             Block block;
             if(!ok||xQueueReceive(queue,&block,pdMS_TO_TICKS(20))!=pdTRUE)continue;
-            if(block.session!=session||esp_timer_get_time()-block.us>kMaxBlockAgeUs){++dropped;blocks=0;if(sent)++wire_seq;continue;}
-            if(previous&&block.seq!=previous+1){blocks=0;++dropped;if(sent)++wire_seq;}
+            block_age_us=static_cast<uint32_t>(std::max(int64_t(0),esp_timer_get_time()-block.us));
+            if(block.session!=session||block_age_us>kMaxBlockAgeUs){++stale_blocks;++dropped;blocks=0;if(sent)++wire_seq;continue;}
+            if(previous&&block.seq!=previous+1){blocks=0;++sequence_gaps;++dropped;if(sent)++wire_seq;}
             if(!blocks){first_us=block.us;sounding=false;}
             std::copy_n(block.pcm,kFrames,pcm.data()+blocks*kFrames);sounding|=block.sounding;previous=block.seq;
             if(++blocks!=3)continue;
@@ -404,8 +406,10 @@ void feed_audio(const int16_t* data,size_t frames,uint32_t seq,int64_t timestamp
     block.sounding=playback_self_sounding()||timestamp_us<quiet_until.load();
     for(size_t i=0;i<frames;++i)block.pcm[i]=data[i*2];
     if(xQueueSend(queue,&block,0)!=pdTRUE) {
-        Block stale;xQueueReceive(queue,&stale,0);++dropped;xQueueSend(queue,&block,0);
+        Block stale;xQueueReceive(queue,&stale,0);++queue_overflow;++dropped;xQueueSend(queue,&block,0);
     }
+    const uint32_t depth=uxQueueMessagesWaiting(queue);uint32_t high=queue_high_water.load();
+    while(depth>high&&!queue_high_water.compare_exchange_weak(high,depth)){}
 }
 ListeningIntent listening_intent() {
     std::lock_guard<std::mutex> lock(mutex);
@@ -447,6 +451,10 @@ void json(JsonObject out,bool with_events,uint32_t events_after) {
     out["session_age_ms"]=session_started?static_cast<int32_t>((now-session_started)/1000):-1;
     out["session_dropped_blocks"]=session_started?dropped.load()-session_dropped_base:0;
     out["send_max_us"]=send_max_us;
+    auto pending=out["capture_queue"].to<JsonObject>();
+    pending["blocks"]=queue?uxQueueMessagesWaiting(queue):0;pending["capacity"]=kQueue;
+    pending["high_water"]=queue_high_water.load();pending["last_age_ms"]=block_age_us.load()/1000;
+    pending["overflow"]=queue_overflow.load();pending["stale"]=stale_blocks.load();pending["sequence_gaps"]=sequence_gaps.load();
     auto end=out["disconnects"].to<JsonObject>();
     end["heartbeat_timeout"]=ends.heartbeat_timeout;end["send_failed"]=ends.send_failed;end["transport_closed"]=ends.transport_closed;
     end["connect_failed"]=ends.connect_failed;end["handshake_timeout"]=ends.handshake_timeout;end["encode_failed"]=ends.encode_failed;end["stopped"]=ends.stopped;

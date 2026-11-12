@@ -33,6 +33,7 @@ esp_err_t remote_set_tracking(bool enabled);
 bool remote_tracking_requested();
 void remote_tracking_json(ArduinoJson::JsonObject target);
 // speed is the spring mapping input (kWebYawMinSpeed..kWebYawMaxSpeed); out of range returns ESP_ERR_INVALID_ARG.
+esp_err_t remote_turn_yaw(int duration_ms, uint32_t* request_seq);
 esp_err_t remote_step_yaw(int delta_tenths, int speed, bool remote_like, uint32_t* request_seq);
 // Absolute 20-degree slot (-3..3; 0 = center). ESP_ERR_INVALID_STATE when not idle/enabled.
 esp_err_t remote_yaw_slot(int slot, int speed, uint32_t* request_seq);

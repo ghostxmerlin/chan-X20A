@@ -7,7 +7,7 @@ import { createMonitorServer } from './server.mjs';
 function fixture() {
   const calls=[];
   const m=new Monitor({binding:{}, verified:true, control:async (...a)=>{calls.push(a);return {accepted:true,request_seq:3};}});
-  m.online=m.running=true; m.info={boot_id:'boot-a',capabilities:{web_control:'supported',unified_control:'supported'}};
+  m.online=m.running=true; m.info={boot_id:'boot-a',capabilities:{web_control:'supported',unified_control:'supported',yaw_step_45:'supported'}};
   m.telemetryAt=Date.now();m.telemetry={timestamp_us:2000000,m12:{valid:true},remote:{motor:{enabled:true,requested:true,yaw:{valid:true,angle_deg:0},timestamp_us:2000000,yaw_trajectory_complete:true}},pitch_setting:{state:'complete'}};
   return {m,calls,c:new Controls(m)};
 }
@@ -23,9 +23,12 @@ test('local voice is explicit, bounded, fresh, audio-ready and single-job',async
  m.telemetry.playback.busy=false;m.telemetry.health.audio_ready=false;await assert.rejects(c.execute(request));
  assert.equal(calls.length,3);
 });
-test('yaw buttons send one 20-degree slot and center sends slot 0',async()=>{
+test('yaw buttons require the 45-degree capability and center sends slot 0',async()=>{
  const {m,c,calls}=fixture();
- await c.execute({action:'yaw',delta_deg:20,boot:'boot-a'});assert.deepEqual(calls[0][1],{target:'yaw_step',delta_deg:20});
+ delete m.info.capabilities.yaw_step_45;
+ await assert.rejects(c.execute({action:'yaw',delta_deg:45,boot:'boot-a'}));
+ m.info.capabilities.yaw_step_45='supported';
+ await c.execute({action:'yaw',delta_deg:45,boot:'boot-a'});assert.deepEqual(calls[0][1],{target:'yaw_step',delta_deg:45});
  await c.execute({action:'yaw_center',slot:0,boot:'boot-a'});assert.equal(calls[1][0],'/v1/control');assert.deepEqual(calls[1][1],{target:'yaw_step',slot:0});
  for(const bad of [{action:'yaw',delta_deg:5,boot:'boot-a'},{action:'yaw',delta_deg:-10,boot:'boot-a'},{action:'yaw_center',slot:1,boot:'boot-a'}]) await assert.rejects(c.execute(bad));
  assert.equal(calls.length,2);
@@ -154,14 +157,14 @@ test('controls whitelist schema, boot, freshness and permissions before writing'
   m.telemetryAt=Date.now()-2000;await assert.rejects(c.execute({action:'m12',enabled:true,boot:'boot-a'}));
   assert.equal(calls.length,0);
   m.telemetryAt=Date.now();m.telemetry.remote.motor.yaw.valid=false;
-  await assert.rejects(c.execute({action:'yaw',delta_deg:20,boot:'boot-a'}));
+  await assert.rejects(c.execute({action:'yaw',delta_deg:45,boot:'boot-a'}));
   await c.execute({action:'motor',enabled:false,boot:'boot-a'}); assert.equal(calls.length,1);
 });
 test('single command never retries after unknown network result and rejects competing actions',async()=>{
   const {m,c,calls}=fixture();let fail;
   m.client.control=()=>{calls.push(1);return new Promise((_,reject)=>fail=reject);};
   const first=c.execute({action:'m12',enabled:true,boot:'boot-a'});
-  await assert.rejects(c.execute({action:'yaw',delta_deg:20,boot:'boot-a'}), /正在/);
+  await assert.rejects(c.execute({action:'yaw',delta_deg:45,boot:'boot-a'}), /正在/);
   fail(new Error('connection lost'));await assert.rejects(first,/未确认/);assert.equal(calls.length,1);
 });
 test('local POST needs exact same origin and JSON; GET never actuates',async t=>{
@@ -214,4 +217,57 @@ test('hearing voiceprint delete sends op forget with the name only',async()=>{
  for(const name of ['',' ','x'.repeat(49),3]) await assert.rejects(c.execute({action:'hearing_forget',name,boot:'boot-a'}));
  await assert.rejects(c.execute({action:'hearing_forget',boot:'boot-a'}));
  assert.equal(calls.length,1);
+});
+test('timed turn validates exact duration and capability without claiming measured arrival',async()=>{
+ const {m,c,calls}=fixture(),request={action:'yaw_turn',duration_ms:1000,boot:'boot-a'};
+ await assert.rejects(c.execute(request));m.info.capabilities.yaw_turn='supported';
+ for(const duration_ms of [100,1000,2000]) {
+  const result=await c.execute({...request,duration_ms});
+  assert.deepEqual(calls.at(-1)[1],{target:'yaw_turn',duration_ms});assert.match(result.message,/估计|约/);
+ }
+ for(const duration_ms of [99,2001,100.1,'1000',NaN,null])await assert.rejects(c.execute({...request,duration_ms}));
+ const {duration_ms,...missing}=request;await assert.rejects(c.execute(missing));
+ await assert.rejects(c.execute({...request,pwm:400}));await assert.rejects(c.execute({...request,boot:'old'}));
+ m.telemetryAt=Date.now()-3000;await assert.rejects(c.execute(request));assert.equal(calls.length,3);
+});
+test('timed turn blocks conflicting actions but permits motor stop and tracking disable',async()=>{
+ const {m,c,calls}=fixture();Object.assign(m.info.capabilities,{yaw_turn:'supported',yaw_step_diagnostics:'supported',servo_tuning:'supported',interaction_modes:'supported',face_tracking:'supported'});
+ const request={action:'yaw_turn',duration_ms:1000,boot:'boot-a'},motor=m.telemetry.remote.motor;
+ for(const key of ['enabled','requested']){motor[key]=false;await assert.rejects(c.execute(request));motor[key]=true;}
+ for(const state of ['queued','moving','waiting_feedback']){m.telemetry.pitch_setting.state=state;await assert.rejects(c.execute(request));}
+ m.telemetry.pitch_setting.state='complete';
+ for(const state of ['queued','moving']){motor.web_yaw={state};await assert.rejects(c.execute(request));}
+ motor.web_yaw={state:'idle'};motor.yaw_trajectory_complete=false;
+ m.telemetry.interaction={tracking:{requested:true,active:true,state:'turning'}};
+ await c.execute(request); // Firmware owns takeover of tracking output.
+ motor.yaw_turn={state:'rotating',busy:true};
+ for(const body of [request,{action:'yaw',delta_deg:45},{action:'yaw_center',slot:0},{action:'yaw_step',delta_deg:5,speed:600,path:'web'},{action:'pitch',angle_deg:10},{action:'servo_refresh',axis:'yaw'},{action:'servo_restore',axis:'yaw'},{action:'motor',enabled:true},{action:'interaction',mode:'tracking',enabled:true}])await assert.rejects(c.execute({...body,boot:'boot-a'}));
+ await c.execute({action:'motor',enabled:false,boot:'boot-a'});
+ await c.execute({action:'interaction',mode:'tracking',enabled:false,boot:'boot-a'});
+ assert.equal(calls.length,3);
+});
+test('motor stop is sent while another command awaits its response without releasing that command lock',async()=>{
+ const {m,c}=fixture();m.info.capabilities.yaw_turn='supported';const sent=[];let release;
+ m.client.control=async (route,body)=>{sent.push(body);if(body.target==='yaw_turn')await new Promise(r=>release=r);return {accepted:true};};
+ const turn=c.execute({action:'yaw_turn',duration_ms:1000,boot:'boot-a'});
+ await c.execute({action:'motor',enabled:false,boot:'boot-a'});
+ await assert.rejects(c.execute({action:'m12',enabled:true,boot:'boot-a'}),/正在/);
+ assert.deepEqual(sent,[{target:'yaw_turn',duration_ms:1000},{target:'remote',enabled:false}]);release();await turn;
+});
+test('ordinary yaw keeps feedback within position mode bounds and accepts telemetry snapshot skew',async()=>{
+ const {m,c,calls}=fixture(),request={action:'yaw_center',slot:0,boot:'boot-a'};
+ m.telemetry.remote.motor.timestamp_us=2024125;
+ for(const angle of [-128,128]){m.telemetry.remote.motor.yaw.angle_deg=angle;await c.execute(request);}
+ for(const angle of [-129,129,180,NaN,null]){m.telemetry.remote.motor.yaw.angle_deg=angle;await assert.rejects(c.execute(request));}
+ assert.equal(calls.length,2);
+});
+test('queued timed turn rechecks boot and freshness; uncertain responses are never retried',async t=>{
+ const seen=[];const server=http.createServer((req,res)=>{seen.push(req.url);res.destroy();});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const {m,c}=fixture();m.info.capabilities.yaw_turn='supported';
+ m.client=new DeviceClient({address:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(32),device_id:'test-device'});m.client.verified=true;m.client.info={boot_id:'boot-a'};
+ const request={action:'yaw_turn',duration_ms:1000,boot:'boot-a'};
+ let release;m.client.requestTail=new Promise(r=>release=r);const rebooted=c.execute(request);m.client.info.boot_id='boot-b';release();await assert.rejects(rebooted);assert.equal(seen.length,0);
+ m.client.info.boot_id='boot-a';m.client.requestTail=new Promise(r=>release=r);const stale=c.execute(request);m.telemetryAt=Date.now()-3000;release();await assert.rejects(stale);assert.equal(seen.length,0);
+ m.telemetryAt=Date.now();await assert.rejects(c.execute(request),/不会自动重发/);assert.equal(seen.length,1);
 });

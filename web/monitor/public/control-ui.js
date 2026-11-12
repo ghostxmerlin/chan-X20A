@@ -1,16 +1,18 @@
 const names={queued:'等待执行',moving:'运动中',trajectory_complete:'轨迹结束（请核对实测角度）',complete:'轨迹结束（请核对实测角度）',completed:'轨迹结束（请核对实测角度）',feedback_unavailable:'反馈不可用，未确认动作',cancelled:'已取消',superseded:'已被实体遥控取代',expired:'请求已过期',idle:'尚无网页动作',waiting_feedback:'等待反馈',target_unavailable:'目标超出机械范围'};
+const turnNames={idle:'尚未转身',queued:'转身等待执行',rotating:'转身中',stopping:'正在停止转身',estimated_complete:'按时长估计完成，未测量转身角度',cancelled:'转身已取消',expired:'转身请求已过期',failed:'转身未启动，模式或总线校验失败',power_cut:'停止通信异常，已请求舵机断电；需重启恢复'};
+const turnIsBusy=motor=>motor.yaw_turn?.busy===true || ['queued','rotating','stopping'].includes(motor.yaw_turn?.state);
 export class ControlPanel {
   constructor(doc, send = async body => {
     const response=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(7000)});
     if(!response.ok) throw new Error(await response.text());
     return response.json();
   }) {
-    this.doc=doc;this.send=send;this.pending=false;this.dirty=false;this.boot='';
+    this.doc=doc;this.send=send;this.pending=false;this.stopPending=false;this.commandSeq={};this.dirty=false;this.boot='';
     this.actions={
       'm12-start':()=>({action:'m12',enabled:true}), 'm12-stop':()=>({action:'m12',enabled:false}),
       'motor-enable':()=>({action:'motor',enabled:true}), 'motor-disable':()=>({action:'motor',enabled:false}),
-      'camera-toggle':()=>({action:'camera',enabled:this.state?.telemetry?.health?.camera_enabled!==true}),
-      'yaw-left':()=>({action:'yaw',delta_deg:-20}), 'yaw-right':()=>({action:'yaw',delta_deg:20}), 'yaw-center':()=>({action:'yaw_center',slot:0}),
+      'yaw-left':()=>({action:'yaw',delta_deg:-45}), 'yaw-right':()=>({action:'yaw',delta_deg:45}), 'yaw-center':()=>({action:'yaw_center',slot:0}),
+      'yaw-turn':()=>({action:'yaw_turn',duration_ms:Number(this.el('yaw-turn-duration').value)}),
       'yaw-step-left':()=>this.stepBody(-1), 'yaw-step-right':()=>this.stepBody(1),
       'pitch-apply':()=>({action:'pitch',angle_deg:Number(this.el('pitch-input').value)})
     };
@@ -23,14 +25,18 @@ export class ControlPanel {
     return {action:'yaw_step',delta_deg:direction*degrees,speed:Math.round(Number(this.el('yaw-speed-input').value)),path:this.el('yaw-path-select').value==='remote'?'remote':'web'};
   }
   async dispatch(id,body) {
-    if(this.pending || !this.ready || this.el(id).disabled) return;
-    const boot=this.state.boot, message=body.action.startsWith('m12')?'m12-command':body.action==='camera'?'camera-command':'servo-command';
+    const stopping=body.action==='motor' && body.enabled===false;
+    const lock=stopping?'stopPending':'pending';
+    if(this[lock] || (!stopping && this.stopPending) || !this.ready || this.el(id).disabled) return;
+    const boot=this.state.boot, message=body.action.startsWith('m12')?'m12-command':'servo-command';
     if(body.action==='pitch' && (!Number.isFinite(body.angle_deg) || body.angle_deg<5 || body.angle_deg>85 || Math.abs(body.angle_deg*10-Math.round(body.angle_deg*10))>1e-7)) {this.el(message).textContent='请输入 5–85°，步长 0.1°';return;}
     if(body.action==='yaw_step' && (!Number.isInteger(body.delta_deg) || body.delta_deg===0 || Math.abs(body.delta_deg)>30 || !Number.isInteger(body.speed) || body.speed<50 || body.speed>1000)) {this.el(message).textContent='步进 1–30 整数度，速度 50–1000';return;}
-    this.pending=true;this.el(message).textContent='正在发送…';this.render(this.state,this.fresh);
-    try {const result=await this.send({...body,boot});this.el(message).textContent=this.state?.boot===boot?result.message:'机器人已重启，请核对新状态';}
-    catch(error) {this.el(message).textContent=error.name==='TimeoutError'?'请求结果未确认，请核对实时状态；不会自动重发':error.message || '请求结果未确认';}
-    finally {this.pending=false;this.render(this.state,this.fresh);}
+    if(body.action==='yaw_turn' && (!Number.isInteger(body.duration_ms) || body.duration_ms<100 || body.duration_ms>2000)) {this.el(message).textContent='转身估计时长须为 100–2000 毫秒的整数';return;}
+    const seq=(this.commandSeq[message]||0)+1;this.commandSeq[message]=seq;
+    this[lock]=true;this.el(message).textContent='正在发送…';this.render(this.state,this.fresh);
+    try {const result=await this.send({...body,boot});if(seq===this.commandSeq[message])this.el(message).textContent=this.state?.boot===boot?result.message:'机器人已重启，请核对新状态';}
+    catch(error) {if(seq===this.commandSeq[message])this.el(message).textContent=error.name==='TimeoutError'?'请求结果未确认，请核对实时状态；不会自动重发':error.message || '请求结果未确认';}
+    finally {this[lock]=false;this.render(this.state,this.fresh);}
   }
   render(state,fresh) {
     this.state=state;this.fresh=fresh;
@@ -40,27 +46,32 @@ export class ControlPanel {
     const active=m.enabled && m.requested;
     // Firmware stamps telemetry before copying servo snapshots, so feedback may be a few ms newer (seen: 24 ms).
     const feedbackFresh=(at)=>Number.isFinite(at)&&t.timestamp_us-at>-100000&&t.timestamp_us-at<1000000;
-    const yawFresh=m.yaw?.valid && feedbackFresh(m.timestamp_us);
+    const yawFresh=m.yaw?.valid && Number.isFinite(m.yaw.angle_deg) && Math.abs(m.yaw.angle_deg)<=128 && feedbackFresh(m.timestamp_us);
     const pitchFresh=p.feedback_valid && feedbackFresh(p.feedback_timestamp_us);
-    const yawReady=active && yawFresh && m.yaw_trajectory_complete && !['queued','moving'].includes(m.web_yaw?.state);
-    const pitchReady=active && pitchFresh && !['queued','moving','waiting_feedback'].includes(p.state);
-    const cameraKnown=typeof t.health?.camera_enabled==='boolean', cameraOn=t.health?.camera_enabled===true;
-    this.el('camera-toggle').textContent=cameraOn?'关闭相机':'开启相机';
+    const turnBusy=turnIsBusy(m),manualYawBusy=['queued','moving'].includes(m.web_yaw?.state),pitchBusy=['queued','moving','waiting_feedback'].includes(p.state);
+    const yawReady=active && !turnBusy && yawFresh && m.yaw_trajectory_complete && !manualYawBusy;
+    const pitchReady=active && !turnBusy && pitchFresh && !pitchBusy;
+    const step45=state?.capabilities?.yaw_step_45==='supported',turnSupported=state?.capabilities?.yaw_turn==='supported';
+    const turnReady=active && turnSupported && !turnBusy && !manualYawBusy && !pitchBusy;
     const stepDiag=state?.capabilities?.yaw_step_diagnostics==='supported';
-    const availability={'m12-start':t.m12?.valid && t.m12?.online!==false,'m12-stop':true,'motor-enable':!m.requested,'motor-disable':true,'yaw-left':yawReady&&(m.web_yaw?.measured_slot===undefined||m.web_yaw.measured_slot>-(m.web_yaw.slots??3)),'yaw-right':yawReady&&(m.web_yaw?.measured_slot===undefined||m.web_yaw.measured_slot<(m.web_yaw.slots??3)),'yaw-center':yawReady,'yaw-step-left':yawReady&&stepDiag,'yaw-step-right':yawReady&&stepDiag,'pitch-apply':pitchReady,'camera-toggle':state?.capabilities?.camera_control==='supported' && cameraKnown};
-    for(const id of ['yaw-step-input','yaw-speed-input','yaw-path-select']) this.el(id).disabled=!this.ready||this.pending||!stepDiag;
+    const availability={'m12-start':t.m12?.valid && t.m12?.online!==false,'m12-stop':true,'motor-enable':!m.requested&&!turnBusy,'motor-disable':true,'yaw-left':yawReady&&step45&&(m.web_yaw?.measured_slot===undefined||m.web_yaw.measured_slot>-(m.web_yaw.slots??2)),'yaw-right':yawReady&&step45&&(m.web_yaw?.measured_slot===undefined||m.web_yaw.measured_slot<(m.web_yaw.slots??2)),'yaw-center':yawReady,'yaw-turn':turnReady,'yaw-step-left':yawReady&&stepDiag,'yaw-step-right':yawReady&&stepDiag,'pitch-apply':pitchReady};
+    for(const id of ['yaw-step-input','yaw-speed-input','yaw-path-select']) this.el(id).disabled=!this.ready||this.pending||this.stopPending||turnBusy||!stepDiag;
     if(!this.stepDefaultsSet && fresh && stepDiag){this.el('yaw-step-input').value='5';this.el('yaw-speed-input').value=String(m.web_yaw?.default_speed||600);this.stepDefaultsSet=true;}
-    for(const id of Object.keys(this.actions)) this.el(id).disabled=!this.ready || this.pending || !availability[id];
-    this.el('pitch-input').disabled=!this.ready || this.pending;
+    if(!this.turnDefaultsSet && fresh && turnSupported){const initial=m.yaw_turn?.default_duration_ms;this.el('yaw-turn-duration').value=String(Number.isInteger(initial)&&initial>=100&&initial<=2000?initial:1200);this.turnDefaultsSet=true;}
+    this.el('yaw-turn-duration').disabled=!this.ready||this.pending||this.stopPending||turnBusy||!turnSupported;
+    for(const id of Object.keys(this.actions)) this.el(id).disabled=!this.ready || this.stopPending || (this.pending && id!=='motor-disable') || !availability[id];
+    this.el('pitch-input').disabled=!this.ready || this.pending || this.stopPending || turnBusy;
     if(state?.boot !== this.boot) {this.boot=state?.boot;this.dirty=false;}
     if(!this.dirty && fresh && Number.isFinite(p.configured_deg)) this.el('pitch-input').value=String(p.configured_deg);
-    this.el('controls-note').textContent=!fresh?'连接或数据已过期，控制暂不可用':!supported?'等待支持网页控制的新固件':!active?'舵机已停用，启用后可调整角度':!yawFresh?'左右角度反馈不可用，暂不能步进':!yawReady?'等待左右轴动作结束':`按机器人自身方向，每次一档 ${m.web_yaw?.step_deg??20}°，中心左右各 ${m.web_yaw?.slots??3} 档；当前约在第 ${m.web_yaw?.measured_slot??'—'} 档`;
+    this.el('controls-note').textContent=!fresh?'连接或数据已过期，控制暂不可用':!supported?'等待支持网页控制的新固件':!active?'舵机已停用，启用后可调整角度':turnBusy?'转身执行中；可随时停用舵机':!yawFresh?'左右角度反馈不可用，暂不能步进':!yawReady?'等待左右轴动作结束':!step45?'当前固件不支持 45° 步进':`按机器人自身方向，每次一档 45°，中心左右各 2 档（±90°）；当前约在第 ${m.web_yaw?.measured_slot??'—'} 档。位置反馈范围 ±128°。`;
+    const turn=m.yaw_turn||{},turnText=turnNames[turn.state]||turn.state||'尚未转身';
+    this.el('yaw-turn-state').textContent=!fresh?'状态已过期，等待新遥测':!turnSupported?'当前固件不支持定时转身':turnText+(turn.request_seq&&Number.isInteger(turn.duration_ms)?` · 设定 ${turn.duration_ms} ms`:'');
     this.el('yaw-command-state').textContent=fresh ? (names[m.web_yaw?.state] || m.web_yaw?.state || '尚无网页动作') + (m.web_yaw?.request_seq ? ` · 目标 ${Number(m.web_yaw.target_deg).toFixed(1)}° · 速度 ${m.web_yaw.speed}${m.web_yaw.path==='remote_like'?' · 遥控同款路径':''}` : '') : '—';
     const pitchState=p.state==='feedback_unavailable' && p.feedback_valid && Number.isFinite(p.measured_deg) ? `反馈角度 ${p.measured_deg.toFixed(1)}°，未能启动调整` : names[p.state] || p.state || '—';
     this.el('pitch-command-state').textContent=fresh ? pitchState : '—';
     const modes=state?.capabilities?.interaction_modes==='supported';
     this.el('remote-pitch-note').textContent=!fresh?'遥控状态已过期':modes?'遥控：左追踪 · 右认人 · 上听觉 · 下预留':t.remote?.pitch_control_enabled===false?'实体遥控上下已屏蔽，左右与中心开关屏保留。':t.remote?.pitch_control_enabled===true?'实体遥控上下仍启用，等待固件更新。':'等待遥控上下状态。';
-    this.el('remote-pitch-note').title=modes?'实体遥控四向只切换模式，不直接转动舵机；使用摇杆页，松回中位后再次拨动。中心仍开关屏幕。网页左右一档 20° 和保存仰角仍为显式动作，并退出自动追踪。':this.el('remote-pitch-note').textContent;
+    this.el('remote-pitch-note').title=modes?'实体遥控四向只切换模式，不直接转动舵机；使用摇杆页，松回中位后再次拨动。中心仍开关屏幕。网页左右一档 45°、定时转身和保存仰角仍为显式动作，并退出自动追踪。':this.el('remote-pitch-note').textContent;
   }
 }
 
@@ -97,7 +108,7 @@ export class InteractionPanel {
       const data=interaction[mode],requested=!!fresh&&!!data?.requested,button=this.el('interaction-'+mode);
       if(!button)continue;
       button.textContent=`${requested?'关闭':'开启'}${name}`;button.setAttribute('aria-pressed',String(requested));
-      const allowed=mode==='tracking'?trackingSupported&&(requested||(motorReady&&t.m12?.valid)):mode==='recognition'?requested||t.m12?.valid:true;
+      const allowed=mode==='tracking'?trackingSupported&&(requested||(motorReady&&t.m12?.valid&&!turnIsBusy(t.remote?.motor||{}))):mode==='recognition'?requested||t.m12?.valid:true;
       button.disabled=!this.ready||this.pending||typeof data?.requested!=='boolean'||!allowed;
       button.title=mode==='advanced'?'只记录预留意图；高级语音尚未实现，不会启动新的语音后端。':mode==='tracking'?'看两帧、一口气转到位：人脸偏离中心超过 8° 才动；两帧间基本没动就直接转到人脸，在移动就按速度提前（最多 10°），正走向中央就不转；一条命令（多给 3° 预补偿），实测停稳后再看下一帧；丢脸 1.5 s 回到锚点；范围为开启时角度 ±60°。开启需舵机启用和 M12 串口就绪。': '任意已登记人脸视为主人，确认后启动现有听觉与情绪回应；真正问答尚未实现。';
     }
