@@ -149,3 +149,4 @@ summary{cursor:pointer;width:fit-content}
 .memory-item { border-bottom:1px solid #315b40; padding:10px 0; }
 .memory-item p { margin:6px 0; }
 #say-explanation { white-space:pre-wrap; overflow-wrap:anywhere; max-width:750px; line-height:1.6; }
+.memory-pagination { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; }

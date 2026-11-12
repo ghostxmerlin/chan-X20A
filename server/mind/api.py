@@ -89,7 +89,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                          for r in [speech_settings.role_config(r,s) for r in roles.values()]],
                 'history':ctx['settings_store'].history() if ctx.get('settings_store') else [],
                 'worker':{k:v for k,v in (db['mind_memory_jobs'].find_one({'_id':'worker:live'}) or {}).items()
-                          if k in ('cursor','updated_at','last_error','skipped_range','last_reconcile','deployed_at')}}
+                          if k in ('state','cursor_window','last_tick','last_error','skipped_range','last_reconcile','deployed_at')}}
 
     def memory_row(mid):
         if not isinstance(mid,str) or not re.fullmatch(r'm[a-f0-9]{24}',mid):

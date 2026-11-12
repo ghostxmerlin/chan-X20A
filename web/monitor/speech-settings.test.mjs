@@ -23,6 +23,11 @@ test('saved config version and selected role audition are sent',async()=>{
  await m.load();await m.save();await m.audition('sad');
  assert.equal(calls[1][1].expected_version,4);assert.deepEqual(calls[2],['/role/try',{role:'sad'}]);
 });
+test('an old save response cannot replace a newly opened settings view',async()=>{
+ let resolveSave;const m=new ui.SpeechSettingsModel(async(p,b)=>b?new Promise(r=>{resolveSave=r;}):cfg());
+ await m.load();const saving=m.save();await m.load();m.draft.speech.profile='home';resolveSave(cfg());await saving;
+ assert.equal(m.draft.speech.profile,'home');
+});
 test('memory and explanation markup escape stored text',()=>{
  const html=ui.memoriesHtml({items:[{memory_id:'m1',statement:'<img>',status:'known',version:2}],offset:0,total:1},'办公室');
  assert.match(html,/&lt;img&gt;/);assert.doesNotMatch(html,/style=|<img>/);

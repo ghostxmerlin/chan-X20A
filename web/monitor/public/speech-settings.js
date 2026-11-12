@@ -10,7 +10,7 @@ export class SpeechSettingsModel{
  constructor(req=request){this.request=req;this.loadSeq=0;this.pageSeq=0;this.page=null;}
  async load(){const seq=++this.loadSeq;const cfg=await this.request('/speech/settings');if(seq!==this.loadSeq)return false;this.accept(cfg);return true;}
  accept(cfg){this.config=cfg;this.draft=copy({speech:cfg.speech,memory:cfg.memory});for(const [k,v] of Object.entries(cfg.environments))this.draft.speech.profiles[k].environment=v;}
- async save(){const cfg=await this.request('/speech/settings',{...copy(this.draft),expected_version:this.config.version});this.accept(cfg);++this.pageSeq;return cfg;}
+ async save(){const seq=this.loadSeq;const cfg=await this.request('/speech/settings',{...copy(this.draft),expected_version:this.config.version});if(seq!==this.loadSeq)return false;this.accept(cfg);++this.pageSeq;return cfg;}
  async memories(offset=0,status=''){const seq=++this.pageSeq;const p=await this.request(`/memories?offset=${offset}&limit=10${status?'&status='+encodeURIComponent(status):''}`);if(seq!==this.pageSeq)return false;this.page=p;return true;}
  audition(role){return this.request('/role/try',{role});}
 }
@@ -22,7 +22,7 @@ export function memoriesHtml(page,scene){
    <p class="note">${esc(m.kind==='routine'?`有观察 ${metrics.observed_days||0} 天 · 发生 ${metrics.activity_days||0} 天`:`支持 ${metrics.support_days||0} 天 / ${metrics.support_windows||0} 个窗口`)}</p>
    <div class="control-buttons"><button data-memory-action="confirm">确认</button><button data-memory-action="correct">纠正</button><button data-memory-action="disable">停用</button><button data-memory-action="history">历史 / 恢复</button></div><div data-memory-detail></div></article>`;
  }).join(''):'<p class="note">还没有形成认识。需要多个独立窗口的证据，不会把一次观察当成习惯。</p>')+
- `<div class="control-buttons"><button data-memory-page="${Math.max(0,page.offset-10)}" ${page.offset===0?'disabled':''}>上一页</button><span>${page.offset+1}–${Math.min(page.offset+10,page.total)} / ${page.total}</span><button data-memory-page="${page.offset+10}" ${page.offset+10>=page.total?'disabled':''}>下一页</button></div>`;
+ `<div class="memory-pagination"><button data-memory-page="${Math.max(0,page.offset-10)}" ${page.offset===0?'disabled':''}>上一页</button><span>${page.total?Math.min(page.offset+1,page.total):0}–${Math.min(page.offset+10,page.total)} / ${page.total}</span><button data-memory-page="${page.offset+10}" ${page.offset+10>=page.total?'disabled':''}>下一页</button></div>`;
 }
 const reasons={latest_speech:'跟上刚听到的话',notes_agree:'纪要与刚听到的一致',notes_conflict:'纪要有冲突，以刚听到为准',new_topic:'话题已变化',special_visual:'画面有明显变化',emotion_boost:'重复情绪标签伴随声音变化',routine_background:'日常情况降为背景',uncertain_speech:'识别不确定',no_new_topic:'没有新话题'};
 export function explanationText(row){
@@ -93,8 +93,9 @@ export class SpeechSettings{
   const b=ev.target.closest('button');if(!b||this.busy)return;
   const relevant=b.hasAttribute('data-speech-save')||b.hasAttribute('data-role-try')||b.hasAttribute('data-memory-page')||b.hasAttribute('data-memory-action')||b.hasAttribute('data-history-page');if(!relevant)return;
   this.busy=true;b.disabled=true;
+  const fields=[...this.root.querySelectorAll('input,select,textarea')];fields.forEach(x=>{x.disabled=true;});
   try{
-   if(b.hasAttribute('data-speech-save')){this.capture(this.profile);await this.model.save();this.render();this.msg('已保存，下一次开口使用新设置。');await this.pages();}
+   if(b.hasAttribute('data-speech-save')){this.capture(this.profile);if(await this.model.save()){this.render();this.msg('已保存，下一次开口使用新设置。');await this.pages();}}
    else if(b.hasAttribute('data-role-try')){this.msg('试听已保存的角色设置…');await this.model.audition(this.role);this.msg('已发送试听。未保存的修改不参与本次试听。');}
    else if(b.hasAttribute('data-memory-page'))await this.pages(Number(b.dataset.memoryPage));
    else{
@@ -109,6 +110,6 @@ export class SpeechSettings{
      await this.pages(this.model.page.offset);this.msg('认识已更新，历史已保留。');
     }
    }
-  }catch(e){this.msg('没有完成：'+e.message);}finally{this.busy=false;if(b.isConnected)b.disabled=false;}
+  }catch(e){this.msg('没有完成：'+e.message);}finally{this.busy=false;if(b.isConnected)b.disabled=false;fields.forEach(x=>{x.disabled=false;});}
  }
 }
