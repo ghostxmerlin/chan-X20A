@@ -17,7 +17,7 @@ export function utterancesHtml(list,roles){
  if(!list||!list.length)return '<p class="note">还没说过话</p>';
  const name={try:'试听',...Object.fromEntries((roles||[]).map(r=>[r.id,r.button]))};
  return '<ul class="utterances">'+list.slice(-5).reverse().map(u=>{
-  const extra=[SAY_STATE[u.state]||escapeHtml(u.state||''),u.timings_s?.first_accepted!=null?`${Number(u.timings_s.first_accepted).toFixed(1)} 秒开口`:'',
+  const extra=[SAY_STATE[u.state]||escapeHtml(u.state||''),u.server_ms!=null?`服务端 ${(Number(u.server_ms)/1000).toFixed(1)} 秒`:'',u.timings_s?.first_accepted!=null?`TTS 起播 ${Number(u.timings_s.first_accepted).toFixed(1)} 秒`:'',
    u.tts_cost_cny!=null?`¥${Number(u.tts_cost_cny).toFixed(4)}`:''].filter(Boolean).join(' · ');
   return `<li><span class="muted">${hhmmss(u.at)}</span> <b>${escapeHtml(name[u.role]||u.role||'')}</b> ${escapeHtml(u.text||'')} <span class="muted">${extra}</span>${u.uid&&u.role!=='try'?` <button data-say-explain="${escapeHtml(u.uid)}" class="inline-button">为什么说这句</button>`:''}</li>`;
  }).join('')+'</ul>';

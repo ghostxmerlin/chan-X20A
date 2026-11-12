@@ -34,7 +34,7 @@ export function memoryEvidenceHtml(row){
 const reasons={latest_speech:'跟上刚听到的话',notes_agree:'纪要与刚听到的一致',notes_outdated:'纪要已过时，以刚听到为准',topic_changed:'话题已变化',visual_change:'画面有明显变化',emotion_cue:'情绪标签伴随声音变化',ordinary_background:'日常情况降为背景',uncertain_input:'识别不确定'};
 export function explanationText(row){
  const a=row.attention||{},c=row.context||{};
- return [`关注：${a.focus||'旧版记录，没有注意力诊断'}`,`依据：${(a.reason_codes||[]).map(x=>reasons[x]||x).join('、')}`,
+ return [row.pipeline==='scene-v1'?`输入情景：${c.scene?.text||'暂无新鲜情景'}${c.scene?.summary?'；'+c.scene.summary:''}`:`关注：${a.focus||'旧版记录，没有注意力诊断'}`,row.pipeline==='scene-v1'?'重点选择与写台词由同一次调用完成；下列为输入资料，不是模型引用证明。':`依据：${(a.reason_codes||[]).map(x=>reasons[x]||x).join('、')}`,
  `场景：${scenes[c.scope?.id]||c.scope?.id||'—'}`,`设置：${row.settings_version??'旧记录未标注'} · 提示词：${row.prompt||'旧记录未标注'} · 生成耗时：${row.llm_ms!=null?(row.llm_ms/1000).toFixed(1)+' 秒':'—'}`,...(c.evidence||[]).map(e=>`${(a.evidence_ids||[]).includes(e.id)?'采用':'背景'} · ${localTime(e.at)} · ${e.kind||''}：${e.text||e.summary||e.activity||JSON.stringify(e)}`),
  ...(c.memories||[]).map(m=>`已有认识：${m.statement}`),...(c.warnings||[]),`发音指令：${row.instruction||'—'}`].join('\n');
 }

@@ -250,8 +250,7 @@ class SpeechPipelineTest(SpeechCase):
         self.modules()
         self.heard(text='客户加需求，钱没加'); ctx=self.context()
         ids=[ctx['evidence'][0]['id']]; fake=FakeChat()
-        fake.reply_next(json.dumps(self.choose_reply(ids)))
-        fake.reply_next(json.dumps(self.candidates(ids,'活路翻倍，钱没涨，我这个班上得造孽哦。')))
+        fake.reply_next(json.dumps({'text':'活路翻倍，钱没涨，我这个班上得造孽哦。'}))
         old=speak.CHAT; speak.CHAT=fake; self.addCleanup(lambda:setattr(speak,'CHAT',old))
         tts=FakeTts()
         rec=speak.say(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles'),'sad',tts,self.now,wait=True)
@@ -259,7 +258,7 @@ class SpeechPipelineTest(SpeechCase):
         self.assertIn('请讲四川话',tts.said[0][1]['instruction'])
         self.assertEqual(rec['scope_id'],'office')
         self.assertEqual(self.db['utterances'].docs[-1]['state'],'done')
-        self.assertEqual([r['step'] for r in self.db['mind_runs'].docs],['attention','say'])
+        self.assertEqual([r['step'] for r in self.db['mind_runs'].docs],['say'])
 
     def test_long_or_repeated_lines_get_one_repair_and_are_never_truncated(self):
         attention, gen=self.modules(); self.heard(); ctx=self.context(); ids=[ctx['evidence'][0]['id']]
@@ -278,7 +277,7 @@ class SpeechPipelineTest(SpeechCase):
 
     def test_stop_during_attention_prevents_generation_and_playback(self):
         self.heard(); ids=[self.context()['evidence'][0]['id']]
-        fake=FakeChat(); fake.reply_next(json.dumps(self.choose_reply(ids)))
+        fake=FakeChat(); fake.reply_next(json.dumps({'text':'需求翻倍，工资倒是一动不动。'}))
         def cancelling(*args,**kwargs):
             response=fake(*args,**kwargs)
             speak.cancel_pending()

@@ -30,7 +30,7 @@ MAX_SETTINGS_BODY = 512 * 1024  # validated multilingual profiles and existing i
 MARKS = ("arrive", "leave", "meeting", "others_near", "alone")
 VERDICTS = ("right", "wrong", "unsure")
 FIELDS = ("owner", "people", "activity", "topic", "summary", "other")
-UTTERANCE_FIELDS = ('uid','at','role','text','state','tts_cost_cny','timings_s','pipeline','scope_id')
+UTTERANCE_FIELDS = ('uid','at','role','text','state','tts_cost_cny','timings_s','pipeline','scope_id','server_ms')
 
 
 def compact_utterance(row):
@@ -198,7 +198,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             context = row.get('context') or {}
             return {**compact_utterance(row),'attention':row.get('attention'),
                     **{k:row.get(k) for k in ('settings_version','prompt','llm_ms')},
-                    'context':{k:context.get(k) for k in ('scope','time','profile','evidence','memories','warnings')},
+                    'context':{k:context.get(k) for k in ('scope','time','profile','scene','evidence','memories','warnings')},
                     'instruction':row.get('instruction')}
         if path == "/state":
             return {**store.state(), "enabled": store.enabled(), "lane": LANE, "now_ms": int(time.time() * 1000)}

@@ -28,7 +28,8 @@ test('last lines: time, role, text, state, start time, cost', ()=>{
  const at=new Date(2026,10,11,17,5,3).getTime();
  const list=ui.utterancesHtml([{at,role:'roast',text:'这板子焊得，比我的发型还有个性。',state:'done',tts_cost_cny:0.0036,timings_s:{first_accepted:1.2}},
   {at,role:'try',text:'试听一句',state:'sent'}],roles);
- assert.match(list,/17:05:03/);assert.match(list,/吐槽/);assert.match(list,/说完了/);assert.match(list,/1.2 秒开口/);assert.match(list,/试听/);
+ assert.match(list,/17:05:03/);assert.match(list,/吐槽/);assert.match(list,/说完了/);assert.match(list,/TTS 起播 1.2 秒/);assert.match(list,/试听/);
+ assert.match(ui.utterancesHtml([{at,role:'roast',text:'一句',server_ms:2150,state:'sent'}],roles),/服务端 2.1 秒/);
  assert.match(ui.utterancesHtml([],roles),/还没说过话/);
  assert.match(ui.utterancesHtml([{at,role:'roast',text:'<b>',state:'sent'}],roles),/&lt;b&gt;/);
 });

@@ -132,6 +132,21 @@ def _emotions(items, now_ms):
 def build(db, store, s, now_ms):
     scope = speech_settings.scope(s)
     effective = speech_settings.effective(s)
+    # Same scene as /now, with the original observation age preserved for carried scenes.
+    scene = None
+    row = store.latest_scene_any('live')
+    sources_ok = all(s['sources'].values())
+    if row and not sources_ok:
+        original = store.latest_scene('live',row.get('carried_from')) if row.get('source')=='carried' else row
+        snapshot = db['mind_settings'].find_one({'lane':'live','version':original.get('settings_version')}) if original else None
+        sources_ok = bool(snapshot and snapshot.get('settings',{}).get('sources')==s['sources'])
+    if row and row.get('source') in ('model','carried') and sources_ok:
+        at = min(row['minute'], row.get('carried_from') or row['minute'], row.get('last_call_minute') or row['minute'])
+        sc = row.get('scene') or {}
+        doing = sc.get('people_doing') or {}
+        if max(scope['since'],now_ms-360_000)<=at<=now_ms and doing.get('confidence') in ('mid','high'):
+            scene = {'text':doing.get('text') or '', 'summary':sc.get('summary') or '', 'at':at,
+                     'minute':row['minute'], 'version':row.get('version'), 'source':row['source']}
     start = max(now_ms-120_000, scope['since'])
     window = Records(db).window(start, now_ms+1)
     evidence = group_speech(window, s, now_ms)[-12:]
@@ -191,6 +206,6 @@ def build(db, store, s, now_ms):
         except Exception as e:
             warnings.append('memory_unavailable:'+type(e).__name__)
     ctx = {'scope':scope, 'environment':effective.get('environment',''), 'time':settings.local_label(now_ms,s['tz']),
-           'profile':s['speech']['profiles'][scope['id']], 'evidence':evidence, 'memories':memories, 'recent':recent, 'warnings':warnings}
+           'profile':s['speech']['profiles'][scope['id']], 'scene':scene, 'evidence':evidence, 'memories':memories, 'recent':recent, 'warnings':warnings}
     ctx['fingerprint'] = fingerprint({**ctx, 'settings':s})
     return ctx

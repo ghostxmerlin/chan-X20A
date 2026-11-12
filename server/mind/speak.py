@@ -14,7 +14,7 @@ import time
 import uuid
 
 from . import llm, notes, settings as settings_mod
-from . import attention, speech_context, speech_generation, speech_settings
+from . import attention, speech_context, scene_speech, speech_settings
 from .records import Records
 from .store import LANE
 
@@ -182,6 +182,7 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=N
 
 
 def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,settings_version=None):
+    started = time.monotonic()
     epoch = _EPOCH
     role = speech_settings.role_config(roles[role_id], s)
     if s['speech']['pipeline'] == 'v1':
@@ -190,25 +191,21 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,
         raise NotConnected('hello 的嘴没连上')
     if not _SAY_LOCK.acquire(blocking=False):
         raise NotConnected('正在写上一句，请稍等或先停止')
-    started = time.monotonic()
     try:
         _check_pending(epoch,is_current)
         ctx = speech_context.build(store.db, store, s, now_ms)
-        focus = attention.choose(env, store, s, ctx, now_ms, chat=CHAT)
-        _check_pending(epoch,is_current)
-        output = speech_generation.generate(env, store, s, role, ctx, focus, now_ms, chat=CHAT)
+        context_ms = int((time.monotonic()-started)*1000)
+        output = scene_speech.generate(env, store, s, role, ctx, now_ms, chat=CHAT)
         _check_pending(epoch,is_current)
         finish_ms = now_ms+int((time.monotonic()-started)*1000)
-        selected = [e for e in ctx['evidence'] if e['id'] in focus['evidence_ids']]
-        if not selected or max(e['at'] for e in selected)<finish_ms-120_000:
+        scene = ctx.get('scene')
+        if not (scene and scene['at']>=finish_ms-360_000) and not any(e['quality']=='usable' and e['at']>=finish_ms-120_000 for e in ctx['evidence']):
             raise attention.NoSituation('生成耗时过长，刚才的情况已过期，请重新点一次')
         uid = 'u'+uuid.uuid4().hex
         rec = {'uid':uid, 'role':role_id, 'text':output['text'], 'voice':role['voice'], 'at':now_ms,
-               'state':'ready', 'run_id':output['run_id'], 'run_ids':output['run_ids'], 'scope_id':ctx['scope']['id'],
-               'pipeline':'v2', 'focus':focus['focus'], 'joke_type':output['joke_type'],
-               'attention':focus, 'instruction':role['instruction'], 'llm_ms':finish_ms-now_ms,
-               'settings_version':settings_version,'prompt':'say-v2 / attention-v1',
-               'context':ctx, 'generation':{'selected':output['selected'], 'candidates':output['candidates']}}
+               'state':'ready', 'run_id':output['run_id'], 'run_ids':[output['run_id']], 'scope_id':ctx['scope']['id'],
+               'pipeline':'scene-v1', 'instruction':role['instruction'], 'llm_ms':finish_ms-now_ms,
+               'context_ms':context_ms,'settings_version':settings_version,'prompt':scene_speech.PROMPT,'context':ctx}
         store.db['utterances'].insert_one(dict(rec))
         try:
             with _ENQUEUE_LOCK:
@@ -222,6 +219,8 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,
         store.db['utterances'].update_one({'uid':uid},{'$set':{'tts_id':tts_id,'state':'sent'}})
         from . import selfvoice
         selfvoice.refresh_spoken(store.db, now_ms)
+        rec['server_ms']=int((time.monotonic()-started)*1000)
+        store.db['utterances'].update_one({'uid':uid},{'$set':{'server_ms':rec['server_ms']}})
         if wait:
             _finish(store.db,tts,uid,tts_id)
         else:
