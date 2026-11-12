@@ -451,7 +451,9 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(400, {"error": str(e)})
             except NotFound as e:
                 self._send(404, {"error": str(e)})
-            except (Conflict, SettingsConflict, MemoryConflict, speak.NotConnected, NoSituation, BudgetExceeded) as e:
+            except NoSituation as e:
+                self._send(409, {"error": str(e), "code": "no_situation"})
+            except (Conflict, SettingsConflict, MemoryConflict, speak.NotConnected, BudgetExceeded) as e:
                 self._send(409, {"error": str(e)})
             except Exception as e:               # noqa: BLE001 - database trouble shows as 503
                 self._send(503, {"error": f"{type(e).__name__}"})

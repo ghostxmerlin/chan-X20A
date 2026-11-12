@@ -35,6 +35,33 @@ class SpeechCase(unittest.TestCase):
 
 class SpeechContextTest(SpeechCase):
 
+    def eye(self, minute_age, frame_age, confidence, version=1):
+        self.db.add('eye_minutes', {'minute':self.now-minute_age, 'version':version, 'source':'model',
+            'frames':[{'at':self.now-frame_age}],
+            'result':{'activity':'有人走到桌边', 'changes':'有人进入', 'confidence':confidence}})
+
+    def test_unclear_latest_visual_keeps_previous_fresh_clear_observation(self):
+        self.eye(60_000, 20_000, 'low')
+        self.eye(120_000, 95_000, 'mid')
+        rows = self.context()['evidence']
+        self.assertEqual([r['quality'] for r in rows], ['uncertain', 'usable'])
+        self.assertEqual(rows[1]['at'], self.now-95_000)
+        self.assertEqual(rows[1]['refs'][0]['minute'], self.now-120_000)
+
+    def test_visual_fallback_does_not_revive_superseded_stale_or_previous_scope(self):
+        self.eye(60_000, 20_000, 'high', version=1)
+        self.eye(60_000, 20_000, 'low', version=2)
+        self.eye(180_000, 121_000, 'high')
+        self.assertFalse(any(e['quality']=='usable' for e in self.context()['evidence']))
+        self.eye(120_000, 95_000, 'mid')
+        self.s['speech']['scope_since'] = self.now-60_000
+        self.assertFalse(any(e['quality']=='usable' for e in self.context()['evidence']))
+
+    def test_latest_clear_visual_does_not_add_older_observations(self):
+        self.eye(60_000, 20_000, 'high')
+        self.eye(120_000, 95_000, 'mid')
+        self.assertEqual(len(self.context()['evidence']), 1)
+
     def test_similar_asr_with_changed_negation_date_or_amount_stays_uncertain(self):
         for left,right in [('客户说不是明天交付','客户说是明天交付'),('客户说周五交付','客户说周四交付'),
                            ('客户说加三千块钱','客户说加五千块钱')]:
@@ -210,6 +237,14 @@ class SpeechPipelineTest(SpeechCase):
             speak.say(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles'),'sad',tts,self.now,wait=True)
         self.assertEqual(tts.said, [])
         self.assertEqual(self.db.count('mind_runs'), 0)
+
+    def test_conflicting_recognition_explains_why_it_cannot_speak(self):
+        attention, _ = self.modules()
+        self.heard(text='明天交付', pos=[4_720_000,4_736_000])
+        self.db.add('tingwu', tingwu('S',1,self.now,'明天不交付',pos=[4_720_000,4_736_000]))
+        with self.assertRaisesRegex(attention.NoSituation, '两路语音识别不一致'):
+            attention.choose(ENV,self.store,self.s,self.context(),self.now,chat=FakeChat())
+        self.assertEqual(self.db.count('mind_runs'),0)
 
     def test_say_v2_forwards_role_dialect_and_preserves_entire_sentence(self):
         self.modules()

@@ -31,7 +31,11 @@ special_visual 仅在新鲜清楚的画面确有显著变化时 true。reason_co
 def choose(env,store,s,ctx,now_ms,chat=None):
     usable = {e['id']:e for e in ctx['evidence'] if e['quality']=='usable'}
     if not usable:
-        raise NoSituation('暂时没有可靠的新情况')
+        if any(e.get('asr_conflict') for e in ctx['evidence']):
+            raise NoSituation('两路语音识别不一致，其他线索也不足。听清下一句话后再试。')
+        if ctx['evidence']:
+            raise NoSituation('刚才的识别结果不够确定，暂不开口。等一句清楚的话或新画面后再试。')
+        raise NoSituation('最近两分钟没有可用的听觉或视觉线索。等一句清楚的话或新画面后再试。')
     cached = getattr(store,'_attention_cache',None)
     if cached and cached['fingerprint']==ctx['fingerprint'] and 0<=now_ms-cached['at']<10_000:
         return {**copy.deepcopy(cached['result']),'cached':True}

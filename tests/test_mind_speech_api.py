@@ -21,7 +21,8 @@ class SpeechApiTest(unittest.TestCase):
         self.ss = SettingsStore(self.db, '/nonexistent.json')
         self.tts = FakeTts()
         self.server = api.make_server(Store(self.db), 'k', port=0, ctx={
-            'settings_store':self.ss, 'tts':self.tts, 'roles_dir':str(ROOT/'config/roles')})
+            'settings_store':self.ss, 'tts':self.tts, 'roles_dir':str(ROOT/'config/roles'),
+            'env':{'base_url':'http://unused.invalid','api_key':'unused'}})
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
@@ -51,6 +52,15 @@ class SpeechApiTest(unittest.TestCase):
         self.assertGreater(saved['speech']['scope_since'], 0)
         self.assertEqual(self.call('/speech/settings', body)[0], 409)
         self.assertEqual(self.call('/settings', {'settings':self.ss.current()[0], 'expected_version':cfg['version']})[0], 409)
+
+    def test_no_situation_is_distinct_from_connection_or_service_failure(self):
+        self.call('/switches', {'name':'mouth','mode':'tts'})
+        status, body = self.call('/say', {'role':'sad'})
+        self.assertEqual(status,409)
+        self.assertEqual(body.get('code'),'no_situation')
+        self.assertIn('最近两分钟',body['error'])
+        self.assertEqual(self.tts.said,[])
+        self.assertEqual(self.db.count('mind_runs'),0)
 
     def test_memory_page_edit_restore_conflict_and_scope(self):
         mid = 'm'+'a'*24

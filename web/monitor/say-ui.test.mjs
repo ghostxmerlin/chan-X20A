@@ -6,6 +6,15 @@ import {createMonitorServer} from './server.mjs';
 const ui=await import('data:text/javascript;base64,'+readFileSync(new URL('./public/say-ui.js',import.meta.url)).toString('base64'));
 const roles=[{id:'roast',button:'吐槽',name:'毒舌脱口秀演员'},{id:'comfort',button:'鼓励',name:'程序员安慰师小姐姐'}];
 
+test('say errors explain missing context and unwrap structured API errors', ()=>{
+ assert.equal(ui.sayErrorMessage(new Error('{"code":"no_situation","error":"两路语音识别不一致，暂时无法确认内容"}')),
+  '两路语音识别不一致，暂时无法确认内容');
+ assert.equal(ui.sayErrorMessage(new Error('{"error":"暂时没有可靠的新情况"}')), '暂时没有可靠的新情况');
+ assert.equal(ui.sayErrorMessage(new Error('{"error":"请先切到 TTS 模式"}')), '先把顶上的「嘴」切到 TTS');
+ assert.equal(ui.sayErrorMessage(new Error('{"error":"生成超时"}')), '没说成：生成超时');
+ assert.equal(ui.sayErrorMessage(new Error('Bad Gateway')), '没说成：Bad Gateway');
+});
+
 test('role buttons and a stop button', ()=>{
  const b=ui.roleButtonsHtml(roles);
  assert.match(b,/data-role="roast"/);assert.match(b,/吐槽/);assert.match(b,/data-say-stop/);assert.doesNotMatch(b,/style="/);

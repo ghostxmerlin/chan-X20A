@@ -140,18 +140,26 @@ def build(db, store, s, now_ms):
         for row in db['eye_minutes'].find({'minute': {'$gte': now_ms-180_000, '$lte': now_ms}, 'source':'model'}, {'_id':0}):
             if row['minute'] not in latest or row.get('version',0)>latest[row['minute']].get('version',0):
                 latest[row['minute']] = row
+        visual = []
         for row in sorted(latest.values(), key=lambda r:r['minute'], reverse=True):
             frames = [f.get('at') for f in row.get('frames', []) if _num(f.get('at'))]
             if not frames or min(frames)<scope['since'] or not start<=max(frames)<=now_ms:
                 continue
             result = row.get('result') or {}
             if result.get('activity'):
+                usable = result.get('confidence') in ('high','mid')
+                if visual and not usable:
+                    continue
                 ref = {'c':'eye_minutes', 'minute':row['minute'], 'version':row.get('version',0)}
-                evidence.append({'id':'v'+fingerprint(ref)[:16], 'kind':'vision', 'at':max(frames),
+                visual.append({'id':'v'+fingerprint(ref)[:16], 'kind':'vision', 'at':max(frames),
                                  'text':result['activity'], 'changes':result.get('changes') or '',
                                  'confidence':result.get('confidence', 'low'), 'refs':[ref],
-                                 'quality':'usable' if result.get('confidence') in ('high','mid') else 'uncertain', 'priority':'support'})
-                break
+                                 'quality':'usable' if usable else 'uncertain', 'priority':'support'})
+                # Keep the latest uncertainty visible, but do not let it hide a separate,
+                # still-fresh clear observation. Never resurrect a superseded revision.
+                if usable:
+                    break
+        evidence.extend(visual)
     if s['sources']['speech_text'] or s['sources']['tingwu']:
         conv = db['conversations'].find_one({'start_ms':{'$gte':scope['since'], '$lte':now_ms}}, {'_id':0}, sort=[('start_ms',-1)])
         if conv and (conv.get('notes') or conv.get('title')):

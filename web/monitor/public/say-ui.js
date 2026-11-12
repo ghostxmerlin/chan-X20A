@@ -22,8 +22,10 @@ export function utterancesHtml(list,roles){
   return `<li><span class="muted">${hhmmss(u.at)}</span> <b>${escapeHtml(name[u.role]||u.role||'')}</b> ${escapeHtml(u.text||'')} <span class="muted">${extra}</span>${u.uid&&u.role!=='try'?` <button data-say-explain="${escapeHtml(u.uid)}" class="inline-button">为什么说这句</button>`:''}</li>`;
  }).join('')+'</ul>';
 }
-function why(e){
- const m=String(e?.message||e);
+export function sayErrorMessage(e){
+ let m=String(e?.message||e),code;
+ try{const body=JSON.parse(m);if(typeof body?.error==='string'){m=body.error;code=body.code;}}catch{}
+ if(code==='no_situation'||/^暂时没有(可靠|值得说)的新情况/.test(m))return m;
  return m.includes('TTS 模式')?'先把顶上的「嘴」切到 TTS':m.includes('嘴没连上')?'hello 的嘴还没连上（本体 /mouth 未连接）':`没说成：${m}`;
 }
 async function getJson(path){const r=await fetch('/api/mind'+path,{signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error(await r.text());return r.json();}
@@ -44,14 +46,14 @@ export class SayPanel{
    try{
     if(b.dataset.sayStop){await postJson('/say/stop',{});if(seq===this.seq)$('say-msg').textContent='已叫停';}
     else{$('say-msg').textContent='正在想…';const r=await postJson('/say',{role:b.dataset.role});if(seq===this.seq)$('say-msg').textContent=`说：${r.text}`;}
-   }catch(e){if(seq===this.seq)$('say-msg').textContent=why(e);}
+   }catch(e){if(seq===this.seq)$('say-msg').textContent=sayErrorMessage(e);}
    this.refresh();
   });
   $('say-voices').addEventListener('click',async ev=>{
    const b=ev.target.closest('button');if(!b)return;
    const seq=++this.seq;
    try{$('say-msg').textContent='试听中…';const r=await postJson('/voice/try',{voice:b.dataset.voice});if(seq===this.seq)$('say-msg').textContent=`试听：${r.text}`;}
-   catch(e){if(seq===this.seq)$('say-msg').textContent=why(e);}
+   catch(e){if(seq===this.seq)$('say-msg').textContent=sayErrorMessage(e);}
    this.refresh();
   });
   setInterval(()=>this.refresh(),5000);
