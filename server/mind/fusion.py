@@ -81,8 +81,15 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
     """revise: late records rewrote this minute's package — call again only if the content changed
     (returns None, writing nothing, when the minute has no scene yet or its content is the same)."""
     now_ms = now_ms if now_ms is not None else minute_ms + 2 * MIN_MS
+    from . import speech_settings
+    s = speech_settings.effective(s)
+    scope_since = speech_settings.scope(s)['since']
     forced = force_prompt is not None or force_model is not None
     prev = store.last_scene_before("live" if lane == "rerun" else lane, minute_ms)
+    if prev and prev.get('minute', 0) < scope_since:
+        prev = None
+    neighbours = {k: p if p and p.get('minute', minute_ms) >= scope_since else None for k, p in (neighbours or {}).items()}
+    segments = [g for g in segments or [] if g.get('start', 0) >= scope_since]
     level = prev.get("review_level", 0) if prev else 0
     prompt = force_prompt or s["fusion"]["prompt"]
     model = force_model or s["fusion"]["model"]

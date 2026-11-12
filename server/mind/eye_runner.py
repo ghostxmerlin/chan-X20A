@@ -11,7 +11,7 @@ import argparse
 import os
 import time
 
-from . import eye, settings
+from . import eye, settings, speech_settings
 from .settings_store import SettingsStore
 from .store import Store
 
@@ -38,6 +38,7 @@ def tick(db, store, s, env, recordings_root, now_ms):
             db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": last_ready}}, upsert=True)
         return []
     first = last_ready - (CATCH_UP_MINUTES - 1) * MIN_MS
+    first = max(first, ((speech_settings.scope(s)['since'] + MIN_MS - 1) // MIN_MS) * MIN_MS)
     if cursor is not None:
         first = max(first, cursor + MIN_MS)
     done = []

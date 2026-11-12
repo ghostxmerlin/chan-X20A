@@ -65,3 +65,21 @@ for i in $(seq 20); do
 done
 echo "unit: $(systemctl is-active "$NOTES_UNIT")"
 sudo journalctl -u "$NOTES_UNIT" --since "$since" --no-pager -o cat | tail -n 3
+
+# Incremental memory uses existing database observations and adds no device task or port.
+MEMORY_UNIT="${MEMORY_UNIT:-soul-memory}"
+if [ "$(systemctl show "$MEMORY_UNIT" -p LoadState --value 2>/dev/null)" = "loaded" ]; then
+  sudo systemctl restart "$MEMORY_UNIT"
+else
+  sudo systemctl reset-failed "$MEMORY_UNIT" 2>/dev/null || true
+  sudo systemd-run --unit "$MEMORY_UNIT" --description "hello memory (evidence and daily routines)" \
+    --uid "$(id -u)" --gid "$(id -g)" -p WorkingDirectory="$D" -p Restart=on-failure -p RestartSec=5s \
+    -p MemoryMax=256M -p CPUQuota=20% \
+    "$PY" -m mind.memory_worker --settings "$D/settings.json"
+fi
+for i in $(seq 20); do
+  if sudo journalctl -u "$MEMORY_UNIT" --since "$since" --no-pager | grep -q 'memory: worker ready'; then break; fi
+  sleep 2
+done
+echo "unit: $(systemctl is-active "$MEMORY_UNIT")"
+sudo journalctl -u "$MEMORY_UNIT" --since "$since" --no-pager -o cat | tail -n 3

@@ -13,13 +13,13 @@ MIND_DIR=${SOUL_MIND_DIR:-soul-mind}
 UNIT=${SOUL_MIND_UNIT:-soul-mind}
 cd "$HERE"
 FILES="$(ls ./*.py | sed 's#^\./##' | tr '\n' ' ')settings.example.json"   # every module, so new ones are never left behind
-$SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$MIND_DIR/mind"
 if [ "${1:-}" = "--dry-run" ]; then
   # shellcheck disable=SC2086
   rsync -aicn -e "$SSH" $FILES "$SOUL_SERVER_SSH:$MIND_DIR/mind/"
   echo "(dry run: nothing copied)"
   exit 0
 fi
+$SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$MIND_DIR/mind"
 # shellcheck disable=SC2086
 rsync -aic -e "$SSH" $FILES "$SOUL_SERVER_SSH:$MIND_DIR/mind/"
 # hello's voice clip texts (selfvoice), built locally and never committed:

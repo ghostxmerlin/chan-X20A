@@ -21,6 +21,10 @@ def _get(doc, key):
 _MISSING = object()
 
 
+class FakeDuplicateKey(Exception):
+    code = 11000
+
+
 def _match(doc, flt):
     for key, cond in (flt or {}).items():
         if key == "$or":
@@ -131,7 +135,23 @@ class FakeCollection:
 
     def insert_one(self, doc):
         self._check()
+        if '_id' in doc and any(d.get('_id', _MISSING) == doc['_id'] for d in self.docs):
+            raise FakeDuplicateKey('duplicate _id')
         self.docs.append(copy.deepcopy(doc))
+
+    def find_one_and_update(self, flt, update, upsert=False, return_document=False):
+        self._check()
+        for row in self.docs:
+            if _match(row, flt):
+                old = copy.deepcopy(row)
+                row.update(copy.deepcopy(update.get('$set', {})))
+                return copy.deepcopy(row) if return_document else old
+        if upsert:
+            row = {k:v for k,v in flt.items() if not k.startswith('$') and not isinstance(v,dict)}
+            row.update(copy.deepcopy(update.get('$set', {})))
+            self.insert_one(row)
+            return copy.deepcopy(row) if return_document else None
+        return None
 
     def replace_one(self, flt, doc, upsert=False):
         self._check()

@@ -10,7 +10,7 @@ import json
 import os
 import time
 
-from . import llm, settings as settings_mod
+from . import llm, speech_settings, settings as settings_mod
 
 CHAT = llm.chat                       # injectable in tests
 EYE_MODEL = "claude-haiku-5-5"
@@ -137,6 +137,9 @@ def _parse(resp):
 
 
 def messages_for(s, minute_ms, inputs, prev):
+    s = speech_settings.effective(s)
+    if prev and prev.get('minute', 0) < speech_settings.scope(s)['since']:
+        prev = None
     owner = settings_mod.owner_name(s, minute_ms)
     env_text = (s.get("environment") or "").strip()
     lines = ([f"环境：{env_text}"] if env_text else []) + [f"时间：{settings_mod.local_label(minute_ms, s['tz'])}；主人的称呼：{owner}",
@@ -147,7 +150,8 @@ def messages_for(s, minute_ms, inputs, prev):
     lines.append(f"下面是这一分钟按时间顺序的 {len(inputs['frames'])} 张画面（画面有变化时才拍，最多每 10 秒一张）。")
     content = [{"type": "text", "text": "\n".join(lines)}] + [
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + f["b64"]}} for f in inputs["frames"]]
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": content}]
+    system = SYSTEM if speech_settings.scope(s)['id']=='office' else SYSTEM.replace('主人的办公桌上','主人身边')
+    return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
 
 def _state(db):

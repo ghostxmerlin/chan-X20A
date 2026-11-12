@@ -1,6 +1,7 @@
 """mind tables in the hello database: mind_packages (versioned minute packages) and mind_state."""
 import datetime
 import time
+import uuid
 from zoneinfo import ZoneInfo
 
 LANE = "live"
@@ -147,7 +148,7 @@ class Store:
 
     def put_run(self, doc):
         self._run_seq = getattr(self, "_run_seq", 0) + 1
-        run_id = f"r{int(time.time() * 1000)}-{self._run_seq}"
+        run_id = f"r{int(time.time() * 1000)}-{uuid.uuid4().hex}"
         self.db["mind_runs"].insert_one({**doc, "run_id": run_id})
         return run_id
 

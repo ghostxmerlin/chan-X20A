@@ -12,7 +12,7 @@ import argparse
 import os
 import time
 
-from . import notes, selfvoice, settings
+from . import notes, selfvoice, settings, speech_settings
 from .records import Records
 from .settings_store import SettingsStore
 from .store import Store
@@ -51,10 +51,10 @@ def _recent(db, records, conv):
     return [x for x in got if tuple(x["ref"]) in refs]
 
 
-def _late_home(db, sentences, conv, since_ms):
+def _late_home(db, sentences, conv, since_ms, scope_since=0):
     """Sentences that belong to an already closed conversation (a late row): (home, sentence) pairs."""
     closed = [c for c in db["conversations"].find({"start_ms": {"$gte": since_ms - 6 * 3600_000}}, {"_id": 0})
-              if c.get("end_ms") is not None]
+              if c.get("end_ms") is not None and c['start_ms'] >= scope_since]
     out = []
     for x in sentences:
         if conv is not None and x["at"] >= conv["start_ms"]:
@@ -74,6 +74,8 @@ def _attach(db, home, x):
 
 def tick(db, store, records, s, env, now_ms):
     """How many model calls this pass made."""
+    s = speech_settings.effective(s)
+    scope_since = speech_settings.scope(s)['since']
     until = settings.minute_floor(now_ms - DELAY_MS)
     state = db["notes_state"].find_one({"_id": "live"}) or {}
     cursor = state.get("cursor_ms")
@@ -81,7 +83,7 @@ def tick(db, store, records, s, env, now_ms):
         return 0
     seen_rows = [r for r in state.get("seen", []) if r[3] >= until - SEEN_KEEP_MS]
     seen = {tuple(r[:3]) for r in seen_rows}
-    since = (cursor if cursor is not None else until - 10 * MIN_MS) - RESCAN_MS
+    since = max(scope_since, (cursor if cursor is not None else until - 10 * MIN_MS) - RESCAN_MS)
     sentences = notes.new_sentences(db, records, since, until, seen)
 
     def handled(batch):          # saved at once: a crash later in this pass never sends them again
@@ -89,7 +91,10 @@ def tick(db, store, records, s, env, now_ms):
         db["notes_state"].update_one({"_id": "live"}, {"$set": {"seen": seen_rows}}, upsert=True)
 
     conv, calls = _open(db), 0
-    for home, x in _late_home(db, sentences, conv, since):
+    if conv and conv['start_ms'] < scope_since:
+        _close(db, conv)
+        conv = None
+    for home, x in _late_home(db, sentences, conv, since, scope_since):
         _attach(db, home, x)                     # a late row of a closed conversation: recorded, no call
         handled([x])
     late = {tuple(x["ref"]) for x in sentences if tuple(x["ref"]) in {tuple(r[:3]) for r in seen_rows}}

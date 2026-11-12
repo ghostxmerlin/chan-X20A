@@ -11,7 +11,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 
-from . import fusion, package, segments, selfvoice, settings, speak, strong
+from . import fusion, package, segments, selfvoice, settings, speak, strong, speech_settings
 from .records import Records
 from .settings_store import SettingsStore
 from .store import LANE, Store
@@ -55,6 +55,8 @@ def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE, revise=F
     """Model fusion for these minutes, in order (packages must exist), then segment summaries.
     Nothing is called while the mind switch is off; segment summaries only when a sense was on in
     one of these minutes (both senses off: no model call of any kind)."""
+    s = speech_settings.effective(s)
+    minutes = [m for m in minutes if m >= speech_settings.scope(s)['since']]
     if env is None or not s["fusion"]["enabled"] or not minutes or not store.enabled():
         return 0
     segs = segments.update(env, store, s, day_start(minutes[0], s["tz"]), now_ms, lane, summarize_now=False)
