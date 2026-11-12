@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {StringDecoder} from 'node:string_decoder';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,12 +54,15 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
       if (origin !== 'http://' + req.headers.host) { respond(403, '写入必须来自当前观察页面'); return; }
       if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') { respond(415, '只接受 JSON'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
+      const maxBody=['/settings','/speech/settings'].includes(sub)?512*1024:16384;
+      const decoder=new StringDecoder('utf8');
       let body = '', size = 0, ended = false;
       const timer = setTimeout(() => { if (!ended) { ended = true; respond(408, '请求超时'); req.destroy(); } }, 3000);
       req.on('close', () => clearTimeout(timer));
-      req.on('data', chunk => { size += chunk.length; if (size > 16384) { ended = true; clearTimeout(timer); respond(413, '内容过长'); req.destroy(); } else body += chunk; });
+      req.on('data', chunk => { size += chunk.length; if (size > maxBody) { ended = true; clearTimeout(timer); respond(413, '内容过长'); req.destroy(); } else body += decoder.write(chunk); });
       req.on('end', () => {
         clearTimeout(timer); if (ended) return; ended = true;
+        body+=decoder.end();
         mind.post(sub, body).then(r => {
           res.writeHead(r.status, { 'Content-Type': r.status < 300 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });
           res.end(r.body);

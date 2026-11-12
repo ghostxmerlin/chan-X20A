@@ -63,7 +63,8 @@ export class MindProxy {
  async post(path,bodyText){
   if(!this.ssh||!this.token)return {status:503,body:'本机 .env 缺少 SOUL_SERVER_SSH 或 SOUL_EAR_TOKEN'};
   if(!POST_PATHS.has(path))return {status:400,body:'不允许的写入'};
-  if(typeof bodyText!=='string'||Buffer.byteLength(bodyText)>MAX_BODY)return {status:413,body:'内容过长'};
+  const maxBody=['/settings','/speech/settings'].includes(path)?512*1024:MAX_BODY;
+  if(typeof bodyText!=='string'||Buffer.byteLength(bodyText)>maxBody)return {status:413,body:'内容过长'};
   if(!this.tunnel())return {status:503,body:'情景服务连接中'};
   // a rerun may wait for two model calls (90 s each)
   try{return await this.requestFn(this.socketPath,path,{Authorization:`Bearer ${this.token}`},{method:'POST',body:bodyText,timeout:200000});}

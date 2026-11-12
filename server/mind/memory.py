@@ -64,7 +64,7 @@ class MemoryStore:
         return [_clean(x) for x in self.evidence.aggregate(pipe)]
 
     def observe(self, scope_id, window_ms, observations, coverage, source_version, now_ms, s):
-        if scope_id not in ('office', 'home', 'friends') or type(window_ms) is not int:
+        if scope_id not in ('office', 'home', 'friends') or not isinstance(window_ms,int) or isinstance(window_ms,bool):
             raise ValueError('invalid memory scope/window')
         if not isinstance(observations, list) or len(observations) > 32 or not isinstance(coverage, dict):
             raise ValueError('invalid memory observations/coverage')
@@ -182,7 +182,11 @@ class MemoryStore:
                 # Disposable statistics are not the authoritative memory statement/version.
                 # Repeated support must refresh recency without flooding immutable history.
                 metrics = {k: new[k] for k in ('last_seen', 'support_days', 'observed_windows', 'conflict_windows',
-                                               'observed_days', 'activity_days', 'frequency', 'coverage_s') if new and k in new}
+                                               'observed_days', 'activity_days', 'frequency', 'coverage_s',
+                                               'evidence_refs','evidence_snippets') if new and k in new}
+                metrics['observed_status'] = new['status'] if new else 'review'
+                if not new:
+                    metrics.update(support_days=0,observed_windows=0,conflict_windows=0,evidence_refs=[],evidence_snippets=[])
                 self.db['mind_memory_jobs'].update_one({'_id': f'metrics:{self.lane}:{mid}'},
                     {'$set': {'metrics': metrics, 'updated_at': now_ms}}, upsert=True)
                 if old and old.get('manual'):
@@ -205,7 +209,8 @@ class MemoryStore:
 
     def _with_metrics(self, row):
         metrics = self.db['mind_memory_jobs'].find_one({'_id': f"metrics:{self.lane}:{row['memory_id']}"}, {'_id': 0})
-        return {**row, 'latest_evidence': (metrics or {}).get('metrics') or {}}
+        return {**row, 'latest_evidence': (metrics or {}).get('metrics') or {},
+                'latest_evidence_at': (metrics or {}).get('updated_at')}
 
     def list(self, scope_id, offset=0, limit=20, status=None):
         _page(offset, limit)

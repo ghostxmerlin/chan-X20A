@@ -262,6 +262,7 @@ class RunnerTest(unittest.TestCase):
         self.tick(T0 + MIN + 5_000)
         v = self.db["conversation_versions"].docs[-1]
         self.assertEqual(v["until_ms"], T0 + MIN)
+        self.assertEqual(v['covered_last_ms'],T0+5000)
 
     def test_status_document(self):
         notes_runner.write_status(self.db, True, True, T0)

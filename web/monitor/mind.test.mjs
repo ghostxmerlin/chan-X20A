@@ -103,6 +103,7 @@ test('proxy forwards whitelisted POSTs with the token and rejects others', async
  assert.equal((await proxy.post('/say/stop','{}')).status,200);
  assert.equal((await proxy.post('/switches','{"name":"eye","on":true}')).status,200);
  assert.equal((await proxy.post('/mark','x'.repeat(16385))).status,413);
+ assert.equal((await proxy.post('/speech/settings',JSON.stringify({environment:'办'.repeat(9000)}))).status,200);
  assert.equal((await proxy.get('/scene?t=5&lane=rerun')).status,200);
  assert.equal((await proxy.get('/scene?t=5&lane=evil')).status,400);
  assert.equal((await proxy.get('/stats?days=7')).status,200);
@@ -117,6 +118,18 @@ test('server POST /api/mind/* requires same origin and JSON', async t=>{
  const ok=await fetch(url+'/api/mind/mark',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:'{"kind":"arrive"}'});
  assert.equal(ok.status,200);assert.deepEqual(calls,[['/mark','{"kind":"arrive"}']]);
  assert.equal((await fetch(url+'/api/mind/other',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:'{}'})).status,404);
+});
+test('large Chinese scene settings survive UTF-8 chunks through the local server',async t=>{
+ const http=await import('node:http');let seen='';
+ const mind={post:async(p,b)=>{seen=b;return {status:200,body:'{}'};},stop(){}};
+ const server=createMonitorServer(new Monitor({binding:{address:'http://127.0.0.1:8080',token:'b'.repeat(32)}}),undefined,mind);
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const body=JSON.stringify({environment:'办公室'.repeat(9000)}),bytes=Buffer.from(body),port=server.address().port;
+ const status=await new Promise((resolve,reject)=>{
+  const req=http.request({host:'127.0.0.1',port,path:'/api/mind/speech/settings',method:'POST',headers:{Origin:`http://127.0.0.1:${port}`,'Content-Type':'application/json'}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});
+  req.on('error',reject);const split=bytes.indexOf(Buffer.from('办'))+1;req.write(bytes.subarray(0,split));setTimeout(()=>req.end(bytes.subarray(split)),10);
+ });
+ assert.equal(status,200);assert.equal(seen,body);
 });
 test('entries grouped in fixed dimension order', ()=>{
  assert.deepEqual(Object.keys(ui.groupEntries([{dimension:'topic'},{dimension:'people'},{dimension:'weird'}])),['people','topic','other']);

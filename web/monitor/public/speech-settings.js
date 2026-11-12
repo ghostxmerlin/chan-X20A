@@ -1,6 +1,7 @@
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const scenes={office:'办公室',home:'家里',friends:'朋友聚会'};
 const states={candidate:'待积累',known:'已认识',review:'待复核',disabled:'已停用'};
+const localTime=t=>typeof t==='number'?new Date(t).toLocaleString('zh-CN',{hour12:false}):'时间未记录';
 const copy=x=>JSON.parse(JSON.stringify(x));
 export async function request(path,body){
  const r=await fetch('/api/mind'+path,{...(body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),signal:AbortSignal.timeout(30000)});
@@ -19,16 +20,22 @@ export function memoriesHtml(page,scene){
  return `<p class="note">${esc(scene)} · ${page.total} 条认识（只列当前已保存的场景）</p>`+(page.items.length?page.items.map(m=>{
   const metrics={...m,...m.latest_evidence};
   return `<article class="memory-item" data-memory="${esc(m.memory_id)}"><p><b>${esc(states[m.status]||m.status)}</b> · 第 ${m.version} 版${m.manual?' · 手动确认':''}</p><p>${esc(m.statement)}</p>
-   <p class="note">${esc(m.kind==='routine'?`有观察 ${metrics.observed_days||0} 天 · 发生 ${metrics.activity_days||0} 天`:`支持 ${metrics.support_days||0} 天 / ${metrics.support_windows||0} 个窗口`)}</p>
-   <div class="control-buttons"><button data-memory-action="confirm">确认</button><button data-memory-action="correct">纠正</button><button data-memory-action="disable">停用</button><button data-memory-action="history">历史 / 恢复</button></div><div data-memory-detail></div></article>`;
+   <p class="note">${esc(m.kind==='routine'?`有观察 ${metrics.observed_days||0} 天 · 发生 ${metrics.activity_days||0} 天`:`支持 ${metrics.support_days||0} 天 / ${metrics.observed_windows||0} 个窗口`)}${m.manual&&metrics.observed_status==='review'?' · 新证据待复核，手动结论保留':''}</p>
+   <div class="control-buttons"><button data-memory-action="evidence">查看依据</button><button data-memory-action="confirm">确认</button><button data-memory-action="correct">纠正</button><button data-memory-action="disable">停用</button><button data-memory-action="history">历史 / 恢复</button></div><div data-memory-detail></div></article>`;
  }).join(''):'<p class="note">还没有形成认识。需要多个独立窗口的证据，不会把一次观察当成习惯。</p>')+
  `<div class="memory-pagination"><button data-memory-page="${Math.max(0,page.offset-10)}" ${page.offset===0?'disabled':''}>上一页</button><span>${page.total?Math.min(page.offset+1,page.total):0}–${Math.min(page.offset+10,page.total)} / ${page.total}</span><button data-memory-page="${page.offset+10}" ${page.offset+10>=page.total?'disabled':''}>下一页</button></div>`;
 }
-const reasons={latest_speech:'跟上刚听到的话',notes_agree:'纪要与刚听到的一致',notes_conflict:'纪要有冲突，以刚听到为准',new_topic:'话题已变化',special_visual:'画面有明显变化',emotion_boost:'重复情绪标签伴随声音变化',routine_background:'日常情况降为背景',uncertain_speech:'识别不确定',no_new_topic:'没有新话题'};
+export function memoryEvidenceHtml(row){
+ const e=row.latest_evidence??row;
+ const header=`<p>${row.manual&&e.observed_status==='review'?'自动证据待复核；手动结论保留。':''}${e.conflict_windows?`矛盾 ${e.conflict_windows} 个窗口。`:''}</p><p class="note">${esc(localTime(row.latest_evidence_at??row.changed_at))}${e.coverage_s!=null?` · 有效观察约 ${Math.round(e.coverage_s/60)} 分钟`:''}</p>`;
+ const refs=e.evidence_refs||[],snippets=e.evidence_snippets||[];
+ return header+(refs.length?refs.map((v,i)=>`<section class="memory-source"><p><b>${v.relation==='contradict'?'矛盾证据':'支持证据'}</b> · ${esc(localTime(v.window_ms))} · 窗口第 ${esc(v.version)} 版</p><p>${esc(snippets[i]||'')}</p>${(v.refs||[]).map(r=>`<p class="note">${esc(r.c)} · ${esc(r.session||'')} · ${esc(r.id??r.n??r.minute??'')}${r.version?` / 版 ${esc(r.version)}`:''}</p>${r.excerpt?`<blockquote>${esc(r.excerpt)}</blockquote>`:''}`).join('')}</section>`).join(''):'<p class="note">当前没有可用的支持证据。历史依据可在历史版本中查看。</p>');
+}
+const reasons={latest_speech:'跟上刚听到的话',notes_agree:'纪要与刚听到的一致',notes_outdated:'纪要已过时，以刚听到为准',topic_changed:'话题已变化',visual_change:'画面有明显变化',emotion_cue:'情绪标签伴随声音变化',ordinary_background:'日常情况降为背景',uncertain_input:'识别不确定'};
 export function explanationText(row){
  const a=row.attention||{},c=row.context||{};
  return [`关注：${a.focus||'旧版记录，没有注意力诊断'}`,`依据：${(a.reason_codes||[]).map(x=>reasons[x]||x).join('、')}`,
- `场景：${scenes[c.scope?.id]||c.scope?.id||'—'}`,...(c.evidence||[]).map(e=>`${(a.evidence_ids||[]).includes(e.id)?'采用':'背景'} · ${e.kind||''}：${e.text||e.summary||e.activity||JSON.stringify(e)}`),
+ `场景：${scenes[c.scope?.id]||c.scope?.id||'—'}`,`设置：${row.settings_version??'旧记录未标注'} · 提示词：${row.prompt||'旧记录未标注'} · 生成耗时：${row.llm_ms!=null?(row.llm_ms/1000).toFixed(1)+' 秒':'—'}`,...(c.evidence||[]).map(e=>`${(a.evidence_ids||[]).includes(e.id)?'采用':'背景'} · ${localTime(e.at)} · ${e.kind||''}：${e.text||e.summary||e.activity||JSON.stringify(e)}`),
  ...(c.memories||[]).map(m=>`已有认识：${m.statement}`),...(c.warnings||[]),`发音指令：${row.instruction||'—'}`].join('\n');
 }
 function options(items,selected){return Object.entries(items).map(([v,label])=>`<option value="${esc(v)}" ${v===selected?'selected':''}>${esc(label)}</option>`).join('');}
@@ -86,7 +93,7 @@ export class SpeechSettings{
   const seq=++this.historySeq;
   const p=await this.model.request(`/memory/history?id=${encodeURIComponent(row.memory_id)}&offset=${offset}&limit=10`);
   if(seq!==this.historySeq||!item.isConnected)return;
-  item.querySelector('[data-memory-detail]').innerHTML=p.items.map(v=>`<p>第 ${v.version} 版 · ${esc(v.actor)} · ${esc(v.reason)} · ${esc(states[v.status]||v.status)}<br>${esc(v.statement)} <button data-memory-action="restore" data-version="${v.version}">恢复此版本</button></p>`).join('')+
+  item.querySelector('[data-memory-detail]').innerHTML=p.items.map(v=>`<p>第 ${v.version} 版 · ${esc(localTime(v.changed_at))} · ${esc(v.actor)} · ${esc(v.reason)} · ${esc(states[v.status]||v.status)}<br>${esc(v.statement)} <button data-memory-action="restore" data-version="${v.version}">恢复此版本</button></p><details><summary>当时的依据</summary>${memoryEvidenceHtml(v)}</details>`).join('')+
    `<div class="control-buttons"><button data-history-page="${Math.max(0,offset-10)}" ${offset===0?'disabled':''}>较新</button><button data-history-page="${offset+10}" ${offset+10>=p.total?'disabled':''}>更早</button></div>`;
  }
  async click(ev){
@@ -102,6 +109,7 @@ export class SpeechSettings{
     const item=b.closest('[data-memory]'),row=this.model.page.items.find(x=>x.memory_id===item.dataset.memory);
     if(b.hasAttribute('data-history-page'))await this.history(item,row,Number(b.dataset.historyPage));
     else if(b.dataset.memoryAction==='history')await this.history(item,row);
+    else if(b.dataset.memoryAction==='evidence')item.querySelector('[data-memory-detail]').innerHTML=memoryEvidenceHtml(row);
     else if(b.dataset.memoryAction==='correct')item.querySelector('[data-memory-detail]').innerHTML=`<label>纠正后的认识<textarea data-correction maxlength="160">${esc(row.statement)}</textarea></label><button data-memory-action="save-correction">保存纠正</button>`;
     else{
      const action=b.dataset.memoryAction;

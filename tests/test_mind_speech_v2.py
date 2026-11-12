@@ -35,6 +35,22 @@ class SpeechCase(unittest.TestCase):
 
 class SpeechContextTest(SpeechCase):
 
+    def test_similar_asr_with_changed_negation_date_or_amount_stays_uncertain(self):
+        for left,right in [('客户说不是明天交付','客户说是明天交付'),('客户说周五交付','客户说周四交付'),
+                           ('客户说加三千块钱','客户说加五千块钱')]:
+            with self.subTest(left=left):
+                self.db['speech'].docs.clear();self.db['tingwu'].docs.clear()
+                self.heard(text=left,pos=[4_720_000,4_736_000])
+                self.db.add('tingwu',tingwu('S',1,self.now,right,pos=[4_720_000,4_736_000]))
+                row=self.context()['evidence'][0]
+                self.assertTrue(row['asr_conflict'])
+                self.assertEqual(row['quality'],'uncertain')
+
+    def test_punctuation_difference_does_not_make_asr_uncertain(self):
+        self.heard(text='客户说明天交付',pos=[4_720_000,4_736_000])
+        self.db.add('tingwu',tingwu('S',1,self.now,'客户说，明天交付。',pos=[4_720_000,4_736_000]))
+        self.assertEqual(self.context()['evidence'][0]['quality'],'usable')
+
     def test_dual_asr_is_one_event_with_alternatives_and_canonical_owner(self):
         self.heard(pos=[4_720_000,4_736_000], band='known', name='me')
         self.db.add('tingwu', tingwu('S', 1, self.now, '客户改成下周交付', pos=[4_720_000,4_736_000]))
@@ -66,6 +82,19 @@ class SpeechContextTest(SpeechCase):
         self.db.add('eye_minutes', {'minute':self.now-60_000, 'version':1, 'source':'model',
                                     'frames':[{'at':self.now-300_000}], 'result':{'activity':'靠椅背', 'changes':'', 'confidence':'high'}})
         self.assertEqual(self.context()['evidence'], [])
+
+    def test_late_note_scan_does_not_refresh_old_source_speech(self):
+        self.db.add('conversations',{'cid':'c1','start_ms':self.now-600_000,'last_ms':self.now-300_000,
+                                    'updated_at':self.now-10_000,'notes':'旧交期','title':'项目'})
+        self.db.add('conversation_versions',{'cid':'c1','version':1,'at':self.now-10_000,
+            'until_ms':self.now-30_000,'covered_last_ms':self.now-300_000,'notes':'旧交期','confidence':'high'})
+        self.assertEqual(self.context()['evidence'],[])
+
+    def test_legacy_note_version_without_coverage_is_not_highest_evidence(self):
+        self.db.add('conversations',{'cid':'c1','start_ms':self.now-600_000,'last_ms':self.now-5000,'notes':'旧交期'})
+        self.db.add('conversation_versions',{'cid':'c1','version':1,'at':self.now-10_000,
+            'until_ms':self.now-30_000,'notes':'旧交期','confidence':'high'})
+        self.assertFalse(any(e['quality']=='usable' for e in self.context()['evidence']))
 
     def test_scope_boundary_discards_old_speech_and_notes(self):
         self.heard(age=10_000)
@@ -225,6 +254,18 @@ class SpeechPipelineTest(SpeechCase):
             speak.say(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles'),'sad',tts,self.now)
         self.assertEqual(tts.said,[])
         self.assertEqual(len(fake.calls),1)
+
+    def test_stop_while_device_health_is_pending_cancels_the_whole_request(self):
+        self.heard();fake=FakeChat();old=speak.CHAT;speak.CHAT=fake
+        self.addCleanup(lambda:setattr(speak,'CHAT',old))
+        class StoppedDuringHealth(FakeTts):
+            def health(inner):
+                speak.cancel_pending()
+                return super().health()
+        tts=StoppedDuringHealth()
+        with self.assertRaises(speak.NotConnected):
+            speak.say(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles'),'sad',tts,self.now)
+        self.assertEqual(fake.calls,[]);self.assertEqual(tts.said,[])
 
     def test_changed_settings_prevent_old_generation_playback(self):
         self.heard(); ids=[self.context()['evidence'][0]['id']]

@@ -169,7 +169,7 @@ def _save(db, conv, run_id, now_ms, changed, until_ms=None):
     if changed:
         # until_ms: the minute boundary these notes cover (mind picks the version covering its minute)
         db["conversation_versions"].insert_one({k: conv.get(k) for k in ("cid", "version", "title", "notes", "confidence",
-                                                                         "continues")} | {"run_id": run_id, "at": now_ms,
+                                                                         "continues", "covered_last_ms")} | {"run_id": run_id, "at": now_ms,
                                                                                           "until_ms": until_ms,
                                                                                           "refs": len(conv["refs"])})
 
@@ -224,6 +224,7 @@ def update(env, store, s, conv, sentences, now_ms, recent=None, until_ms=None, c
         cont = conv.get("continues") or ""
     conv = dict(conv, title=str(out.get("title") or "")[:40], notes=str(out.get("notes") or "")[:200],
                 confidence=out.get("confidence") if out.get("confidence") in ("high", "mid", "low") else "low",
-                continues=cont, version=conv["version"] + 1, updated_at=now_ms, run_id=run_id)
+                continues=cont, version=conv["version"] + 1, updated_at=now_ms, run_id=run_id,
+                covered_last_ms=max([conv.get('covered_last_ms') or 0]+[x['at'] for x in sentences]+[x['at'] for x in (recent or [])]))
     _save(db, conv, run_id, now_ms, True, until_ms)
     return conv

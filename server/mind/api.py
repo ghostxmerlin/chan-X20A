@@ -1,5 +1,5 @@
 """HTTP API of mind on the server's loopback only (the Mac reaches it over ssh). Every call needs
-"Authorization: Bearer <token>". POST bodies: application/json, at most 16 KB. POSTs write only
+"Authorization: Bearer <token>". POST bodies: application/json, at most 16 KiB (validated settings: 512 KiB). POSTs write only
 mind tables (settings versions, labels/marks, rerun lane) — never raw records, never the live
 scenes. Sentence text only leaves through this API; nothing is logged.
 
@@ -26,6 +26,7 @@ from .store import LANE
 
 MAX_RANGE_MS = 24 * 3600_000
 MAX_BODY = 16 * 1024
+MAX_SETTINGS_BODY = 512 * 1024  # validated multilingual profiles and existing identity lists
 MARKS = ("arrive", "leave", "meeting", "others_near", "alone")
 VERDICTS = ("right", "wrong", "unsure")
 FIELDS = ("owner", "people", "activity", "topic", "summary", "other")
@@ -196,6 +197,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise NotFound('没有这句话')
             context = row.get('context') or {}
             return {**compact_utterance(row),'attention':row.get('attention'),
+                    **{k:row.get(k) for k in ('settings_version','prompt','llm_ms')},
                     'context':{k:context.get(k) for k in ('scope','time','profile','evidence','memories','warnings')},
                     'instruction':row.get('instruction')}
         if path == "/state":
@@ -335,7 +337,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             s, version = current_settings()
             try:
                 rec = speak.say(ctx["env"], store, s, roles, body["role"], tts, now,
-                                is_current=lambda: current_settings()[1] == version and mouth_mode() == 'tts')
+                                is_current=lambda: current_settings()[1] == version and mouth_mode() == 'tts',settings_version=version)
             except speak.NotConnected as e:
                 raise Conflict(str(e)) from None
             return compact_utterance(rec)
@@ -476,7 +478,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(415, {"error": "application/json only"})
                 return
             length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_BODY:
+            if length > (MAX_SETTINGS_BODY if url.path in ('/settings','/speech/settings') else MAX_BODY):
                 self._send(413, {"error": "body too large"})
                 return
             try:

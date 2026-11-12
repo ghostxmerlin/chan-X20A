@@ -58,6 +58,29 @@ class SpeakTest(unittest.TestCase):
             Path(d, "bad.json").write_text(json.dumps({"id": "bad", "button": "x"}), encoding="utf-8")
             self.assertEqual(speak.load_roles(d), {})
 
+    def test_v1_rollback_keeps_home_scope_isolated(self):
+        import copy
+        s=copy.deepcopy(S);s['environment']='办公室旧背景';s['speech'].update(profile='home',scope_since=self.now-5000)
+        self.db.add('conversations',{'cid':'old','start_ms':self.now-60_000,'last_ms':self.now-1000,
+            'end_ms':None,'notes':'办公室客户项目','title':'需求'})
+        self.db.add('speech',speech('S',1,self.now-10_000,text='客户改需求'))
+        self.db.add('utterances',{'at':self.now-1000,'text':'办公室旧吐槽','scope_id':'office'})
+        ctx=speak.context(self.db,self.store,s,self.now)
+        self.assertEqual(ctx['environment'],'')
+        self.assertIsNone(ctx['conversation']);self.assertEqual(ctx['heard'],[]);self.assertEqual(ctx['mine'],[])
+
+    def test_auditions_stopped_during_health_never_enqueue(self):
+        class StoppedDuringHealth(FakeTts):
+            def health(inner):
+                speak.cancel_pending()
+                return super().health()
+        for audition in ('role','voice'):
+            tts=StoppedDuringHealth()
+            with self.subTest(audition=audition),self.assertRaises(speak.NotConnected):
+                if audition=='role':speak.try_role(self.store,tts,self.roles['sad'],S,self.now)
+                else:speak.try_voice(self.store,tts,'xiaohei',self.now)
+            self.assertEqual(tts.said,[])
+
     def test_context_uses_only_fresh_scene_eye_and_conversation(self):
         now = self.now
         self.db.add("mind_scenes", {"lane": "live", "minute": now - 2 * MIN, "version": 1, "source": "model",

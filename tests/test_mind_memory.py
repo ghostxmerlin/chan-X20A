@@ -93,6 +93,18 @@ class MemoryTest(unittest.TestCase):
             self.mem.edit(row['memory_id'], row['version'], 'disable')
         self.assertEqual(self.mem.list('office')['items'][0]['version'], changed['version'])
 
+    def test_manual_statement_retains_new_conflicting_evidence_for_review(self):
+        row=self.seed()
+        saved=self.mem.edit(row['memory_id'],row['version'],'confirm')
+        for n in range(2):
+            at=T0+4*DAY+n*WINDOW
+            self.observe(at,[fact(at,relation='contradict',statement='主人改到站立桌工作')])
+        current=self.mem.list('office')['items'][0]
+        self.assertEqual(current['version'],saved['version'])
+        self.assertEqual(current['latest_evidence']['observed_status'],'review')
+        self.assertIn('主人改到站立桌工作',current['latest_evidence']['evidence_snippets'])
+        self.assertTrue(any(e['relation']=='contradict' for e in current['latest_evidence']['evidence_refs']))
+
     def test_old_automatic_memory_exits_recall_but_history_remains(self):
         row = self.seed()
         self.mem.reconcile('office', T0+40*DAY, self.s)

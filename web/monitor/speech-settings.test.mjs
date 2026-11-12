@@ -33,3 +33,10 @@ test('memory and explanation markup escape stored text',()=>{
  assert.match(html,/&lt;img&gt;/);assert.doesNotMatch(html,/style=|<img>/);
  assert.match(ui.explanationText({attention:{focus:'客户改交期',reason_codes:['latest_speech']},context:{evidence:[{id:'a',text:'改需求'}]}}),/客户改交期/);
 });
+test('memory evidence shows current conflicts, source excerpts, windows and historical version',()=>{
+ const row={statement:'习惯',status:'known',version:2,manual:true,kind:'habit',latest_evidence:{observed_windows:7,observed_status:'review',
+  evidence_snippets:['新冲突'],evidence_refs:[{window_ms:1000,version:3,relation:'contradict',refs:[{c:'speech',id:'s1',excerpt:'<旧结论不对>'}]}]}};
+ assert.match(ui.memoriesHtml({items:[row],total:1,offset:0},'办公室'),/7 个窗口/);
+ const html=ui.memoryEvidenceHtml(row);
+ assert.match(html,/新冲突/);assert.match(html,/&lt;旧结论不对&gt;/);assert.match(html,/第 3 版/);assert.match(html,/手动结论保留/);
+});

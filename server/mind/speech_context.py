@@ -1,5 +1,4 @@
 """Fresh, scoped evidence for speech. Preserve ASR alternatives instead of doubling votes."""
-import difflib
 import math
 import re
 import statistics
@@ -28,7 +27,7 @@ def _num(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def group_speech(window, s, now_ms):
+def group_speech(window, s, now_ms, max_rows=240):
     """Connected overlap groups handle one-to-many ASR segmentation in both directions."""
     unique = {}
     for collection, enabled in (('speech', s['sources']['speech_text']), ('tingwu', s['sources']['tingwu'])):
@@ -42,7 +41,7 @@ def group_speech(window, s, now_ms):
                 continue
             ref = {'c': collection, 'session': d.get('session'), ('id' if collection=='speech' else 'n'): d.get('id' if collection=='speech' else 'n')}
             unique[fingerprint(ref)] = {**d, 'text': text[:600], '_ref': ref, '_collection': collection}
-    rows = sorted(unique.values(), key=lambda x:x['_wall'])[-240:]
+    rows = sorted(unique.values(), key=lambda x:x['_wall'])[-max_rows:]
     parent = list(range(len(rows)))
 
     def root(i):
@@ -76,10 +75,14 @@ def group_speech(window, s, now_ms):
         raw = [r for r in group if r['_collection']=='speech']
         refs = sorted([r['_ref'] for r in group], key=lambda x:json_key(x))
         valid_text = len(norm(text))>=2 and len(set(norm(text)))>=2
-        mismatch = len(variants)>1 and difflib.SequenceMatcher(None, norm(variants[0]['text']), norm(variants[1]['text'])).ratio()<0.55
+        # High character similarity cannot establish semantic agreement: a single 不, date,
+        # or amount can reverse the meaning. Preserve both alternatives and stay conservative.
+        mismatch = len(variants)>1 and norm(variants[0]['text'])!=norm(variants[1]['text'])
         low_voice = raw and all(_num((r.get('voice') or {}).get('p')) and r['voice']['p']<0.4 for r in raw) and len(variants)==1
         at = max(r['_wall'] for r in group)
         item = {'id': 's'+fingerprint(refs)[:16], 'kind': 'speech', 'at': at, 'text': text, 'alternatives': variants,
+                'observed_at':min(r['_wall'] for r in (raw or group)),
+                'earliest_at':min(r['_wall'] for r in group),
                 'refs': refs, 'subject_id': subject(name,s), 'speaker': name, 'speaker_reliable': bool(name),
                 'asr_conflict': mismatch, 'quality': 'usable' if valid_text and not mismatch and not low_voice else 'uncertain',
                 'priority': 'highest' if now_ms-at<=30_000 else 'support', 'emotion_boost': False,
@@ -153,13 +156,14 @@ def build(db, store, s, now_ms):
         conv = db['conversations'].find_one({'start_ms':{'$gte':scope['since'], '$lte':now_ms}}, {'_id':0}, sort=[('start_ms',-1)])
         if conv and (conv.get('notes') or conv.get('title')):
             version = db['conversation_versions'].find_one({'cid':conv['cid'], 'at':{'$lte':now_ms}}, {'_id':0}, sort=[('version',-1)])
-            at = (version or {}).get('until_ms') or min(conv.get('last_ms',0), conv.get('updated_at', conv.get('last_ms',0)))
+            source = version or conv
+            covered = source.get('covered_last_ms')
+            at = covered if _num(covered) else min(conv.get('last_ms',0),source.get('at',conv.get('updated_at',conv.get('last_ms',0))))
             if start<=at<=now_ms:
-                source = version or conv
                 evidence.append({'id':'n'+fingerprint([conv['cid'],source.get('version',0)])[:16], 'kind':'notes', 'at':at,
                                  'text':f"{source.get('title') or ''}：{source.get('notes') or ''}",
                                  'refs':[{'c':'conversation_versions','cid':conv['cid'],'version':source.get('version',0)}],
-                                 'quality':'usable' if source.get('confidence')!='low' else 'uncertain', 'priority':'support'})
+                                 'quality':'usable' if source.get('confidence')!='low' and (not version or _num(covered)) else 'uncertain', 'priority':'support'})
     recent = []
     for u in db['utterances'].find({'at':{'$gte':now_ms-1_800_000, '$lte':now_ms}}, {'_id':0}).sort('at',-1).limit(100):
         if u.get('role')=='try' or u.get('scope_id','office')!=scope['id']:

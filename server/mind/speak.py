@@ -64,15 +64,18 @@ def load_roles(directory):
 
 
 def context(db, store, s, now_ms):
+    s = speech_settings.effective(s)
+    scope = speech_settings.scope(s)
     scene = store.latest_scene_any(LANE)
     sc = (scene or {}).get("scene") or {}
-    fresh_scene = scene and now_ms - scene["minute"] <= FRESH_MS + 60_000
-    eye = db["eye_minutes"].find_one({"source": "model"}, {"_id": 0}, sort=[("minute", -1)])
-    conv = db["conversations"].find_one({}, {"_id": 0}, sort=[("start_ms", -1)])
+    fresh_scene = scene and scene['minute'] >= scope['since'] and now_ms - scene["minute"] <= FRESH_MS + 60_000
+    eye = db["eye_minutes"].find_one({"source": "model",'minute':{'$gte':scope['since']}}, {"_id": 0}, sort=[("minute", -1)])
+    conv = db["conversations"].find_one({'start_ms':{'$gte':scope['since']}}, {"_id": 0}, sort=[("start_ms", -1)])
     conv_ok = conv and (conv.get("notes") or conv.get("title")) and \
         (conv.get("end_ms") is None or now_ms - conv["end_ms"] <= FRESH_MS)
-    heard = notes.new_sentences(db, Records(db), now_ms - 2 * 60_000, now_ms, set())[-10:]
-    mine = [u["text"] for u in db["utterances"].find({}, {"_id": 0, "text": 1}).sort("at", -1).limit(5)]
+    heard = notes.new_sentences(db, Records(db), max(scope['since'],now_ms-2*60_000), now_ms, set())[-10:]
+    mine = [u['text'] for u in db['utterances'].find({'at':{'$gte':scope['since']}}, {'_id':0}).sort('at',-1).limit(100)
+            if u.get('scope_id','office')==scope['id'] and u.get('role')!='try'][:5]
     return {"environment": (s.get("environment") or "").strip(),
             "time": settings_mod.local_label(now_ms, s["tz"]),
             "doing": (sc.get("people_doing") or {}).get("text") if fresh_scene else None,
@@ -139,7 +142,7 @@ def _finish(db, tts, uid, tts_id):
                                                         "timings_s": st.get("timings_s")}})
 
 
-def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None):
+def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,settings_version=None):
     epoch = _EPOCH
     role = roles[role_id]                        # KeyError: unknown role
     if not ((tts.health().get("mouth") or {}).get("device")):
@@ -168,7 +171,8 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=N
         tts_id = tts.say(text, voice=voice, interrupt=True, **opts)
     uid = f"u{now_ms}"
     rec = {"uid": uid, "role": role_id, "text": text, "voice": voice, "tts_id": tts_id, "at": now_ms, "state": "sent",
-           "run_id": run_id, "llm_ms": ms, "context": {k: ctx[k] for k in ("doing", "eye", "conversation")}}
+           "run_id": run_id, "llm_ms": ms, 'settings_version':settings_version,'prompt':PROMPT,
+           'scope_id':speech_settings.scope(s)['id'],"context": {k: ctx[k] for k in ("doing", "eye", "conversation")}}
     db["utterances"].insert_one(dict(rec))
     if wait:
         _finish(db, tts, uid, tts_id)
@@ -177,16 +181,16 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=N
     return rec
 
 
-def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None):
+def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,settings_version=None):
+    epoch = _EPOCH
     role = speech_settings.role_config(roles[role_id], s)
     if s['speech']['pipeline'] == 'v1':
-        return _say_v1(env, store, s, {**roles, role_id: role}, role_id, tts, now_ms, wait=wait,is_current=is_current)
+        return _say_v1(env, store, s, {**roles, role_id: role}, role_id, tts, now_ms, wait=wait,is_current=is_current,settings_version=settings_version)
     if not ((tts.health().get('mouth') or {}).get('device')):
         raise NotConnected('hello 的嘴没连上')
     if not _SAY_LOCK.acquire(blocking=False):
         raise NotConnected('正在写上一句，请稍等或先停止')
     started = time.monotonic()
-    epoch = _EPOCH
     try:
         _check_pending(epoch,is_current)
         ctx = speech_context.build(store.db, store, s, now_ms)
@@ -203,6 +207,7 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None)
                'state':'ready', 'run_id':output['run_id'], 'run_ids':output['run_ids'], 'scope_id':ctx['scope']['id'],
                'pipeline':'v2', 'focus':focus['focus'], 'joke_type':output['joke_type'],
                'attention':focus, 'instruction':role['instruction'], 'llm_ms':finish_ms-now_ms,
+               'settings_version':settings_version,'prompt':'say-v2 / attention-v1',
                'context':ctx, 'generation':{'selected':output['selected'], 'candidates':output['candidates']}}
         store.db['utterances'].insert_one(dict(rec))
         try:
@@ -231,10 +236,12 @@ ROLE_TRY_TEXT = '今天又加了需求，交期还是明天。先吃饭，吃完
 
 
 def try_role(store, tts, role, s, now_ms, wait=False):
+    epoch = _EPOCH
     if not ((tts.health().get('mouth') or {}).get('device')):
         raise NotConnected('hello 的嘴没连上')
     resolved = speech_settings.role_config(role,s)
     with _ENQUEUE_LOCK:
+        _check_pending(epoch,None)
         cancel_pending()
         tts_id = tts.say(ROLE_TRY_TEXT,voice=resolved['voice'],interrupt=True,
                         **{k:resolved[k] for k in ('instruction','rate') if resolved.get(k) is not None})
@@ -258,6 +265,7 @@ def voice_list(tts):
 
 def try_voice(store, tts, voice_id, now_ms, wait=False):
     """One fixed sample sentence in `voice_id` through the robot's mouth (voice audition, user 2026-11-11)."""
+    epoch = _EPOCH
     voices = (tts.voices().get("voices") or {})
     if voice_id not in voices:
         raise KeyError(voice_id)
@@ -266,6 +274,7 @@ def try_voice(store, tts, voice_id, now_ms, wait=False):
     label = re.sub(r"[（(].*?[）)]", "", voices[voice_id].get("label") or voice_id).split("·")[0].strip()
     text = TRY_TEXT.format(label=label)
     with _ENQUEUE_LOCK:
+        _check_pending(epoch,None)
         cancel_pending()
         tts_id = tts.say(text, voice=voice_id, interrupt=True)
     uid = 'u'+uuid.uuid4().hex

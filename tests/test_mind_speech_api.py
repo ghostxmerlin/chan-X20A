@@ -84,6 +84,12 @@ class SpeechApiTest(unittest.TestCase):
         self.tts.connected=False
         self.assertEqual(self.call('/role/try',{'role':'sad'})[0],409)
 
+    def test_valid_long_scene_settings_fit_request_limit(self):
+        _,cfg=self.call('/speech/settings')
+        for p in cfg['speech']['profiles'].values():p['environment']='办'*3000
+        body={k:cfg[k] for k in ('speech','memory')};body['expected_version']=cfg['version']
+        self.assertEqual(self.call('/speech/settings',body)[0],200)
+
     def test_explanation_is_lazy_and_omits_provider_payloads(self):
         self.db.add('utterances', {'uid':'uabc','at':100,'role':'roast','text':'一句话','state':'done',
             'attention':{'focus':'需求'},'context':{'evidence':[{'id':'s1','text':'改需求'}],'scope':{'id':'office'}},
