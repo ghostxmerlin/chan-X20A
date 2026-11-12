@@ -26,6 +26,10 @@ esp_err_t reject(httpd_req_t* r,const char* status,const char* error) {
     httpd_resp_set_status(r,status);httpd_resp_set_hdr(r,"Connection","close");
     JsonDocument doc;doc["accepted"]=false;doc["error"]=error;send(r,doc);return ESP_FAIL;
 }
+esp_err_t send(ControlReply* r,const JsonDocument& doc) {return collector::send_json(r,doc);}
+esp_err_t reject(ControlReply* r,const char* status,const char* error) {
+    r->status=status;JsonDocument doc;doc["accepted"]=false;doc["error"]=error;return send(r,doc);
+}
 struct Upload {httpd_req_t* request=nullptr;const Asset* asset=nullptr;const VoiceClip* voice=nullptr;uint8_t* bytes=nullptr;};
 QueueHandle_t upload_queue=nullptr;
 StaticQueue_t upload_queue_control;
@@ -109,7 +113,7 @@ void status_json(JsonObject out) {
     storage["mount_error"]=sd.mount_error;storage["reads"]=sd.reads;storage["installs"]=sd.installs;
     storage["failures"]=sd.failures;storage["read_us"]=sd.read_us;storage["write_us"]=sd.write_us;storage["installing"]=installing.load();
 }
-esp_err_t command_handler(httpd_req_t* r,JsonObject body) {
+esp_err_t command_handler(ControlReply* r,JsonObject body) {
     // /v1/control already parsed the request; re-serialize the target-free object so
     // the strict flat-ASCII command grammar below still gates every field.
     char text[512];const size_t size=serializeJson(body,text,sizeof(text));

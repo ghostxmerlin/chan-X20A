@@ -2,7 +2,7 @@
 #pragma once
 #include "hearing_intent.h"
 #include <ArduinoJson.hpp>
-#include <esp_http_server.h>
+#include "control_reply.h"
 #include <cstdint>
 #include <cstddef>
 #include <string>
@@ -20,6 +20,7 @@ void stop_for_owner(uint32_t owner_revision);
 void asr_command(uint8_t id,bool has_value);
 // events: include hearing events with seq > events_after (speech, sound, gap, error, link).
 void json(ArduinoJson::JsonObject target,bool events=false,uint32_t events_after=0);
+void events_json(ArduinoJson::JsonObject out,uint32_t after);
 // Body of POST /v1/control {"target":"hearing",op,...}; auth and boot checked by the caller.
-esp_err_t handle(httpd_req_t* request,ArduinoJson::JsonObject body);
+esp_err_t handle(ControlReply* request,ArduinoJson::JsonObject body);
 }

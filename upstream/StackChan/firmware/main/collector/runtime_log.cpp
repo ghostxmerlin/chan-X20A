@@ -162,6 +162,14 @@ void runtime_log_init()
 #endif
 }
 
+void runtime_log_set_output(int (*sink)(const char*,va_list)) {
+#if defined(ESP_PLATFORM) || defined(COLLECTOR_RUNTIME_LOG_TEST)
+    if(sink) previous_sink.store(sink,std::memory_order_release);
+#else
+    (void)sink;
+#endif
+}
+
 bool runtime_log_snapshot(RuntimeLogSnapshot& out)
 {
     if (cache_lock.test_and_set(std::memory_order_acquire)) return false;

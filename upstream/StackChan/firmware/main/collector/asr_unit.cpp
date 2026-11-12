@@ -104,7 +104,7 @@ void asr_init()
 
 uint32_t asr_latest() { return latest.load(); }
 
-void asr_json(ArduinoJson::JsonObject out)
+void asr_json(ArduinoJson::JsonObject out,uint32_t after)
 {
     out["valid"] = driver_ok.load();
     out["rx_gpio"] = static_cast<int>(kRx);
@@ -120,7 +120,7 @@ void asr_json(ArduinoJson::JsonObject out)
     auto events = out["events"].to<ArduinoJson::JsonArray>();
     for (uint32_t seq = last_seq >= kHistory ? last_seq - kHistory + 1 : 1; seq <= last_seq; ++seq) {
         const Event& e = copy[seq % kHistory];
-        if (e.seq != seq) continue;
+        if (e.seq != seq || seq <= after) continue;
         auto item = events.add<ArduinoJson::JsonObject>();
         item["seq"] = e.seq;
         item["timestamp_us"] = e.timestamp_us;

@@ -25,7 +25,10 @@ test('last lines: time, role, text, state, start time, cost', ()=>{
 });
 test('the say panel lives in the 台词 panel of the main page, not on 情景', ()=>{
  const index=readFileSync(new URL('./public/index.html',import.meta.url),'utf8');
- const voicePanel=index.slice(index.indexOf('class="panel voice-panel"'),index.indexOf('class="panel eyes-panel"'));
+ const start=index.indexOf('<section class="panel voice-panel"');
+ assert.notEqual(start,-1);
+ const end=index.indexOf('<section class="panel ',start+1);
+ const voicePanel=index.slice(start,end===-1?undefined:end);
  for(const id of ['say-buttons','say-voices','say-msg','say-utterances'])assert.match(voicePanel,new RegExp(`id="${id}"`));
  assert.match(readFileSync(new URL('./public/app.js',import.meta.url),'utf8'),/SayPanel/);
  assert.doesNotMatch(readFileSync(new URL('./public/mind.html',import.meta.url),'utf8'),/mind-say-buttons|让 hello 说一句/);

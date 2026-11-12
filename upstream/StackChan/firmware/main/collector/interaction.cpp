@@ -51,7 +51,7 @@ esp_err_t set_locked(const char* mode,bool enabled,int64_t now) {
     }
     last_error="";apply_camera_locked();return ESP_OK;
 }
-esp_err_t reply(httpd_req_t* r,const char* status,const char* error) {
+esp_err_t reply(ControlReply* r,const char* status,const char* error) {
     httpd_resp_set_status(r,status);httpd_resp_set_type(r,"application/json");
     ArduinoJson::JsonDocument doc;doc["accepted"]=error==nullptr;if(error)doc["error"]=error;
     std::string body;serializeJson(doc,body);return httpd_resp_send(r,body.c_str(),body.size());
@@ -125,7 +125,7 @@ void json(ArduinoJson::JsonObject out) {
     out["dialogue"]["state"]=dialogue;out["dialogue"]["owned"]=owner_token&&intent.revision==owner_token;
     out["advanced"]["requested"]=advanced;out["advanced"]["supported"]=false;out["advanced"]["state"]="not_implemented";
 }
-esp_err_t handle(httpd_req_t* request,ArduinoJson::JsonObject doc) {
+esp_err_t handle(ControlReply* request,ArduinoJson::JsonObject doc) {
     if(doc.size()!=2||!doc["mode"].is<const char*>()||!doc["enabled"].is<bool>())return reply(request,"400 Bad Request","invalid_command");
     const auto result=set_mode(doc["mode"],doc["enabled"]);
     return result==ESP_OK?reply(request,"202 Accepted",nullptr):

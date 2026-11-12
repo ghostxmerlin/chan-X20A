@@ -361,7 +361,7 @@ void worker(void*) {
     }
 }
 
-esp_err_t respond(httpd_req_t* request,const char* status,const char* message) {
+esp_err_t respond(ControlReply* request,const char* status,const char* message) {
     JsonDocument doc;doc["accepted"]=!std::strcmp(status,"202 Accepted");doc["message"]=message;
     std::string body;serializeJson(doc,body);httpd_resp_set_status(request,status);httpd_resp_set_type(request,"application/json");
     httpd_resp_set_hdr(request,"Cache-Control","no-store");return httpd_resp_send(request,body.data(),body.size());
@@ -483,7 +483,17 @@ void json(JsonObject out,bool with_events,uint32_t events_after) {
     enrollment["phase"]=enroll_phase;enrollment["n"]=enroll_n;enrollment["count"]=5;enrollment["rejected"]=enroll_rejected;
 }
 
-esp_err_t handle(httpd_req_t* request,JsonObject doc) {
+void events_json(JsonObject out,uint32_t after) {
+    std::lock_guard<std::mutex> lock(mutex);const int64_t now=esp_timer_get_time();
+    auto list=out["events"].to<JsonArray>();
+    const uint32_t first=event_seq>=kEvents?event_seq-kEvents+1:1;
+    for(uint32_t seq=std::max(first,after+1);seq<=event_seq;++seq){
+        const auto& e=events[seq%kEvents];if(e.seq!=seq)continue;
+        auto item=list.add<JsonObject>();item["seq"]=e.seq;item["age_ms"]=static_cast<int32_t>((now-e.us)/1000);
+        item["kind"]=e.kind;item["label"]=e.label;item["detail"]=e.detail;if(e.p>=0)item["p"]=e.p/100.0f;
+    }
+}
+esp_err_t handle(ControlReply* request,JsonObject doc) {
     const std::string op=doc["op"]|"";
     if(op=="listen"&&doc.size()==2&&doc["enabled"].is<bool>())
         return set_listening(doc["enabled"])?respond(request,"202 Accepted","listen_updated"):respond(request,"409 Conflict","configure_backend_first");

@@ -72,7 +72,7 @@ int main(){
     interaction::asr_command(0x14,false);assert(!tracking&&face.function==M12Function::detect);
     interaction::asr_command(0x10,false);tick();assert(tracking&&face.function==M12Function::detect);
     // 0.4.46: /v1/control parses the body and hands the target-free object to the module.
-    auto handle=[](const std::string& body){httpd_req_t r;ArduinoJson::JsonDocument d;deserializeJson(d,body);interaction::handle(&r,d.as<ArduinoJson::JsonObject>());return r.status;};
+    auto handle=[](const std::string& body){ControlReply r;ArduinoJson::JsonDocument d;deserializeJson(d,body);interaction::handle(&r,d.as<ArduinoJson::JsonObject>());return r.status;};
     assert(handle("{\"mode\":\"advanced\",\"enabled\":false}")=="202 Accepted");
     for(const std::string body:{"{\"mode\":\"advanced\",\"enabled\":1}","{\"mode\":\"bad\",\"enabled\":false}","{\"mode\":\"advanced\",\"enabled\":false,\"extra\":1}"})
         assert(handle(body)=="400 Bad Request");

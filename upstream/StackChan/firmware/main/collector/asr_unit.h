@@ -14,6 +14,6 @@ void asr_init();
 // Lock-free, safe from the LVGL timer. Every frame is also logged under
 // "AsrUnit", so it shows on the robot's own log page.
 uint32_t asr_latest();
-void asr_json(ArduinoJson::JsonObject out);
+void asr_json(ArduinoJson::JsonObject out,uint32_t after=0);
 void asr_info_json(ArduinoJson::JsonObject out);
 }

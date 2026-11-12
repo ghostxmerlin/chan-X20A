@@ -13,7 +13,7 @@ const config = fs.existsSync(configFile) ? JSON.parse(fs.readFileSync(configFile
 const port = config.port ?? 8787;
 const pid = fs.existsSync(pidfile) ? Number(fs.readFileSync(pidfile, 'utf8')) : 0;
 const command = pid > 0 ? spawnSync('/bin/ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).stdout : '';
-const running = !!command?.includes(server);
+const running = !!command && (command.includes(server) || command.trim().endsWith('node web/monitor/server.mjs'));
 const action = process.argv[2] || 'status';
 if (!['start','stop','status'].includes(action)) throw new Error('用法：node web/monitor/service.mjs start|stop|status');
 if (action === 'status') console.log(running ? `运行中 http://127.0.0.1:${port}/` : '已停止');

@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const {HearingPanel}=await import('data:text/javascript;base64,'+readFileSync(new URL('./public/hearing-ui.js',import.meta.url)).toString('base64'));
 function fixture(){const elements=new Map();return {getElementById(id){if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,textContent:'',addEventListener(){}});return elements.get(id);}};}
+test('initial page render before the first telemetry message is safe and passive',()=>{
+ const doc=fixture(),calls=[],panel=new HearingPanel(doc,async body=>{calls.push(body);return {};});
+ panel.render(undefined,false);
+ assert.equal(doc.getElementById('hearing-text').textContent,'等待语音');
+ assert.equal(doc.getElementById('hearing-start').disabled,true);
+ assert.equal(calls.length,0);
+});
 test('configuration never writes on render; enrollment needs name and live status',async()=>{
  const doc=fixture(),calls=[],panel=new HearingPanel(doc,async body=>{calls.push(body);return {message:'accepted'};});
  const state={boot:'a',capabilities:{hearing:'supported'},telemetry:{health:{audio_ready:true},hearing:{ready:true,url:'ws://127.0.0.1/',token_configured:true,state:'idle',enrollment:{active:false}}}};

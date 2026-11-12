@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 
@@ -21,6 +22,7 @@ struct RuntimeLogSnapshot {
 // Install once, early in collector startup. UART output keeps its previous
 // vprintf sink. Captures subsequent ESP logs only, not ROM/early/raw printf.
 void runtime_log_init();
+void runtime_log_set_output(int (*sink)(const char*,va_list));
 // Best-effort local display cache, not a durable log. Never waits for a writer;
 // false leaves out unchanged so the display can retain its previous snapshot.
 bool runtime_log_snapshot(RuntimeLogSnapshot& out);

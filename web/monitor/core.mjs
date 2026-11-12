@@ -221,6 +221,16 @@ export class Monitor extends EventEmitter {
     }
     const newest = this.motion.at(-1)?.t || 0;
     this.motion = this.motion.filter(s => s.t >= newest - 4).slice(-240);
+    this.acceptEvents(data,now);
+    if (data.m12?.online !== previous?.m12?.online && previous)
+      this.event('m12', data.m12?.online ? 'M12 上线（收到心跳）' : 'M12 离线（6 秒内没有心跳）');
+    if (data.m12?.function !== previous?.m12?.function)
+      this.event('m12', `M12 ${({detect:'检测已开',standby:'已待机',unknown:'状态未确认'})[data.m12?.function] || data.m12?.function || '—'}`);
+    const state = data.remote?.motor?.state;
+    if (state !== previous?.remote?.motor?.state && state) this.event('motor', `舵机状态 ${state}`);
+  }
+  acceptEvents(data,now=Date.now()) {
+    if(data.boot_id!==this.info?.boot_id)return;
     for (const event of data.asr?.events || []) if (event.seq > this.asrSeq) {
       const ageMs = Math.max(0, (data.timestamp_us - event.timestamp_us) / 1000);
       const delay = Number.isFinite(ageMs) ? ageMs : 0;
@@ -245,18 +255,12 @@ export class Monitor extends EventEmitter {
       if (formatted.known) this.events.at(-1).known = true;
       if (event.kind === 'gap') Object.assign(this.events.at(-1), { gap: { total: Number(event.detail) || 0, times: 1 }, gapAt: at });
     }
-    if (data.m12?.online !== previous?.m12?.online && previous)
-      this.event('m12', data.m12?.online ? 'M12 上线（收到心跳）' : 'M12 离线（6 秒内没有心跳）');
-    if (data.m12?.function !== previous?.m12?.function)
-      this.event('m12', `M12 ${({detect:'检测已开',standby:'已待机',unknown:'状态未确认'})[data.m12?.function] || data.m12?.function || '—'}`);
-    const state = data.remote?.motor?.state;
-    if (state !== previous?.remote?.motor?.state && state) this.event('motor', `舵机状态 ${state}`);
   }
   snapshot(now = Date.now()) {
     const fresh = { telemetry: !!this.telemetryAt && now - this.telemetryAt < 1500,
       camera: !!this.frame?.at && now - this.frame.at < 1500, audio: !!this.audio.at && now - this.audio.at < 1000 };
     return { online: this.online, active: this.running, error: this.error, viewers: this.viewers,
-      capabilities: this.info?.capabilities || {}, firmware: this.info?.firmware || '', boot: this.info?.boot_id || '', address: this.client.binding?.address || '',
+      capabilities: this.info?.capabilities || {}, firmware: this.info?.firmware || '', boot: this.info?.boot_id || '', address: this.client.push ? 'USB Serial/JTAG' : (this.client.binding?.address || ''),
       receivedAt: this.telemetryAt, fresh, telemetry: this.telemetry,
       voiceLibrary: this.info?.voice_library || {clips:[]},
       eyesCatalog: this.info?.eyes || {styles:[],states:[]},
@@ -279,11 +283,19 @@ export class Monitor extends EventEmitter {
     if (this.running) return;
     this.running = true; const epoch = ++this.epoch; this.controller = new AbortController();
     this.m12System.start();
-    this.event('connection', '开始监控'); void this.loop(epoch, this.controller.signal);
+    this.event('connection', '开始监控');
+    const signal=this.controller.signal;
+    if(this.client.push) {
+      // A cancelled session must finish releasing its bridge before a new one opens.
+      this.pushLoop=(this.pushLoop||Promise.resolve()).catch(()=>{}).then(()=>{
+        if(this.running&&epoch===this.epoch&&!signal.aborted)return this.loopPush(epoch,signal);
+      });
+    } else void this.loop(epoch,signal);
   }
   stop() {
     this.running = false; this.online = false; this.epoch++; this.controller?.abort(); this.m12System.stop();
     this.client.verified = false; this.clearStreams(); this.event('connection', '监控已暂停，设备采集连接已释放');
+    if(this.client.push)void this.client.close();
     this.emit('state', this.snapshot());
   }
   ensureAudio(epoch) {
@@ -317,6 +329,30 @@ export class Monitor extends EventEmitter {
       this.emit('audioReset');
       if (this.running && epoch === this.epoch) this.audioError = failure || '音频连接中断，正在重连';
     });
+  }
+  async loopPush(epoch,signal) {
+    const client=this.client;
+    while(this.running&&epoch===this.epoch&&!signal.aborted){
+      const listeners=[];const on=(name,fn)=>{client.on(name,fn);listeners.push([name,fn]);};
+      const current=()=>this.running&&epoch===this.epoch&&!signal.aborted;
+      let abort;
+      try {
+        await client.closed;
+        const info=await client.connect(signal);if(!current())break;
+        this.acceptInfo(info);
+        let end;const disconnected=new Promise(resolve=>{end=resolve;});
+        on('disconnect',e=>{if(current()){this.online=false;this.error=e.message;this.clearStreams();this.emit('state',this.snapshot());}end();});
+        on('state',data=>{if(!current())return;this.acceptTelemetry(data);this.online=true;this.error='';if(data.health?.camera_enabled===false)this.frame=null;this.emit('state',this.snapshot());});
+        on('events',data=>{if(current()){this.acceptEvents(data);this.emit('state',this.snapshot());}});
+        on('frame',frame=>{if(current()){this.frame=frame;this.cameraError='';this.emit('state',this.snapshot());}});
+        on('log',line=>{if(current()){this.event('system',line.replace(/\x1b\[[0-9;]*m/g,''));this.emit('state',this.snapshot());}});
+        on('stale',()=>{if(current()){this.online=false;this.error='串口状态缺帧，正在重新同步';this.clearStreams();this.emit('state',this.snapshot());}});
+        abort=()=>end();signal.addEventListener('abort',abort,{once:true});
+        await client.subscribe();if(current())await disconnected;
+      } catch(e){if(current()){this.online=false;this.error=e.message;this.clearStreams();this.emit('state',this.snapshot());}}
+      finally{if(abort)signal.removeEventListener('abort',abort);for(const [name,fn] of listeners)client.off(name,fn);await client.close();}
+      if(current())await sleep(1500);
+    }
   }
   async loop(epoch, signal) {
     let lastInfo = 0;

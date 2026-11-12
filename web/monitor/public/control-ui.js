@@ -74,12 +74,12 @@ export class InteractionPanel {
     if(!response.ok)throw new Error(await response.text());return response.json();
   }) {
     this.doc=doc;this.send=send;this.pending=false;
-    for(const mode of ['tracking','recognition','advanced'])this.el('interaction-'+mode).addEventListener('click',()=>this.toggle(mode));
+    for(const mode of ['tracking','recognition','advanced'])this.el('interaction-'+mode)?.addEventListener('click',()=>this.toggle(mode));
   }
   el(id){return this.doc.getElementById(id);}
-  label(id,text,title=text){this.el(id).textContent=text;this.el(id).title=title;}
+  label(id,text,title=text){const el=this.el(id);if(el){el.textContent=text;el.title=title;}}
   async toggle(mode){
-    if(!this.ready||this.pending||this.el('interaction-'+mode).disabled)return;
+    if(!this.ready||this.pending||!this.el('interaction-'+mode)||this.el('interaction-'+mode).disabled)return;
     const boot=this.state.boot,enabled=!this.state.telemetry.interaction[mode].requested;
     this.pending=true;this.label('interaction-command','正在发送…');this.render(this.state,this.fresh);
     try{const result=await this.send({action:'interaction',mode,enabled,boot});this.label('interaction-command',this.state?.boot===boot?result.message:'机器人已重启，请核对新状态');}
@@ -95,6 +95,7 @@ export class InteractionPanel {
     const motorReady=!!t.remote?.motor?.requested&&!!t.remote?.motor?.enabled;
     for(const [mode,name] of [['tracking','追踪'],['recognition','认人对话'],['advanced','高级预留']]){
       const data=interaction[mode],requested=!!fresh&&!!data?.requested,button=this.el('interaction-'+mode);
+      if(!button)continue;
       button.textContent=`${requested?'关闭':'开启'}${name}`;button.setAttribute('aria-pressed',String(requested));
       const allowed=mode==='tracking'?trackingSupported&&(requested||(motorReady&&t.m12?.valid)):mode==='recognition'?requested||t.m12?.valid:true;
       button.disabled=!this.ready||this.pending||typeof data?.requested!=='boolean'||!allowed;

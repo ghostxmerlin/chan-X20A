@@ -63,7 +63,7 @@ export class HearingPanel {
   this.el('hearing-emotion').textContent=fresh&&h.emotion?`情绪标签：${emotions[h.emotion]||h.emotion} · 仅作台词互动参考`:'情绪标签：—';
   // Keep the last real sentence: a punctuation-only misfire does not replace it.
   if(fresh&&h.text&&/[\p{L}\p{N}]/u.test(h.text))this.lastText={text:h.text,boot:state.boot};
-  const shownText=this.lastText?.boot===state?.boot?this.lastText.text:'';
+  const shownText=this.lastText&&this.lastText.boot===state?.boot?this.lastText.text:'';
   this.el('hearing-text').textContent=fresh&&shownText?`${shownText}${shownText===h.text&&h.last_speech_age_ms>=0?' · '+Math.floor(h.last_speech_age_ms/1000)+' 秒前':''}`:'等待语音';
   // Why the last sentence did not count (server reason, collector-0.4.68+).
   const rejected={too_short:'上一句太短，没算进去：每句至少说 1 秒',too_long:'上一句太长（超过 12 秒），没算进去',not_voice:'上一句听起来不像清楚的人声，没算进去：靠近一点、正常音量再说',self_voice:'上一句和 hello 自己的声音重叠，没算进去',bad_embedding:'上一句声纹提取失败，请再说一句'};

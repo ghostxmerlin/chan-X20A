@@ -27,7 +27,7 @@ set(STACK_CHAN_INCLUDE_DIRS
     "."
 )
 list(APPEND STACK_CHAN_SOURCES main.cpp)
-list(APPEND STACK_CHAN_SOURCES collector/collector.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/collector.cpp collector/serial_monitor.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/remote.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/asr_unit.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/m12_unit.cpp collector/vision_uplink.cpp collector/mouth_link.cpp)

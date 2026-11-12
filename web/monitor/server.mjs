@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DeviceClient, Monitor } from './core.mjs';
+import {SerialDeviceClient} from './serial-client.mjs';
 import { Controls } from './control.mjs';
 import { existingHearingConfig } from './hearing.mjs';
 import { M12System } from './m12-system.mjs';
@@ -93,13 +94,21 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (url.pathname === '/api/events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' }); res.flushHeaders();
-      const send = state => {
-        if (res.writableLength > 262144) { res.destroy(); return; }
-        res.write(`data: ${JSON.stringify(state)}\n\n`);
+      let waitingForDrain = false, pending = false;
+      const send = () => {
+        if (res.destroyed || res.writableEnded) return;
+        // USB can deliver many log records in one read. Respect backpressure
+        // and merge their notifications into the next current snapshot, whose
+        // event cache still contains every retained log entry.
+        if (waitingForDrain) { pending = true; return; }
+        pending = false;
+        waitingForDrain = !res.write(`data: ${JSON.stringify(monitor.snapshot())}\n\n`);
       };
-      monitor.addViewer(); monitor.on('state', send); send(monitor.snapshot());
-      const heartbeat = setInterval(() => send(monitor.snapshot()), 1000);
-      res.on('close', () => { clearInterval(heartbeat); monitor.off('state', send); monitor.removeViewer(); });
+      const drain = () => { waitingForDrain = false; if (pending) send(); };
+      res.on('drain', drain);
+      monitor.addViewer(); monitor.on('state', send); send();
+      const heartbeat = setInterval(send, 1000);
+      res.on('close', () => { clearInterval(heartbeat); res.off('drain', drain); monitor.off('state', send); monitor.removeViewer(); });
       return;
     }
     // /api/listen (browser playback of the raw mic stream) was removed with the stream itself.
@@ -116,13 +125,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const config = JSON.parse(fs.readFileSync(filename));
   const port = config.port ?? 8787;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('本机端口无效');
-  const monitor = new Monitor(new DeviceClient(config), new M12System(config.m12, {root}));
+  const monitor = new Monitor(config.transport==='http'?new DeviceClient(config):new SerialDeviceClient(config), new M12System(config.m12, {root}));
   let env = {};
   try { env = parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8')); } catch {}
   const mind = new MindProxy({ ssh: env.SOUL_SERVER_SSH, token: env.SOUL_EAR_TOKEN });
   const server = createMonitorServer(monitor, undefined, mind);
   server.on('error', error => { console.error('本机观察台启动失败：' + error.code); process.exit(1); });
   server.listen(port, '127.0.0.1', () => console.log(`StackChan 观察台：http://127.0.0.1:${port}/`));
-  const close = () => { monitor.stop(); mind.stop(); server.closeAllConnections(); server.close(() => process.exit(0)); };
+  const close = async () => { monitor.stop(); mind.stop(); server.closeAllConnections(); await monitor.client.close?.(); server.close(() => process.exit(0)); };
   process.on('SIGTERM', close); process.on('SIGINT', close);
 }

@@ -53,6 +53,8 @@
 #include <mbedtls/md.h>
 #include <lwip/sockets.h>
 #include <driver/usb_serial_jtag.h>
+#include "control_reply.h"
+#include "serial_monitor.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <lvgl.h>
@@ -76,7 +78,11 @@ constexpr uint32_t kSampleRate = 24000;
 constexpr uint16_t kChannels = 2;
 constexpr uint32_t kFrames = 480;
 constexpr size_t kPcmBytes = kFrames * kChannels * sizeof(int16_t);
+#ifdef CONFIG_COLLECTOR_NETWORK_MONITOR
 constexpr size_t kRingBlocks = 64;
+#else
+constexpr size_t kRingBlocks = 25; // only the half-second level window; no network PCM consumers
+#endif
 constexpr char kVersion[] = FIRMWARE_VERSION;
 constexpr int kMainHttpSessions = 3, kAudioHttpSessions = 2;
 // IDF 5.5.4 httpd owns listen, control and message sockets in each instance.
@@ -342,7 +348,7 @@ void connect_network(size_t index)
     if (result != ESP_OK) ESP_LOGW(kTag, "Wi-Fi connect request: %s", esp_err_to_name(result));
 }
 
-void serial_config_task(void*)
+[[maybe_unused]] void serial_config_task(void*)
 {
     // USB-only fallback. priority=true adds a preferred profile while preserving
     // legacy/factory fallback networks. The two secrets commit as one NVS value.
@@ -639,6 +645,9 @@ esp_err_t unavailable(httpd_req_t* request, const char* message)
     return httpd_resp_sendstr(request, message);
 }
 
+using collector::send_json;
+using collector::unavailable;
+
 bool discovery_reply(const std::string& nonce, JsonDocument& doc)
 {
     if (!discovery_nonce_valid(nonce)) return false;
@@ -682,7 +691,7 @@ esp_err_t discovery_handler(httpd_req_t* request)
     return send_json(request, doc);
 }
 
-void discovery_task(void*)
+[[maybe_unused]] void discovery_task(void*)
 {
     const int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     sockaddr_in local{};
@@ -823,10 +832,8 @@ void environment_json(JsonDocument& doc, bool metadata)
     }
 }
 
-esp_err_t info_handler(httpd_req_t* request)
+void fill_info(JsonDocument& doc)
 {
-    if (!authorize(request)) return ESP_OK;
-    JsonDocument doc;
     doc["protocol_version"] = 1;
     doc["device_id"] = device_id;
     doc["boot_id"] = boot_id;
@@ -939,8 +946,14 @@ esp_err_t info_handler(httpd_req_t* request)
     doc["assets"]["endpoint"] = "/v1/assets";
     doc["assets"]["selector"] = "X-Voice-Id, or X-Eyes-Style + X-Eyes-State";
     doc["capture_active"] = true;
-    doc["transport"] = "http_lan_unencrypted";
-    return send_json(request, doc);
+    doc["transport"] = "usb_serial_jtag";
+    serial_monitor_stats(doc["monitor"].to<JsonObject>());
+
+}
+
+esp_err_t info_handler(httpd_req_t* request) {
+    if (!authorize(request)) return ESP_OK;
+    JsonDocument doc; fill_info(doc); return send_json(request,doc);
 }
 
 bool query_counter(httpd_req_t* request, const char* key, uint32_t& value, bool& present)
@@ -961,17 +974,8 @@ bool query_counter(httpd_req_t* request, const char* key, uint32_t& value, bool&
     return true;
 }
 
-esp_err_t telemetry_handler(httpd_req_t* request)
+void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=false,uint32_t remote_after=0,bool remote_requested=false,bool servo_diag=false,uint32_t hearing_after=0,bool hearing_requested=false)
 {
-    if (!authorize(request)) return ESP_OK;
-    uint32_t imu_after = 0, remote_after = 0, servo_diag = 0, hearing_after = 0;
-    bool imu_requested = false, remote_requested = false, servo_diag_requested = false, hearing_requested = false;
-    if (!query_counter(request, "imu_after", imu_after, imu_requested) ||
-        !query_counter(request, "remote_after", remote_after, remote_requested) ||
-        !query_counter(request, "hearing_after", hearing_after, hearing_requested) ||
-        !query_counter(request, "servo_diag", servo_diag, servo_diag_requested) || servo_diag > 1) {
-        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid sample cursor"); return ESP_OK;
-    }
     Sensors sample;
     std::vector<Sensors> batch;
     if (imu_requested) batch.reserve(kImuHistory);
@@ -985,7 +989,6 @@ esp_err_t telemetry_handler(httpd_req_t* request)
             for (uint32_t i = std::max(first, imu_after + 1); i <= sample.seq; ++i) batch.push_back(imu_history[i % kImuHistory]);
         }
     }
-    JsonDocument doc;
     doc["boot_id"] = boot_id;
     doc["seq"] = sample.seq;
     doc["timestamp_us"] = sample.timestamp_us;
@@ -1020,7 +1023,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     }
     environment_json(doc, false);
     temperature_json(doc["temperature"].to<JsonObject>());
-    remote_json(doc["remote"].to<JsonObject>(), remote_after, remote_requested, servo_diag_requested && servo_diag == 1);
+    remote_json(doc["remote"].to<JsonObject>(), remote_after, remote_requested, servo_diag);
     wifi_json(doc["wifi"].to<JsonObject>());
     remote_pitch_setting_json(doc["pitch_setting"].to<JsonObject>());
     face_detection_json(doc["face_detection"].to<JsonObject>());
@@ -1054,6 +1057,7 @@ esp_err_t telemetry_handler(httpd_req_t* request)
     power["charging"] = charging;
     power["timestamp_us"] = power_us;
     auto health = doc["health"].to<JsonObject>();
+    serial_monitor_stats(doc["monitor"].to<JsonObject>());
     health["heap_free"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     health["heap_largest_free"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     // Internal 8-bit heaps may include memory unsuitable for SPI/I2S DMA.
@@ -1129,7 +1133,22 @@ esp_err_t telemetry_handler(httpd_req_t* request)
         const std::string connected(reinterpret_cast<const char*>(ap.ssid), strnlen(reinterpret_cast<const char*>(ap.ssid), sizeof(ap.ssid)));
         health["wifi_on_preferred"] = preferred_network_configured && !networks.empty() && connected == networks.front().ssid;
     }
-    return send_json(request, doc);
+
+}
+esp_err_t telemetry_handler(httpd_req_t* request)
+{
+    if (!authorize(request)) return ESP_OK;
+    uint32_t imu_after = 0, remote_after = 0, servo_diag = 0, hearing_after = 0;
+    bool imu_requested = false, remote_requested = false, servo_diag_requested = false, hearing_requested = false;
+    if (!query_counter(request, "imu_after", imu_after, imu_requested) ||
+        !query_counter(request, "remote_after", remote_after, remote_requested) ||
+        !query_counter(request, "hearing_after", hearing_after, hearing_requested) ||
+        !query_counter(request, "servo_diag", servo_diag, servo_diag_requested) || servo_diag > 1) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid sample cursor"); return ESP_OK;
+    }
+    JsonDocument doc;
+    fill_telemetry(doc,imu_after,imu_requested,remote_after,remote_requested,servo_diag_requested&&servo_diag==1,hearing_after,hearing_requested);
+    return send_json(request,doc);
 }
 
 bool control_boot_matches(httpd_req_t* request, bool required = false)
@@ -1148,10 +1167,10 @@ bool control_boot_matches(httpd_req_t* request, bool required = false)
 // {"target": <name>, ...}. The dispatcher authenticates, requires the current
 // X-Boot-Id, reads one bounded body and hands the target-free object to the
 // handler named in kControlTargets; each handler keeps its own field checks.
-using ControlHandler = esp_err_t (*)(httpd_req_t*, JsonObject, const char* target);
+using ControlHandler = esp_err_t (*)(ControlReply*, JsonObject, const char* target);
 constexpr size_t kControlBodyMax = 768;
 
-esp_err_t web_control(httpd_req_t* request, JsonObject doc, const char* target)
+esp_err_t web_control(ControlReply* request, JsonObject doc, const char* target)
 {
     JsonDocument result;
     const bool yaw_step = strcmp(target, "yaw_step") == 0;
@@ -1226,7 +1245,7 @@ esp_err_t web_control(httpd_req_t* request, JsonObject doc, const char* target)
     httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
 }
 
-esp_err_t remote_control(httpd_req_t* request, JsonObject doc, const char*)
+esp_err_t remote_control(ControlReply* request, JsonObject doc, const char*)
 {
     if (doc.size() != 1 || !doc["enabled"].is<bool>()) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
@@ -1236,7 +1255,7 @@ esp_err_t remote_control(httpd_req_t* request, JsonObject doc, const char*)
     return send_json(request, result);
 }
 
-esp_err_t pitch_control(httpd_req_t* request, JsonObject doc, const char*)
+esp_err_t pitch_control(ControlReply* request, JsonObject doc, const char*)
 {
     int angle_tenths = 0;
     if (doc.size() != 1 || !doc["angle_deg"].is<double>() || !pitch_request_tenths(doc["angle_deg"].as<double>(), angle_tenths)) {
@@ -1289,7 +1308,7 @@ void wifi_json(JsonObject target)
 }
 
 
-esp_err_t wifi_control(httpd_req_t* request, JsonObject doc, const char*)
+esp_err_t wifi_control(ControlReply* request, JsonObject doc, const char*)
 {
     const char* op = doc["op"] | "";
     const std::string ssid = doc["ssid"] | "";
@@ -1317,7 +1336,7 @@ esp_err_t wifi_control(httpd_req_t* request, JsonObject doc, const char*)
     httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
 }
 
-esp_err_t camera_control(httpd_req_t* request, JsonObject doc, const char*)
+esp_err_t camera_control(ControlReply* request, JsonObject doc, const char*)
 {
     if (doc.size() != 1 || !doc["enabled"].is<bool>()) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
@@ -1330,7 +1349,7 @@ esp_err_t camera_control(httpd_req_t* request, JsonObject doc, const char*)
     return send_json(request, result);
 }
 
-esp_err_t servo_control(httpd_req_t* request, JsonObject doc, const char*)
+esp_err_t servo_control(ControlReply* request, JsonObject doc, const char*)
 {
     ServoTuneRequest tune;
     const char* axis = doc["axis"] | "";
@@ -1380,7 +1399,7 @@ const ControlTarget kControlTargets[] = {
     {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control},
     {"servo", servo_control}, {"wifi", wifi_control},
     {"m12_view", web_control}, {"m12_mode", web_control}, {"yaw_step", web_control}, {"voice_play", web_control},
-    {"m12_request", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t {
+    {"m12_request", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t {
         // {"target":"m12_request","op":"ping|ver|status|cfg|learn|who|forget|faces"[,"name":..][,"face":id]}
         // Asynchronous: 202 with the request id; the result appears in telemetry m12.commands.
         M12Op op;
@@ -1404,17 +1423,17 @@ const ControlTarget kControlTargets[] = {
         }
         JsonDocument result; result["accepted"] = true; result["op"] = m12_op_name(op); result["id"] = id;
         httpd_resp_set_status(r, "202 Accepted"); return send_json(r, result); }},
-    {"interaction", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return interaction::handle(r, body); }},
-    {"hearing", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return hearing::handle(r, body); }},
-    {"eyes", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t { return eyes::command_handler(r, body); }},
-    {"volume", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t {
+    {"interaction", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t { return interaction::handle(r, body); }},
+    {"hearing", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t { return hearing::handle(r, body); }},
+    {"eyes", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t { return eyes::command_handler(r, body); }},
+    {"volume", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t {
         // {"target":"volume","value":10..100}; applies to the next playback and is saved.
         if (body.size() != 1 || !body["value"].is<int>() || playback_set_volume(body["value"].as<int>(), "web") != ESP_OK) {
             httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Volume must be an integer 10..100"); return ESP_OK;
         }
         JsonDocument result; result["accepted"] = true; result["volume"] = playback_volume();
         httpd_resp_set_status(r, "202 Accepted"); return send_json(r, result); }},
-    {"mic_gain", +[](httpd_req_t* r, JsonObject body, const char*) -> esp_err_t {
+    {"mic_gain", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t {
         // {"target":"mic_gain","value":0..24} dB; applies from the next 20 ms block and is saved.
         if (body.size() != 1 || !body["value"].is<int>() || !mic_gain_valid(body["value"].as<int>())) {
             httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Mic gain must be an integer 0..24 dB"); return ESP_OK;
@@ -1428,6 +1447,14 @@ const ControlTarget kControlTargets[] = {
         JsonDocument result; result["accepted"] = true; result["mic_gain_db"] = db; result["saved"] = err == ESP_OK;
         httpd_resp_set_status(r, "202 Accepted"); return send_json(r, result); }},
 };
+
+void dispatch_control(JsonObject body,ControlReply& reply){
+    static std::mutex mutex;std::lock_guard<std::mutex> lock(mutex);
+    if(!body["target"].is<const char*>()){httpd_resp_send_err(&reply,HTTPD_400_BAD_REQUEST,"target required");return;}
+    const std::string target=body["target"].as<const char*>();body.remove("target");
+    for(const auto& entry:kControlTargets)if(target==entry.name){entry.handle(&reply,body,entry.name);return;}
+    httpd_resp_send_err(&reply,HTTPD_400_BAD_REQUEST,"unknown target");
+}
 
 void control_info_json(JsonObject target)
 {
@@ -1460,11 +1487,7 @@ esp_err_t control_handler(httpd_req_t* request)
     if (deserializeJson(doc, body, total) || !doc.is<JsonObject>() || !doc["target"].is<const char*>()) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected a JSON object with a target string"); return ESP_OK;
     }
-    const std::string target = doc["target"].as<const char*>();
-    doc.remove("target");
-    for (const auto& entry : kControlTargets)
-        if (target == entry.name) return entry.handle(request, doc.as<JsonObject>(), entry.name);
-    httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Unknown control target"); return ESP_OK;
+    ControlReply reply;dispatch_control(doc.as<JsonObject>(),reply);return reply.http(request);
 }
 
 esp_err_t frame_handler(httpd_req_t* request)
@@ -1600,7 +1623,7 @@ const Route kMainRoutes[] = {
 };
 const Route kAudioRoutes[] = {{"/v1/audio", HTTP_GET, audio_handler}};
 
-void start_server(int port, int control_port, bool audio_only)
+[[maybe_unused]] void start_server(int port, int control_port, bool audio_only)
 {
     const Route* routes = audio_only ? kAudioRoutes : kMainRoutes;
     const size_t route_count = audio_only ? std::size(kAudioRoutes) : std::size(kMainRoutes);
@@ -1838,7 +1861,9 @@ void run()
     m12_init();
     temperature_init();
     eyes::start();
+#ifdef CONFIG_COLLECTOR_NETWORK_MONITOR
     eyes::start_asset_installer();
+#endif
     playback_init();
     hearing::init(device_id,boot_id);
     vision_uplink_init(device_id, boot_id);
@@ -1851,12 +1876,22 @@ void run()
     load_camera_setting();
     // Keep JPEG work off Wi-Fi's core 0, still below sensor and audio priorities.
     ESP_ERROR_CHECK(create_psram_task(camera_task, "collector_camera", 8192, nullptr, 2, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
-    ESP_ERROR_CHECK(xTaskCreate(serial_config_task, "collector_serial", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    serial_monitor_start(device_id,boot_id,token,MonitorHooks{
+        fill_info,
+        +[](JsonDocument& d){fill_telemetry(d);},
+        +[](JsonDocument& d,uint32_t asr_after,uint32_t hearing_after){
+            asr_json(d["asr"].to<JsonObject>(),asr_after);
+            hearing::events_json(d["hearing"].to<JsonObject>(),hearing_after);
+        },
+        dispatch_control,discovery_reply});
+#ifdef CONFIG_COLLECTOR_NETWORK_MONITOR
     start_server(8080, 32768, false);
     start_server(8081, 32769, true);
     ESP_ERROR_CHECK(create_psram_task(discovery_task, "collector_discovery", 4096, nullptr, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
-    ESP_LOGI(kTag, "HTTP ready :8080 /v1/info /v1/telemetry /v1/frame; :8081 /v1/audio");
-    ESP_LOGI(kTag, "USB fallback: one JSON line with cmd=wifi, ssid and password; saved only in collector NVS");
+    ESP_LOGI(kTag,"Network monitor enabled; USB monitor available");
+#else
+    ESP_LOGI(kTag,"USB monitor ready; network monitor disabled");
+#endif
     size_t attempt = 0;
     int64_t last_attempt = -10000000;
     int64_t last_health_log = 0;
@@ -1874,7 +1909,9 @@ void run()
             wifi_ap_record_t ap{};
             if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
                 ssid.assign(reinterpret_cast<const char*>(ap.ssid), strnlen(reinterpret_cast<const char*>(ap.ssid), sizeof(ap.ssid)));
+#ifdef CONFIG_COLLECTOR_NETWORK_MONITOR
             if (ip != previous_ip) ESP_LOGI(kTag, "PAIRING_URL=http://%s:8080 BOOT_ID=%s SSID=%s", ip.c_str(), boot_id.c_str(), ssid.c_str());
+#endif
         } else if (esp_timer_get_time() - last_attempt >= 10000000) {
             if (attempt != 0) esp_wifi_disconnect();
             connect_network(attempt++ / 3);

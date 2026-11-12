@@ -2,7 +2,7 @@
 #pragma once
 #include <ArduinoJson.hpp>
 #include <esp_err.h>
-#include <esp_http_server.h>
+#include "control_reply.h"
 #include <cstdint>
 namespace collector::interaction {
 struct Indicators { bool tracking = false, recognition = false; };
@@ -16,5 +16,5 @@ void tick(int64_t now);
 void release_for_manual_m12();
 void json(ArduinoJson::JsonObject out);
 // Body of POST /v1/control {"target":"interaction",mode,enabled}; auth and boot checked by the caller.
-esp_err_t handle(httpd_req_t* request,ArduinoJson::JsonObject body);
+esp_err_t handle(ControlReply* request,ArduinoJson::JsonObject body);
 }

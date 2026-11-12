@@ -26,6 +26,11 @@ int httpd_req_recv(httpd_req_t*,char*,size_t);
 esp_err_t httpd_resp_set_status(httpd_req_t*,const char*);
 esp_err_t httpd_resp_set_type(httpd_req_t*,const char*);
 esp_err_t httpd_resp_send(httpd_req_t*,const char*,size_t);
+enum httpd_err_code_t {HTTPD_400_BAD_REQUEST,HTTPD_404_NOT_FOUND,HTTPD_401_UNAUTHORIZED};
+esp_err_t httpd_resp_set_hdr(httpd_req_t*,const char*,const char*);
+esp_err_t httpd_resp_sendstr(httpd_req_t*,const char*);
+esp_err_t httpd_resp_send_err(httpd_req_t*,httpd_err_code_t,const char*);
+
 ''')
             args=['c++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(d),'-I'+str(main),'-isystem',str(root/'upstream/StackChan/firmware/components/smooth_ui_toolkit/src'),'-DSMOOTH_UI_TOOLKIT_ENABLE_DEFAULT_HAL=0','-Wno-mismatched-tags','-Wno-unused-parameter','-I'+str(root/'upstream/StackChan/firmware/components/ArduinoJson/src'),str(root/'tests'/test)]
             if service: args.append(str(main/'collector/interaction.cpp'))

@@ -39,9 +39,16 @@ let lastBoot = '', lastEvent = -1, lastFiltered = 0, logFilter = 'all';
 // Combined log: ASR commands, hearing (speech / link / gaps), sound events and system state changes.
 const LOG_GROUPS = { asr: ['asr'], hearing: ['hearing', 'response'], response: ['response'], sound: ['sound'], tingwu: ['tingwu'] };
 const LOG_TAGS = { asr: 'ASR', hearing: '听觉', sound: '声音', response: '回应', tingwu: '听悟' };
-const inGroup = (kind, filter) => filter === 'all' || (filter === 'system' ? !Object.values(LOG_GROUPS).flat().includes(kind) : (LOG_GROUPS[filter] || []).includes(kind));
+const activityKinds = new Set(Object.values(LOG_GROUPS).flat());
+const inGroup = (kind, filter) => filter === 'all' || (filter === 'system' ? !activityKinds.has(kind) : filter === 'non-system' ? activityKinds.has(kind) : (LOG_GROUPS[filter] || []).includes(kind));
+try {
+  const saved = localStorage.getItem('stackchan.logFilter');
+  if (['all', 'non-system', 'system', ...Object.keys(LOG_GROUPS)].includes(saved)) logFilter = saved;
+} catch {}
+for (const button of document.querySelectorAll('[data-log-filter]')) button.setAttribute('aria-pressed', String(button.dataset.logFilter === logFilter));
 for (const button of document.querySelectorAll('[data-log-filter]')) button.addEventListener('click', () => {
   logFilter = button.dataset.logFilter; lastEvent = -1;
+  try { localStorage.setItem('stackchan.logFilter', logFilter); } catch {}
   for (const other of document.querySelectorAll('[data-log-filter]')) other.setAttribute('aria-pressed', String(other === button));
   render();
 });
