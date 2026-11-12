@@ -19,7 +19,7 @@ export function utterancesHtml(list,roles){
  return '<ul class="utterances">'+list.slice(-5).reverse().map(u=>{
   const extra=[SAY_STATE[u.state]||escapeHtml(u.state||''),u.timings_s?.first_accepted!=null?`${Number(u.timings_s.first_accepted).toFixed(1)} 秒开口`:'',
    u.tts_cost_cny!=null?`¥${Number(u.tts_cost_cny).toFixed(4)}`:''].filter(Boolean).join(' · ');
-  return `<li><span class="muted">${hhmmss(u.at)}</span> <b>${escapeHtml(name[u.role]||u.role||'')}</b> ${escapeHtml(u.text||'')} <span class="muted">${extra}</span></li>`;
+  return `<li><span class="muted">${hhmmss(u.at)}</span> <b>${escapeHtml(name[u.role]||u.role||'')}</b> ${escapeHtml(u.text||'')} <span class="muted">${extra}</span>${u.uid&&u.role!=='try'?` <button data-say-explain="${escapeHtml(u.uid)}" class="inline-button">为什么说这句</button>`:''}</li>`;
  }).join('')+'</ul>';
 }
 function why(e){
@@ -28,28 +28,30 @@ function why(e){
 }
 async function getJson(path){const r=await fetch('/api/mind'+path,{signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error(await r.text());return r.json();}
 async function postJson(path,obj){
- const r=await fetch('/api/mind'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj),signal:AbortSignal.timeout(60000)});
+ const r=await fetch('/api/mind'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj),signal:AbortSignal.timeout(path==='/say'?180000:30000)});
  const text=await r.text();if(!r.ok)throw new Error(text);return JSON.parse(text);
 }
 export class SayPanel{
  constructor(doc){
-  this.doc=doc;this.roles=[];
+  this.doc=doc;this.roles=[];this.seq=0;
   const $=id=>doc.getElementById(id);
   if(!$('say-buttons'))return;
   getJson('/roles').then(r=>{this.roles=r;$('say-buttons').innerHTML=roleButtonsHtml(r);this.refresh();},()=>{$('say-buttons').innerHTML='<span class="muted">角色读不到（情景服务未连接）</span>';});
   getJson('/voices').then(v=>{$('say-voices').innerHTML=voiceButtonsHtml(v);},()=>{$('say-voices').innerHTML='<span class="muted">音色读不到</span>';});
   $('say-buttons').addEventListener('click',async ev=>{
    const b=ev.target.closest('button');if(!b)return;
+   const seq=++this.seq;
    try{
-    if(b.dataset.sayStop){await postJson('/say/stop',{});$('say-msg').textContent='已叫停';}
-    else{$('say-msg').textContent='正在想…';const r=await postJson('/say',{role:b.dataset.role});$('say-msg').textContent=`说：${r.text}`;}
-   }catch(e){$('say-msg').textContent=why(e);}
+    if(b.dataset.sayStop){await postJson('/say/stop',{});if(seq===this.seq)$('say-msg').textContent='已叫停';}
+    else{$('say-msg').textContent='正在想…';const r=await postJson('/say',{role:b.dataset.role});if(seq===this.seq)$('say-msg').textContent=`说：${r.text}`;}
+   }catch(e){if(seq===this.seq)$('say-msg').textContent=why(e);}
    this.refresh();
   });
   $('say-voices').addEventListener('click',async ev=>{
    const b=ev.target.closest('button');if(!b)return;
-   try{$('say-msg').textContent='试听中…';const r=await postJson('/voice/try',{voice:b.dataset.voice});$('say-msg').textContent=`试听：${r.text}`;}
-   catch(e){$('say-msg').textContent=why(e);}
+   const seq=++this.seq;
+   try{$('say-msg').textContent='试听中…';const r=await postJson('/voice/try',{voice:b.dataset.voice});if(seq===this.seq)$('say-msg').textContent=`试听：${r.text}`;}
+   catch(e){if(seq===this.seq)$('say-msg').textContent=why(e);}
    this.refresh();
   });
   setInterval(()=>this.refresh(),5000);

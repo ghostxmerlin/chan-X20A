@@ -190,7 +190,7 @@ export function start(doc){
  el('mind-date').value=today;
  el('mind-legend').innerHTML=Object.keys(LABELS).map(k=>`<span><i class="dot" data-c="${COLOURS[k]}"></i>${LABELS[k]}</span>`).join('')+'<span>三条小条：听觉 / 视觉 / M12 这一分钟工作的秒数</span>';
  paint(el('mind-legend'));
- let open=null,settingsBase=null,prompts={versions:['v3'],models:['gpt-6-luna','gpt-6.1-terra']};
+ let open=null,settingsBase=null,settingsVersion=null,prompts={versions:['v3'],models:['gpt-6-luna','gpt-6.1-terra']};
  const range=()=>{const day=el('mind-date').value||today,hours=Number(el('mind-range').value),dayStart=new Date(day+'T00:00:00').getTime(),now=Date.now();
   const to=Math.min(dayStart+86400000,day===today?now:dayStart+86400000);return {day,from:hours===24||day!==today?dayStart:Math.max(dayStart,to-hours*3600000),to,dayStart};};
  async function refresh(){
@@ -266,7 +266,7 @@ export function start(doc){
  el('mind-open-settings').addEventListener('click',async()=>{
   try{
    const [cur,names,p]=await Promise.all([getJson('/settings'),getJson('/names'),getJson('/prompts')]);
-   settingsBase=cur.settings;prompts=p;
+   settingsBase=cur.settings;settingsVersion=cur.version;prompts=p;
    el('settings-form').innerHTML=settingsHtml(formFromSettings(cur.settings),names);
    el('settings-msg').textContent=`当前第 ${cur.version} 版`;el('settings-dialog').showModal();
   }catch(e){el('mind-status').textContent='读取设置失败：'+e.message;}
@@ -274,7 +274,7 @@ export function start(doc){
  el('settings-cancel').addEventListener('click',()=>el('settings-dialog').close());
  el('settings-save').addEventListener('click',async()=>{
   const v=readForm(el('settings-form'));
-  try{const r=await postJson('/settings',{settings:settingsFromForm(v,settingsBase),note:v.note});el('settings-msg').textContent=`已保存为第 ${r.version} 版`;}
+  try{const r=await postJson('/settings',{settings:settingsFromForm(v,settingsBase),note:v.note,expected_version:settingsVersion});settingsVersion=r.version;el('settings-msg').textContent=`已保存为第 ${r.version} 版`;}
   catch(e){el('settings-msg').textContent='没保存：'+e.message;}
  });
  el('mind-date').addEventListener('change',()=>{open=null;refresh();});

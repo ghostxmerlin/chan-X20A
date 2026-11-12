@@ -137,3 +137,15 @@ summary{cursor:pointer;width:fit-content}
   #log-panel #events li{grid-template-columns:53px 28px minmax(0,1fr);gap:4px;font-size:11px}
   footer{gap:10px;line-height:1.5;flex-wrap:wrap}
 }
+
+/* On-demand speech settings keep the monitor grid and large log untouched. */
+#speech-settings-dialog { width:min(820px,94vw); }
+#speech-settings label { display:flex; flex-direction:column; gap:6px; margin:10px 0; }
+#speech-settings .check-label { flex-direction:row; align-items:center; }
+#speech-settings textarea { width:100%; box-sizing:border-box; resize:vertical; background:#09140e; color:var(--text,#b7ffd0); border:1px solid #315b40; padding:8px; font:inherit; }
+.speech-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(175px,1fr)); gap:14px; }
+.memory-section { margin-top:22px; border-top:1px solid #315b40; padding-top:16px; }
+.memory-section summary { cursor:pointer; font-weight:700; }
+.memory-item { border-bottom:1px solid #315b40; padding:10px 0; }
+.memory-item p { margin:6px 0; }
+#say-explanation { white-space:pre-wrap; overflow-wrap:anywhere; max-width:750px; line-height:1.6; }

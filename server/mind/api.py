@@ -7,15 +7,21 @@ GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /l
 POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voice/try
 """
 import base64
+import copy
 import hmac
 import json
 import os
+import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from . import fusion, prompts, segments, settings as settings_mod, speak
-from .settings_store import MODELS
+from .settings_store import MODELS, SettingsConflict
+from . import speech_settings
+from .memory import MemoryStore, MemoryConflict
+from .attention import NoSituation
+from .model_calls import BudgetExceeded
 from .store import LANE
 
 MAX_RANGE_MS = 24 * 3600_000
@@ -23,6 +29,11 @@ MAX_BODY = 16 * 1024
 MARKS = ("arrive", "leave", "meeting", "others_near", "alone")
 VERDICTS = ("right", "wrong", "unsure")
 FIELDS = ("owner", "people", "activity", "topic", "summary", "other")
+UTTERANCE_FIELDS = ('uid','at','role','text','state','tts_cost_cny','timings_s','pipeline','scope_id')
+
+
+def compact_utterance(row):
+    return {k: row[k] for k in UTTERANCE_FIELDS if k in row}
 
 
 class BadRequest(Exception):
@@ -67,6 +78,27 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
     def current_settings():
         ss = ctx.get("settings_store")
         return ss.current() if ss else (settings_mod.load(None), 0)
+
+    def speech_config():
+        s, v = current_settings()
+        roles = speak.load_roles(ctx.get('roles_dir') or '')
+        return {'speech':s['speech'], 'memory':s['memory'], 'version':v,
+                'environments':{k:p['environment'] if p['environment'] is not None else s.get('environment','')
+                                for k,p in s['speech']['profiles'].items()},
+                'roles':[{k:r.get(k) for k in ('id','button','name','dialect','delivery','rate','instruction')}
+                         for r in [speech_settings.role_config(r,s) for r in roles.values()]],
+                'history':ctx['settings_store'].history() if ctx.get('settings_store') else [],
+                'worker':{k:v for k,v in (db['mind_memory_jobs'].find_one({'_id':'worker:live'}) or {}).items()
+                          if k in ('cursor','updated_at','last_error','skipped_range','last_reconcile','deployed_at')}}
+
+    def memory_row(mid):
+        if not isinstance(mid,str) or not re.fullmatch(r'm[a-f0-9]{24}',mid):
+            raise BadRequest('invalid memory id')
+        mem = MemoryStore(db)
+        row = mem._current(mid)
+        if not row or row['scope_id'] != speech_settings.scope(current_settings()[0])['id']:
+            raise NotFound('当前场景没有这条认识')
+        return mem
 
     def names():
         voice, face = [], []
@@ -141,6 +173,31 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         return out
 
     def get(path, q):
+        if path == '/speech/settings':
+            return speech_config()
+        if path in ('/memories','/memory/history'):
+            offset = _int(q,'offset',False)
+            limit = _int(q,'limit',False)
+            offset, limit = 0 if offset is None else offset, 20 if limit is None else limit
+            try:
+                if path == '/memories':
+                    return MemoryStore(db).list(speech_settings.scope(current_settings()[0])['id'], offset, limit,
+                                                (q.get('status') or [None])[0])
+                mid = (q.get('id') or [''])[0]
+                return memory_row(mid).history(mid,offset,limit)
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+        if path == '/say/explain':
+            uid = (q.get('uid') or [''])[0]
+            if not re.fullmatch(r'u[a-zA-Z0-9._-]{1,80}',uid):
+                raise BadRequest('invalid utterance id')
+            row = db['utterances'].find_one({'uid':uid})
+            if not row:
+                raise NotFound('没有这句话')
+            context = row.get('context') or {}
+            return {**compact_utterance(row),'attention':row.get('attention'),
+                    'context':{k:context.get(k) for k in ('scope','time','profile','evidence','memories','warnings')},
+                    'instruction':row.get('instruction')}
         if path == "/state":
             return {**store.state(), "enabled": store.enabled(), "lane": LANE, "now_ms": int(time.time() * 1000)}
         if path == "/timeline":
@@ -204,7 +261,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return speak.voice_list(tts)
         if path == "/utterances":
             lo, hi = _range(q)
-            return list(db["utterances"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0, "context": 0}).sort("at", 1).limit(200))
+            return list(reversed([compact_utterance(r) for r in db['utterances'].find(
+                {'at':{'$gte':lo,'$lt':hi}}, {**{k:1 for k in UTTERANCE_FIELDS},'_id':0}).sort('at',-1).limit(200)]))
         if path == "/notes":
             lo, hi = _range(q)
             return list(db["conversations"].find({"start_ms": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("start_ms", 1).limit(500))
@@ -218,12 +276,51 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
 
     def post(path, body):
         now = int(time.time() * 1000)
+        if path == '/speech/settings':
+            ss = ctx.get('settings_store')
+            if not ss or type(body.get('expected_version')) is not int or set(body)-{'speech','memory','expected_version','note'}:
+                raise BadRequest('speech, memory and expected_version required')
+            s, _ = current_settings()
+            s = copy.deepcopy(s)
+            s.update(speech=body.get('speech'),memory=body.get('memory'))
+            errors = speech_settings.validate(s['speech'],s['memory'])
+            if errors:
+                raise BadRequest('; '.join(errors))
+            office = s['speech']['profiles']['office']
+            if office['environment'] is not None:
+                s['environment'], office['environment'] = office['environment'], None
+            try:
+                ss.save(s,_str(body.get('note'),200) or '场景与说话设置',expected_version=body['expected_version'])
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+            speak.cancel_pending()
+            return speech_config()
+        if path == '/memory/edit':
+            mem = memory_row(body.get('id'))
+            try:
+                return mem.edit(body['id'],body.get('expected_version'),body.get('action'),
+                                body.get('statement'),body.get('restore_version'),now)
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+            except KeyError as e:
+                raise NotFound(str(e)) from None
+        if path == '/role/try':
+            tts = ctx.get('tts')
+            roles = speak.load_roles(ctx.get('roles_dir') or '')
+            if not isinstance(body.get('role'),str) or body['role'] not in roles:
+                raise BadRequest('unknown role')
+            if not tts or mouth_mode() != 'tts':
+                raise Conflict('嘴没切到 TTS 模式')
+            s, _ = current_settings()
+            return compact_utterance(speak.try_role(store,tts,roles[body['role']],s,now))
         if path == "/settings":
             ss = ctx.get("settings_store")
             if not ss:
                 raise BadRequest("settings are not configurable here")
             try:
-                return {"version": ss.save(body.get("settings"), _str(body.get("note"), 200))}
+                version = ss.save(body.get("settings"), _str(body.get("note"), 200),expected_version=body.get('expected_version'))
+                speak.cancel_pending()
+                return {'version':version}
             except ValueError as e:
                 raise BadRequest(str(e)) from None
         if path == "/say":
@@ -235,12 +332,13 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise BadRequest(f"role must be one of {', '.join(sorted(roles))}")
             if mouth_mode() != "tts":
                 raise Conflict("嘴没切到 TTS 模式")
-            s, _ = current_settings()
+            s, version = current_settings()
             try:
-                rec = speak.say(ctx["env"], store, s, roles, body["role"], tts, now)
+                rec = speak.say(ctx["env"], store, s, roles, body["role"], tts, now,
+                                is_current=lambda: current_settings()[1] == version and mouth_mode() == 'tts')
             except speak.NotConnected as e:
                 raise Conflict(str(e)) from None
-            return {k: v for k, v in rec.items() if k != "context"}
+            return compact_utterance(rec)
         if path == "/voice/try":
             tts = ctx.get("tts")
             if not tts:
@@ -256,7 +354,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return {k: v for k, v in rec.items() if k != "_id"}
         if path == "/say/stop":
             tts = ctx.get("tts")
-            return {"cancelled": tts.stop() if tts else []}
+            return {'cancelled':speak.cancel_pending(tts)}
         if path == "/switches" and body.get("name") == "mouth":
             if body.get("mode") not in MOUTH_MODES:
                 raise BadRequest(f"mouth mode must be one of {'/'.join(MOUTH_MODES)}")
@@ -264,7 +362,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             db["switches"].update_one({"_id": "mouth"}, {"$set": {"mode": body["mode"], "at": now, "by": "page"}}, upsert=True)
             if was == "tts" and body["mode"] != "tts" and ctx.get("tts"):
                 try:
-                    ctx["tts"].stop()                    # leaving TTS: stop what is still playing
+                    speak.cancel_pending(ctx['tts'])
                 except Exception:                        # noqa: BLE001 - the switch itself is saved
                     pass
             return switches()
@@ -351,7 +449,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(400, {"error": str(e)})
             except NotFound as e:
                 self._send(404, {"error": str(e)})
-            except Conflict as e:
+            except (Conflict, SettingsConflict, MemoryConflict, speak.NotConnected, NoSituation, BudgetExceeded) as e:
                 self._send(409, {"error": str(e)})
             except Exception as e:               # noqa: BLE001 - database trouble shows as 503
                 self._send(503, {"error": f"{type(e).__name__}"})
@@ -368,7 +466,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try"):
+            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:

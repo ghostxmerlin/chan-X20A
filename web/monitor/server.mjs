@@ -13,7 +13,7 @@ import { parseEnv } from 'node:util';
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export const root = path.resolve(directory, '../..');
 export function createMonitorServer(monitor, controls = new Controls(monitor,{loadHearingConfig:()=>existingHearingConfig(path.join(root,'.env'))}), mind = null) {
-  const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']],
+  const assets = new Map([['/speech-settings.js', ['speech-settings.js','text/javascript; charset=utf-8']], ['/', ['index.html', 'text/html; charset=utf-8']],
     ['/hearing-ui.js', ['hearing-ui.js','text/javascript; charset=utf-8']], ['/servo-tuning-ui.js', ['servo-tuning-ui.js','text/javascript; charset=utf-8']], ['/wifi-ui.js', ['wifi-ui.js','text/javascript; charset=utf-8']], ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
     ['/mind.html', ['mind.html', 'text/html; charset=utf-8']], ['/mind-ui.js', ['mind-ui.js', 'text/javascript; charset=utf-8']], ['/mind.css', ['mind.css', 'text/css; charset=utf-8']],
     ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/say-ui.js', ['say-ui.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']]]);
@@ -49,7 +49,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (req.method === 'POST' && url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/settings', '/mark', '/label', '/rerun', '/place', '/switch', '/switches', '/say', '/say/stop', '/voice/try'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/settings', '/mark', '/label', '/rerun', '/place', '/switch', '/switches', '/say', '/say/stop', '/voice/try', '/speech/settings', '/memory/edit', '/role/try'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (origin !== 'http://' + req.headers.host) { respond(403, '写入必须来自当前观察页面'); return; }
       if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') { respond(415, '只接受 JSON'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
@@ -76,7 +76,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
       mind.get(sub + url.search).then(r => {
         res.writeHead(r.status, { 'Content-Type': r.status === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });

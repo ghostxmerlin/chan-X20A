@@ -28,10 +28,24 @@ REQUIRED = ("id", "button", "name", "persona", "rules", "voice")
 SAY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["text"],
               "properties": {"text": {"type": "string"}}}
 _SAY_LOCK = threading.Lock()
+_ENQUEUE_LOCK = threading.RLock()
+_EPOCH = 0
 
 
 class NotConnected(Exception):
     pass
+
+
+def cancel_pending(tts=None):
+    global _EPOCH
+    with _ENQUEUE_LOCK:
+        _EPOCH += 1
+        return tts.stop() if tts else []
+
+
+def _check_pending(epoch, is_current):
+    if epoch != _EPOCH or (is_current is not None and not is_current()):
+        raise NotConnected('这句已取消或设置已改变，请重新点一次')
 
 
 def load_roles(directory):
@@ -125,7 +139,8 @@ def _finish(db, tts, uid, tts_id):
                                                         "timings_s": st.get("timings_s")}})
 
 
-def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False):
+def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None):
+    epoch = _EPOCH
     role = roles[role_id]                        # KeyError: unknown role
     if not ((tts.health().get("mouth") or {}).get("device")):
         raise NotConnected("hello 的嘴没连上")
@@ -148,7 +163,9 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False):
         raise RuntimeError(err or "没写出句子")
     voice = role["voice"]
     opts = {k: role[k] for k in ("instruction", "rate") if role.get(k) is not None}
-    tts_id = tts.say(text, voice=voice, interrupt=True, **opts)
+    with _ENQUEUE_LOCK:
+        _check_pending(epoch,is_current)
+        tts_id = tts.say(text, voice=voice, interrupt=True, **opts)
     uid = f"u{now_ms}"
     rec = {"uid": uid, "role": role_id, "text": text, "voice": voice, "tts_id": tts_id, "at": now_ms, "state": "sent",
            "run_id": run_id, "llm_ms": ms, "context": {k: ctx[k] for k in ("doing", "eye", "conversation")}}
@@ -160,19 +177,23 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False):
     return rec
 
 
-def say(env, store, s, roles, role_id, tts, now_ms, wait=False):
+def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None):
     role = speech_settings.role_config(roles[role_id], s)
     if s['speech']['pipeline'] == 'v1':
-        return _say_v1(env, store, s, {**roles, role_id: role}, role_id, tts, now_ms, wait=wait)
+        return _say_v1(env, store, s, {**roles, role_id: role}, role_id, tts, now_ms, wait=wait,is_current=is_current)
     if not ((tts.health().get('mouth') or {}).get('device')):
         raise NotConnected('hello 的嘴没连上')
     if not _SAY_LOCK.acquire(blocking=False):
         raise NotConnected('正在写上一句，请稍等或先停止')
     started = time.monotonic()
+    epoch = _EPOCH
     try:
+        _check_pending(epoch,is_current)
         ctx = speech_context.build(store.db, store, s, now_ms)
         focus = attention.choose(env, store, s, ctx, now_ms, chat=CHAT)
+        _check_pending(epoch,is_current)
         output = speech_generation.generate(env, store, s, role, ctx, focus, now_ms, chat=CHAT)
+        _check_pending(epoch,is_current)
         finish_ms = now_ms+int((time.monotonic()-started)*1000)
         selected = [e for e in ctx['evidence'] if e['id'] in focus['evidence_ids']]
         if not selected or max(e['at'] for e in selected)<finish_ms-120_000:
@@ -185,8 +206,10 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False):
                'context':ctx, 'generation':{'selected':output['selected'], 'candidates':output['candidates']}}
         store.db['utterances'].insert_one(dict(rec))
         try:
-            tts_id = tts.say(output['text'],voice=role['voice'],interrupt=True,
-                             **{k:role[k] for k in ('instruction','rate') if role.get(k) is not None})
+            with _ENQUEUE_LOCK:
+                _check_pending(epoch,is_current)
+                tts_id = tts.say(output['text'],voice=role['voice'],interrupt=True,
+                                 **{k:role[k] for k in ('instruction','rate') if role.get(k) is not None})
         except Exception as e:
             store.db['utterances'].update_one({'uid':uid},{'$set':{'state':'error','error':type(e).__name__}})
             raise
@@ -204,6 +227,27 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False):
 
 
 TRY_TEXT = "我是{label}。这是一句试听：今天的调试就到这里，大家辛苦了。"
+ROLE_TRY_TEXT = '今天又加了需求，交期还是明天。先吃饭，吃完再想办法。'
+
+
+def try_role(store, tts, role, s, now_ms, wait=False):
+    if not ((tts.health().get('mouth') or {}).get('device')):
+        raise NotConnected('hello 的嘴没连上')
+    resolved = speech_settings.role_config(role,s)
+    with _ENQUEUE_LOCK:
+        cancel_pending()
+        tts_id = tts.say(ROLE_TRY_TEXT,voice=resolved['voice'],interrupt=True,
+                        **{k:resolved[k] for k in ('instruction','rate') if resolved.get(k) is not None})
+    rec = {'uid':'u'+uuid.uuid4().hex,'role':'try','audition_role':role['id'],'text':ROLE_TRY_TEXT,
+           'voice':resolved['voice'],'instruction':resolved['instruction'],'tts_id':tts_id,'at':now_ms,'state':'sent'}
+    store.db['utterances'].insert_one(dict(rec))
+    from . import selfvoice
+    selfvoice.refresh_spoken(store.db,now_ms)
+    if wait:
+        _finish(store.db,tts,rec['uid'],tts_id)
+    else:
+        threading.Thread(target=_finish,args=(store.db,tts,rec['uid'],tts_id),daemon=True).start()
+    return rec
 
 
 def voice_list(tts):
@@ -221,8 +265,10 @@ def try_voice(store, tts, voice_id, now_ms, wait=False):
         raise NotConnected("hello 的嘴没连上")
     label = re.sub(r"[（(].*?[）)]", "", voices[voice_id].get("label") or voice_id).split("·")[0].strip()
     text = TRY_TEXT.format(label=label)
-    tts_id = tts.say(text, voice=voice_id, interrupt=True)
-    uid = f"u{now_ms}"
+    with _ENQUEUE_LOCK:
+        cancel_pending()
+        tts_id = tts.say(text, voice=voice_id, interrupt=True)
+    uid = 'u'+uuid.uuid4().hex
     rec = {"uid": uid, "role": "try", "text": text, "voice": voice_id, "tts_id": tts_id, "at": now_ms, "state": "sent"}
     store.db["utterances"].insert_one(dict(rec))       # selfvoice treats it as hello's own voice
     if wait:

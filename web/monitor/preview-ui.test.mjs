@@ -19,7 +19,7 @@ function harness(){
   EventSource:class{constructor(url){this.url=url;sources.push(this);}close(){this.closed=true;}},
   fetch:async(url,options)=>{requests.push({url,options});return {ok:true,headers:{get:()=>1},blob:async()=>({})};},
   renderM12(){},renderThermal(){}};
- for(const name of ['ControlPanel','InteractionPanel','VoicePanel','EyesPanel','HearingPanel','ServoTuningPanel','WifiPanel','M12LibraryPanel','SwitchBar','SayPanel'])context[name]=class{render(){}};
+ for(const name of ['ControlPanel','InteractionPanel','VoicePanel','EyesPanel','HearingPanel','ServoTuningPanel','WifiPanel','M12LibraryPanel','SwitchBar','SayPanel','SpeechSettings'])context[name]=class{render(){}};
  const script=readFileSync(new URL('./public/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
  vm.runInNewContext(script,context);
  const send=(source=sources.at(-1),telemetry={health:{camera_enabled:false}})=>source.onmessage({data:JSON.stringify({online:true,fresh:{camera:true,telemetry:true},telemetry,frame:{seq:1,bytes:500},events:[],receivedAt:Date.now()})});

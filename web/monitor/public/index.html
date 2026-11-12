@@ -107,12 +107,15 @@
 <dialog id="monitor-settings" aria-labelledby="settings-heading">
   <div class="dialog-head"><h2 id="settings-heading">设置</h2><form method="dialog"><button>关闭</button></form></div>
   <div class="settings-links"><button data-open="hearing-config">听觉配置 / 声纹</button><button data-open="wifi-config">网络</button><button data-open="servo-settings">仰角设置</button><button data-open="servo-tuning">舵机参数</button></div>
+  <button id="speech-settings-open">说话风格 / 场景 / 长期记忆</button>
   <h3 class="settings-section-heading">认人学习</h3>
           <div class="m12-library" aria-label="M12 人脸库"><div class="m12-library-head"><span>认人库（存在 M12 上）</span><button id="m12-faces" disabled>刷新</button></div>
             <div class="m12-learn"><input id="m12-name" maxlength="32" placeholder="名字（最多 32 字节）" autocomplete="off" disabled><button id="m12-learn" disabled title="对画面里最大的那张脸采 5 个样本，约 1 秒；请正对镜头">学习</button><button id="m12-who" disabled title="对画面里最大的那张脸认一次（会让检测停顿约 0.2 秒）">认一下</button></div>
             <ul id="m12-library-list" class="m12-library-list"><li>M12 在线后可读取</li></ul><p id="m12-library-note" class="command-result" role="status">同一个名字可以多学几次（不同角度和光线），每个名字最多 20 个样本、最多 16 个名字。</p></div>
   <p class="note">学习前先开启 M12 检测，正对镜头。名字和人脸样本保存在 M12 上。</p>
 </dialog>
+<dialog id="speech-settings-dialog" aria-labelledby="speech-settings-heading"><div class="dialog-head"><h2 id="speech-settings-heading">说话与记忆</h2><form method="dialog"><button>关闭</button></form></div><div id="speech-settings"></div></dialog>
+<dialog id="say-explanation-dialog" aria-labelledby="say-explanation-heading"><div class="dialog-head"><h2 id="say-explanation-heading">为什么说这句</h2><form method="dialog"><button>关闭</button></form></div><pre id="say-explanation"></pre></dialog>
 <dialog id="system-details" aria-labelledby="system-details-heading"><div class="dialog-head"><h2 id="system-details-heading">机身温度趋势</h2><form method="dialog"><button>关闭</button></form></div>
   <div class="thermal-caption"><span id="chip-temperature-note">ESP32-S3 · 等待读数</span><span>2 min</span></div><canvas id="chip-thermal" aria-label="StackChan 芯片温度趋势"></canvas>
 </dialog>

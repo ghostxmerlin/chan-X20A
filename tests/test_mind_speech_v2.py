@@ -212,6 +212,29 @@ class SpeechPipelineTest(SpeechCase):
             gen.generate(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles')['worst'],ctx,focus,self.now,chat=fake)
         self.assertEqual(len(fake.calls),2)
 
+    def test_stop_during_attention_prevents_generation_and_playback(self):
+        self.heard(); ids=[self.context()['evidence'][0]['id']]
+        fake=FakeChat(); fake.reply_next(json.dumps(self.choose_reply(ids)))
+        def cancelling(*args,**kwargs):
+            response=fake(*args,**kwargs)
+            speak.cancel_pending()
+            return response
+        old=speak.CHAT;speak.CHAT=cancelling;self.addCleanup(lambda:setattr(speak,'CHAT',old))
+        tts=FakeTts()
+        with self.assertRaises(speak.NotConnected):
+            speak.say(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles'),'sad',tts,self.now)
+        self.assertEqual(tts.said,[])
+        self.assertEqual(len(fake.calls),1)
+
+    def test_changed_settings_prevent_old_generation_playback(self):
+        self.heard(); ids=[self.context()['evidence'][0]['id']]
+        fake=FakeChat(); fake.reply_next(json.dumps(self.choose_reply(ids)))
+        old=speak.CHAT;speak.CHAT=fake;self.addCleanup(lambda:setattr(speak,'CHAT',old))
+        tts=FakeTts()
+        with self.assertRaises(speak.NotConnected):
+            speak.say(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles'),'sad',tts,self.now,is_current=lambda:False)
+        self.assertEqual(tts.said,[])
+
     def test_budget_zero_calls_no_model_or_tts(self):
         self.modules()
         calls=importlib.import_module('mind.model_calls')

@@ -11,6 +11,13 @@ function fakeSsh(log=[]){return (cmd,args)=>{const child=new EventEmitter();chil
 const okFetch=seen=>async(sock,p,h)=>{seen.push([sock,p,h.Authorization]);return {status:200,body:'{"ok":1}'};};
 const SOCK='/tmp/x/mind.sock';
 
+test('speech and memory proxy query validation',()=>{
+ for(const path of ['/speech/settings','/memories?offset=0&limit=20&status=known','/memory/history?id=m'+'a'.repeat(24),'/say/explain?uid=uabc'])
+  assert.equal(MindProxy.check(path),path);
+ for(const path of ['/memories?status=evil','/memory/history?id=%24ne','/say/explain?uid=../secret'])
+  assert.equal(MindProxy.check(path),null);
+});
+
 test('proxy adds token and only forwards whitelisted paths', async()=>{
  const seen=[],spawned=[],proxy=new MindProxy({ssh:'h',token:'k',socketPath:SOCK,prepareFn:()=>{},spawnFn:fakeSsh(spawned),requestFn:okFetch(seen)});
  assert.equal((await proxy.get('/timeline?from=1&to=2')).status,200);
