@@ -270,6 +270,9 @@ class ApiV1Test(unittest.TestCase):
         self.assertIn("TTS", r.json()["error"])
         self.post_json("/switches", {"name": "mouth", "mode": "tts"})
         try:
+            config, version = self.settings_store.current()
+            config['speech']['pipeline'] = 'v1'  # This existing test covers the rollback endpoint.
+            self.settings_store.save(config, expected_version=version)
             self.fake.reply_next(json.dumps({"text": "这板子焊得，比我的发型还有个性。"}, ensure_ascii=False))
             r = self.post_json("/say", {"role": "roast"})
             self.assertEqual((r.status, r.json()["text"]), (200, "这板子焊得，比我的发型还有个性。"))

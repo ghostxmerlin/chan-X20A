@@ -13,6 +13,7 @@ from test_mind_fusion import FakeChat                # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 S = settings.load(None)
+S['speech']['pipeline'] = 'v1'  # Keep the explicit rollback path covered.
 ENV = {"base_url": "http://x", "api_key": "k"}
 MIN = 60_000
 
@@ -155,6 +156,7 @@ class TtsHttpTest(unittest.TestCase):
                 self.send_response(code); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"{}")
         srv = HTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
         self.addCleanup(srv.shutdown)
         c = speak.TtsHttp(f"http://127.0.0.1:{srv.server_address[1]}", "t" * 20)
         with self.assertRaises(speak.NotConnected):

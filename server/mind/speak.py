@@ -11,8 +11,10 @@ import os
 import re
 import threading
 import time
+import uuid
 
 from . import llm, notes, settings as settings_mod
+from . import attention, speech_context, speech_generation, speech_settings
 from .records import Records
 from .store import LANE
 
@@ -25,6 +27,7 @@ TTS_CNY_PER_M = (1.5, 12.0)          # qwen-audio-3.1-tts-flash, per million inp
 REQUIRED = ("id", "button", "name", "persona", "rules", "voice")
 SAY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["text"],
               "properties": {"text": {"type": "string"}}}
+_SAY_LOCK = threading.Lock()
 
 
 class NotConnected(Exception):
@@ -37,7 +40,8 @@ def load_roles(directory):
         if not name.endswith(".json"):
             continue
         try:
-            r = json.load(open(os.path.join(directory, name), encoding="utf-8"))
+            with open(os.path.join(directory, name), encoding="utf-8") as f:
+                r = json.load(f)
         except (OSError, ValueError):
             continue
         if isinstance(r, dict) and all(r.get(k) for k in REQUIRED) and isinstance(r["rules"], list):
@@ -117,10 +121,11 @@ def _finish(db, tts, uid, tts_id):
         return
     cost, tin, tout = tts_cost(st)
     db["utterances"].update_one({"uid": uid}, {"$set": {"state": st.get("state"), "tts_cost_cny": cost, "tts_tokens": [tin, tout],
+                                                        "played": st.get("state") == "done" or (st.get("timings_s") or {}).get("first_accepted") is not None,
                                                         "timings_s": st.get("timings_s")}})
 
 
-def say(env, store, s, roles, role_id, tts, now_ms, wait=False):
+def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False):
     role = roles[role_id]                        # KeyError: unknown role
     if not ((tts.health().get("mouth") or {}).get("device")):
         raise NotConnected("hello 的嘴没连上")
@@ -153,6 +158,49 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False):
     else:
         threading.Thread(target=_finish, args=(db, tts, uid, tts_id), daemon=True).start()
     return rec
+
+
+def say(env, store, s, roles, role_id, tts, now_ms, wait=False):
+    role = speech_settings.role_config(roles[role_id], s)
+    if s['speech']['pipeline'] == 'v1':
+        return _say_v1(env, store, s, {**roles, role_id: role}, role_id, tts, now_ms, wait=wait)
+    if not ((tts.health().get('mouth') or {}).get('device')):
+        raise NotConnected('hello 的嘴没连上')
+    if not _SAY_LOCK.acquire(blocking=False):
+        raise NotConnected('正在写上一句，请稍等或先停止')
+    started = time.monotonic()
+    try:
+        ctx = speech_context.build(store.db, store, s, now_ms)
+        focus = attention.choose(env, store, s, ctx, now_ms, chat=CHAT)
+        output = speech_generation.generate(env, store, s, role, ctx, focus, now_ms, chat=CHAT)
+        finish_ms = now_ms+int((time.monotonic()-started)*1000)
+        selected = [e for e in ctx['evidence'] if e['id'] in focus['evidence_ids']]
+        if not selected or max(e['at'] for e in selected)<finish_ms-120_000:
+            raise attention.NoSituation('生成耗时过长，刚才的情况已过期，请重新点一次')
+        uid = 'u'+uuid.uuid4().hex
+        rec = {'uid':uid, 'role':role_id, 'text':output['text'], 'voice':role['voice'], 'at':now_ms,
+               'state':'ready', 'run_id':output['run_id'], 'run_ids':output['run_ids'], 'scope_id':ctx['scope']['id'],
+               'pipeline':'v2', 'focus':focus['focus'], 'joke_type':output['joke_type'],
+               'attention':focus, 'instruction':role['instruction'], 'llm_ms':finish_ms-now_ms,
+               'context':ctx, 'generation':{'selected':output['selected'], 'candidates':output['candidates']}}
+        store.db['utterances'].insert_one(dict(rec))
+        try:
+            tts_id = tts.say(output['text'],voice=role['voice'],interrupt=True,
+                             **{k:role[k] for k in ('instruction','rate') if role.get(k) is not None})
+        except Exception as e:
+            store.db['utterances'].update_one({'uid':uid},{'$set':{'state':'error','error':type(e).__name__}})
+            raise
+        rec.update(tts_id=tts_id, state='sent')
+        store.db['utterances'].update_one({'uid':uid},{'$set':{'tts_id':tts_id,'state':'sent'}})
+        from . import selfvoice
+        selfvoice.refresh_spoken(store.db, now_ms)
+        if wait:
+            _finish(store.db,tts,uid,tts_id)
+        else:
+            threading.Thread(target=_finish,args=(store.db,tts,uid,tts_id),daemon=True).start()
+        return rec
+    finally:
+        _SAY_LOCK.release()
 
 
 TRY_TEXT = "我是{label}。这是一句试听：今天的调试就到这里，大家辛苦了。"
@@ -193,7 +241,8 @@ class TtsHttp:
     def from_file(cls, base, token_file):
         """None when the token file is missing (soul-tts not deployed): /say then answers 409."""
         try:
-            token = open(token_file).read().strip()
+            with open(token_file) as f:
+                token = f.read().strip()
         except OSError:
             return None
         return cls(base, token) if token else None
@@ -207,6 +256,7 @@ class TtsHttp:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                 return json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
+            e.close()
             if e.code in (409, 429):         # no device on /mouth, or too many queued: nothing was paid for
                 raise NotConnected("hello 的嘴没连上" if e.code == 409 else "hello 还有话没说完") from None
             raise
