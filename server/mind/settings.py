@@ -7,6 +7,7 @@ import copy
 import datetime
 import json
 from zoneinfo import ZoneInfo
+from . import speech_settings
 
 DEFAULTS = {
     "tz": "Asia/Shanghai",
@@ -25,6 +26,8 @@ DEFAULTS = {
     "sources": {"speech_text": True, "tingwu": True, "sounds": True, "vision": True},
     "fusion": {"enabled": True, "model": "gpt-6-luna", "prompt": "v3", "max_age_min": 60, "review_after_min": [5, 10, 20, 30]},
     "budget_usd_per_day": 20.0,   # runaway guard only (user: cost is not a concern, but keep statistics)
+    "speech": speech_settings.defaults(),
+    "memory": {"learning": True, "apply": True},
 }
 MINUTE_MS = 60_000
 

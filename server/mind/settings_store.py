@@ -2,9 +2,16 @@
 With no version stored yet, the settings file (phase 0) becomes version 0."""
 import re
 import time
+import threading
 from zoneinfo import ZoneInfo
 
-from . import settings as settings_mod
+from . import settings as settings_mod, speech_settings
+
+_SAVE_LOCK = threading.RLock()
+
+
+class SettingsConflict(Exception):
+    pass
 
 MODELS = ("gpt-6-luna", "gpt-6.1-terra")
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -98,6 +105,8 @@ def validate(s):
     for k, v in (s.get("thresholds") or {}).items():
         if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
             errs.append(f"thresholds.{k}: positive number")
+    merged = settings_mod._merge(settings_mod.DEFAULTS, s)
+    errs.extend(speech_settings.validate(merged.get('speech'), merged.get('memory')))
     return errs
 
 
@@ -105,28 +114,48 @@ class SettingsStore:
     def __init__(self, db, file_path):
         self.coll = db["mind_settings"]
         self.file_path = file_path
+        # Legacy snapshots may have duplicate version numbers. New writes have a unique key,
+        # so upgrading does not rewrite or discard historical records to create an index.
+        self.coll.create_index([('revision_key', 1)], unique=True,
+                               partialFilterExpression={'revision_key': {'$exists': True}})
 
     def _latest(self):
-        return self.coll.find_one({"lane": "live"}, {"_id": 0}, sort=[("version", -1)])
+        return self.coll.find_one({"lane": "live"}, {"_id": 0}, sort=[("version", -1), ("saved_at", -1)])
 
     def current(self):
         doc = self._latest()
         if doc is None:
             s, _ = settings_mod.load_checked(self.file_path, None)
-            self.coll.insert_one({"lane": "live", "version": 0, "settings": s, "note": "from settings file",
-                                  "saved_at": int(time.time() * 1000)})
-            return s, 0
+            try:
+                self.coll.insert_one({"lane": "live", "version": 0, "revision_key": "live:0", "settings": s,
+                                      "note": "from settings file", "saved_at": int(time.time() * 1000)})
+                return s, 0
+            except Exception as e:
+                if getattr(e, 'code', None) != 11000:
+                    raise
+                return self.current()
         return settings_mod._merge(settings_mod.DEFAULTS, doc["settings"]), doc["version"]
 
-    def save(self, s, note=""):
+    def save(self, s, note="", expected_version=None):
         merged = settings_mod._merge(settings_mod.DEFAULTS, s if isinstance(s, dict) else {})
         errs = validate(s if isinstance(s, dict) else {}) + ([] if isinstance(s, dict) else ["settings must be an object"])
         if errs:
             raise ValueError("; ".join(errs))
-        _, version = self.current()
-        self.coll.insert_one({"lane": "live", "version": version + 1, "settings": merged, "note": str(note)[:200],
-                              "saved_at": int(time.time() * 1000)})
-        return version + 1
+        with _SAVE_LOCK:
+            previous, version = self.current()
+            if expected_version is not None and (type(expected_version) is not int or expected_version != version):
+                raise SettingsConflict('设置已更新，请刷新后重试')
+            now = int(time.time() * 1000)
+            old_scope = speech_settings.scope(previous)
+            merged['speech']['scope_since'] = now if speech_settings.scope(merged)['id'] != old_scope['id'] else old_scope['since']
+            try:
+                self.coll.insert_one({"lane": "live", "version": version + 1, "revision_key": f"live:{version + 1}",
+                                      "settings": merged, "note": str(note)[:200], "saved_at": now})
+            except Exception as e:
+                if getattr(e, 'code', None) != 11000:
+                    raise
+                raise SettingsConflict('设置已更新，请刷新后重试') from None
+            return version + 1
 
     def get(self, version):
         doc = self.coll.find_one({"lane": "live", "version": version}, {"_id": 0})
