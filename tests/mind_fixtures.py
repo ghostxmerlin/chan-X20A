@@ -62,6 +62,10 @@ class FakeCursor:
             self.docs = self.docs[:n]
         return self
 
+    def skip(self, n):
+        self.docs = self.docs[n:]
+        return self
+
     def __iter__(self):
         return iter(copy.deepcopy(self.docs))
 
@@ -91,6 +95,39 @@ class FakeCollection:
     def count_documents(self, flt):
         self._check()
         return sum(1 for d in self.docs if _match(d, flt))
+
+    def aggregate(self, pipeline):
+        """The small Mongo aggregation subset used by memory; unknown stages fail loudly."""
+        self._check()
+        rows = copy.deepcopy(self.docs)
+        for stage in pipeline:
+            op, value = next(iter(stage.items()))
+            if op == '$match':
+                rows = [r for r in rows if _match(r, value)]
+            elif op == '$sort':
+                rows = FakeCursor(rows).sort(list(value.items())).docs
+            elif op == '$group':
+                grouped = {}
+                for row in rows:
+                    key = _get(row, value['_id'][1:])
+                    if key not in grouped:
+                        grouped[key] = {'_id': key}
+                        for k, expr in value.items():
+                            if k != '_id':
+                                assert expr == {'$first': '$$ROOT'}
+                                grouped[key][k] = row
+                rows = list(grouped.values())
+            elif op == '$replaceRoot':
+                rows = [_get(r, value['newRoot'][1:]) for r in rows]
+            elif op == '$skip':
+                rows = rows[value:]
+            elif op == '$limit':
+                rows = rows[:value]
+            elif op == '$count':
+                rows = [{value: len(rows)}] if rows else []
+            else:
+                raise NotImplementedError(op)
+        return rows
 
     def insert_one(self, doc):
         self._check()
