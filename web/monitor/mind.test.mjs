@@ -223,3 +223,28 @@ test('talk-show round routes pass the proxy and the local server', async t=>{
  for(const p of ['/say/rounds?from=1&to=2','/say/stats?days=1','/say/explain?rid=rab12','/scenes?from=1&to=2','/signals?from=1&to=2'])
   assert.equal((await fetch(url+'/api/mind'+p)).status,200,p);
 });
+test('db query validation',()=>{
+ for(const p of ['/db/overview','/db/people','/db/person?id=owner','/db/person?id=p_0123456789ab',
+   '/db/memories?kind=event&person=p_0123456789ab&topic=k_0123456789ab&offset=0&limit=20',
+   '/db/knowledge?q='+encodeURIComponent('登山 "$ne" .*'),'/db/item?c=people_notes&id=n_0123456789ab',
+   '/memory/history?id=m'+'a'.repeat(24)])
+  assert.equal(MindProxy.check(p),p);
+ for(const p of ['/db/person?id=%24ne','/db/item?c=sessions&id=owner','/db/memories?kind=health',
+   '/db/knowledge?q='+'字'.repeat(41),'/db/knowledge?q=%00x','/db/knowledge?q=','/db/memories?person=../x'])
+  assert.equal(MindProxy.check(p),null);
+});
+test('db writes are forwarded and other writes still refused',async()=>{
+ const seen=[],proxy=new MindProxy({ssh:'h',token:'k',socketPath:SOCK,prepareFn:()=>{},spawnFn:fakeSsh(),requestFn:okFetch(seen)});
+ for(const p of ['/db/person','/db/person/note','/db/memory','/db/knowledge'])assert.equal((await proxy.post(p,'{}')).status,200);
+ assert.equal((await proxy.post('/db/delete','{}')).status,400);
+});
+test('local server routes /api/mind/db/*', async t=>{
+ const calls=[],mind={get:async p=>{calls.push(p);return {status:200,body:'{}'};},post:async(p)=>{calls.push(p);return {status:200,body:'{}'};},stop(){}};
+ const server=createMonitorServer(new Monitor({binding:{address:'http://127.0.0.1:8080',token:'b'.repeat(32)}}),undefined,mind);
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const url=`http://127.0.0.1:${server.address().port}`;
+ for(const p of ['/db/overview','/db/people','/db/person?id=owner','/db/memories','/db/knowledge','/db/item?c=people_notes&id=owner'])assert.equal((await fetch(url+'/api/mind'+p)).status,200,p);
+ for(const p of ['/db/person','/db/person/note','/db/memory','/db/knowledge'])
+  assert.equal((await fetch(url+'/api/mind'+p,{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{}'})).status,200,p);
+ assert.equal((await fetch(url+'/api/mind/db/delete',{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{}'})).status,404);
+});
