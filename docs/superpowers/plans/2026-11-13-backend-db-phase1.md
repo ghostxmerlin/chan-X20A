@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 `hello` 库里建好五个新集合（带字段校验、索引、只追加版本和来历字段），在 mind 上开一组 `/db/` 读写接口，在情景页加一块"库"视图，让主人能手工录入人物、性格条目（含一次贴多条的初始录入）、记忆和知识，并看到每条的历史。
+**Goal:** 在 `hello` 库里建好五个新集合（带字段校验、索引、只追加版本和来历字段），在 mind 上开一组 `/db/` 读写接口，在观察台加一页可维护的"库"（`/db.html`），让主人能手工录入、修改、停用人物、性格条目（含一次贴多条的初始录入）、记忆和知识，并看到每条的历史。
 
 **Architecture:** 新模块 `server/mind/library.py` 管全部校验、写版本和读取，接口层 `server/mind/api.py` 只做参数解析和错误映射。观察台 `web/monitor/` 的代理白名单放行新路径和参数；新页面模块 `web/monitor/public/db-ui.js` 自带请求和转义，挂在 `mind.html` 上。这一期没有任何提示、模式、耳朵或付费模型读写这些集合。
 
@@ -479,14 +479,18 @@ git commit -m "monitor: forward /db library endpoints"
 
 ---
 
-### Task 5: 情景页的"库"视图和初始性格录入
+### Task 5: 单独的"库"页面（可维护：加、改、停用、历史、回到我的版本）和初始性格录入
+
+> 2026-11-13 主人追加："数据库设定后，要给我可以维护的前端"。所以"库"不再是情景页里的一块，而是观察台上单独一页 `/db.html`；情景页和观察台首页各放一个入口链接。下面的接口、文字和测试照旧有效，另加"维护"一节的要求。
 
 **Files:**
+- Create: `web/monitor/public/db.html`（单独页面：`<header>` 里有标题"hello 库"、`<a href="/mind.html">← 情景</a>`、`<a href="/">观察台</a>`；`<main id="db-root"></main>`；`<head>` 引 `/db.css` 和 `<script type="module" src="/db-ui.js"></script>`；页面上不写内联脚本，CSP 不允许）
 - Create: `web/monitor/public/db-ui.js`
-- Modify: `web/monitor/public/mind.html`（在 `<main>` 末尾加 `<section id="db"><h2>库</h2><div id="db-root"></div></section>`；`<head>` 加 `<script type="module" src="/db-ui.js"></script>`）
-- Modify: `web/monitor/public/mind.css`
-- Modify: `web/monitor/server.mjs:17-20`（`assets` 加 `['/db-ui.js', ['db-ui.js','text/javascript; charset=utf-8']]`）
-- Modify: `web/monitor/static-files.test.mjs`（检查列表 `['app.js','say-ui.js','scene-ui.js']` 加 `'db-ui.js'`）
+- Create: `web/monitor/public/db.css`（照 `mind.css` 的配色和字号，窄屏 400 px 不横向滚动）
+- Modify: `web/monitor/public/mind.html`（header 里 `← 观察台` 旁加 `<a href="/db.html">库</a>`）
+- Modify: `web/monitor/public/index.html`（在指向情景页的链接旁加 `<a href="/db.html">库</a>`；没有这样的链接就放在 header 里）
+- Modify: `web/monitor/server.mjs:17-20`（`assets` 加 `/db.html`、`/db-ui.js`、`/db.css`，类型照同类文件）
+- Modify: `web/monitor/static-files.test.mjs`（检查列表加 `db-ui.js`；若该测试也检查 html/css 资源，一并加上 `db.html`、`db.css`）
 - Test: `web/monitor/db-ui.test.mjs`
 
 **Interfaces:**
@@ -498,6 +502,7 @@ git commit -m "monitor: forward /db library endpoints"
     - `overview()`、`people()`、`person(id)`、`memories(filters)`、`knowledge(filters)`、`item(c, id)`：每个读取各自带序号，过时的响应返回 `false` 且不覆盖新的结果，照 `SpeechSettingsModel` 的 `loadSeq` / `pageSeq`；
     - `save(path, fields, {id, expected_version} = {})`：返回写入的版本；
     - `restore(path, id, expected_version, restore_version)`；
+  - `setStatus(c, doc, status, reason?)`：用 `editable(c, doc)` 换掉 `status` 后保存（`id` 取该集合的编号字段，`expected_version = doc.version`）；
     - `addNotes(personId, kind, text) -> Promise<{saved: number, failed: [{line: string, error: string}]}>`：按行拆，去掉首尾空白和空行；每行一条，依次 POST `/db/person/note`；单行失败不停，记进 `failed`；超过 200 字的行不发送，直接记 `failed`，`error` 为"超过 200 字"。
   - HTML 函数（只返回字符串，所有存储的文字都经 `esc`）：`overviewHtml(o)`、`peopleHtml(items)`、`personHtml(p)`、`memoriesHtml(page)`、`knowledgeHtml(page)`、`historyHtml(item)`、`voiceLabelsHtml(o)`。
   - `mount(root, model = new LibraryModel())`：画出标签"人物 / 记忆 / 知识 / 现有日常记忆 / 声纹标注"，绑定按钮。"现有日常记忆"只列 `GET /memories?offset=0&limit=10` 的条目（只读，编辑仍在设置里的原有一栏）。
@@ -512,6 +517,14 @@ git commit -m "monitor: forward /db library endpoints"
 - 每条都有"历史"按钮，用 `historyHtml`：版本列表（第几版、时间、谁、原因）；人物条目和知识另有两栏"主人原版 / 当前版"，以及"回到我的版本"按钮（当前版不是主人原版时才显示）。
 - 声纹标注：显示条数（本期为 0）和一句"第 4 期的每日回顾页会写这里"。
 - 409 时提示"已被改过，请刷新后重试"，并重新读取这一条。
+
+**维护（主人追加，必须有）：**
+- 人物卡、人物条目、记忆、知识，每一条都有"改"：打开一个预先填好当前内容的表单，保存时带 `id` 和 `expected_version`（当前版本号），送全部可写字段；`kind` 和 `person_id` 在表单里只读显示。
+- 每一条都有"停用"/"重新启用"：就是同一个保存，只把 `status` 换掉（人物卡 confirmed↔retired，条目 active↔disabled，记忆 active↔disabled，知识 active↔disabled），`reason` 写"停用"或"重新启用"。列表默认把停用的排在后面、灰显，有"显示已停用"开关。
+- 保存时可以填一句"为什么改"（`reason`，可空，≤200 字）。
+- 记忆和知识有搜索框（`q`）、种类筛选、翻页（每页 20）。
+- 地址栏记住位置：`#people`、`#person=<id>`、`#memories`、`#knowledge`、`#item=<c>:<id>`；刷新或返回后回到原处。
+- 新增导出：`editable(c, doc) -> object`：从某版本文档里只取出该集合页面可写的字段（Task 1 的表格），不带任何服务端字段；"改"和"停用"都用它组装 `fields`。
 
 - [ ] **Step 1: 写失败的测试** `web/monitor/db-ui.test.mjs`（加载方式照 `speech-settings.test.mjs`：`import('data:text/javascript;base64,'+…)`）
 
@@ -552,6 +565,17 @@ test('overview shows counts and the server-only notice',()=>{
  const h=ui.overviewHtml({collections:{people_cards:{total:2},people_notes:{total:5},memory_items:{total:0},knowledge_items:{total:1}},voice_labels:{total:0},existing:{mind_memories:7}});
  assert.match(h,/5/);assert.match(h,/不进仓库/);assert.match(h,/没有删除/);
 });
+test('editable keeps only page-writable fields',()=>{
+ const doc={note_id:'n_0123456789ab',person_id:'owner',kind:'trait',text:'爱笑',status:'active',observed_at:null,version:3,actor:'owner',reason:'',changed_at:1,supersedes:2,origin:'owner',owner_original:null,derived_from:[],fusion:null,scope_id:'office',_id:'x'};
+ assert.deepEqual(Object.keys(ui.editable('people_notes',doc)).sort(),['kind','observed_at','person_id','status','text']);
+});
+test('disable re-saves the current version with only status changed',async()=>{
+ const calls=[];const m=new ui.LibraryModel(async(p,b)=>{calls.push([p,b]);return {version:4};});
+ const doc={memory_id:'e_0123456789ab',kind:'event',title:'t',statement:'s',subjects:[],topics:[],when:{type:'point',start_ms:1,end_ms:null},status:'active',version:3,scope_id:'office',source:{kind:'owner',refs:[]}};
+ await m.setStatus('memory_items',doc,'disabled');
+ assert.equal(calls[0][0],'/db/memory');assert.equal(calls[0][1].id,'e_0123456789ab');assert.equal(calls[0][1].expected_version,3);
+ assert.equal(calls[0][1].fields.status,'disabled');assert.equal(calls[0][1].fields.title,'t');assert.ok(!('source' in calls[0][1].fields));
+});
 ```
 
 - [ ] **Step 2: 运行，确认失败**
@@ -566,13 +590,13 @@ Expected: FAIL，`db-ui.js` 不存在；静态文件测试在列表加上 `db-ui
 Run: `node --test web/monitor/*.test.mjs`
 Expected: 全部 pass
 
-- [ ] **Step 5: 本机看一眼页面**：用观察台说明里的入口启动（`web/monitor/README.md`），打开情景页，确认"库"一块能画出来（连不上服务器时显示读取失败而不是白屏），窄屏 400 px 下没有横向滚动。
+- [ ] **Step 5: 本机看一眼页面**：用观察台说明里的入口启动（`web/monitor/README.md`），打开 `/db.html`（以及情景页和首页上的入口链接），确认页面能画出来（连不上服务器时显示读取失败而不是白屏），窄屏 400 px 下没有横向滚动。
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add web/monitor/public/db-ui.js web/monitor/public/mind.html web/monitor/public/mind.css web/monitor/server.mjs web/monitor/static-files.test.mjs web/monitor/db-ui.test.mjs
-git commit -m "monitor: library view on the scene page, with bulk character entry"
+git add web/monitor/public/db.html web/monitor/public/db-ui.js web/monitor/public/db.css web/monitor/public/mind.html web/monitor/public/index.html web/monitor/server.mjs web/monitor/static-files.test.mjs web/monitor/db-ui.test.mjs
+git commit -m "monitor: library page for maintaining people, notes, memories and knowledge"
 ```
 
 ---
