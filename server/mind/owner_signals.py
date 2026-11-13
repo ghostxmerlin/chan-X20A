@@ -22,6 +22,17 @@ def _attribute(db, at):
     return {'uid': best['uid']} if best else None
 
 
+def _resolve(db, sig):
+    """A remote rating stored before its line had play times (they are written after the line ends):
+    match it again now and keep the result."""
+    if sig.get('kind') == 'rating' and sig.get('refers_to') is None and (sig.get('source') or {}).get('device', 'page') != 'page':
+        ref = _attribute(db, sig['at'])
+        if ref:
+            sig['refers_to'] = ref
+            db['owner_signals'].update_one({'sid': sig['sid']}, {'$set': {'refers_to': ref}})
+    return sig
+
+
 def put_signal(db, body, now_ms):
     if not isinstance(body, dict) or body.get('kind') not in KINDS:
         raise ValueError('kind must be rating, round_none, mode or click')
@@ -65,7 +76,7 @@ def put_signal(db, body, now_ms):
 
 def recent(db, from_ms, to_ms, limit=100):
     rows = list(db['owner_signals'].find({'at': {'$gte': from_ms, '$lt': to_ms}}, {'_id': 0}).sort('at', -1).limit(limit))
-    return list(reversed(rows))
+    return [_resolve(db, r) for r in reversed(rows)]
 
 
 def _column(device):
@@ -76,7 +87,7 @@ def _signals(db, from_ms):
     for sig in db['owner_signals'].find({'at': {'$gte': from_ms}}, {'_id': 0}).sort('at', 1):
         if sig.get('kind') not in ('rating', 'round_none'):
             continue
-        ref, line = sig.get('refers_to') or {}, None
+        ref, line = _resolve(db, sig).get('refers_to') or {}, None
         rid = ref.get('rid')
         if ref.get('uid'):
             u = db['utterances'].find_one({'uid': ref['uid']}, {'_id': 0, 'rid': 1, 'line': 1}) or {}
