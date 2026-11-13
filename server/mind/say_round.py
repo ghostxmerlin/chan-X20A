@@ -131,10 +131,12 @@ def line(round_, key):
 
 
 def is_thin(round_, ctx, now_ms, s):
+    # Replay 2026-11-13: requiring 'usable' speech (both recognisers agreeing) or trusting the judge's weak
+    # flag made 4 of 5 typical moments "thin". Thin = no speech at all in 60 s; the weak flag is opt-in
+    # until the owner's "这一轮都不行" marks calibrate it.
     flags = (s.get('speech') or {}).get('round') or {}
-    no_speech = not any(e.get('kind') == 'speech' and e.get('quality') == 'usable' and e.get('at', 0) >= now_ms - 60_000
-                        for e in ctx.get('evidence', []))
-    return (flags.get('thin_no_speech', True) and no_speech) or (flags.get('thin_judge_weak', True) and round_['judge']['weak'])
+    no_speech = not any(e.get('kind') == 'speech' and e.get('at', 0) >= now_ms - 60_000 for e in ctx.get('evidence', []))
+    return (flags.get('thin_no_speech', True) and no_speech) or (flags.get('thin_judge_weak', False) and round_['judge']['weak'])
 
 
 def check_round(env, store, s, round_, ctx_now, now_ms, *, chat=None, keys=None):

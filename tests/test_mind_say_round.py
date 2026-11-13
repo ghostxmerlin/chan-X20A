@@ -113,11 +113,15 @@ class SayRoundTest(unittest.TestCase):
         self.assertEqual(R.check_round(ENV, self.store, self.s, r, ctx(T0 + 20000), T0 + 20000, chat=RoutedChat(check_pick=2)), 'worst')
 
     def test_is_thin_flags(self):
+        # Replay 2026-11-13: dual-ASR disagreement marks most speech 'uncertain', and the judge's weak flag
+        # fired on 3 of 5 typical moments, so thin = no speech at all; the weak flag is off by default.
         r = self.write(RoutedChat(weak=True))
+        self.assertFalse(R.is_thin(r, ctx(clear=False), T0, self.s))
+        self.s['speech']['round'] = {'thin_judge_weak': True}
         self.assertTrue(R.is_thin(r, ctx(clear=True), T0, self.s))
-        r = self.write(RoutedChat(weak=False))
-        self.assertFalse(R.is_thin(r, ctx(clear=True), T0, self.s))
-        self.assertTrue(R.is_thin(r, ctx(clear=False), T0, self.s))
+        self.s['speech']['round'] = {}
+        quiet = {**ctx(), 'evidence': []}
+        self.assertTrue(R.is_thin(r, quiet, T0, self.s))
 
 
 if __name__ == '__main__':

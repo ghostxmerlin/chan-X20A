@@ -65,6 +65,7 @@ class SayEntryTest(SpeechCase):
         self.assertEqual(len(self.tts.said), 2)
 
     def test_thin_moment_huyu_then_silent(self):
+        self.s['speech']['round'] = {'thin_judge_weak': True}        # opt-in since the 2026-11-13 replay
         self.heard(age=8000)
         self.stock(self.now - 2000, weak=True)
         first = self.click()
