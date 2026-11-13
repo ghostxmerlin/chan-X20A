@@ -55,6 +55,13 @@ class SayPrefetchTest(unittest.TestCase):
         self.assertEqual(self.w.step(T0 + 7000), 'wrote')
         self.assertEqual(self.w.stock('office')['rid'], 'r0')
 
+    def test_last_step_is_kept_for_the_page(self):
+        self.h.speech = [(T0 + 1000, '甲')]
+        self.w.step(T0 + 5000)
+        self.assertEqual(self.w.last, {'reason': 'waiting', 'at': T0 + 5000})
+        self.w.step(T0 + 7000)
+        self.assertEqual(self.w.last['reason'], 'wrote')
+
     def test_spacing_30s(self):
         self.h.speech = [(T0 + 1000, '甲')]
         self.w.step(T0 + 7000)

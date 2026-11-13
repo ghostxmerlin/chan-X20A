@@ -100,3 +100,17 @@ test('remote signals list', ()=>{
  assert.match(html,/好 ×3/);assert.match(html,/左/);assert.match(html,/点击/);assert.match(html,/dualkey-ae1c/);
  assert.match(ui.signalsHtml([]),/还没有/);
 });
+test('pre-written rounds are listed with their state and the worker status', ()=>{
+ const now=new Date(2026,10,13,16,10,0).getTime();
+ const ln=(key,text)=>({key,text,voice_label:'甲'});
+ const rows=[{rid:'r1',source:'prefetch',written_at:now-400000,at:now-400000,triggered:false,order:['roast','sad'],lines:[ln('roast','<老>板'),ln('sad','唉')]},
+  {rid:'r2',source:'prefetch',written_at:now-60000,at:now-60000,triggered:true,order:['sad','roast'],plays:[{key:'sad'}],lines:[ln('roast','甲句'),ln('sad','乙句')]},
+  {rid:'r3',source:'prefetch',written_at:now-20000,at:now-20000,triggered:false,order:['roast','sad'],lines:[ln('roast','丙句'),ln('sad','丁句')]},
+  {rid:'r4',source:'page',written_at:now-10000,at:now-10000,triggered:true,order:['roast'],lines:[ln('roast','页面')]}];
+ const html=ui.prefetchRoundsHtml(rows,{on:true,last:{reason:'spacing',at:now-2000}},now);
+ assert.match(html,/离上一轮不到 30 秒/);
+ assert.doesNotMatch(html,/页面/);
+ assert.ok(html.indexOf('丙句')<html.indexOf('乙句')&&html.indexOf('乙句')<html.indexOf('&lt;老&gt;板'));
+ assert.match(html,/待用/);assert.match(html,/已用/);assert.match(html,/过期/);
+ assert.match(ui.prefetchRoundsHtml([],{on:false},now),/提前写关着/);
+});

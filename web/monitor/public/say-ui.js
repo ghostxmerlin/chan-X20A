@@ -72,6 +72,17 @@ export function earlierRoundsHtml(rows){
   const said=(r.plays||[]).map(p=>(r.lines||[]).find(l=>l.key===p.key)?.text).filter(Boolean);
   return `<li>${said.length?said.map(escapeHtml).join(' / '):'<span class="muted">没出声</span>'}</li>`;}).join('')}</ul></details>`;
 }
+const PREFETCH_WHY={off:'条件不满足（嘴不在 TTS 或不是一轮模式）',no_speech:'最近没有听清的话',waiting:'等这段话说完（静 5 秒）',
+ nothing_new:'说完后没有新话',spacing:'离上一轮不到 30 秒',same_moment:'还是同一时刻，不重写',budget:'本小时已到 0.6 美元上限',wrote:'刚写完一轮'};
+// 提前写 (2026-11-13): the rounds written ahead, newest first, with whether each was used, still waiting, or expired (5 min).
+export function prefetchRoundsHtml(rows,status,now=Date.now()){
+ const mine=(rows||[]).filter(r=>r.source==='prefetch').reverse();
+ const head=!status?.on?'提前写关着':`提前写开着 · ${status.last?`${hhmmss(status.last.at)} ${PREFETCH_WHY[status.last.reason]||escapeHtml(status.last.reason)}`:'还没跑'}`;
+ return `<details class="say-prefetch"><summary>提前写（${mine.length} 轮）· ${head}</summary>${mine.length?'<ul class="utterances">'+mine.map(r=>{
+  const st=r.triggered?'已用':now-r.written_at>300000?'过期':'待用';
+  const byKey=Object.fromEntries((r.lines||[]).map(l=>[l.key,l]));
+  return `<li><span class="muted">${hhmmss(r.written_at)} · ${st}</span> ${(r.order||[]).map((k,i)=>byKey[k]?.text?`${i===0?'<b>':''}${escapeHtml(byKey[k].text)}${i===0?'</b>':''}`:'').filter(Boolean).join(' / ')}</li>`;}).join('')+'</ul>':'<p class="note">最近一小时还没有提前写的轮次</p>'}</details>`;
+}
 const DIR_ZH={up:'上',down:'下',left:'左',right:'右'};
 export function signalsHtml(rows){
  if(!rows||!rows.length)return '<p class="note">还没有遥控信号</p>';
@@ -183,6 +194,9 @@ export class SayPanel{
    // Re-render only on change, so an open recast list is not closed by the 5 s refresh.
    const key=roundKey(last)+'|'+rows.filter(r=>r.triggered).length;
    if(last&&key!==this.roundKeySeen){this.roundKeySeen=key;this.round=last;this.renderRound(last.marks,earlierRoundsHtml(rows));}
+   const pf=this.doc.getElementById('say-prefetch');
+   if(pf){const st=(await getJson('/say/stats?days=1')).prefetch;const html=prefetchRoundsHtml(rows,st);
+    if(html!==this.prefetchSeen){const open=pf.querySelector('details')?.open;this.prefetchSeen=html;pf.innerHTML=html;if(open)pf.querySelector('details').open=true;}}
   }catch{}
  }
  async refresh(){

@@ -252,7 +252,8 @@ def compact_round(r):
                       for x in r['lines']],
             'order': r['judge']['order'], 'weak': r['judge']['weak'], 'timings': r.get('timings'),
             'plays': [{k: p.get(k) for k in ('key', 'at', 'why', 'uid')} for p in r.get('plays', [])],
-            'thin_moment': r.get('thin_moment', False), 'cost_usd': r.get('cost_usd')}
+            'thin_moment': r.get('thin_moment', False), 'cost_usd': r.get('cost_usd'),
+            'source': (r.get('trigger') or {}).get('source')}
 
 
 def _speak_line(store, tts, r, key, now_ms, why, casting=None, epoch=None, is_current=None):

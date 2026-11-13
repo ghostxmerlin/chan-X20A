@@ -31,6 +31,7 @@ class Worker:
         self._scope_key = None
         self._on = False
         self._attempt = {}                 # scope -> last write attempt (ms), successful or not
+        self.last = None                   # {reason, at} of the latest step, shown on the page
         self.store.set_state(say_prefetch={'on': False, 'since': None})       # a restart always starts off
 
     # ---- switch ----
@@ -74,6 +75,11 @@ class Worker:
 
     # ---- one step ----
     def step(self, now_ms):
+        reason = self._step(now_ms)
+        self.last = {'reason': reason, 'at': now_ms}
+        return reason
+
+    def _step(self, now_ms):
         if not self._on:
             return 'off'
         s = self.settings_fn()

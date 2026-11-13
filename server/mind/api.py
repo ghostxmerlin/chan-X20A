@@ -307,7 +307,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             now = int(time.time() * 1000)
             scope_id = speech_settings.scope(current_settings()[0])['id']
             return {**owner_signals.stats(db, scope_id, now - days * 86400_000, now + 60_000), 'days': days,
-                    'prefetch': {'on': bool(ctx.get('say_worker') and ctx['say_worker'].enabled())}}
+                    'prefetch': {'on': bool(ctx.get('say_worker') and ctx['say_worker'].enabled()),
+                                 'last': ctx['say_worker'].last if ctx.get('say_worker') else None}}
         raise NotFound("not found")
 
     def post(path, body):
