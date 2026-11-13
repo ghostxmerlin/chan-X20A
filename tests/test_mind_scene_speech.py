@@ -61,3 +61,52 @@ class SceneSpeechTest(SpeechCase):
         with patch.object(speak,'CHAT',stop),self.assertRaises(speak.NotConnected):
             speak.say(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles'),'sad',tts,self.now)
         self.assertEqual(tts.said,[])
+
+
+class SceneSayV2Test(SpeechCase):
+    def scene(self):
+        self.db.add('mind_scenes', {'lane':'live','minute':self.now-60000,'version':1,'source':'model',
+            'scene':{'people_doing':{'text':'大家讨论软件的交付时间','confidence':'high'},'summary':'客户要求明天交付'}})
+
+    def say(self, reply):
+        fake=FakeChat();fake.reply_next(json.dumps(reply,ensure_ascii=False));tts=FakeTts()
+        with patch.object(speak,'CHAT',fake):
+            rec=speak.say(ENV,self.store,self.s,speak.load_roles(ROOT/'config/roles'),'worst',tts,self.now,wait=True)
+        return rec,fake.calls[0]
+
+    def test_point_and_device_are_kept_and_rotated(self):
+        self.scene()
+        rec,call=self.say({'point':'明天交付','device':'最坏预言','text':'明天交付？后天怕是要量产咯。'})
+        self.assertEqual((rec['focus'],rec['joke_type'],rec['prompt']),('明天交付','最坏预言','scene-say-v2'))
+        self.assertEqual(call['response_format']['json_schema']['schema']['required'],['point','device','text'])
+        self.db['utterances'].docs[-1]['state']='done'
+        _,call=self.say({'point':'交付','device':'顺推','text':'交付完了是不是还要包售后。'})
+        payload=json.loads(call['messages'][1]['content'])
+        self.assertEqual(payload['最近用过的手法'],['最坏预言'])
+        self.assertIn('不是同事',call['messages'][0]['content'])
+        self.assertIn('乌鸦嘴。（本角色擅长）',call['messages'][0]['content'])
+
+    def test_unknown_device_is_not_stored(self):
+        self.scene()
+        rec,_=self.say({'point':'x','device':'乱写','text':'明天交付？后天怕是要量产咯。'})
+        self.assertIsNone(rec['joke_type'])
+
+
+class OverusedTest(unittest.TestCase):
+    def test_repeated_fragments_except_live_topic_words(self):
+        from mind import scene_speech
+        recent=[{'text':t} for t in ('我申请留在桌上。','板子要申请羽绒服了。','花听了都想请假','喝口水都要请假哦','精心呵护还要保姆')]
+        out=scene_speech.overused({'recent':recent,'evidence':[{'text':'精心呵护，天天浇水'}]})
+        self.assertEqual(set(out),{'申请','请假'})
+
+    def test_evidence_is_newest_first_with_relative_time(self):
+        from mind import scene_speech
+        ctx={'time':'11-12 18:00','scene':None,'memories':[],'recent':[],'environment':'','profile':{},
+             'evidence':[{'kind':'speech','at':1000,'text':'旧话','subject_id':'owner','quality':'usable'},
+                         {'kind':'speech','at':55000,'text':'新话','speaker':None,'quality':'uncertain','asr_conflict':True,
+                          'alternatives':[{'text':'新话'},{'text':'心化'}]}]}
+        p=json.loads(scene_speech.messages({'id':'sad','persona':'x'},ctx,40,60000)[1]['content'])
+        self.assertEqual([e['内容'] for e in p['实时输入']],['新话','旧话'])
+        self.assertEqual(p['实时输入'][0]['时间'],'5秒前')
+        self.assertEqual(p['实时输入'][0]['另一种听法'],['心化'])
+        self.assertEqual(p['实时输入'][1]['谁说的'],'主人')

@@ -205,7 +205,8 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,
         rec = {'uid':uid, 'role':role_id, 'text':output['text'], 'voice':role['voice'], 'at':now_ms,
                'state':'ready', 'run_id':output['run_id'], 'run_ids':[output['run_id']], 'scope_id':ctx['scope']['id'],
                'pipeline':'scene-v1', 'instruction':role['instruction'], 'llm_ms':finish_ms-now_ms,
-               'context_ms':context_ms,'settings_version':settings_version,'prompt':scene_speech.PROMPT,'context':ctx}
+               'context_ms':context_ms,'settings_version':settings_version,'prompt':scene_speech.PROMPT,'context':ctx,
+               'focus':output.get('point'),'joke_type':output.get('device')}
         store.db['utterances'].insert_one(dict(rec))
         try:
             with _ENQUEUE_LOCK:
