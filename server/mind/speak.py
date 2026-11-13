@@ -14,7 +14,8 @@ import time
 import uuid
 
 from . import llm, notes, settings as settings_mod
-from . import attention, speech_context, scene_speech, speech_settings
+from . import attention, speech_context, scene_speech, speech_settings, say_moment, say_prompts
+from . import say_round as rounds
 from .records import Records
 from .store import LANE
 
@@ -137,9 +138,16 @@ def _finish(db, tts, uid, tts_id):
         db["utterances"].update_one({"uid": uid}, {"$set": {"state": "unknown", "error": f"{type(e).__name__}"}})
         return
     cost, tin, tout = tts_cost(st)
-    db["utterances"].update_one({"uid": uid}, {"$set": {"state": st.get("state"), "tts_cost_cny": cost, "tts_tokens": [tin, tout],
-                                                        "played": st.get("state") == "done" or (st.get("timings_s") or {}).get("first_accepted") is not None,
-                                                        "timings_s": st.get("timings_s")}})
+    timings = st.get("timings_s") or {}
+    fields = {"state": st.get("state"), "tts_cost_cny": cost, "tts_tokens": [tin, tout],
+              "played": st.get("state") == "done" or timings.get("first_accepted") is not None, "timings_s": st.get("timings_s")}
+    submit = (db["utterances"].find_one({"uid": uid}, {"tts_submit_at": 1}) or {}).get("tts_submit_at")
+    if submit:
+        # Wall-clock play window (spec 11): ratings from a remote are matched to the line playing then.
+        for name, key in (("play_start_at", "first_sound"), ("play_end_at", "done")):
+            if isinstance(timings.get(key), (int, float)):
+                fields[name] = submit + int(round(timings[key] * 1000))
+    db["utterances"].update_one({"uid": uid}, {"$set": fields})
 
 
 def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,settings_version=None):
@@ -229,6 +237,134 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,
         return rec
     finally:
         _SAY_LOCK.release()
+
+
+def _compact_round(r):
+    keep = ('key', 'text', 'gloss', 'point', 'device', 'dialect', 'score', 'dropped')
+    return {'rid': r['rid'], 'moment_id': r['moment_id'], 'at': r['at'], 'written_at': r['written_at'],
+            'lines': [{**{k: x.get(k) for k in keep}, 'voice_label': say_prompts.VOICE_LABELS.get(x.get('voice'), x.get('voice'))}
+                      for x in r['lines']],
+            'order': r['judge']['order'], 'weak': r['judge']['weak'], 'timings': r.get('timings'),
+            'plays': [{k: p.get(k) for k in ('key', 'at', 'why', 'uid')} for p in r.get('plays', [])],
+            'thin_moment': r.get('thin_moment', False), 'cost_usd': r.get('cost_usd')}
+
+
+def _speak_line(store, tts, r, key, now_ms, why, casting=None):
+    """Hand one line of round r to soul-tts and record the play (utterances + say_rounds.plays)."""
+    line = rounds.line(r, key)
+    cast = casting or {k: line.get(k) for k in ('voice', 'dialect', 'instruction', 'rate')}
+    uid = 'u' + uuid.uuid4().hex
+    submit = int(time.time() * 1000)
+    rec = {'uid': uid, 'role': key, 'text': line['text'], 'voice': cast['voice'], 'at': now_ms, 'state': 'ready',
+           'scope_id': r['scope_id'], 'pipeline': 'round', 'rid': r['rid'], 'line': key, 'moment_id': r['moment_id'],
+           'casting': cast, 'tts_submit_at': submit, 'why': why}
+    store.db['utterances'].insert_one(dict(rec))
+    try:
+        with _ENQUEUE_LOCK:
+            tts_id = tts.say(line['text'], voice=cast['voice'], interrupt=True,
+                             **{k: cast[k] for k in ('instruction', 'rate') if cast.get(k) is not None})
+    except Exception as e:
+        store.db['utterances'].update_one({'uid': uid}, {'$set': {'state': 'error', 'error': type(e).__name__}})
+        raise
+    store.db['utterances'].update_one({'uid': uid}, {'$set': {'tts_id': tts_id, 'state': 'sent'}})
+    r.setdefault('plays', []).append({'key': key, 'at': now_ms, 'why': why, 'uid': uid, 'casting': cast})
+    store.db['say_rounds'].update_one({'rid': r['rid']}, {'$set': {'plays': r['plays']}})
+    from . import selfvoice
+    selfvoice.refresh_spoken(store.db, now_ms)
+    return uid, tts_id
+
+
+def _note_trigger(store, r, now_ms, why, trigger):
+    r.setdefault('triggers', []).append({'at': now_ms, 'why': why, 'source': (trigger or {}).get('source', 'page')})
+    store.db['say_rounds'].update_one({'rid': r['rid']}, {'$set': {'triggers': r['triggers'], 'thin_moment': r.get('thin_moment', False)}})
+
+
+def say_round(env, store, s, roles, tts, now_ms, *, worker, force_new=False, trigger=None, wait=False,
+              is_current=None, settings_version=None):
+    """One trigger of the talk show (spec 6, 6A): play a pre-written line, check it once against newer
+    speech, or write fresh; inside a thin moment the first trigger plays the Shanghainese line and later
+    ones stay silent. Returns {rid, played, why, uid, round}."""
+    started = time.monotonic()
+    epoch = _EPOCH
+    if not ((tts.health().get('mouth') or {}).get('device')):
+        raise NotConnected('hello 的嘴没连上')
+    if not _SAY_LOCK.acquire(blocking=False):
+        raise NotConnected('正在说上一轮，请稍等或先停止')
+    try:
+        _check_pending(epoch, is_current)
+        ctx = speech_context.build(store.db, store, s, now_ms)
+        scope_id = ctx['scope']['id']
+        sig = say_moment.signature(ctx, now_ms)
+        huyu_on = (s['speech'].get('round') or {}).get('huyu', True)
+        key, why = None, None
+        with worker.writing():
+            r = worker.stock(scope_id)
+            same = bool(r) and not force_new and say_moment.same_moment(r.get('signature'), sig)
+            if same and r.get('plays') or same and r.get('triggers'):
+                if r.get('thin_moment'):
+                    why = 'silent'
+                else:
+                    played = {p['key'] for p in r.get('plays', [])}
+                    key = next((k for k in rounds.ranked_keys(r) if k not in played), None)
+                    why = 'next' if key else None
+            elif same:
+                newer = any(e.get('kind') == 'speech' and e.get('quality') == 'usable' and e['at'] > r['written_at']
+                            for e in ctx['evidence'])
+                if rounds.is_thin(r, ctx, now_ms, s):
+                    key, why = 'huyu', 'huyu'
+                elif newer:
+                    key = rounds.check_round(env, store, s, r, ctx, now_ms, chat=CHAT)
+                    key, why = (key, 'checked') if key else ('huyu', 'huyu')
+                else:
+                    key, why = rounds.ranked_keys(r)[0], 'stock'
+            if why is None:
+                moment = r['moment_id'] if same else None
+                r = rounds.write_round(env, store, s, roles, ctx, now_ms, chat=CHAT, trigger=trigger, moment_id=moment)
+                worker.put(scope_id, r)
+                _check_pending(epoch, is_current)
+                key, why = (('huyu', 'huyu') if rounds.is_thin(r, ctx, now_ms, s) else (rounds.ranked_keys(r)[0], 'fresh'))
+            if key == 'huyu' and (not huyu_on or rounds.line(r, 'huyu').get('dropped')):
+                key, why = None, 'silent'
+            if why == 'huyu':
+                r['thin_moment'] = True
+        _check_pending(epoch, is_current)
+        _note_trigger(store, r, now_ms, why, trigger)
+        uid = None
+        if key:
+            uid, tts_id = _speak_line(store, tts, r, key, now_ms, why)
+            if wait:
+                _finish(store.db, tts, uid, tts_id)
+            else:
+                threading.Thread(target=_finish, args=(store.db, tts, uid, tts_id), daemon=True).start()
+        server_ms = int((time.monotonic() - started) * 1000)
+        store.db['say_rounds'].update_one({'rid': r['rid']}, {'$set': {'timings.last_server_ms': server_ms}})
+        return {'rid': r['rid'], 'played': key, 'why': why, 'uid': uid, 'server_ms': server_ms, 'round': _compact_round(r)}
+    finally:
+        _SAY_LOCK.release()
+
+
+def play_line(store, s, roles, tts, rid, key, now_ms, *, voice=None, dialect=None, wait=False):
+    """Replay one line of a round, optionally in another voice and dialect (spec 8: 换副嗓子再说一遍)."""
+    if not ((tts.health().get('mouth') or {}).get('device')):
+        raise NotConnected('hello 的嘴没连上')
+    r = store.db['say_rounds'].find_one({'rid': rid}, {'_id': 0})
+    if not r:
+        raise KeyError(rid)
+    line = rounds.line(r, key)
+    if not line.get('text'):
+        raise KeyError(key)
+    casting = None
+    if voice or dialect:
+        base_role = roles.get(key if key in roles else 'comfort', {})
+        d = dialect or line.get('dialect') or '普通话'
+        casting = {'voice': voice or line['voice'], 'dialect': d, 'rate': None if voice and voice != line['voice'] else line.get('rate'),
+                   'instruction': speech_settings.DIALECTS[d] + base_role.get('delivery', '')}
+    uid, tts_id = _speak_line(store, tts, r, key, now_ms, 'page', casting)
+    if wait:
+        _finish(store.db, tts, uid, tts_id)
+    else:
+        threading.Thread(target=_finish, args=(store.db, tts, uid, tts_id), daemon=True).start()
+    return {'uid': uid, 'rid': rid, 'line': key, 'casting': casting or {k: line.get(k) for k in ('voice', 'dialect')}}
 
 
 TRY_TEXT = "我是{label}。这是一句试听：今天的调试就到这里，大家辛苦了。"

@@ -3,6 +3,10 @@ import copy
 import math
 
 PROFILES = ('office', 'home', 'friends')
+ROUND_DEFAULTS = {'thin_no_speech': True, 'thin_judge_weak': True, 'huyu': True, 'moment_gap_s': 90,
+                  'moment_window_s': 90, 'prefetch_quiet_s': 5, 'prefetch_spacing_s': 30, 'prefetch_usd_per_hour': 0.6}
+ROUND_LIMITS = {'moment_gap_s': (10, 600), 'moment_window_s': (10, 600), 'prefetch_quiet_s': (1, 60),
+                'prefetch_spacing_s': (5, 600), 'prefetch_usd_per_hour': (0, 5)}
 ROLES = ('comfort', 'deadpan', 'roast', 'sad', 'worst')
 DIALECTS = {'普通话': '请讲普通话。', '上海话': '请讲上海话。',
             '四川话': '请讲四川话。', '武汉话': '请讲湖北武汉话。'}
@@ -10,6 +14,8 @@ DIALECTS = {'普通话': '请讲普通话。', '上海话': '请讲上海话。'
 
 def defaults():
     return {'pipeline': 'v2', 'profile': 'office', 'scope_since': 0, 'max_chars': 40, 'roles': {},
+            # One-button talk show (spec 2026-11-13-unified-say-button-design.md, sections 6, 6A, 14).
+            'round': dict(ROUND_DEFAULTS),
             'profiles': {
                 'office': {'scope_id': 'office', 'environment': None,
                            'topics': ['销售空头承诺', '客户无理要求', '活多钱少', '抱怨忙', '项目要完蛋', '出馊主意', '发牢骚'], 'avoid': []},
@@ -31,8 +37,18 @@ def validate(speech, memory):
         return ['memory: must be an object']
     if set(speech) - set(defaults()):
         errors.append('speech: unknown setting')
-    if speech.get('pipeline') not in ('v1', 'v2'):
-        errors.append('speech.pipeline: v1 or v2')
+    if speech.get('pipeline') not in ('v1', 'v2', 'round'):
+        errors.append('speech.pipeline: v1, v2 or round')
+    rnd = speech.get('round', ROUND_DEFAULTS)
+    if not isinstance(rnd, dict) or set(rnd) - set(ROUND_DEFAULTS):
+        errors.append('speech.round: unknown setting')
+    else:
+        for key, value in rnd.items():
+            limits = ROUND_LIMITS.get(key)
+            if limits is None and not isinstance(value, bool):
+                errors.append(f'speech.round.{key}: true or false')
+            elif limits and not _number(value, *limits):
+                errors.append(f'speech.round.{key}: {limits[0]}–{limits[1]}')
     if speech.get('profile') not in PROFILES:
         errors.append('speech.profile: office/home/friends')
     if not isinstance(speech.get('max_chars'), int) or not _number(speech.get('max_chars'), 8, 40):
