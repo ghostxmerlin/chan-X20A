@@ -17,8 +17,10 @@ def object_schema(properties):
 
 
 def run_json(env, store, s, step, prompt, schema, messages, now_ms, chat=None, lane='live', max_tokens=2000,
-             reasoning_effort='low', timeout=45, model=MODEL):
-    body = {'model':model, 'messages':messages, 'temperature':0.65 if step=='say' else 0.1,
+             reasoning_effort='low', timeout=45, model=MODEL, temperature=None):
+    if temperature is None:
+        temperature = 0.65 if step=='say' else 0.1
+    body = {'model':model, 'messages':messages, 'temperature':temperature,
             'max_tokens':max_tokens, 'reasoning_effort':reasoning_effort,
             'response_format':{'type':'json_schema', 'json_schema':{'name':step, 'strict':True, 'schema':schema}}}
     with _LOCK:

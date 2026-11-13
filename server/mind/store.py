@@ -51,6 +51,13 @@ class Store:
         db["mind_segments"].create_index([("lane", 1), ("start", 1), ("version", 1)], unique=True)
         db["mind_labels"].create_index([("at", 1)])
         db["mind_settings"].create_index([("lane", 1), ("version", 1)], unique=True)
+        # One-button talk show (2026-11-13); conversations by start time: speech_context's scan was the slow part.
+        db["say_rounds"].create_index([("rid", 1)], unique=True)
+        db["say_rounds"].create_index([("scope_id", 1), ("at", 1)])
+        db["owner_signals"].create_index([("sid", 1)], unique=True)
+        db["owner_signals"].create_index([("at", 1)])
+        db["owner_signals"].create_index([("refers_to.rid", 1)])
+        db["conversations"].create_index([("start_ms", 1)])
 
     def latest(self, lane, minute):
         return self.packages.find_one({"lane": lane, "minute": minute}, {"_id": 0}, sort=[("version", -1)])
