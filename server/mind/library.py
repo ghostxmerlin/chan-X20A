@@ -51,6 +51,11 @@ def _only(d, name, allowed):
         raise ValueError(f'{name}不能包含：{"、".join(sorted(map(str, extra)))}')
 
 
+def _page(offset, limit):
+    if type(offset) is not int or type(limit) is not int or not 0 <= offset <= 100_000 or not 1 <= limit <= 100:
+        raise ValueError('分页范围不合法')
+
+
 def _ms(v, name):
     return None if v is None else _int(v, name)
 
@@ -231,6 +236,104 @@ class Library:
                 fields['links'].pop('legacy_ids', None)
             return self.put(c, fields, item_id=item_id, expected_version=expected_version,
                             scope_id=head.get('scope_id', ''), now_ms=now_ms, reason='restore')
+
+    # ---- read views (never write) ----
+
+    def _heads(self, c, **match):
+        """Latest version of every id in `c`, scalar filters only, at most 5000."""
+        pipe = [{'$match': dict(match)}, {'$sort': {'version': -1}},
+                {'$group': {'_id': '$' + COLLECTIONS[c], 'doc': {'$first': '$$ROOT'}}}, {'$replaceRoot': {'newRoot': '$doc'}},
+                {'$limit': 5000}]
+        rows = self.db[c].aggregate(pipe)
+        return [{k: v for k, v in r.items() if k != '_id'} for r in rows]
+
+    @staticmethod
+    def _hit(row, q):
+        if not q:
+            return True
+        vals = [row.get(k) for k in ('title', 'statement', 'name', 'text')]
+        vals += list(row.get('aliases') or [])
+        return any(isinstance(v, str) and q in v for v in vals)
+
+    @staticmethod
+    def _slice(rows, offset, limit):
+        return {'items': rows[offset:offset + limit], 'total': len(rows), 'offset': offset, 'limit': limit}
+
+    def overview(self, s):
+        cols = {}
+        for c in COLLECTIONS:
+            heads = self._heads(c)
+            by_status, by_origin = {}, {}
+            for r in heads:
+                by_status[r.get('status')] = by_status.get(r.get('status'), 0) + 1
+                if 'origin' in r:
+                    by_origin[r['origin']] = by_origin.get(r['origin'], 0) + 1
+            cols[c] = {'total': len(heads), 'by_status': by_status, 'by_origin': by_origin}
+        mem = list(self.db['mind_memories'].aggregate([{'$group': {'_id': '$memory_id', 'doc': {'$first': '$$ROOT'}}},
+                                                       {'$count': 'total'}]))
+        owner = s.get('owner') or {}
+        return {'collections': cols, 'voice_labels': {'total': self.db['voice_labels'].count_documents({})},
+                'existing': {'owner_voice_names': len(owner.get('voice_names') or []),
+                             'owner_face_names': len(owner.get('face_names') or []),
+                             'settings_people': len(s.get('people') or []),
+                             'mind_memories': mem[0]['total'] if mem else 0}}
+
+    def people(self):
+        counts = {}
+        for n in self._heads('people_notes'):
+            if n.get('status') == 'active':
+                counts[n['person_id']] = counts.get(n['person_id'], 0) + 1
+        rows = [{**c, 'notes': counts.get(c['person_id'], 0)} for c in self._heads('people_cards')]
+        rows.sort(key=lambda r: -r['changed_at'])
+        rows.sort(key=lambda r: r['person_id'] != 'owner')
+        return rows
+
+    def person(self, person_id):
+        card = self.head('people_cards', person_id)
+        if not card:
+            raise KeyError('没有这个人物')
+        versions = [{k: v for k, v in d.items() if k != '_id'}
+                    for d in self.db['people_cards'].find({'person_id': person_id}, {'_id': 0}).sort('version', -1)]
+        by_time = lambda r: -r['changed_at']
+        notes = sorted(self._heads('people_notes', person_id=person_id), key=by_time)
+        mems = sorted((m for m in self._heads('memory_items') if person_id in (m.get('subjects') or [])),
+                      key=lambda m: -m['when']['start_ms'])
+        know = sorted((k for k in self._heads('knowledge_items') if person_id in (k.get('subjects') or [])), key=by_time)
+        return {'card': card, 'versions': versions, 'notes': notes, 'memories': mems, 'knowledge': know}
+
+    def memories(self, kind=None, person=None, topic=None, q=None, from_ms=None, to_ms=None, offset=0, limit=20):
+        _page(offset, limit)
+        rows = self._heads('memory_items', **({'kind': kind} if kind else {}))
+        rows = [r for r in rows
+                if (not person or person in (r.get('subjects') or [])) and (not topic or topic in (r.get('topics') or []))
+                and self._hit(r, q) and (from_ms is None or r['when']['start_ms'] >= from_ms)
+                and (to_ms is None or r['when']['start_ms'] <= to_ms)]
+        rows.sort(key=lambda r: (-r['when']['start_ms'], r['memory_id']))
+        return self._slice(rows, offset, limit)
+
+    def knowledge(self, kind=None, person=None, q=None, offset=0, limit=20):
+        _page(offset, limit)
+        rows = self._heads('knowledge_items', **({'kind': kind} if kind else {}))
+        rows = [r for r in rows if (not person or person in (r.get('subjects') or [])) and self._hit(r, q)]
+        rows.sort(key=lambda r: (-r['changed_at'], r['kid']))
+        return self._slice(rows, offset, limit)
+
+    def item(self, c, item_id):
+        if c not in COLLECTIONS:
+            raise ValueError('没有这个集合')
+        key = COLLECTIONS[c]
+        versions = [{k: v for k, v in d.items() if k != '_id'}
+                    for d in self.db[c].find({key: item_id}, {'_id': 0}).sort('version', -1).limit(50)]
+        if not versions:
+            raise KeyError('没有这一条')
+        original = None
+        if c in ('people_notes', 'knowledge_items'):
+            original = next((v for v in versions if v.get('origin') == 'owner'), None)
+        children = []
+        if c == 'knowledge_items':
+            children = sorted((m for m in self._heads('memory_items') if item_id in (m.get('topics') or [])),
+                              key=lambda m: -m['when']['start_ms'])
+        return {'versions': versions, 'owner_original': original, 'children': children}
 
 
 def voice_label(body, now_ms):

@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mind_fixtures import FakeDB
+from mind import settings
 from mind.library import Library, LibraryConflict, voice_label
 from mind.store import Store
 
@@ -154,6 +155,70 @@ class LibraryWriteTest(unittest.TestCase):
         e = self.lib.put('people_notes', {'person_id': 'owner', 'kind': 'trait', 'text': '再改'},
                          item_id=n['note_id'], expected_version=3, scope_id='office', now_ms=4)
         self.assertEqual((e['origin'], e['fusion'], e['owner_original'], e['derived_from']), ('owner', None, None, []))
+
+
+class LibraryReadTest(unittest.TestCase):
+    def setUp(self):
+        self.db = FakeDB(); self.lib = Library(self.db)
+        kw = dict(item_id=None, expected_version=None, scope_id='office')
+        self.lib.put('people_cards', {'kind': 'owner', 'display': '主人'}, now_ms=100, **kw)
+        self.jia = self.lib.put('people_cards', {'kind': 'regular', 'display': '人物甲'}, now_ms=200, **kw)['person_id']
+        n1 = self.lib.put('people_notes', {'person_id': self.jia, 'kind': 'trait', 'text': '爱笑'}, now_ms=300, **kw)
+        n2 = self.lib.put('people_notes', {'person_id': self.jia, 'kind': 'trait', 'text': '话少'}, now_ms=310, **kw)
+        self.edited_note = n2['note_id']
+        self.lib.put('people_notes', {'person_id': self.jia, 'kind': 'trait', 'text': '话不多'}, item_id=self.edited_note,
+                     expected_version=1, scope_id='office', now_ms=320)
+        self.climb = self.lib.put('knowledge_items', {'kind': 'commitment', 'name': '登山团体', 'subjects': ['owner']},
+                                  now_ms=400, **kw)['kid']
+        for title, ms, extra in (('第一次登山', 1000, {'topics': [self.climb]}), ('最近一次登山', 3000, {'topics': [self.climb]}),
+                                 ('和甲吃饭', 2000, {'subjects': [self.jia]})):
+            self.lib.put('memory_items', {'kind': 'event', 'title': title, 'statement': '说明',
+                                          'when': {'type': 'point', 'start_ms': ms, 'end_ms': None}, **extra}, now_ms=500, **kw)
+
+    def test_overview_counts_ids_not_versions(self):
+        o = self.lib.overview(settings.load(None))
+        self.assertEqual(o['collections']['people_notes']['total'], 2)
+        self.assertEqual(o['collections']['people_notes']['by_origin'], {'owner': 2})
+        self.assertEqual(o['voice_labels']['total'], 0)
+        self.assertEqual(set(o['existing']), {'owner_voice_names', 'owner_face_names', 'settings_people', 'mind_memories'})
+
+    def test_people_owner_first_with_note_counts(self):
+        rows = self.lib.people()
+        self.assertEqual(rows[0]['person_id'], 'owner')
+        self.assertEqual(next(r for r in rows if r['person_id'] == self.jia)['notes'], 2)
+
+    def test_person_view_gathers_notes_memories_knowledge(self):
+        p = self.lib.person(self.jia)
+        self.assertEqual(len(p['notes']), 2)
+        self.assertEqual([m['title'] for m in p['memories']], ['和甲吃饭'])
+        with self.assertRaises(KeyError):
+            self.lib.person('p_' + '0' * 12)
+
+    def test_memories_filters_and_paging(self):
+        self.assertEqual(self.lib.memories(topic=self.climb)['total'], 2)
+        self.assertEqual(self.lib.memories(person=self.jia)['total'], 1)
+        self.assertEqual(self.lib.memories(limit=1)['items'][0]['title'], '最近一次登山')   # newest start_ms first
+        with self.assertRaises(ValueError):
+            self.lib.memories(limit=101)
+
+    def test_q_is_plain_substring(self):
+        self.assertEqual(self.lib.knowledge(q='登山')['total'], 1)
+        self.assertEqual(self.lib.knowledge(q='.*')['total'], 0)
+        self.assertEqual(self.lib.memories(q='$ne')['total'], 0)
+
+    def test_item_history_owner_original_and_children(self):
+        it = self.lib.item('people_notes', self.edited_note)
+        self.assertEqual([v['version'] for v in it['versions']], [2, 1])
+        self.assertEqual(it['owner_original']['version'], 2)
+        self.assertEqual(len(self.lib.item('knowledge_items', self.climb)['children']), 2)
+        with self.assertRaises(KeyError):
+            self.lib.item('memory_items', 'e_' + '0' * 12)
+
+    def test_reads_never_write(self):
+        before = {c: len(self.db[c].docs) for c in ('people_cards', 'people_notes', 'memory_items', 'knowledge_items')}
+        self.lib.overview(settings.load(None)); self.lib.people(); self.lib.person(self.jia)
+        self.lib.memories(q='登山'); self.lib.knowledge(); self.lib.item('knowledge_items', self.climb)
+        self.assertEqual(before, {c: len(self.db[c].docs) for c in before})
 
 
 if __name__ == "__main__":
