@@ -1,5 +1,12 @@
 # 会话交接记录
 
+## 2026-11-13 下午：统一按钮第一步上线（Claude）
+
+- 按计划 `docs/superpowers/plans/2026-11-13-unified-say-button-step1.md` 实现（本会话内联执行，账本在本机 `.superpowers/sdd/2026-11-13-unified-say-button-step1/progress.md`），提交 `f8c910d`…`ed6988f` 等。说明见 [统一按钮第一步](memory-speech.md#统一按钮第一步2026-11-13-上线)。
+- 最终审阅（Fable）1 处严重、8 处重要，已全部带测试修复；次要问题记在账本里，未修。Python 577 通过（4 跳过），Node 195 通过。
+- 已部署：mind/eye/notes/memory 重启，服务器文件哈希与本地一致；观察台重启；设置第 5 版 `speech.pipeline=round`。未做现场验收（等用户点）。
+- 同时在做：DualKey 固件（Opus 子 agent，`dualkey/`，按 `/signal` WebSocket 协议）；服务器 `/signal` 端点和页面待做；模式规划文档在合并用户答复。
+
 ## 2026-11-13 中午：ASR 方向词、开机自动追踪上机（0.4.87–0.4.89，Claude）
 
 - 0.4.87 = 0.4.86（白屏修复）+ ASR 方向词（Opus 实现，见下面 0.4.85 条目）。用户实测"效果不错"。
