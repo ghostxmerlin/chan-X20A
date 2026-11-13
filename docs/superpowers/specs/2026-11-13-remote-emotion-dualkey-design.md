@@ -264,7 +264,7 @@
 | 刷机工具 | `tools/dualkey_flash.py`，`tools/dualkey_usb.py` | 按 USB 序列号找口、核对芯片和容量、整片备份并校验、只写 `factory` 应用分区、独立校验；不写 bootloader、分区表、`nvs`、`fctry`、`esp_secure_cert`、`nvs_key`。出厂固件整片备份在本机，可以随时还原 |
 | 配网 | `tools/dualkey_provision.py` | USB 写 Wi-Fi、服务器、令牌；不打开机器人的口 |
 | 耳朵转发 | `server/ear/signal_link.py` | 只转发：每条信号在线程里交给 mind，mind 存好才回 ack；mind 不在就不回 ack，设备会重发；60 秒没消息关连接 |
-| mind 存储 | `server/mind/owner_signals.py`，`api.py` 的 `POST /signal`、`GET /signals` | 种类 `rating / round_none / mode / click`；按 `device + boot + seq` 去重；DualKey 的打分对应到当时正在播、或结束不超过 12 秒的那句台词，台词还没有播放时间时，读取时再对一次 |
+| mind 存储 | `server/mind/owner_signals.py`，`api.py` 的 `POST /signal`、`GET /signals` | 种类 `rating / round_none / mode / click`；按 `device + boot + seq` 去重；DualKey 的打分对应到当时正在播、或结束不超过 30 秒的那句台词（原为 12 秒，2026-11-13 主人改为 30 秒），台词还没有播放时间时，读取时再对一次 |
 | 打分规则 | `dualkey/README.md` | 间隔 ≤ 350 ms 算同一组，超过立即收尾；最后一下后 500 ms 没再按就发；最多计 5 下；两键同按作废 |
 
 审计提的 DualKey 问题，这一版已经落实的：刷机规则和 G7 / G8 不能配成高电平输出的警告（严重 1）；耳朵只转发、不写库（重要 9）；分组阈值统一、续航估算改成 3.5–5 小时、蓝牙关闭、灯平时不亮（重要 7、8）。

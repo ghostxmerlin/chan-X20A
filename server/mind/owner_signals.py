@@ -9,11 +9,11 @@ import uuid
 KINDS = ('rating', 'round_none', 'mode', 'click')
 DIRECTIONS = ('up', 'down', 'left', 'right')
 CLICKS = ('single', 'double', 'long')
-ATTRIBUTE_AFTER_MS = 12_000          # a device rating up to 12 s after a line ends still rates that line
+ATTRIBUTE_AFTER_MS = 30_000          # a device rating up to 30 s after a line ends still rates that line
 
 
 def _attribute(db, at):
-    """The spoken line a device rating refers to: playing at `at`, or ended at most 12 s before (spec C.2)."""
+    """The spoken line a device rating refers to: playing at `at`, or ended at most 30 s before (spec C.2; 12 s until 2026-11-13, owner chose 30)."""
     best = None
     for u in db['utterances'].find({'play_start_at': {'$lte': at}}, {'_id': 0, 'uid': 1, 'play_start_at': 1, 'play_end_at': 1}):
         end = u.get('play_end_at') or u['play_start_at']

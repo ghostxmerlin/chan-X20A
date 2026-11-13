@@ -100,8 +100,11 @@ class DeviceSignalsTest(unittest.TestCase):
         doc = self.dev('rating', {'polarity': 1, 'count': 2, 'presses_ms': [0, 200], 'capped': False}, at=T0 + 9000)
         self.assertEqual(doc['refers_to'], {'uid': 'u1'})
         self.assertEqual(doc['at'], T0 + 8800)
-        late = self.dev('rating', {'polarity': -1, 'count': 1, 'presses_ms': [0], 'capped': False}, seq=2, at=T0 + 40000)
-        self.assertIsNone(late['refers_to'])            # nothing played in the last 12 s: rates the moment
+        # 2026-11-13 16:17:36 live: a press 25.5 s after the line ended found nothing with a 12 s window
+        slow = self.dev('rating', {'polarity': 1, 'count': 1, 'presses_ms': [0], 'capped': False}, seq=2, age=0, at=T0 + 23000 + 25500)
+        self.assertEqual(slow['refers_to'], {'uid': 'u2'})
+        late = self.dev('rating', {'polarity': -1, 'count': 1, 'presses_ms': [0], 'capped': False}, seq=3, age=0, at=T0 + 23000 + 30001)
+        self.assertIsNone(late['refers_to'])            # nothing played in the last 30 s: rates the moment
 
     def test_rating_during_playback_is_attached_once_play_times_are_known(self):
         # 2026-11-13 live: play_start_at is written only after the line finished, so a press while hello
