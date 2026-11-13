@@ -165,11 +165,21 @@ def main():
             print(f"fused {n} minutes, cost ${store.cost_today(s['tz'], int(time.time() * 1000)) - before:.4f}", flush=True)
         return
     token = open(a.token_file).read().strip() if a.token_file else ""
-    from . import api
+    from . import api, say_prefetch, say_round, speech_context
+    roles = speak.load_roles(a.roles)
+    say_worker = say_prefetch.Worker(
+        store, settings_fn=lambda: settings_store.current()[0],
+        mouth_fn=lambda: (db["switches"].find_one({"_id": "mouth"}) or {}).get("mode", "clips"),
+        ctx_fn=lambda s, now_ms: speech_context.build(db, store, s, now_ms),
+        write_fn=lambda ctx, now_ms: say_round.write_round(env, store, settings_store.current()[0], roles, ctx, now_ms,
+                                                           trigger={"source": "prefetch"}))
+    if env:
+        threading.Thread(target=say_worker.run, daemon=True).start()
     threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port,
                                              {"env": env, "settings_store": settings_store,
                                                                          "recordings_root": a.recordings, "roles_dir": a.roles,
-                                                                         "tts": speak.TtsHttp.from_file(a.tts_url, a.tts_token_file)}), daemon=True).start()
+                                                                         "tts": speak.TtsHttp.from_file(a.tts_url, a.tts_token_file),
+                                                                         "say_worker": say_worker}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}", flush=True)
     while True:
