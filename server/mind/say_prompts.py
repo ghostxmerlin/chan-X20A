@@ -38,8 +38,9 @@ JUDGE_RULES = '''你替桌上的小机器人 hello 把关。它刚听到下面�
 给每句打分，1 到 10 的整数。看这几条：是不是接住了刚才的话，越新越好；有没有意外；短不短；像不像熟人顺嘴说的；这副嗓子和方言说这句合不合适。硬编的、复述原话的、不知所云的给低分。
 scores 按候选的编号顺序给出。best 填现场效果最好的那句的编号。如果连最好的一句说出来也多半冷场，weak 填 true。只输出 JSON。'''
 
-CHECK_RULES = '''桌上的小机器人 hello 事先写好了几句插嘴，按好坏排好了序。写完之后屋里又说了新的话。
-判断现在说哪一句还接得上：优先排在前面的；如果新的话已经换了话题，或者某句现在说出来会显得答非所问，就跳过它。pick 填要说的那句的编号；一句都不合适就填 0。只输出 JSON。'''
+CHECK_RULES = '''桌上的小机器人 hello 事先写好了几句插嘴，按好坏排好了序。写的时候屋里在说一件事，写完之后屋里又说了几句新的话。
+判断现在说哪一句还接得上：新的话还在同一个话题上（接着讲、补充、附和、换个说法）时，排在前面的那句照样能说，选它；只有新的话明显换了一件事，或者某句现在说出来会答非所问，才跳过那句。
+pick 填要说的那句的编号；只有每一句都接不上时才填 0。只输出 JSON。'''
 
 LINE_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['point', 'device', 'text'],
                'properties': {'point': {'type': 'string'}, 'device': {'type': 'string', 'enum': list(S.DEVICES)},
@@ -83,6 +84,11 @@ def huyu_messages(ctx, now_ms, history, max_chars=40):
                      _payload(ctx, now_ms, {'最近写过': [x['text'] for x in mine[-6:]]}))
 
 
+def _heard_between(ctx, lo_ms, hi_ms):
+    rows = [e for e in ctx['evidence'] if e['kind'] == 'speech' and lo_ms < e['at'] <= hi_ms]
+    return ['- ' + e['text'][:200] + ('' if e.get('quality') == 'usable' else '（听不太清）') for e in rows][-5:]
+
+
 def _heard(ctx, since_ms=None):
     rows = []
     for e in ctx['evidence']:
@@ -103,7 +109,9 @@ def judge_messages(ctx, now_ms, lines):
 
 def check_messages(ctx_now, now_ms, ranked, since_ms):
     """ranked: best first, each {text}; only speech heard after since_ms (the round's written_at) is shown."""
+    before = [r for r in _heard_between(ctx_now, since_ms - 90_000, since_ms)] or ['（没有听清的话）']
     heard = '\n'.join(_heard(ctx_now, since_ms)) or '（没有新的话）'
     cands = '\n'.join(f"{i + 1}. {x['text']}" for i, x in enumerate(ranked))
     return [{'role': 'system', 'content': CHECK_RULES},
-            {'role': 'user', 'content': f'写完之后新听到的话（旧到新）：\n{heard}\n\n事先写好的句子（好的在前）：\n{cands}'}]
+            {'role': 'user', 'content': f'写的时候屋里在说的（旧到新）：\n' + '\n'.join(before) +
+             f'\n\n写完之后新听到的话（旧到新）：\n{heard}\n\n事先写好的句子（好的在前）：\n{cands}'}]

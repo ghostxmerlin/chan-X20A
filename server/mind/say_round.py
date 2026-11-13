@@ -17,7 +17,7 @@ from .speech_context import norm
 MODEL = 'gpt-6.1-terra'
 KEYS = tuple(P.DIRECTIONS)                       # comfort deadpan roast sad worst
 HUYU = 'huyu'
-PROMPTS = {'line': 'say-line-v1', 'huyu': 'say-huyu-v1', 'judge': 'say-judge-v1', 'check': 'say-check-v1'}
+PROMPTS = {'line': 'say-line-v1', 'huyu': 'say-huyu-v1', 'judge': 'say-judge-v1', 'check': 'say-check-v2'}
 CALL_TIMEOUT_S = 12
 HISTORY_ROUNDS = 6
 BAD_CHARS = re.compile(r'[\r\n\[\]【】（）()“”「」<>]')

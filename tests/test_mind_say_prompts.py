@@ -55,12 +55,19 @@ class SayPromptsTest(unittest.TestCase):
         self.assertIn('2. 乙句（小黑，四川话）', user)
         self.assertIn('刚说的话', user)
 
-    def test_check_prompt_lists_new_speech_only_after_round(self):
-        c = ctx([heard('写之前的话', 40000), heard('写之后的新话', 3000)])
+    def test_check_prompt_shows_what_was_said_before_and_after_the_round(self):
+        # 2026-11-13 live: with only the new speech shown, the check answered "none fits" 3 of 3 times;
+        # it needs the speech the lines were written for to judge whether the topic went on.
+        c = ctx([heard('很早的话', 200000), heard('写之前的话', 40000), heard('写之后的新话', 3000)])
         user = P.check_messages(c, T0, [{'text': '候选一'}, {'text': '候选二'}], since_ms=T0 - 20000)[1]['content']
-        self.assertIn('写之后的新话', user)
-        self.assertNotIn('写之前的话', user)
-        self.assertIn('1. 候选一', user)
+        before, after = user.split('写完之后新听到的话')
+        self.assertIn('写的时候屋里在说的', before)
+        self.assertIn('写之前的话', before)
+        self.assertNotIn('很早的话', user)             # only the 90 s before the round was written
+        self.assertIn('写之后的新话', after)
+        self.assertNotIn('写之前的话', after)
+        self.assertIn('1. 候选一', after)
+        self.assertIn('同一个话题', P.CHECK_RULES)
 
     def test_schemas_are_strict(self):
         for schema in (P.LINE_SCHEMA, P.HUYU_SCHEMA, P.JUDGE_SCHEMA, P.CHECK_SCHEMA):
