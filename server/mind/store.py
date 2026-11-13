@@ -59,6 +59,8 @@ class Store:
         db["owner_signals"].create_index([("refers_to.rid", 1)])
         db["owner_signals"].create_index([("source.device", 1), ("source.boot", 1), ("source.seq", 1)])
         db["conversations"].create_index([("start_ms", 1)])
+        from .library import Library
+        Library(db).ensure_indexes()
 
     def latest(self, lane, minute):
         return self.packages.find_one({"lane": lane, "minute": minute}, {"_id": 0}, sort=[("version", -1)])
