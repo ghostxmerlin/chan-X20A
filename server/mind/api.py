@@ -5,6 +5,8 @@ scenes. Sentence text only leaves through this API; nothing is logged.
 
 GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes /roles /utterances /voices
 POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voice/try
+GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
+POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
 """
 import base64
 import copy
@@ -24,6 +26,7 @@ from .attention import NoSituation
 from .model_calls import BudgetExceeded
 from .store import LANE
 from . import owner_signals
+from .library import Library, LibraryConflict, COLLECTIONS, ID_RE
 
 MAX_RANGE_MS = 24 * 3600_000
 MAX_BODY = 16 * 1024
@@ -174,7 +177,64 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                     out["jpeg_b64"], out["missing"] = base64.b64encode(f.read()).decode(), False
         return out
 
+    DB_POST = {'/db/person': 'people_cards', '/db/person/note': 'people_notes', '/db/memory': 'memory_items',
+               '/db/knowledge': 'knowledge_items'}
+
+    def lib_id(v):
+        if not isinstance(v, str) or not re.fullmatch(ID_RE, v):
+            raise BadRequest('invalid id')
+        return v
+
+    def lib_call(fn):
+        try:
+            return fn()
+        except ValueError as e:
+            raise BadRequest(str(e)) from None
+        except KeyError as e:
+            raise NotFound(str(e.args[0]) if e.args else 'not found') from None
+
+    def lib_get(path, q):
+        lib = Library(db)
+        one = lambda k: (q.get(k) or [None])[0]
+        if path == '/db/overview':
+            return lib.overview(current_settings()[0])
+        if path == '/db/people':
+            return {'items': lib.people()}
+        if path == '/db/person':
+            return lib_call(lambda: lib.person(lib_id(one('id'))))
+        if path == '/db/item':
+            if one('c') not in COLLECTIONS:
+                raise BadRequest('invalid collection')
+            return lib_call(lambda: lib.item(one('c'), lib_id(one('id'))))
+        offset, limit = _int(q, 'offset', False), _int(q, 'limit', False)
+        offset, limit = 0 if offset is None else offset, 20 if limit is None else limit
+        if path == '/db/memories':
+            return lib_call(lambda: lib.memories(one('kind'), one('person'), one('topic'), one('q'),
+                                                 _int(q, 'from', False), _int(q, 'to', False), offset, limit))
+        return lib_call(lambda: lib.knowledge(one('kind'), one('person'), one('q'), offset, limit))
+
+    def lib_post(path, body):
+        if set(body) - {'id', 'expected_version', 'fields', 'reason', 'restore_version'}:
+            raise BadRequest('unexpected fields')
+        c, now = DB_POST[path], int(time.time() * 1000)
+        item_id = lib_id(body['id']) if body.get('id') is not None else None
+        lib = Library(db)
+        if 'restore_version' in body:
+            if item_id is None or 'fields' in body:
+                raise BadRequest('restore needs id and no fields')
+            return lib_call(lambda: lib.restore(c, item_id, body.get('expected_version'), body['restore_version'], now))
+        reason = body.get('reason', '')
+        if not isinstance(reason, str):
+            raise BadRequest('reason must be text')
+        scope_id = speech_settings.scope(current_settings()[0])['id']
+        return lib_call(lambda: lib.put(c, body.get('fields'), item_id=item_id, expected_version=body.get('expected_version'),
+                                        scope_id=scope_id, now_ms=now, reason=reason[:200]))
+
     def get(path, q):
+        if path.startswith('/db/'):
+            if path not in ('/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item'):
+                raise NotFound('not found')
+            return lib_get(path, q)
         if path == '/speech/settings':
             return speech_config()
         if path in ('/memories','/memory/history'):
@@ -313,6 +373,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
 
     def post(path, body):
         now = int(time.time() * 1000)
+        if path in DB_POST:
+            return lib_post(path, body)
         if path == '/speech/settings':
             ss = ctx.get('settings_store')
             if not ss or type(body.get('expected_version')) is not int or set(body)-{'speech','memory','expected_version','note'}:
@@ -537,7 +599,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(404, {"error": str(e)})
             except NoSituation as e:
                 self._send(409, {"error": str(e), "code": "no_situation"})
-            except (Conflict, SettingsConflict, MemoryConflict, speak.NotConnected, BudgetExceeded) as e:
+            except (Conflict, SettingsConflict, MemoryConflict, LibraryConflict, speak.NotConnected, BudgetExceeded) as e:
                 self._send(409, {"error": str(e)})
             except Exception as e:               # noqa: BLE001 - database trouble shows as 503
                 self._send(503, {"error": f"{type(e).__name__}"})
@@ -555,7 +617,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 return
             url = urlsplit(self.path)
             if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
-                                '/say/round', '/say/play', '/signal', '/say/prefetch'):
+                                '/say/round', '/say/play', '/signal', '/say/prefetch', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:
