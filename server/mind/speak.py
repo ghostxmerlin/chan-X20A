@@ -142,11 +142,17 @@ def _finish(db, tts, uid, tts_id):
     fields = {"state": st.get("state"), "tts_cost_cny": cost, "tts_tokens": [tin, tout],
               "played": st.get("state") == "done" or timings.get("first_accepted") is not None, "timings_s": st.get("timings_s")}
     submit = (db["utterances"].find_one({"uid": uid}, {"tts_submit_at": 1}) or {}).get("tts_submit_at")
-    if submit:
-        # Wall-clock play window (spec 11): ratings from a remote are matched to the line playing then.
-        for name, key in (("play_start_at", "first_sound"), ("play_end_at", "done")):
-            if isinstance(timings.get(key), (int, float)):
-                fields[name] = submit + int(round(timings[key] * 1000))
+    # Wall-clock play window (spec 11): remote ratings are matched to the line playing then. soul-tts's own
+    # created / speaking_until are wall clock; first_sound exists only for the stream player (final review I7).
+    base = int(st["created"] * 1000) if isinstance(st.get("created"), (int, float)) else submit
+    if base:
+        start = next((timings[k] for k in ("first_sound", "first_accepted") if isinstance(timings.get(k), (int, float))), None)
+        if start is not None:
+            fields["play_start_at"] = base + int(round(start * 1000))
+        if isinstance(st.get("speaking_until"), (int, float)):
+            fields["play_end_at"] = int(round(st["speaking_until"] * 1000))
+        elif isinstance(timings.get("done"), (int, float)):
+            fields["play_end_at"] = base + int(round(timings["done"] * 1000))
     db["utterances"].update_one({"uid": uid}, {"$set": fields})
 
 
@@ -249,7 +255,7 @@ def compact_round(r):
             'thin_moment': r.get('thin_moment', False), 'cost_usd': r.get('cost_usd')}
 
 
-def _speak_line(store, tts, r, key, now_ms, why, casting=None):
+def _speak_line(store, tts, r, key, now_ms, why, casting=None, epoch=None, is_current=None):
     """Hand one line of round r to soul-tts and record the play (utterances + say_rounds.plays)."""
     line = rounds.line(r, key)
     cast = casting or {k: line.get(k) for k in ('voice', 'dialect', 'instruction', 'rate')}
@@ -261,8 +267,13 @@ def _speak_line(store, tts, r, key, now_ms, why, casting=None):
     store.db['utterances'].insert_one(dict(rec))
     try:
         with _ENQUEUE_LOCK:
+            if epoch is not None:
+                _check_pending(epoch, is_current)           # a stop that landed after the last check still wins
             tts_id = tts.say(line['text'], voice=cast['voice'], interrupt=True,
                              **{k: cast[k] for k in ('instruction', 'rate') if cast.get(k) is not None})
+    except NotConnected:
+        store.db['utterances'].update_one({'uid': uid}, {'$set': {'state': 'cancelled'}})
+        raise
     except Exception as e:
         store.db['utterances'].update_one({'uid': uid}, {'$set': {'state': 'error', 'error': type(e).__name__}})
         raise
@@ -277,6 +288,19 @@ def _speak_line(store, tts, r, key, now_ms, why, casting=None):
 def _note_trigger(store, r, now_ms, why, trigger):
     r.setdefault('triggers', []).append({'at': now_ms, 'why': why, 'source': (trigger or {}).get('source', 'page')})
     store.db['say_rounds'].update_one({'rid': r['rid']}, {'$set': {'triggers': r['triggers'], 'thin_moment': r.get('thin_moment', False)}})
+
+
+STOCK_TTL_MS = 300_000
+
+
+def _quiet_continuation(r, ctx, now_ms):
+    # A thin moment in a quiet room has no sentences to compare: it continues while nobody speaks and the
+    # last trigger is within the moment gap (final review I2).
+    if not r.get('thin_moment'):
+        return False
+    last = max([x['at'] for x in r.get('triggers', [])] or [r['at']])
+    quiet = not any(e.get('kind') == 'speech' and e.get('at', 0) >= now_ms - 60_000 for e in ctx.get('evidence', []))
+    return quiet and now_ms - last <= say_moment.GAP_MS
 
 
 def say_round(env, store, s, roles, tts, now_ms, *, worker, force_new=False, trigger=None, wait=False,
@@ -296,42 +320,47 @@ def say_round(env, store, s, roles, tts, now_ms, *, worker, force_new=False, tri
         scope_id = ctx['scope']['id']
         sig = say_moment.signature(ctx, now_ms)
         huyu_on = (s['speech'].get('round') or {}).get('huyu', True)
-        key, why = None, None
+        key, why, thin_path = None, None, False
         with worker.writing():
             r = worker.stock(scope_id)
-            same = bool(r) and not force_new and say_moment.same_moment(r.get('signature'), sig)
-            if same and r.get('plays') or same and r.get('triggers'):
+            triggered = bool(r) and bool(r.get('plays') or r.get('triggers'))
+            same = bool(r) and (say_moment.same_moment(r.get('signature'), sig) or _quiet_continuation(r, ctx, now_ms))
+            if triggered and same and not force_new:
                 if r.get('thin_moment'):
                     why = 'silent'
                 else:
                     played = {p['key'] for p in r.get('plays', [])}
                     key = next((k for k in rounds.ranked_keys(r) if k not in played), None)
                     why = 'next' if key else None
-            elif same:
-                newer = any(e.get('kind') == 'speech' and e.get('quality') == 'usable' and e['at'] > r['written_at']
-                            for e in ctx['evidence'])
+            elif r and not triggered and not force_new and now_ms - r['written_at'] <= STOCK_TTL_MS:
+                # Pre-written stock is used whenever it is fresh, not only inside the same moment (final review I4).
+                newer = any(e.get('kind') == 'speech' and e['at'] > r['written_at'] for e in ctx['evidence'])
                 if rounds.is_thin(r, ctx, now_ms, s):
-                    key, why = 'huyu', 'huyu'
+                    key, why, thin_path = 'huyu', 'huyu', True
                 elif newer:
                     key = rounds.check_round(env, store, s, r, ctx, now_ms, chat=CHAT)
-                    key, why = (key, 'checked') if key else ('huyu', 'huyu')
+                    key, why, thin_path = (key, 'checked', False) if key else ('huyu', 'huyu', True)
                 else:
                     key, why = rounds.ranked_keys(r)[0], 'stock'
             if why is None:
-                moment = r['moment_id'] if same else None
+                # "重新写五句" stays in the same moment (final review I5).
+                moment = r['moment_id'] if r and same else None
                 r = rounds.write_round(env, store, s, roles, ctx, now_ms, chat=CHAT, trigger=trigger, moment_id=moment)
                 worker.put(scope_id, r)
                 _check_pending(epoch, is_current)
-                key, why = (('huyu', 'huyu') if rounds.is_thin(r, ctx, now_ms, s) else (rounds.ranked_keys(r)[0], 'fresh'))
+                if rounds.is_thin(r, ctx, now_ms, s):
+                    key, why, thin_path = 'huyu', 'huyu', True
+                else:
+                    key, why = rounds.ranked_keys(r)[0], 'fresh'
             if key == 'huyu' and (not huyu_on or rounds.line(r, 'huyu').get('dropped')):
                 key, why = None, 'silent'
-            if why == 'huyu':
-                r['thin_moment'] = True
+            if thin_path:
+                r['thin_moment'] = True                      # later triggers in this moment stay silent (I8)
         _check_pending(epoch, is_current)
         _note_trigger(store, r, now_ms, why, trigger)
         uid = None
         if key:
-            uid, tts_id = _speak_line(store, tts, r, key, now_ms, why)
+            uid, tts_id = _speak_line(store, tts, r, key, now_ms, why, epoch=epoch, is_current=is_current)
             if wait:
                 _finish(store.db, tts, uid, tts_id)
             else:

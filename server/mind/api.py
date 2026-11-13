@@ -289,13 +289,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             lo, hi = _range(q)
             scope_id = speech_settings.scope(current_settings()[0])['id']
             rows = list(db['say_rounds'].find({'scope_id': scope_id, 'at': {'$gte': lo, '$lt': hi}}, {'_id': 0}).sort('at', -1).limit(50))
-            folded = {m['first_rid']: m for m in owner_signals.fold_moments(db, scope_id, lo, hi)}
-            out = []
-            for r in reversed(rows):
-                m = next((x for x in folded.values() if x['moment_id'] == r['moment_id']), None)
-                out.append({**speak.compact_round(r), 'marks': {'ratings': {k: v[0] for k, v in (m or {}).get('ratings', {}).items()},
-                                                                 'none': bool((m or {}).get('none'))}})
-            return out
+            return [{**speak.compact_round(r), 'triggered': bool(r.get('plays') or r.get('triggers')),
+                     'marks': owner_signals.round_marks(db, r['rid'])} for r in reversed(rows)]
         if path == '/say/stats':
             days = max(1, min(_int(q, 'days', required=False) or 7, 365))
             now = int(time.time() * 1000)

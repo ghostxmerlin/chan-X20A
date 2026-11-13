@@ -125,3 +125,66 @@ class SayEntryTest(SpeechCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SayEntryReviewFixesTest(SayEntryTest):
+    """Final review findings I1, I2, I4, I5, I7, I8."""
+    def test_stop_just_before_enqueue_never_speaks(self):
+        self.heard(age=8000)
+        self.stock(self.now - 2000)
+        original = speak._note_trigger
+        def stop_then(*a, **k):
+            speak.cancel_pending()
+            return original(*a, **k)
+        with patch.object(speak, '_note_trigger', stop_then), self.assertRaises(speak.NotConnected):
+            self.click()
+        self.assertEqual(self.tts.said, [])
+
+    def test_quiet_room_huyu_then_silent_by_default(self):
+        self.stock(self.now - 2000)                       # nobody spoke: thin by the default rule
+        first = self.click()
+        calls = RoutedChat()
+        second = self.click(now=self.now + 5000, chat=calls)
+        self.assertEqual((first['why'], second['why']), ('huyu', 'silent'))
+        self.assertEqual(calls.calls, [])
+        self.assertEqual(len(self.tts.said), 1)
+
+    def test_stock_used_even_after_the_talk_moved_on(self):
+        self.heard(id=1, age=125000, text='第一件事')
+        self.stock(self.now - 118000)                     # > 90 s ago: no longer the same moment
+        for i, text in enumerate(('第二件事', '第三件事', '第四件事')):
+            self.heard(id=2 + i, age=20000 - i * 5000, text=text)
+        chk = RoutedChat(check_pick=1)
+        rec = self.click(chat=chk)
+        self.assertEqual(rec['why'], 'checked')
+        self.assertEqual([c[0] for c in chk.calls], ['check'])
+
+    def test_rewrite_stays_in_the_same_moment(self):
+        self.heard(age=8000)
+        r = self.stock(self.now - 2000)
+        self.click()
+        again = self.click(now=self.now + 3000, force_new=True)
+        self.assertEqual(again['why'], 'fresh')
+        self.assertEqual(again['round']['moment_id'], r['moment_id'])
+
+    def test_play_window_from_soul_tts_wall_clock(self):
+        self.heard(age=8000)
+        self.stock(self.now - 2000)
+        class TimedTts(FakeTts):
+            def status(self, uid, wait=0):
+                return {'state': 'done', 'created': 1000.0, 'speaking_until': 1004.5,
+                        'timings_s': {'first_accepted': 0.9, 'first_sound': 1.2, 'done': 3.0}, 'attempts': []}
+        self.tts = TimedTts()
+        rec = self.click()
+        u = self.db['utterances'].find_one({'uid': rec['uid']})
+        self.assertEqual((u['play_start_at'], u['play_end_at']), (1001200, 1004500))
+
+    def test_check_none_without_fallback_stays_silent(self):
+        self.s['speech']['round'] = {'huyu': False}
+        self.heard(id=1, age=20000)
+        self.stock(self.now - 15000)
+        self.heard(id=2, age=3000, text='客户又说下周交付')
+        first = self.click(chat=RoutedChat(check_pick=0))
+        second = self.click(now=self.now + 4000, chat=RoutedChat(check_pick=0))
+        self.assertEqual((first['why'], second['why']), ('silent', 'silent'))
+        self.assertEqual(self.tts.said, [])

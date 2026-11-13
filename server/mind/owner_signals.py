@@ -35,7 +35,19 @@ def _column(device):
     return 'page' if device == 'page' else 'daily'
 
 
+def _signals(db, from_ms):
+    for sig in db['owner_signals'].find({'at': {'$gte': from_ms}}, {'_id': 0}).sort('at', 1):
+        ref, line = sig.get('refers_to') or {}, None
+        rid = ref.get('rid')
+        if ref.get('uid'):
+            u = db['utterances'].find_one({'uid': ref['uid']}, {'_id': 0, 'rid': 1, 'line': 1}) or {}
+            rid, line = u.get('rid'), u.get('line')
+        yield sig, rid, line or ref.get('line')
+
+
 def fold_moments(db, scope_id, from_ms, to_ms):
+    """One entry per moment. Ratings are keyed by (rid, line, column) — a line of round 2 is not the same
+    sentence as round 1's line with the same direction (final review I5); the last rating wins."""
     rounds = list(db['say_rounds'].find({'scope_id': scope_id, 'at': {'$gte': from_ms, '$lt': to_ms}}, {'_id': 0}).sort('at', 1))
     by_rid = {r['rid']: r for r in rounds}
     moments = {}
@@ -43,15 +55,10 @@ def fold_moments(db, scope_id, from_ms, to_ms):
         m = moments.setdefault(r['moment_id'], {'moment_id': r['moment_id'], 'first_rid': r['rid'],
                                                 'judge_first': r['judge'].get('best_key'), 'ratings': {},
                                                 'none': {}, 'plays': []})
-        m['plays'] += r.get('plays', [])
+        m['plays'] += [{**p, 'rid': r['rid']} for p in r.get('plays', [])]
     if not by_rid:
         return []
-    for sig in db['owner_signals'].find({'at': {'$gte': from_ms}}, {'_id': 0}).sort('at', 1):
-        ref, line = sig.get('refers_to') or {}, None
-        rid = ref.get('rid')
-        if ref.get('uid'):
-            u = db['utterances'].find_one({'uid': ref['uid']}, {'_id': 0, 'rid': 1, 'line': 1}) or {}
-            rid, line = u.get('rid'), u.get('line')
+    for sig, rid, line in _signals(db, from_ms):
         if rid not in by_rid:
             continue
         m = moments[by_rid[rid]['moment_id']]
@@ -59,14 +66,20 @@ def fold_moments(db, scope_id, from_ms, to_ms):
         if sig['kind'] == 'round_none':
             m['none'][col] = True
         else:
-            m['ratings'][(line or ref.get('line'), col)] = sig['value']['polarity'] * sig['value']['count']
-    out = []
-    for m in moments.values():
-        ratings = {}
-        for (line, col), v in m['ratings'].items():
-            ratings.setdefault(line, (v, col))
-            ratings[line] = (v, col)
-        out.append({**m, 'ratings_by_column': m['ratings'], 'ratings': ratings})
+            m['ratings'][(rid, line, col)] = sig['value']['polarity'] * sig['value']['count']
+    return list(moments.values())
+
+
+def round_marks(db, rid):
+    """The page's marks for one round: {ratings: {line: ±strength}, none: bool}, last mark per line."""
+    out = {'ratings': {}, 'none': False}
+    for sig, srid, line in _signals(db, 0):
+        if srid != rid:
+            continue
+        if sig['kind'] == 'round_none':
+            out['none'] = True
+        else:
+            out['ratings'][line] = sig['value']['polarity'] * sig['value']['count']
     return out
 
 
@@ -76,7 +89,7 @@ def stats(db, scope_id, from_ms, to_ms):
     for col in ('page', 'daily'):
         good = bad = rated = hits = judged = none = marked = 0
         for m in moments:
-            mine = {line: v for (line, c), v in m['ratings_by_column'].items() if c == col}
+            mine = {(rid, line): v for (rid, line, c), v in m['ratings'].items() if c == col}
             if mine or m['none'].get(col):
                 marked += 1
             none += bool(m['none'].get(col))
@@ -86,13 +99,13 @@ def stats(db, scope_id, from_ms, to_ms):
             good += sum(v for v in mine.values() if v > 0)
             bad += sum(-v for v in mine.values() if v < 0)
             judged += 1
-            hits += mine.get(m['judge_first'], 0) > 0
+            hits += mine.get((m['first_rid'], m['judge_first']), 0) > 0
         result[col] = {'good_rate': good / (good + bad) if good + bad else None,
                        'judge_hit_rate': hits / judged if judged else None,
                        'none_rate': none / marked if marked else None,
                        'rated_lines': rated, 'moments': marked}
-    played = [(m['moment_id'], p['key']) for m in moments for p in m['plays']]
-    rated_any = {(m['moment_id'], line) for m in moments for (line, _c) in m['ratings_by_column']}
+    played = [(p['rid'], p['key']) for m in moments for p in m['plays']]
+    rated_any = {(rid, line) for m in moments for (rid, line, _c) in m['ratings']}
     with_play = [m for m in moments if m['plays']]
     result['unrated_played_lines'] = len({p for p in played if p not in rated_any})
     result['huyu_rate'] = (sum(any(p.get('why') == 'huyu' for p in m['plays']) for m in with_play) / len(with_play)

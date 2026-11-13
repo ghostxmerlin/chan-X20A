@@ -62,6 +62,16 @@ export function roundCardHtml(r,marks,voices){
 <p class="round-foot"><button data-round-none="1" class="${marks?.none?'on bad':''}">这一轮都不行</button><button data-round-new="1">重新写五句</button>
 <span class="muted">${t.write_ms!=null?`写 ${(t.write_ms/1000).toFixed(1)} 秒`:''}${t.judge_ms!=null?` · 评委 ${(t.judge_ms/1000).toFixed(1)} 秒`:''}${r.weak?' · 评委觉得多半冷场':''}</span></p></div>`;
 }
+// The card shows what hello actually said: the latest triggered round (pre-writes stay hidden until used).
+export function pickRound(rows){return (rows||[]).filter(r=>r.triggered).at(-1)||null;}
+export function roundKey(r){return r?JSON.stringify([r.rid,r.plays,r.marks,r.thin_moment]):'';}
+export function earlierRoundsHtml(rows){
+ const done=(rows||[]).filter(r=>r.triggered).slice(0,-1).reverse();
+ if(!done.length)return '';
+ return `<details class="say-earlier"><summary>更早的轮次（${done.length}）</summary><ul class="utterances">${done.map(r=>{
+  const said=(r.plays||[]).map(p=>(r.lines||[]).find(l=>l.key===p.key)?.text).filter(Boolean);
+  return `<li>${said.length?said.map(escapeHtml).join(' / '):'<span class="muted">没出声</span>'}</li>`;}).join('')}</ul></details>`;
+}
 export class RatingBuffer{
  constructor(send,{settleMs=600,max=5}={}){this.send=send;this.settleMs=settleMs;this.max=max;this.cur=null;this.timer=null;}
  press(rid,line,polarity){
@@ -151,16 +161,18 @@ export class SayPanel{
   this.round=r.round;this.renderRound({ratings:{},none:false});
   this.refreshRound();
  }
- renderRound(marks){
+ renderRound(marks,earlier=''){
   const card=this.doc.getElementById('say-round');
-  if(card)card.innerHTML=roundCardHtml(this.round,marks,this.voices);
+  if(card)card.innerHTML=roundCardHtml(this.round,marks,this.voices)+earlier;
  }
  async refreshRound(){
   if(this.mode!=='round')return;
   try{
    const rows=await getJson(`/say/rounds?from=${Date.now()-3600000}&to=${Date.now()+60000}`);
-   const last=rows.at(-1);
-   if(last){this.round=last;this.renderRound(last.marks);}
+   const last=pickRound(rows);
+   // Re-render only on change, so an open recast list is not closed by the 5 s refresh.
+   const key=roundKey(last)+'|'+rows.filter(r=>r.triggered).length;
+   if(last&&key!==this.roundKeySeen){this.roundKeySeen=key;this.round=last;this.renderRound(last.marks,earlierRoundsHtml(rows));}
   }catch{}
  }
  async refresh(){

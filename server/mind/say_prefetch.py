@@ -30,6 +30,7 @@ class Worker:
         self._stock = {}
         self._scope_key = None
         self._on = False
+        self._attempt = {}                 # scope -> last write attempt (ms), successful or not
         self.store.set_state(say_prefetch={'on': False, 'since': None})       # a restart always starts off
 
     # ---- switch ----
@@ -88,17 +89,28 @@ class Worker:
         latest = max(clear)
         if now_ms - latest < quiet_ms:
             return 'waiting'
-        last = self._stock.get(scope_id)
-        if last and latest <= last['written_at']:
-            return 'nothing_new'
-        if last and now_ms - last['written_at'] < spacing_ms:
-            return 'spacing'
-        if last and same_moment(last.get('signature'), signature(ctx, now_ms)):
-            return 'same_moment'
+        sig = signature(ctx, now_ms)
+
+        def blocked():
+            last = self._stock.get(scope_id)
+            if last and latest <= last['written_at']:
+                return 'nothing_new'
+            # Failed writes count too, so a provider outage or empty rounds do not retry every few seconds.
+            if now_ms - max(last['written_at'] if last else 0, self._attempt.get(scope_id, 0)) < spacing_ms:
+                return 'spacing'
+            if last and same_moment(last.get('signature'), sig):
+                return 'same_moment'
+            return None
+        if reason := blocked():
+            return reason
         if self._hour_cost(now_ms) >= cap:
             return 'budget'
         with self._lock:
+            # A click may have written this moment while we were deciding: decide again under the lock.
+            if reason := blocked():
+                return reason
             self._busy = True
+            self._attempt[scope_id] = now_ms
             try:
                 round_ = self.write_fn(ctx, now_ms)
             finally:
@@ -112,6 +124,6 @@ class Worker:
             try:
                 self.step(int(self.clock() * 1000))
             except Exception as e:                    # noqa: BLE001 - keep the thread alive; log the reason
-                log(f'say prefetch: {type(e).__name__}: {str(e)[:160]}')
+                log(f'say prefetch: {type(e).__name__}: {str(e)[:160]}', flush=True)
                 time.sleep(5)
             time.sleep(1)

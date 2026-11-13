@@ -120,3 +120,39 @@ class SayPrefetchTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SayPrefetchRaceTest(unittest.TestCase):
+    """Final review C1/I6: re-check under the lock; back off after a failed write."""
+    def setUp(self):
+        self.h = Harness(self)
+        self.w = self.h.worker
+        self.w.set_enabled(True, T0)
+
+    def test_click_first_then_worker_writes_once(self):
+        self.h.speech = [(T0 + 1000, '甲')]
+        click_round = {'rid': 'rclick', 'written_at': T0 + 6500, 'scope_id': 'office',
+                       'signature': {'at': T0 + 6500, 'texts': ['甲'], 'scene_minute': None}}
+        real = self.w._lock
+        worker = self.w
+
+        class ClickFirst:
+            def __enter__(self):
+                worker.put('office', click_round)      # the click wrote while the worker was deciding
+                return real.__enter__()
+
+            def __exit__(self, *a):
+                return real.__exit__(*a)
+        self.w._lock = ClickFirst()
+        self.assertIn(self.w.step(T0 + 7000), ('nothing_new', 'spacing', 'same_moment'))
+        self.assertEqual(self.h.writes, [])
+        self.assertEqual(self.w.stock('office')['rid'], 'rclick')
+
+    def test_failed_write_backs_off(self):
+        self.h.speech = [(T0 + 1000, '甲')]
+        def boom(ctx, now):
+            raise RuntimeError('这一轮没写出足够的句子')
+        self.w.write_fn = boom
+        with self.assertRaises(RuntimeError):
+            self.w.step(T0 + 7000)
+        self.assertEqual(self.w.step(T0 + 13000), 'spacing')

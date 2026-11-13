@@ -71,6 +71,15 @@ class SayApiTest(unittest.TestCase):
         self.assertNotIn('secret', text)
         self.assertEqual(rows[0]['lines'][0]['text'], '一句')
 
+    def test_rounds_carry_triggered_flag_and_own_marks(self):
+        # Final review I3/I5: the page shows the latest round that was actually triggered, with its own marks.
+        self.db.add('say_rounds', stored_round('r1'), {**stored_round('r2'), 'at': T0 + 1, 'triggers': [{'at': T0 + 1, 'why': 'stock'}]})
+        self.call('/signal', {'kind': 'rating', 'value': {'polarity': 1, 'count': 2}, 'refers_to': {'rid': 'r2', 'line': 'roast'}})
+        status, rows = self.call(f'/say/rounds?from={T0 - 1}&to={T0 + 10}')
+        by = {r['rid']: r for r in rows}
+        self.assertEqual((by['r1']['triggered'], by['r2']['triggered']), (False, True))
+        self.assertEqual((by['r1']['marks']['ratings'], by['r2']['marks']['ratings']), ({}, {'roast': 2}))
+
     def test_explain_round_by_rid(self):
         self.db.add('say_rounds', stored_round('rab12'))
         status, body = self.call('/say/explain?rid=rab12')

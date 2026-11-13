@@ -34,8 +34,15 @@ class OwnerSignalsTest(unittest.TestCase):
         self.db.add('say_rounds', round_doc('r1', 'r1', 'roast', T0))
         self.rate('r1', 'roast', 1, 3, T0 + 1000)
         self.rate('r1', 'roast', -1, 1, T0 + 2000)
-        m = O.fold_moments(self.db, 'office', T0 - 1, T0 + 10000)[0]
-        self.assertEqual(m['ratings']['roast'][0], -1)
+        self.assertEqual(O.round_marks(self.db, 'r1')['ratings']['roast'], -1)
+
+    def test_ratings_kept_per_round_in_one_moment(self):
+        # Final review I5: a rating on round 2's roast must not count for round 1's roast.
+        self.db.add('say_rounds', round_doc('r1', 'm1', 'roast', T0), round_doc('r2', 'm1', 'roast', T0 + 30000))
+        self.rate('r2', 'roast', 1, 2, T0 + 31000)
+        self.assertEqual(O.stats(self.db, 'office', T0 - 1, T0 + 60000)['page']['judge_hit_rate'], 0.0)
+        self.assertEqual(O.round_marks(self.db, 'r1')['ratings'], {})
+        self.assertEqual(O.round_marks(self.db, 'r2')['ratings'], {'roast': 2})
 
     def test_good_rate_weighted_by_strength(self):
         self.db.add('say_rounds', round_doc('r1', 'r1', 'roast', T0))

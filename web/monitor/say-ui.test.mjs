@@ -82,3 +82,14 @@ test('round messages', ()=>{
  assert.match(ui.sayRoundMessage({why:'fresh',server_ms:4200,round}),/现写/);
  assert.match(ui.sayRoundMessage({why:'stock',server_ms:80,round}),/最坏句/);
 });
+test('the card follows the latest triggered round, not unspoken pre-writes (final review I3)', ()=>{
+ const rows=[{rid:'r1',triggered:true,lines:[{key:'roast',text:'甲'}],plays:[{key:'roast'}],marks:{ratings:{}}},
+  {rid:'r2',triggered:true,lines:[{key:'sad',text:'乙'}],plays:[{key:'sad'}],marks:{ratings:{sad:1}}},
+  {rid:'r3',triggered:false,lines:[{key:'worst',text:'未说'}],plays:[],marks:{ratings:{}}}];
+ assert.equal(ui.pickRound(rows).rid,'r2');
+ assert.equal(ui.pickRound([rows[2]]),null);
+ assert.equal(ui.roundKey(rows[1]),ui.roundKey(structuredClone(rows[1])));
+ assert.notEqual(ui.roundKey(rows[1]),ui.roundKey({...rows[1],marks:{ratings:{sad:2}}}));
+ const earlier=ui.earlierRoundsHtml(rows);
+ assert.match(earlier,/<details/);assert.match(earlier,/甲/);assert.doesNotMatch(earlier,/未说/);assert.doesNotMatch(earlier,/乙/);
+});
