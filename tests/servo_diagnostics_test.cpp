@@ -83,8 +83,16 @@ const char* esp_err_to_name(int){return "fake";}
 int64_t esp_timer_get_time(){now_us+=timer_step_us;return now_us;}
 void vTaskDelay(unsigned ticks){now_us+=ticks ? ticks*10000 : 100;}
 int uart_get_buffered_data_len(int,size_t* count){update_rx();*count=rx.size();return 0;}
-int uart_read_bytes(int,void* dest,size_t requested,int){
-    ++read_calls;update_rx();size_t count=std::min(requested,rx.size());
+int min_read_ticks=1<<30;
+int uart_read_bytes(int,void* dest,size_t requested,int ticks){
+    ++read_calls;min_read_ticks=std::min(min_read_ticks,ticks);update_rx();size_t count=std::min(requested,rx.size());
+    // A blocking read with nothing to read waits out its ticks, like the driver.
+    // A blocking read returns when the first byte lands, or after its ticks.
+    if(!count){
+        const int64_t deadline=now_us+(ticks>0 ? ticks*10000 : 100);
+        int64_t next=deadline;for(const auto& d:pending)next=std::min(next,d.time);
+        now_us=std::max(now_us,next);update_rx();count=std::min(requested,rx.size());
+    }
     for(size_t i=0;i<count;i++){static_cast<uint8_t*>(dest)[i]=rx.front();rx.pop_front();}return count;
 }
 int uart_write_bytes(int,const void* data,size_t requested){
@@ -187,13 +195,17 @@ int main(){
     respond=good_reply;assert(bus.EnableTorque(1,0)==1);
     assert(bus.getDiagnostics(1).torque_disable.ok==2);
 
-    reset_wire();respond=[](const auto& q){deliver(packet(q[2],std::vector<uint8_t>(q[6],0)),4000);};
+    // Reads block for whole 10 ms ticks (2026-11-13): a reply later than one
+    // tick is missed; the stale one then lands inside the next read's window.
+    reset_wire();respond=[](const auto& q){deliver(packet(q[2],std::vector<uint8_t>(q[6],0)),15000);};
     bus.IOTimeOut=2;
     assert(bus.ReadPos(1)==-1&&bus.getLastError()==ERR_NO_REPLY);
+    // A silent bus must yield the core: every wait blocks at least one tick.
+    assert(min_read_ticks>=1);
     // The old response arrives AFTER the next transaction flush and BEFORE
     // its actual answer. Existing parser returns a wrong-ID failure; there is
     // no claim that this synthetic response delay equals real hardware delay.
-    respond=[](const auto& q){deliver(packet(q[2],{2,205}),2000);};
+    respond=[](const auto& q){deliver(packet(q[2],{2,205}),8000);};
     assert(bus.ReadPos(2)==-1&&bus.getLastError()==ERR_SLAVE_ID);
     assert(bus.getDiagnostics(2).last_error.rx_prefix[2]==1);
     reset_wire();respond=[](const auto& q){deliver(packet(q[2],{2,205}),4000);};

@@ -46,12 +46,25 @@ public:
         if (!_config.persistDefaults) {
             // ESP soft reset need not reset the separately powered SCS0009.
             // Never trust the software Mode default when wheel mode survived.
-            setTorqueEnabled(false);
             const auto timeout = _scs_bus.IOTimeOut; _scs_bus.IOTimeOut = 10;
-            _position_mode_verified = TimedRotationIO::positionMode(_scs_bus, _config.id);
-            if (!_position_mode_verified) _position_mode_verified = TimedRotationIO::positionMode(_scs_bus, _config.id);
+            // Cold boot: VM is switched on only 200 ms before this check, and a
+            // servo that has not started yet does not answer. Silence is not wheel
+            // mode: wait up to ~2 s for an answer (2026-11-13 white screen, when
+            // silence cut VM for good). Only a real wheel-mode answer cuts power.
+            bool replied = false;
+            for (int attempt = 0; attempt < 20 && !replied; ++attempt) {
+                const int low = _scs_bus.readWord(_config.id, 9);
+                replied = low >= 0 && TimedRotationIO::good(_scs_bus);
+                if (!replied) vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            if (replied) {
+                setTorqueEnabled(false);
+                _position_mode_verified = TimedRotationIO::positionMode(_scs_bus, _config.id);
+                if (!_position_mode_verified) _position_mode_verified = TimedRotationIO::positionMode(_scs_bus, _config.id);
+            }
             _scs_bus.IOTimeOut = timeout;
-            if (!_position_mode_verified) cutRotationPower();
+            if (replied && !_position_mode_verified) cutRotationPower();
+            else if (!replied) mclog::tagWarn(_tag, "id: {} no reply at boot; motion stays off, servo power left on", _config.id);
         }
         if (_config.persistDefaults) Servo::init();
         else initPassive();

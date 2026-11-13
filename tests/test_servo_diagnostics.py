@@ -41,7 +41,7 @@ int uart_flush_input(int);
 int uart_wait_tx_done(int,unsigned);
 const char* esp_err_to_name(int);
 """)
-            (temporary / "freertos/FreeRTOS.h").write_text("#pragma once\nusing QueueHandle_t=void*;\nconstexpr int pdTRUE=1,pdFALSE=0;\n#define pdMS_TO_TICKS(ms) ((ms)/10)\n")
+            (temporary / "freertos/FreeRTOS.h").write_text("#pragma once\nusing QueueHandle_t=void*;\nusing TickType_t=unsigned;\nconstexpr int pdTRUE=1,pdFALSE=0;\n#define pdMS_TO_TICKS(ms) ((ms)/10)\n")
             (temporary / "freertos/task.h").write_text("#pragma once\nvoid vTaskDelay(unsigned);\n")
             (temporary / "freertos/queue.h").write_text("#pragma once\n#include \"FreeRTOS.h\"\nunsigned uxQueueMessagesWaiting(QueueHandle_t);\nint xQueueReceive(QueueHandle_t,void*,unsigned);\n")
             (temporary / "esp_timer.h").write_text("#pragma once\n#include <cstdint>\nint64_t esp_timer_get_time();\n")
