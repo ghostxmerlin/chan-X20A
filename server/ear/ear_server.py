@@ -44,6 +44,7 @@ from websockets.asyncio.server import serve
 import recorder
 import hello_db
 import vision_link
+import signal_link
 import tingwu as tingwu_rt
 import tingwu_switch
 import mouth_link
@@ -951,6 +952,8 @@ def main():
             last, n = tw_switch.on, n + 1
             await asyncio.sleep(5)
     vision_no = [0]
+    signal_active = set()
+    signal_post = signal_link.mind_poster(token_value)
 
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
@@ -970,6 +973,19 @@ def main():
             finally:
                 mouth_active.discard(ws)
             print(f"- {peer} mouth: {why}", flush=True)
+            return
+        if urlsplit(path).path == "/signal":           # DualKey owner signals, relayed to mind (2026-11-13)
+            if len(signal_active) >= 4:
+                await ws.close(code=1013, reason="server busy")
+                return
+            signal_active.add(ws)
+            peer = ws.remote_address
+            print(f"+ {peer} signal", flush=True)
+            try:
+                link = await signal_link.serve_link(ws, signal_post, f"{peer[0]}:{peer[1]}")
+            finally:
+                signal_active.discard(ws)
+            print(f"- {peer} signal {link.device}: {link.signals} signals", flush=True)
             return
         if urlsplit(path).path == "/vision":           # vision uplink: its own connection (collector-0.4.74+)
             if len(vision_active) >= 4:
