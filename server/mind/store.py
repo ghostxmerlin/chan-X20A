@@ -57,6 +57,7 @@ class Store:
         db["owner_signals"].create_index([("sid", 1)], unique=True)
         db["owner_signals"].create_index([("at", 1)])
         db["owner_signals"].create_index([("refers_to.rid", 1)])
+        db["owner_signals"].create_index([("source.device", 1), ("source.boot", 1), ("source.seq", 1)])
         db["conversations"].create_index([("start_ms", 1)])
 
     def latest(self, lane, minute):

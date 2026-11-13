@@ -86,6 +86,23 @@ class SayApiTest(unittest.TestCase):
         self.assertEqual((status, body['rid']), (200, 'rab12'))
         self.assertNotIn('clone-voice-id', json.dumps(body, ensure_ascii=False))
 
+    def test_recent_signals_listed(self):
+        self.call('/signal', {'kind': 'mode', 'value': {'direction': 'up'}, 'source': {'device': 'dualkey-ae1c', 'boot': 'b', 'seq': 1}})
+        status, rows = self.call('/signals?from=0&to=99999999999999')
+        self.assertEqual(status, 400)                       # range at most 24 h
+        import time as _t
+        now = int(_t.time() * 1000)
+        status, rows = self.call(f'/signals?from={now - 60000}&to={now + 1000}')
+        self.assertEqual((status, rows[-1]['kind'], rows[-1]['source']['device']), (200, 'mode', 'dualkey-ae1c'))
+
+    def test_recent_scene_minutes(self):
+        import time as _t
+        m = (int(_t.time() * 1000) // 60000) * 60000 - 60000
+        self.db.add('mind_scenes', {'lane': 'live', 'minute': m, 'version': 1, 'source': 'model',
+                                    'scene': {'people_doing': {'text': '主人在工位打字', 'confidence': 'high'}, 'summary': '安静工作'}})
+        status, rows = self.call(f'/scenes?from={m - 1}&to={m + 60000}')
+        self.assertEqual((status, rows[-1]['text'], rows[-1]['summary']), (200, '主人在工位打字', '安静工作'))
+
     def test_stats_shape(self):
         status, body = self.call('/say/stats?days=7')
         self.assertEqual(status, 200)

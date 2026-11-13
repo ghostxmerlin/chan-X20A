@@ -83,3 +83,40 @@ class OwnerSignalsTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DeviceSignalsTest(unittest.TestCase):
+    """DualKey signals relayed by the ear (2026-11-13): rating / mode / click, deduplicated, time-attributed."""
+    def setUp(self):
+        self.db = FakeDB()
+
+    def dev(self, kind, value, seq=1, age=200, at=T0 + 10000):
+        return O.put_signal(self.db, {'kind': kind, 'value': value, 'age_ms': age,
+                                      'source': {'device': 'dualkey-ae1c', 'boot': 'b1', 'seq': seq}}, at)
+
+    def test_rating_attaches_to_the_line_playing_then(self):
+        self.db.add('utterances', {'uid': 'u1', 'rid': 'r1', 'line': 'roast', 'at': T0, 'play_start_at': T0 + 1000, 'play_end_at': T0 + 4000},
+                    {'uid': 'u2', 'rid': 'r1', 'line': 'sad', 'at': T0 + 20000, 'play_start_at': T0 + 21000, 'play_end_at': T0 + 23000})
+        doc = self.dev('rating', {'polarity': 1, 'count': 2, 'presses_ms': [0, 200], 'capped': False}, at=T0 + 9000)
+        self.assertEqual(doc['refers_to'], {'uid': 'u1'})
+        self.assertEqual(doc['at'], T0 + 8800)
+        late = self.dev('rating', {'polarity': -1, 'count': 1, 'presses_ms': [0], 'capped': False}, seq=2, at=T0 + 40000)
+        self.assertIsNone(late['refers_to'])            # nothing played in the last 12 s: rates the moment
+
+    def test_mode_and_click_are_recorded(self):
+        self.assertEqual(self.dev('mode', {'direction': 'left'})['value'], {'direction': 'left'})
+        self.assertEqual(self.dev('click', {'type': 'single'}, seq=2)['kind'], 'click')
+        with self.assertRaises(ValueError):
+            self.dev('mode', {'direction': 'diagonal'}, seq=3)
+
+    def test_duplicate_device_seq_is_returned_not_stored_twice(self):
+        a = self.dev('click', {'type': 'single'}, seq=5)
+        b = self.dev('click', {'type': 'single'}, seq=5)
+        self.assertEqual(a['sid'], b['sid'])
+        self.assertEqual(self.db.count('owner_signals'), 1)
+
+    def test_recent_lists_newest_last(self):
+        self.dev('click', {'type': 'single'}, seq=1, at=T0 + 1000)
+        self.dev('mode', {'direction': 'up'}, seq=2, at=T0 + 2000)
+        rows = O.recent(self.db, T0, T0 + 5000)
+        self.assertEqual([r['kind'] for r in rows], ['click', 'mode'])

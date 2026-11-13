@@ -93,3 +93,10 @@ test('the card follows the latest triggered round, not unspoken pre-writes (fina
  const earlier=ui.earlierRoundsHtml(rows);
  assert.match(earlier,/<details/);assert.match(earlier,/甲/);assert.doesNotMatch(earlier,/未说/);assert.doesNotMatch(earlier,/乙/);
 });
+test('remote signals list', ()=>{
+ const at=new Date(2026,10,13,15,4,5).getTime();
+ const html=ui.signalsHtml([{at,kind:'rating',value:{polarity:1,count:3},source:{device:'dualkey-ae1c'},refers_to:{uid:'u1'}},
+  {at,kind:'mode',value:{direction:'left'},source:{device:'dualkey-ae1c'}},{at,kind:'click',value:{type:'single'},source:{device:'page'}}]);
+ assert.match(html,/好 ×3/);assert.match(html,/左/);assert.match(html,/点击/);assert.match(html,/dualkey-ae1c/);
+ assert.match(ui.signalsHtml([]),/还没有/);
+});

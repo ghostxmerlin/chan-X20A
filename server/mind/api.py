@@ -291,6 +291,17 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             rows = list(db['say_rounds'].find({'scope_id': scope_id, 'at': {'$gte': lo, '$lt': hi}}, {'_id': 0}).sort('at', -1).limit(50))
             return [{**speak.compact_round(r), 'triggered': bool(r.get('plays') or r.get('triggers')),
                      'marks': owner_signals.round_marks(db, r['rid'])} for r in reversed(rows)]
+        if path == '/scenes':
+            lo, hi = _range(q)
+            out = []
+            for d in store.scenes_range(LANE, lo, hi)[-60:]:
+                sc = d.get('scene') or {}
+                out.append({'minute': d['minute'], 'source': d.get('source'), 'version': d.get('version'),
+                            'text': (sc.get('people_doing') or {}).get('text') or '', 'summary': sc.get('summary') or ''})
+            return out
+        if path == '/signals':
+            lo, hi = _range(q)
+            return owner_signals.recent(db, lo, hi)
         if path == '/say/stats':
             days = max(1, min(_int(q, 'days', required=False) or 7, 365))
             now = int(time.time() * 1000)

@@ -60,13 +60,9 @@
         <p id="interaction-command" class="command-result" role="status">后台运行 · 仅明确操作后启用</p>
       </div>
     </section>
-    <section class="panel eyes-panel" aria-labelledby="eyes-heading">
-      <div class="panel-head"><h2 id="eyes-heading">眼睛表情</h2><span id="eyes-status" class="muted">等待连接</span></div>
-      <div class="panel-body">
-        <p id="eyes-current">—</p><p id="eyes-result" class="note">—</p>
-        <div class="select-row"><label for="eyes-style">款式</label><select id="eyes-style" disabled></select></div><div class="control-buttons"><button id="eyes-enable" disabled>启用款式</button><button id="eyes-disable" class="stop-button" disabled>恢复原首页</button></div>
-        <div class="select-row"><label for="eyes-state">表情</label><select id="eyes-state" disabled></select></div><div class="control-buttons"><button id="eyes-play" disabled>播放一次</button><button id="eyes-stop" disabled>回到待机</button></div><p id="eyes-command" class="command-result" role="status">选择款式后先应用；单次表情结束回待机。</p>
-      </div>
+    <section class="panel scene-panel" aria-labelledby="scene-heading">
+      <div class="panel-head"><h2 id="scene-heading">情景摘要</h2><span class="muted">每分钟 · 最近 20 分钟</span></div>
+      <div class="panel-body"><div id="scene-minutes"><p class="note">读取中…</p></div></div>
     </section>
     <section class="panel voice-panel" aria-labelledby="voice-heading">
       <div class="panel-head"><h2 id="voice-heading">台词</h2><span id="voice-count" class="muted">等待台词库</span></div>
@@ -74,7 +70,7 @@
         <section class="say-section" aria-labelledby="say-heading">
           <h3 id="say-heading" class="say-heading">让 hello 说一句 <span class="muted">TTS</span></h3><div id="say-buttons" class="say-buttons"></div>
           <p id="say-msg" class="command-result" role="status"></p><div id="say-round" class="say-round"></div>
-          <div class="say-extras"><details><summary>试听音色</summary><div id="say-voices" class="say-buttons"></div></details><details><summary>最近说过的话</summary><div id="say-utterances"></div></details></div>
+          <div class="say-extras"><details><summary>试听音色</summary><div id="say-voices" class="say-buttons"></div></details><details><summary>最近说过的话</summary><div id="say-utterances"></div></details><details><summary>遥控信号</summary><div id="say-signals"></div></details></div>
         </section>
         <h3 class="recordings-heading">固定录音</h3>
         <div class="inline-status"><span id="voice-status">等待连接</span><span id="voice-trigger" class="muted">等待 ASR 能力</span></div><p id="voice-current" class="voice-current">尚未播放台词</p><p id="voice-progress" class="note">网页点播，每次播放一条</p>
@@ -108,6 +104,10 @@
   <div class="dialog-head"><h2 id="settings-heading">设置</h2><form method="dialog"><button>关闭</button></form></div>
   <div class="settings-links"><button data-open="hearing-config">听觉配置 / 声纹</button><button data-open="wifi-config">网络</button><button data-open="servo-settings">仰角设置</button><button data-open="servo-tuning">舵机参数</button></div>
   <button id="speech-settings-open">说话风格 / 场景 / 长期记忆</button>
+  <h3 class="settings-section-heading">眼睛表情 <span id="eyes-status" class="muted">等待连接</span></h3>
+  <div class="settings-eyes"><p id="eyes-current">—</p><p id="eyes-result" class="note">—</p>
+        <div class="select-row"><label for="eyes-style">款式</label><select id="eyes-style" disabled></select></div><div class="control-buttons"><button id="eyes-enable" disabled>启用款式</button><button id="eyes-disable" class="stop-button" disabled>恢复原首页</button></div>
+        <div class="select-row"><label for="eyes-state">表情</label><select id="eyes-state" disabled></select></div><div class="control-buttons"><button id="eyes-play" disabled>播放一次</button><button id="eyes-stop" disabled>回到待机</button></div><p id="eyes-command" class="command-result" role="status">选择款式后先应用；单次表情结束回待机。</p></div>
   <h3 class="settings-section-heading">认人学习</h3>
           <div class="m12-library" aria-label="M12 人脸库"><div class="m12-library-head"><span>认人库（存在 M12 上）</span><button id="m12-faces" disabled>刷新</button></div>
             <div class="m12-learn"><input id="m12-name" maxlength="32" placeholder="名字（最多 32 字节）" autocomplete="off" disabled><button id="m12-learn" disabled title="对画面里最大的那张脸采 5 个样本，约 1 秒；请正对镜头">学习</button><button id="m12-who" disabled title="对画面里最大的那张脸认一次（会让检测停顿约 0.2 秒）">认一下</button></div>

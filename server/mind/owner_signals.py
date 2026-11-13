@@ -6,29 +6,66 @@ Learning counts each moment once: per line, the last rating wins.
 """
 import uuid
 
-KINDS = ('rating', 'round_none')
+KINDS = ('rating', 'round_none', 'mode', 'click')
+DIRECTIONS = ('up', 'down', 'left', 'right')
+CLICKS = ('single', 'double', 'long')
+ATTRIBUTE_AFTER_MS = 12_000          # a device rating up to 12 s after a line ends still rates that line
+
+
+def _attribute(db, at):
+    """The spoken line a device rating refers to: playing at `at`, or ended at most 12 s before (spec C.2)."""
+    best = None
+    for u in db['utterances'].find({'play_start_at': {'$lte': at}}, {'_id': 0, 'uid': 1, 'play_start_at': 1, 'play_end_at': 1}):
+        end = u.get('play_end_at') or u['play_start_at']
+        if at <= end + ATTRIBUTE_AFTER_MS and (best is None or u['play_start_at'] > best['play_start_at']):
+            best = u
+    return {'uid': best['uid']} if best else None
 
 
 def put_signal(db, body, now_ms):
     if not isinstance(body, dict) or body.get('kind') not in KINDS:
-        raise ValueError('kind must be rating or round_none')
+        raise ValueError('kind must be rating, round_none, mode or click')
+    src = body.get('source') or {}
+    device = src.get('device') or 'page'
+    if device != 'page' and src.get('boot') and isinstance(src.get('seq'), int):
+        same = db['owner_signals'].find_one({'source.device': device, 'source.boot': src['boot'], 'source.seq': src['seq']}, {'_id': 0})
+        if same:
+            return same                              # a resend after a reconnect: already stored
+    age = body.get('age_ms') if isinstance(body.get('age_ms'), int) and 0 <= body['age_ms'] <= 600_000 else 0
     refers = body.get('refers_to')
-    doc = {'sid': 'g' + uuid.uuid4().hex, 'at': now_ms, 'who': 'owner', 'kind': body['kind'], 'state': 'applied',
-           'source': {'device': ((body.get('source') or {}).get('device') or 'page'),
-                      'seq': (body.get('source') or {}).get('seq')}}
+    doc = {'sid': 'g' + uuid.uuid4().hex, 'at': now_ms - age, 'received_at': now_ms, 'who': 'owner', 'kind': body['kind'],
+           'state': 'applied', 'source': {'device': device, 'boot': src.get('boot'), 'seq': src.get('seq')}}
+    v = body.get('value') or {}
     if body['kind'] == 'rating':
-        v = body.get('value') or {}
         if v.get('polarity') not in (1, -1) or not isinstance(v.get('count'), int) or not 1 <= v['count'] <= 5:
             raise ValueError('rating needs polarity ±1 and count 1..5')
-        if not (isinstance(refers, dict) and ((isinstance(refers.get('rid'), str) and isinstance(refers.get('line'), str))
-                                              or isinstance(refers.get('uid'), str))):
-            raise ValueError('rating refers to {rid, line} or {uid}')
         doc['value'] = {'polarity': v['polarity'], 'count': v['count']}
-    elif not (isinstance(refers, dict) and isinstance(refers.get('rid'), str)):
-        raise ValueError('round_none refers to {rid}')
-    doc['refers_to'] = {k: refers[k] for k in ('rid', 'line', 'uid') if k in refers}
+        if isinstance(v.get('presses_ms'), list):
+            doc['value'].update(presses_ms=v['presses_ms'][:8], capped=bool(v.get('capped')))
+        if refers is None and device != 'page':
+            refers = _attribute(db, doc['at'])      # a remote rates whatever hello just said
+        elif not (isinstance(refers, dict) and ((isinstance(refers.get('rid'), str) and isinstance(refers.get('line'), str))
+                                                or isinstance(refers.get('uid'), str))):
+            raise ValueError('rating refers to {rid, line} or {uid}')
+    elif body['kind'] == 'round_none':
+        if not (isinstance(refers, dict) and isinstance(refers.get('rid'), str)):
+            raise ValueError('round_none refers to {rid}')
+    elif body['kind'] == 'mode':
+        if v.get('direction') not in DIRECTIONS:
+            raise ValueError('mode needs direction up/down/left/right')
+        doc['value'], refers = {'direction': v['direction']}, None
+    else:
+        if v.get('type') not in CLICKS:
+            raise ValueError('click type single/double/long')
+        doc['value'], refers = {'type': v['type']}, None
+    doc['refers_to'] = {k: refers[k] for k in ('rid', 'line', 'uid') if k in refers} if refers else None
     db['owner_signals'].insert_one(dict(doc))
     return doc
+
+
+def recent(db, from_ms, to_ms, limit=100):
+    rows = list(db['owner_signals'].find({'at': {'$gte': from_ms, '$lt': to_ms}}, {'_id': 0}).sort('at', -1).limit(limit))
+    return list(reversed(rows))
 
 
 def _column(device):
@@ -37,6 +74,8 @@ def _column(device):
 
 def _signals(db, from_ms):
     for sig in db['owner_signals'].find({'at': {'$gte': from_ms}}, {'_id': 0}).sort('at', 1):
+        if sig.get('kind') not in ('rating', 'round_none'):
+            continue
         ref, line = sig.get('refers_to') or {}, None
         rid = ref.get('rid')
         if ref.get('uid'):

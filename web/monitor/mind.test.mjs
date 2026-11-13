@@ -220,6 +220,6 @@ test('talk-show round routes pass the proxy and the local server', async t=>{
  for(const p of ['/say/round','/say/play','/signal','/say/prefetch'])
   assert.equal((await fetch(url+'/api/mind'+p,{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{}'})).status,200,p);
  assert.deepEqual(calls,['/say/round','/say/play','/signal','/say/prefetch']);
- for(const p of ['/say/rounds?from=1&to=2','/say/stats?days=1','/say/explain?rid=rab12'])
+ for(const p of ['/say/rounds?from=1&to=2','/say/stats?days=1','/say/explain?rid=rab12','/scenes?from=1&to=2','/signals?from=1&to=2'])
   assert.equal((await fetch(url+'/api/mind'+p)).status,200,p);
 });

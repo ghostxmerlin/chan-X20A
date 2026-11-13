@@ -72,6 +72,16 @@ export function earlierRoundsHtml(rows){
   const said=(r.plays||[]).map(p=>(r.lines||[]).find(l=>l.key===p.key)?.text).filter(Boolean);
   return `<li>${said.length?said.map(escapeHtml).join(' / '):'<span class="muted">没出声</span>'}</li>`;}).join('')}</ul></details>`;
 }
+const DIR_ZH={up:'上',down:'下',left:'左',right:'右'};
+export function signalsHtml(rows){
+ if(!rows||!rows.length)return '<p class="note">还没有遥控信号</p>';
+ return '<ul class="utterances">'+[...rows].reverse().slice(0,30).map(s=>{
+  const v=s.value||{};
+  const what=s.kind==='rating'?`${v.polarity>0?'好':'坏'} ×${v.count}${s.refers_to?.uid?' · 评刚说的那句':''}`:
+   s.kind==='mode'?`摇杆 ${DIR_ZH[v.direction]||v.direction}`:s.kind==='click'?`点击${v.type&&v.type!=='single'?`（${v.type}）`:''}`:
+   s.kind==='round_none'?'这一轮都不行':escapeHtml(s.kind);
+  return `<li><span class="muted">${hhmmss(s.at)} ${escapeHtml(s.source?.device||'')}</span> ${what}</li>`;}).join('')+'</ul>';
+}
 export class RatingBuffer{
  constructor(send,{settleMs=600,max=5}={}){this.send=send;this.settleMs=settleMs;this.max=max;this.cur=null;this.timer=null;}
  press(rid,line,polarity){
@@ -177,6 +187,8 @@ export class SayPanel{
  }
  async refresh(){
   this.refreshRound();
+  const sig=this.doc.getElementById('say-signals');
+  if(sig){try{sig.innerHTML=signalsHtml(await getJson(`/signals?from=${Date.now()-3600000}&to=${Date.now()+60000}`));}catch{}}
   const d0=new Date();d0.setHours(0,0,0,0);
   try{const list=await getJson(`/utterances?from=${d0.getTime()}&to=${Date.now()+60000}`);
    this.doc.getElementById('say-utterances').innerHTML=utterancesHtml(list,this.roles);}catch{}
