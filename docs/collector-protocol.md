@@ -127,7 +127,7 @@ M12 仍使用已有 `results/last_result_us/requested_us/faces` 等字段；网�
 
 - **开机自动追踪**（`collector/boot_tracking.h`，由 ASR 任务每 100 ms 推进）：开机 30 秒内收到 M12 心跳，就启用舵机（`remote_arm(true)`），舵机就绪后（最多再等 10 秒）打开追踪，追踪会把 M12 切到检测。只做一次。30 秒内没有 M12，就什么都不做。在它生效前说了任何转头词或开关追踪的词（含 `down`/`close`），它就取消，之后也不会再自动打开。结果在 `info.asr.boot_tracking`：`waiting_m12`、`tracking_on`、`no_m12`、`servos_not_ready`、`arm_refused`、`cancelled_by_user`；日志行 `AsrUnit: boot tracking: …`。
 - **`down`** 仍是关追踪（0.4.85 起），随时可用；关掉后开机自动追踪不会再打开它。
-- **`forward`(0x07) / `backward`(0x09)**：不再显示爱心和叉号，只记日志，用途待定。`info.asr.screen_reactions` 标为 reserved。遥控器上下推的爱心和叉号不受影响。
+- **`forward`(0x07) / `backward`(0x09)**：不再显示爱心和叉号，只记日志，用途待定。`info.asr.screen_reactions` 标为 reserved。遥控器上下推原本也有爱心和叉号；2026-11-13 的审计发现它从提交 `7700e7d` 起就已不再触发（`remote.cpp` 的 `reaction` 没有地方赋值），与这次改动无关，待修。
 - 0.4.86 的白屏修复（舵机开机等待回话、读舵机让出 CPU）包含在内。主机测试 500 项通过（4 项跳过），新增 `tests/boot_tracking_test.cpp`。
 
 ## 0.4.85：说话转头（Unit ASR 方向词）
@@ -588,3 +588,7 @@ USB配置命令可附`"priority":true`。首选SSID和密码作为单个`collect
 - `last_recognition_report_us` 是识别程序报告时间；不计入 `recognitions`，不产生人脸/身份。识别收到本次启动报告后停止未应答重发，避免无脸静默导致不断重启。官方源码依据：[face_recognition.cpp](https://github.com/m5stack/UnitV2Framework/blob/main/main/face_recognition.cpp)。
 
 - 俯仰映射：`pitch_mapping=center_v1_saved_neutral_legacy_absolute`；`pitch_neutral_input_deg=47.1`，`pitch_neutral_target_deg` 为最新保存仰角。16字节协议没有模式位，回中映射覆盖其摇杆/IMU输入；8字节旧协议仍绝对角。记录包中的 pitch_deg 保持原始映射值，不能与 motor.pitch_target_deg 混淆。
+
+### /mouth liveness (collector-0.4.90, 2026-11-13)
+
+The `/mouth` downlink is silent while hello is quiet. On 2026-11-13 a network blip made the ear close it (missed pongs) while hello kept reporting `connected` for an hour, so lines could not be spoken. Since 0.4.90 hello counts every frame it reads on `/mouth`, including the ear's WebSocket pings (every 20 s, `websockets` default); 45 s without any frame closes the link and reconnects with the usual back-off. Telemetry `mouth.silent_drops` counts these; `mouth.last_error` is `silent`. Logic: `collector/mouth_liveness.h`, host test `tests/mouth_liveness_test.cpp`.

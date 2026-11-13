@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "mouth_link.h"
+#include "mouth_liveness.h"
 #include "hearing.h"
 #include "hearing_socket.h"
 #include "psram_task.h"
@@ -27,7 +28,7 @@ Report outbox[kOutbox];
 size_t outbox_n = 0;
 std::string device, boot, state = "idle", last_error;
 bool connected = false, hello_ok = false;
-uint32_t connects = 0, failures = 0, streams = 0, reports_sent = 0, reports_dropped = 0, bad_messages = 0;
+uint32_t connects = 0, failures = 0, silent_drops = 0, streams = 0, reports_sent = 0, reports_dropped = 0, bad_messages = 0;
 int64_t connected_us = 0;
 
 void set_state(const char* s, const std::string& err = {})
@@ -134,8 +135,17 @@ void run(void*)
             ESP_LOGI(kTag, "connected");
         }
         int64_t checked_us = esp_timer_get_time();
+        Liveness live; live.start(checked_us);
+        bool silent = false;
         while (ok && socket.IsConnected()) {
-            for (int i = 0; i < 48 && socket.Poll(); ++i) {}
+            bool got = false;
+            for (int i = 0; i < 48 && socket.Poll(); ++i) got = true;
+            if (got) live.seen(esp_timer_get_time());
+            if (live.dead(esp_timer_get_time())) {    // no frame, not even the ear's ping, for 45 s
+                silent = true; ok = false;
+                { std::lock_guard<std::mutex> lock(mutex); ++silent_drops; }
+                break;
+            }
             Report batch[kOutbox];
             size_t n;
             { std::lock_guard<std::mutex> lock(mutex); n = outbox_n; std::copy(outbox, outbox + n, batch); outbox_n = 0; }
@@ -156,7 +166,7 @@ void run(void*)
         { std::lock_guard<std::mutex> lock(mutex); drop_stream_locked(); }
         if (!ok || !err.empty()) {
             { std::lock_guard<std::mutex> lock(mutex); ++failures; }
-            set_state("retry", err.empty() ? (ok ? "closed" : "hello") : err);
+            set_state("retry", silent ? "silent" : err.empty() ? (ok ? "closed" : "hello") : err);
             ESP_LOGW(kTag, "link lost: %s", err.c_str());
             vTaskDelay(pdMS_TO_TICKS(backoff_ms));
             backoff_ms = std::min(backoff_ms * 2, 30000);
@@ -214,7 +224,7 @@ void json(ArduinoJson::JsonObject out)
 {
     std::lock_guard<std::mutex> lock(mutex);
     out["state"] = state; out["connected"] = connected;
-    out["connects"] = connects; out["failures"] = failures; out["streams"] = streams;
+    out["connects"] = connects; out["failures"] = failures; out["silent_drops"] = silent_drops; out["streams"] = streams;
     if (connected) out["connected_ms"] = (esp_timer_get_time() - connected_us) / 1000;
     if (!last_error.empty()) out["last_error"] = last_error;
     out["stream"] = stream.id; out["active"] = stream.active(); out["buffered"] = ring ? ring->size() : 0;
