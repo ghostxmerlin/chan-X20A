@@ -133,10 +133,27 @@ class LibraryWriteTest(unittest.TestCase):
         n = self.lib.put('people_notes', {'person_id': 'owner', 'kind': 'trait', 'text': '甲'},
                          item_id=None, expected_version=None, scope_id='office', now_ms=1)
         self.db['people_notes'].docs[0]['origin'] = 'fused'
-        self.lib.put('people_notes', {'person_id': 'owner', 'kind': 'trait', 'text': '乙'},
-                     item_id=n['note_id'], expected_version=1, scope_id='office', now_ms=2)
+        v2 = self.lib.put('people_notes', {'person_id': 'owner', 'kind': 'trait', 'text': '乙'},
+                          item_id=n['note_id'], expected_version=1, scope_id='office', now_ms=2)
+        self.assertEqual(v2['origin'], 'owner')
         with self.assertRaises(ValueError):
             self.lib.restore('people_notes', n['note_id'], expected_version=2, restore_version=1, now_ms=3)
+
+    def test_owner_edit_and_restore_over_fused_head_become_owner_versions(self):
+        self.card(kind='owner')
+        n = self.lib.put('people_notes', {'person_id': 'owner', 'kind': 'trait', 'text': '原版'},
+                         item_id=None, expected_version=None, scope_id='office', now_ms=1)
+        fused = {**n, 'version': 2, 'supersedes': 1, 'text': '融合', 'origin': 'fused', 'actor': 'worker',
+                 'owner_original': {'text': '原版'}, 'derived_from': ['x'], 'fusion': {'run': 'r'}}
+        self.db['people_notes'].docs.append(fused)
+        r = self.lib.restore('people_notes', n['note_id'], expected_version=2, restore_version=1, now_ms=3)
+        self.assertEqual((r['version'], r['text'], r['origin'], r['owner_original'], r['derived_from'], r['fusion']),
+                         (3, '原版', 'owner', None, [], None))
+        self.db['people_notes'].docs[2]['origin'] = 'fused'
+        self.db['people_notes'].docs[2]['fusion'] = {'run': 'r'}
+        e = self.lib.put('people_notes', {'person_id': 'owner', 'kind': 'trait', 'text': '再改'},
+                         item_id=n['note_id'], expected_version=3, scope_id='office', now_ms=4)
+        self.assertEqual((e['origin'], e['fusion'], e['owner_original'], e['derived_from']), ('owner', None, None, []))
 
 
 if __name__ == "__main__":

@@ -188,15 +188,13 @@ class Library:
                         raise LibraryConflict(CONFLICT)
                 else:
                     item_id = f'{PREFIX[c]}_{uuid.uuid4().hex[:12]}'
-            if old:   # server-only fields carry forward untouched
-                server = {k: copy.deepcopy(v) for k, v in old.items() if k not in clean and k not in
-                          ('version', 'changed_at', 'actor', 'reason', 'supersedes')}
-                if c == 'people_cards':
-                    clean['links']['legacy_ids'] = copy.deepcopy(old['links'].get('legacy_ids', []))
-            else:
-                server = self._server_fields(c, key, item_id, scope_id)
-                if c == 'people_cards':
-                    clean['links']['legacy_ids'] = []
+            server = self._server_fields(c, key, item_id, scope_id)   # owner writes re-stamp provenance
+            if old:   # only truly immutable fields carry forward
+                for k in ('owner_rotation', 'merged_into', 'scope_id'):
+                    if k in old and k in server:
+                        server[k] = copy.deepcopy(old[k])
+            if c == 'people_cards':
+                clean['links']['legacy_ids'] = copy.deepcopy(old['links'].get('legacy_ids', [])) if old else []
             version = old['version'] + 1 if old else 1
             rec = {**clean, **server, 'version': version, 'changed_at': now_ms, 'actor': 'owner',
                    'reason': reason, 'supersedes': old['version'] if old else None}
