@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "remote_gestures.h"
 #include "servo_tuning.h"
+#include "asr_motion.h"
 namespace collector {
 struct RemoteSnapshot {
     bool ready = false, requested = false, enabled = false;
@@ -35,8 +36,13 @@ void remote_tracking_json(ArduinoJson::JsonObject target);
 // speed is the spring mapping input (kWebYawMinSpeed..kWebYawMaxSpeed); out of range returns ESP_ERR_INVALID_ARG.
 esp_err_t remote_turn_yaw(int duration_ms, uint32_t* request_seq);
 esp_err_t remote_step_yaw(int delta_tenths, int speed, bool remote_like, uint32_t* request_seq);
-// Absolute 20-degree slot (-3..3; 0 = center). ESP_ERR_INVALID_STATE when not idle/enabled.
+// Absolute 45-degree slot (-2..2; 0 = center). ESP_ERR_INVALID_STATE when not idle/enabled.
 esp_err_t remote_yaw_slot(int slot, int speed, uint32_t* request_seq);
+// Spoken yaw: |notches| 45-degree slots from the nearest slot, clipped at ±90 degrees.
+// ESP_ERR_INVALID_STATE when not idle/enabled/fed back or already at the limit.
+esp_err_t remote_yaw_notches(int notches, int speed, uint32_t* request_seq);
+// Locked copy of the yaw owner's state for the ASR word plan; no UART access.
+AsrYawStatus remote_yaw_status();
 const char* remote_display_state();
 // Commit one collector setting, then queue one explicit pitch attempt. ESP_OK
 // confirms persistence/acceptance, not measured arrival. Disabled returns

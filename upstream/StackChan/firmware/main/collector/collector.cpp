@@ -941,6 +941,7 @@ void fill_info(JsonDocument& doc)
     capabilities["monitor_streams"] = "supported";
     capabilities["yaw_turn"] = "supported";
     capabilities["yaw_step_45"] = "supported";
+    capabilities["asr_yaw_words"] = "supported"; // up/down/left/right/turn left/turn right/front/back, see asr.yaw_words
     capabilities["yaw_step_diagnostics"] = "supported"; // target yaw_step: whole-degree steps, speed and path
     capabilities["servo_tuning"] = "supported"; // target servo: EEPROM P/D/I/punch/deadband/max torque, runtime goal profile, release policy
     capabilities["wifi_profiles"] = "supported"; // target wifi: saved networks, scan; telemetry wifi carries the state

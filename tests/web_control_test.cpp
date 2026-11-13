@@ -22,6 +22,22 @@ int main() {
     q.cancel();
     assert(!q.submit_slot(3, 1000, false, true, true, true, 0, 500, 500));
     assert(!q.submit_slot(-3, 1000, false, true, true, true, 0, 500, 500));
+    // Spoken yaw (2026-11-13): several notches from the nearest notch, clipped at ±90°, never outward past it.
+    assert(q.submit_notches(-2, 1000, false, true, true, true, 0, 600, 600) && q.target == -900); q.cancel();
+    assert(q.submit_notches(-2, 1000, false, true, true, true, -430, 600, 600) && q.target == -900); q.cancel(); // clipped
+    assert(!q.submit_notches(-2, 1000, false, true, true, true, -870, 600, 600));                         // at the limit
+    assert(!q.submit_notches(-1, 1000, false, true, true, true, -870, 600, 600));
+    assert(q.submit_notches(2, 1000, false, true, true, true, -870, 600, 600) && q.target == 0); q.cancel();
+    assert(q.submit_notches(1, 1000, false, true, true, true, 20, 600, 600) && q.target == 450); q.cancel();
+    assert(!q.submit_notches(1, 1000, false, true, true, true, 1250, 600, 600));  // beyond +90°: right never moves left
+    assert(!q.submit_notches(2, 1000, false, true, true, true, 1250, 600, 600));
+    assert(q.submit_notches(-1, 1000, false, true, true, true, 1250, 600, 600) && q.target == 900); q.cancel();
+    assert(!q.submit_step(450, 1000, false, true, true, true, 1250, 600, 600));   // same rule for the page button
+    assert(!q.submit_notches(0, 1000, false, true, true, true, 0, 600, 600));
+    assert(!q.submit_notches(1, 1000, false, true, false, true, 0, 600, 600));     // no valid feedback
+    assert(!q.submit_notches(1, 1000, false, false, true, true, 0, 600, 600));     // control disabled
+    assert(!q.submit_notches(1, 1000, false, true, true, false, 0, 600, 600));     // not settled
+    q.pending = false; q.state = "idle"; q.sequence = 0;
     // Diagnostic relative steps keep whole-degree and range checks.
     assert(!q.submit(0, kWebYawDefaultSpeed, false, true, true, true, 0, 600, 600));
     assert(!q.submit(55, kWebYawDefaultSpeed, false, true, true, true, 0, 600, 600));

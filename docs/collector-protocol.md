@@ -121,6 +121,49 @@ M12 仍使用已有 `results/last_result_us/requested_us/faces` 等字段；网�
 | `results`、`last_result_us`、`num`、`faces` | 收到的人脸结果数、最近一次的时间、M12 报的人数，以及保留的人脸框（M12 画面坐标） |
 | `rx_bytes`、`last_rx_us`、`lines`、`invalid_lines`、`overflow_lines`、`replies`、`errors` | 串口收发诊断 |
 
+## 0.4.88：开机自动追踪，forward/backward 解绑（2026-11-13）
+
+用户要求：开机后 M12 在，就打开视觉检测和追踪；M12 不在也没关系。`down` 关追踪。`forward`/`backward` 另作他用，不再显示爱心和叉号。
+
+- **开机自动追踪**（`collector/boot_tracking.h`，由 ASR 任务每 100 ms 推进）：开机 30 秒内收到 M12 心跳，就启用舵机（`remote_arm(true)`），舵机就绪后（最多再等 10 秒）打开追踪，追踪会把 M12 切到检测。只做一次。30 秒内没有 M12，就什么都不做。在它生效前说了任何转头词或开关追踪的词（含 `down`/`close`），它就取消，之后也不会再自动打开。结果在 `info.asr.boot_tracking`：`waiting_m12`、`tracking_on`、`no_m12`、`servos_not_ready`、`arm_refused`、`cancelled_by_user`；日志行 `AsrUnit: boot tracking: …`。
+- **`down`** 仍是关追踪（0.4.85 起），随时可用；关掉后开机自动追踪不会再打开它。
+- **`forward`(0x07) / `backward`(0x09)**：不再显示爱心和叉号，只记日志，用途待定。`info.asr.screen_reactions` 标为 reserved。遥控器上下推的爱心和叉号不受影响。
+- 0.4.86 的白屏修复（舵机开机等待回话、读舵机让出 CPU）包含在内。主机测试 500 项通过（4 项跳过），新增 `tests/boot_tracking_test.cpp`。
+
+## 0.4.85：说话转头（Unit ASR 方向词）
+
+用户 2026-11-13 要求：用 ASR 出厂英文词控制水平舵机。八个词都在出厂词表里，编号与 M5Stack `unit_asr` 库的 `commandList` 一致（M5Unit-ASR `src/unit_asr.hpp`）。仍然先说 “Hi M Five”、“hello” 或 “hi A S R” 唤醒，约 20 秒内说方向词。左右都按**机器人自己的左右**，与网页“左/右”按钮相同。
+
+| 编号 | 词 | 做什么 |
+| --- | --- | --- |
+| `0x01` | up | 开追踪，走 `open` 的同一入口（两步动作进行中不接受） |
+| `0x02` | down | 关追踪，走 `close` 的同一入口，随时可用 |
+| `0x03` | left | 向左一档 45°（从最近的一档算起） |
+| `0x04` | turn left | 向左两档 90°，到 −90° 为止 |
+| `0x05` | right | 向右一档 45° |
+| `0x06` | turn right | 向右两档 90°，到 +90° 为止 |
+| `0x08` | front | 回中；如果头正背对着，先转回来再回中 |
+| `0x0A` | back | 转身约 180°；头不在中间时先回中再转 |
+
+**规则（本轮的决定）：**
+- **相对档位，到边就停。** left/right 每次一档，turn left/turn right 每次两档；超过 ±90° 的部分截掉。已经在 −90° 时说 left 或 turn left，不动，结果记 `at_limit`。不会出现“往右说却往左走”的情况。
+- **转身沿用 0.4.83 的定时转身**：原厂轮转模式、1200 ms、方向交替。背向时位置读数进入盲区，所以固件只记“朝前 / 背向 / 不确定”（遥测 `remote.motor.yaw_turn.facing`）。完整转完一次才在朝前和背向之间切换；转到一半被停用、失败或断电，记为“不确定”。之后只要有一次带有效读数的左右位置动作被接受，就重新记为朝前。
+- **front：** 朝前或不确定时直接回中（仍要有效读数）。背向时先做一次反向转身；转完、停 0.5 秒、读数有效后，偏离中心超过 10° 才再回中，否则就此结束。
+- **back：** 已经背向时不动（`already_back`）；不确定时不转（`facing_unknown`，请先说 front 或在网页回中）。朝前且离中心超过 10° 时，先回中，停稳 0.5 秒且实测在 ±15° 内才开始转身；回中没到位就放弃（`centre_missed`）。
+- **背向时不接受 left/right/turn left/turn right**（`facing_back`），避免在没有读数的位置上瞄准。
+- **说方向词会关掉追踪**，与网页按钮相同（追踪状态变成“手动接管”）。要继续追踪就再说 up 或 open。
+- **动作进行中说的词直接丢掉，不排队**（`busy`）。两步动作（先转再回中、先回中再转）进行中，除 down 以外的方向词和 up 都算忙；down 随时可以关追踪。两步动作中途如果舵机被停用、有人开了追踪、网页发了别的左右动作、或 6 秒内没走完，第二步取消，绝不在重新启用后补做。
+- 所有动作都走网页按钮已有的入口（`remote_yaw_slot`、`remote_turn_yaw`、新加的多档 `remote_yaw_notches`），限位、无进展保护、停用、故障锁存和“只有电机任务写舵机串口”都保持原样。ASR 读取任务每 100 ms 检查一次两步动作，没有新任务、新串口或新缓冲区。
+
+**结果怎么看：**
+- USB 日志（监视台右侧总 log、机器人日志页）：`AsrUnit: #12 id=0x03 left -> yaw_left_45 accepted`；两步动作结束时另有一行 `AsrUnit: #13 return_turn plan -> centring`。
+- telemetry `asr.events[]` 中方向词带 `action` 与 `result`；`asr.motion` 是最近一次方向词：`seq`、`word`、`action`、`result`、`plan`（`idle` / `centre_then_turn` / `turn_then_centre`）、`plan_result`。
+- 动作本身照旧显示在舵机卡片：`web_yaw.state`、`measured_slot`、`yaw_turn.state`、`yaw_turn.facing`，追踪状态。
+
+`result` 取值：`accepted`、`busy`、`motor_off`（舵机未启用）、`no_feedback`（没有 1 秒内的有效读数）、`at_limit`、`facing_back`、`already_back`、`facing_unknown`、`rejected`（舵机侧拒绝，例如仰角在动、正在调参）、`unavailable`（up 时 M12 不在线）。`plan_result`：`pending`、`turn_started`、`front`（转回来已在中间）、`centring`、`centre_missed`、`stopped`、`superseded`、`timeout`。
+
+**其他词不变：** `forward`/`backward` 仍是爱心/叉号（0.4.88 起解绑，见上），`open`/`close` 仍开关追踪，`turn on`/`turn off`、`start`/`stop`、`next`、音量词都不变。`info.asr.yaw_words` 列出上表，`capabilities.asr_yaw_words="supported"`。
+
 ## 0.4.10 Unit ASR（顶部黑色口）
 
 M5Stack Unit ASR（CI-03T）接在顶部黑色口（Port B），使用出厂英文词表（用户 2026-11-07 决定先不定制）。0.4.10 = 0.4.9 源码加 ASR；0.4.11 起日志只走 USB，UART0 给 M12（见下节）。
@@ -134,8 +177,11 @@ M5Stack Unit ASR（CI-03T）接在顶部黑色口（Port B），使用出厂英�
 
 | 编号 | 词 |
 | --- | --- |
+| `0x01`–`0x06` | up, down, left, turn left, right, turn right（0.4.85 起转头，见上节） |
 | `0x07` | forward |
+| `0x08` | front（0.4.85 起回中） |
 | `0x09` | backward |
+| `0x0A` | back（0.4.85 起转身） |
 | `0x32` | hello |
 | `0xFF` | Hi M Five |
 

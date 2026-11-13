@@ -2,6 +2,11 @@
 #pragma once
 #include <cstdint>
 namespace collector {
+// Where the head points after timed turns (2026-11-13, spoken yaw words). A completed turn
+// flips front/back; any turn stopped early, failed or cut leaves it unknown until a measured
+// position move proves the head is back in the ±128° sensor range (mark_front).
+enum class YawFacing { Front, Back, Unknown };
+inline const char* yaw_facing_name(YawFacing f) { return f == YawFacing::Front ? "front" : f == YawFacing::Back ? "back" : "unknown"; }
 // Only the existing motor task calls tick; requests never touch UART. Time is
 // measured on the device, so a closed page or unplugged USB cannot prolong a turn.
 struct TimedYawTurn {
@@ -12,6 +17,8 @@ struct TimedYawTurn {
     int duration_ms = kDefaultMs, direction = 1, next_direction = 1;
     int64_t requested_us = 0, started_us = 0, last_stop_us = 0, stopping_us = 0;
     bool cancel_requested = false, failed = false;
+    YawFacing facing = YawFacing::Front;
+    void mark_front() { facing = YawFacing::Front; }
     bool busy() const { return phase == Phase::Queued || phase == Phase::Rotating || phase == Phase::Stopping || phase == Phase::PowerCut; }
     bool submit(int ms, bool allowed, int64_t now) {
         if (!allowed || busy() || ms < kMinMs || ms > kMaxMs) return false;
@@ -40,7 +47,7 @@ struct TimedYawTurn {
         if (phase == Phase::Stopping && (!last_stop_us || now - last_stop_us >= 20000)) {
             if (!stopping_us) stopping_us = now;
             if (now - stopping_us >= 300000) {
-                servo.cutRotationPower(); phase = Phase::PowerCut; last_stop_us = now; return;
+                servo.cutRotationPower(); phase = Phase::PowerCut; facing = YawFacing::Unknown; last_stop_us = now; return;
             }
             last_stop_us = now;
             // Failed stop/limit-restore acknowledgements keep ownership and retry.
@@ -48,6 +55,9 @@ struct TimedYawTurn {
             if (servo.endTimedRotation()) {
                 servo.cancelMotion();
                 phase = failed ? Phase::Failed : (!enabled || cancel_requested ? Phase::Cancelled : Phase::Complete);
+                // Only a full timed turn counts as half a circle; anything shorter is a guess.
+                facing = phase != Phase::Complete ? YawFacing::Unknown
+                    : facing == YawFacing::Front ? YawFacing::Back : facing == YawFacing::Back ? YawFacing::Front : YawFacing::Unknown;
             }
         }
     }

@@ -1,6 +1,7 @@
 #include "../upstream/StackChan/firmware/main/collector/timed_yaw_turn.h"
 #include "../upstream/StackChan/firmware/main/stackchan/motion/timed_rotation_io.h"
 #include <cassert>
+#include <cstring>
 #include <vector>
 using namespace collector;
 struct Axis {
@@ -40,6 +41,23 @@ int main(){
     assert(broken.submit(100,true,1));broken.tick(broken_axis,2,true);broken.tick(broken_axis,100002,true);
     broken.tick(broken_axis,400002,true);assert(broken.phase==TimedYawTurn::Phase::PowerCut&&broken_axis.pwm==0&&broken_axis.cuts==1);
     assert(!broken.submit(100,true,500000));broken.tick(broken_axis,600002,true);assert(broken_axis.cuts==2&&broken_axis.starts==1);
+    {   // Facing (2026-11-13, spoken yaw): a completed turn flips front/back; any early stop makes it unknown.
+        TimedYawTurn f; Axis x; assert(f.facing==YawFacing::Front && !std::strcmp(yaw_facing_name(f.facing),"front"));
+        assert(f.submit(1200,true,1));f.tick(x,2,true);assert(f.facing==YawFacing::Front); // rotating: not yet
+        f.tick(x,1200002,true);assert(f.phase==TimedYawTurn::Phase::Complete&&f.facing==YawFacing::Back);
+        assert(!std::strcmp(yaw_facing_name(f.facing),"back"));
+        assert(f.submit(1200,true,2000000));f.tick(x,2000001,true);f.tick(x,3200001,true);assert(f.facing==YawFacing::Front);
+        assert(f.submit(1200,true,4000000));f.cancel();f.tick(x,4000001,true);assert(f.phase==TimedYawTurn::Phase::Cancelled&&f.facing==YawFacing::Front); // never started
+        assert(f.submit(1200,true,5000000));f.tick(x,7000000,true);assert(f.phase==TimedYawTurn::Phase::Expired&&f.facing==YawFacing::Front);
+        assert(f.submit(1200,true,8000000));f.tick(x,8000001,true);f.cancel();f.tick(x,8100000,true);
+        assert(f.phase==TimedYawTurn::Phase::Cancelled&&f.facing==YawFacing::Unknown&&!std::strcmp(yaw_facing_name(f.facing),"unknown"));
+        assert(f.submit(1200,true,9000000));f.tick(x,9000001,true);f.tick(x,10200001,true);assert(f.facing==YawFacing::Unknown); // stays unknown
+        f.mark_front();assert(f.facing==YawFacing::Front); // a measured position move proved the front range
+        x.start_ok=false;assert(f.submit(1200,true,11000000));f.tick(x,11000001,true);assert(f.phase==TimedYawTurn::Phase::Failed&&f.facing==YawFacing::Unknown);
+        TimedYawTurn g; Axis y; y.stop_ok=false;
+        assert(g.submit(100,true,1));g.tick(y,2,true);g.tick(y,100002,true);g.tick(y,400002,true);
+        assert(g.phase==TimedYawTurn::Phase::PowerCut&&g.facing==YawFacing::Unknown);
+    }
     Bus b;stackchan::motion::TimedRotationIO io;
     assert(io.positionMode(b,1));
     assert(io.begin(b,1,400)&&b.pwm==409&&b.torque==1&&b.low==0);

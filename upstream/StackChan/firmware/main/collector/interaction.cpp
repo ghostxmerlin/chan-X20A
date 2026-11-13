@@ -10,7 +10,9 @@
 namespace collector::interaction {
 namespace {
 std::mutex mutex;
-bool recognition=false,advanced=false;
+// vision: keep M12 detection on without tracking (boot auto-tracking, user 2026-11-13:
+// "down" turns tracking off but not vision). Cleared by an explicit M12 mode/preview command.
+bool recognition=false,advanced=false,vision=false;
 OwnerGate owner;
 uint32_t owner_expected=0,owner_token=0,owned_m12=0;
 uint32_t left_seen=0,right_seen=0,up_seen=0,down_seen=0;
@@ -20,7 +22,7 @@ const char* last_error="";
 int64_t last_tick=0;
 
 void apply_camera_locked() {
-    const auto wanted=camera_mode(remote_tracking_requested(),recognition);
+    const auto wanted=camera_mode(remote_tracking_requested()||vision,recognition);
     if(wanted==M12Function::standby) {
         if(owned_m12 && m12_mode_request()==owned_m12)m12_set_background_mode(wanted);
         owned_m12=0;selected=M12Function::none;return;
@@ -32,15 +34,17 @@ void apply_camera_locked() {
 void release_locked() {
     remote_set_tracking(false);
     if(owner_token)hearing::stop_for_owner(owner_token);
-    owner_token=0;recognition=false;owner.reset(0);dialogue="off";
+    owner_token=0;recognition=false;vision=false;owner.reset(0);dialogue="off";
     owned_m12=0;selected=M12Function::none;
 }
 esp_err_t set_locked(const char* mode,bool enabled,int64_t now) {
     if(!mode)return ESP_ERR_INVALID_ARG;
     if(!std::strcmp(mode,"advanced")) {advanced=enabled;last_error="";return ESP_OK;}
-    if(std::strcmp(mode,"tracking") && std::strcmp(mode,"recognition"))return ESP_ERR_INVALID_ARG;
+    if(std::strcmp(mode,"tracking") && std::strcmp(mode,"recognition") && std::strcmp(mode,"vision"))return ESP_ERR_INVALID_ARG;
     if(enabled&&!m12_snapshot().valid) {last_error="m12_unavailable";return ESP_ERR_INVALID_STATE;}
-    if(!std::strcmp(mode,"tracking")) {
+    if(!std::strcmp(mode,"vision")) {
+        vision=enabled;
+    } else if(!std::strcmp(mode,"tracking")) {
         const auto result=remote_set_tracking(enabled);
         if(result!=ESP_OK){last_error="motor_unavailable";return result;}
     } else {
@@ -115,7 +119,7 @@ void tick(int64_t now) {
 }
 void json(ArduinoJson::JsonObject out) {
     std::lock_guard<std::mutex> lock(mutex);
-    out["supported"]=true;out["last_error"]=last_error;
+    out["supported"]=true;out["last_error"]=last_error;out["vision"]["requested"]=vision;
     remote_tracking_json(out["tracking"].to<ArduinoJson::JsonObject>());
     auto r=out["recognition"].to<ArduinoJson::JsonObject>();r["requested"]=recognition;
     r["state"]=!recognition?"off":owner.confirmed()?"owner_confirmed":owner.seen()?"confirming":"waiting_face";

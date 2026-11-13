@@ -226,7 +226,7 @@ void motor_task(void*)
             std::lock_guard<std::mutex> lock(mutex);
             if (motion.yawServo().rotationPowerFaulted()) {
                 control_requested = active = false;
-                yaw_turn.phase = TimedYawTurn::Phase::PowerCut;
+                yaw_turn.phase = TimedYawTurn::Phase::PowerCut; yaw_turn.facing = YawFacing::Unknown;
                 stop_latch.request(); pitch_requests.stop(); manual_yaw.cancel();
                 tracking.request(false, now);
             }
@@ -455,6 +455,8 @@ void motor_task(void*)
                     }
                     manual_yaw.finish(accepted); web_yaw_active = accepted;
                     if (accepted) {
+                        // A fresh measured position inside the sensor range: the head is not turned around.
+                        yaw_turn.mark_front();
                         yaw_command_started = true;
                         yaw_trace.begin(manual_yaw.remote_like ? "web_yaw_remote_like" : "web_yaw", manual_yaw.sequence, manual_yaw.target, yaw_feedback, esp_timer_get_time());
                     }
@@ -953,6 +955,42 @@ esp_err_t remote_step_yaw(int delta_tenths, int speed, bool remote_like, uint32_
     return ESP_OK;
 }
 
+esp_err_t remote_yaw_notches(int notches, int speed, uint32_t* request_seq)
+{
+    if (notches == 0 || notches < -2 * kWebYawSlots || notches > 2 * kWebYawSlots) return ESP_ERR_INVALID_ARG;
+    if (speed < kWebYawMinSpeed || speed > kWebYawMaxSpeed) return ESP_ERR_INVALID_ARG;
+    std::lock_guard<std::mutex> lock(mutex);
+    // Same admission as the page's 45-degree buttons (remote_step_yaw), several notches at once.
+    const int64_t now = esp_timer_get_time();
+    if (!manual_yaw.submit_notches(notches, speed, false, control_requested && enabled && motor_ready && !yaw_turn.busy(), yaw_feedback.valid,
+            tracking.active() || yaw_trajectory_complete, yaw_feedback.angle, yaw_feedback_timestamp, now)) return ESP_ERR_INVALID_STATE;
+    tracking.request(false, now, "manual_override");
+    if (request_seq) *request_seq = manual_yaw.sequence;
+    return ESP_OK;
+}
+
+AsrYawStatus remote_yaw_status()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    AsrYawStatus s;
+    const int64_t now = esp_timer_get_time();
+    s.control = control_requested && enabled && motor_ready;
+    s.tracking = tracking.requested();
+    s.facing = yaw_turn.facing;
+    s.turn_busy = yaw_turn.busy();
+    s.turn_complete = yaw_turn.phase == TimedYawTurn::Phase::Complete;
+    s.turn_seq = yaw_turn.sequence;
+    s.manual_seq = manual_yaw.sequence;
+    s.manual_busy = manual_yaw.pending || manual_yaw.state == ManualYaw::moving;
+    s.manual_failed = !strcmp(manual_yaw.state, "cancelled") || !strcmp(manual_yaw.state, "expired") ||
+        !strcmp(manual_yaw.state, "superseded") || !strcmp(manual_yaw.state, "feedback_unavailable");
+    s.settled = yaw_trajectory_complete;
+    s.feedback = yaw_feedback.valid && yaw_feedback_timestamp > 0 && now >= yaw_feedback_timestamp &&
+        now - yaw_feedback_timestamp < 1000000 && yaw_feedback.angle >= -1280 && yaw_feedback.angle <= 1280;
+    s.angle = yaw_feedback.angle;
+    return s;
+}
+
 esp_err_t remote_yaw_slot(int slot, int speed, uint32_t* request_seq)
 {
     if (slot < -kWebYawSlots || slot > kWebYawSlots) return ESP_ERR_INVALID_ARG;
@@ -1164,6 +1202,7 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     turn["duration_ms"] = yaw_turn.duration_ms;
     turn["default_duration_ms"] = TimedYawTurn::kDefaultMs;
     turn["pwm"] = TimedYawTurn::kPwm; turn["direction"] = yaw_turn.direction;
+    turn["facing"] = yaw_facing_name(yaw_turn.facing);
     motor["yaw_trajectory_complete"] = yaw_trajectory_complete;
     motor["enabled"] = enabled.load();
     motor["requested"] = control_requested;

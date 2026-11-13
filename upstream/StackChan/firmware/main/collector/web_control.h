@@ -49,9 +49,18 @@ struct ManualYaw {
     }
     // Page button: one slot from the slot nearest to the measured angle; false at the range end.
     bool submit_step(int direction, int requested_speed, bool remote, bool enabled, bool valid, bool settled, int measured, int64_t stamp, int64_t now) {
-        if (direction == 0 || !valid) return false;
-        const int slot = web_yaw_slot(measured) + (direction > 0 ? 1 : -1);
-        if (slot < -kWebYawSlots || slot > kWebYawSlots) return false;
+        if (direction == 0) return false;
+        return submit_notches(direction > 0 ? 1 : -1, requested_speed, remote, enabled, valid, settled, measured, stamp, now);
+    }
+    // Spoken yaw (2026-11-13): `notches` slots from the nearest slot, clipped at the range end;
+    // false when that leaves the head where it is or would move it against the requested direction.
+    bool submit_notches(int notches, int requested_speed, bool remote, bool enabled, bool valid, bool settled, int measured, int64_t stamp, int64_t now) {
+        if (notches == 0 || !valid) return false;
+        const int current = web_yaw_slot(measured);
+        int slot = current + notches;
+        if (slot < -kWebYawSlots) slot = -kWebYawSlots;
+        if (slot > kWebYawSlots) slot = kWebYawSlots;
+        if (notches > 0 ? slot <= current : slot >= current) return false;
         return submit_target(slot * kWebYawStepTenths, requested_speed, remote, enabled, valid, settled, measured, stamp, now);
     }
     bool submit_slot(int slot, int requested_speed, bool remote, bool enabled, bool valid, bool settled, int measured, int64_t stamp, int64_t now) {

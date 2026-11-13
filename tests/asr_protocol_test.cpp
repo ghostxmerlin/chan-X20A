@@ -21,7 +21,7 @@ int main()
         auto f = feed(p, {0xAA, 0x55, 0x07, 0x55, 0xAA, 0xAA, 0x55, 0x09, 0x55, 0xAA, 0xAA, 0x55, 0xFF, 0x55, 0xAA});
         assert(f.size() == 3 && f[0].id == 0x07 && f[1].id == 0x09 && f[2].id == 0xFF);
         assert(!f[0].has_value && p.discarded() == 0);
-        assert(asr_reaction(f[0].id) == AsrReaction::heart && asr_reaction(f[1].id) == AsrReaction::reject);
+        assert(asr_reaction(f[0].id) == AsrReaction::none && asr_reaction(f[1].id) == AsrReaction::none); // forward/backward freed 2026-11-13
         assert(asr_reaction(f[2].id) == AsrReaction::none);
         assert(std::strcmp(asr_word(0x07), "forward") == 0 && std::strcmp(asr_word(0x09), "backward") == 0);
         assert(asr_reaction(0x08) == AsrReaction::none && asr_reaction(0x0A) == AsrReaction::none); // front/back

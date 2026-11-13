@@ -100,12 +100,11 @@ inline const char* asr_word(uint8_t id)
     }
 }
 
-// First soul test (user, 2026-11-07): "forward" shows the home heart, "backward" the reject X.
+// "forward" / "backward" showed the heart / reject X from 2026-11-07 until 2026-11-13, when the
+// user freed both words for another use (not decided yet). They are logged only; no reaction.
 enum class AsrReaction : uint8_t { none, heart, reject };
-inline AsrReaction asr_reaction(uint8_t id)
+inline AsrReaction asr_reaction(uint8_t)
 {
-    if (id == 0x07) return AsrReaction::heart;
-    if (id == 0x09) return AsrReaction::reject;
     return AsrReaction::none;
 }
 
