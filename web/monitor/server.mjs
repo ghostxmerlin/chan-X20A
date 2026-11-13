@@ -17,7 +17,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
   const assets = new Map([['/speech-settings.js', ['speech-settings.js','text/javascript; charset=utf-8']], ['/', ['index.html', 'text/html; charset=utf-8']],
     ['/hearing-ui.js', ['hearing-ui.js','text/javascript; charset=utf-8']], ['/servo-tuning-ui.js', ['servo-tuning-ui.js','text/javascript; charset=utf-8']], ['/wifi-ui.js', ['wifi-ui.js','text/javascript; charset=utf-8']], ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
     ['/mind.html', ['mind.html', 'text/html; charset=utf-8']], ['/mind-ui.js', ['mind-ui.js', 'text/javascript; charset=utf-8']], ['/mind.css', ['mind.css', 'text/css; charset=utf-8']],
-    ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/say-ui.js', ['say-ui.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']]]);
+    ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/say-ui.js', ['say-ui.js', 'text/javascript; charset=utf-8']], ['/scene-ui.js', ['scene-ui.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
