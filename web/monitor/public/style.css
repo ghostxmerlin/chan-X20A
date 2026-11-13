@@ -152,3 +152,16 @@ summary{cursor:pointer;width:fit-content}
 .memory-pagination { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; }
 .memory-source { border-left:2px solid #315b40; margin:12px 0; padding-left:10px; overflow-wrap:anywhere; }
 .memory-source blockquote { margin:6px 0; color:#d8ffe1; }
+
+/* One-button talk show (say-ui.js roundCardHtml) */
+.say-round .round-card{display:flex;flex-direction:column;gap:6px;margin:6px 0}
+.say-round .line{border-left:2px solid var(--line);padding:3px 0 4px 9px}
+.say-round .line.played{border-left:3px solid var(--green)}
+.say-round .line.played .line-text{font-size:17px;font-weight:600}
+.say-round .line-tag,.say-round .line-gloss,.say-round .round-sub{margin:0;font-size:11px}
+.say-round .line-text{margin:2px 0;font-size:13px;overflow-wrap:anywhere}
+.say-round .line-actions,.say-round .round-foot{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0;font-size:11px}
+.say-round button.on{background:var(--green);color:var(--bg)}
+.say-round button.on.bad{background:var(--warn)}
+.prefetch-switch{font-size:11px;display:inline-flex;gap:4px;align-items:center}
+.say-roles{flex-basis:100%;font-size:11px}

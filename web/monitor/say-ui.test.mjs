@@ -49,3 +49,36 @@ test('server serves say-ui.js', async t=>{
  const r=await fetch(`http://127.0.0.1:${server.address().port}/say-ui.js`);
  assert.equal(r.status,200);assert.match(await r.text(),/export class SayPanel/);
 });
+
+// ---- one-button talk show (2026-11-13) ----
+const round={rid:'r1',moment_id:'r1',order:['worst','roast','sad'],weak:false,timings:{write_ms:1900,judge_ms:1300},
+ plays:[{key:'worst',why:'stock'}],thin_moment:false,
+ lines:[{key:'roast',text:'吐槽<句>',voice_label:'汤师爷',dialect:'普通话',score:6},{key:'worst',text:'最坏句',voice_label:'主人自己的声音',dialect:'武汉话',score:8},
+  {key:'sad',text:'伤心句',voice_label:'小黑',dialect:'四川话',score:4},{key:'comfort',text:null,dropped:'invalid'},
+  {key:'huyu',text:'侬讲讲看伐',gloss:'你说说看嘛',voice_label:'龙安欢',dialect:'上海话'}]};
+test('round card: the played line first and largest, the rest by score, the fallback with its gloss', ()=>{
+ const html=ui.roundCardHtml(round,{ratings:{roast:3},none:false});
+ assert.ok(html.indexOf('最坏句')<html.indexOf('吐槽')&&html.indexOf('吐槽')<html.indexOf('伤心句'));
+ assert.match(html,/class="line played"/);
+ assert.match(html,/你说说看嘛/);
+ assert.match(html,/吐槽&lt;句&gt;/);
+ assert.match(html,/好 ×3/);
+ assert.doesNotMatch(html,/style="/);
+ assert.doesNotMatch(html,/dropped|invalid/);
+});
+test('rating buffer merges presses after 600 ms, caps at 5, settles on a polarity switch', async()=>{
+ const sent=[],buf=new ui.RatingBuffer(x=>sent.push(x),{settleMs:30});
+ for(let i=0;i<3;i++)buf.press('r1','roast',1);
+ await new Promise(r=>setTimeout(r,60));
+ assert.deepEqual(sent,[{kind:'rating',value:{polarity:1,count:3},refers_to:{rid:'r1',line:'roast'}}]);
+ for(let i=0;i<7;i++)buf.press('r1','sad',-1);
+ buf.press('r1','sad',1);
+ await new Promise(r=>setTimeout(r,60));
+ assert.deepEqual(sent.slice(1),[{kind:'rating',value:{polarity:-1,count:5},refers_to:{rid:'r1',line:'sad'}},
+                                 {kind:'rating',value:{polarity:1,count:1},refers_to:{rid:'r1',line:'sad'}}]);
+});
+test('round messages', ()=>{
+ assert.equal(ui.sayRoundMessage({why:'silent'}),'这一刻先不说了');
+ assert.match(ui.sayRoundMessage({why:'fresh',server_ms:4200,round}),/现写/);
+ assert.match(ui.sayRoundMessage({why:'stock',server_ms:80,round}),/最坏句/);
+});
