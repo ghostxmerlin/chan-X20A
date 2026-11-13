@@ -1,0 +1,4 @@
+dependencies:
+  idf: ">=5.5"
+  espressif/led_strip: "~3.0.3"            # same version as the robot firmware
+  espressif/esp_websocket_client: "^1.5.0"
