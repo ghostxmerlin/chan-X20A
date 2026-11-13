@@ -7,9 +7,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain']);
-const POST_PATHS=new Set(['/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try']);
-const PARAMS=new Set(['from','to','t','version','days','lane','offset','limit','status','id','uid']);
+const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats']);
+const POST_PATHS=new Set(['/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try','/say/round','/say/play','/signal','/say/prefetch']);
+const PARAMS=new Set(['from','to','t','version','days','lane','offset','limit','status','id','uid','rid']);
 const MAX_BODY=16384;
 const DEFAULT_SOCKET=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../.private/mind-tunnel/mind.sock');
 function prepareSocketDir(socketPath){
@@ -35,7 +35,7 @@ export class MindProxy {
   if(!pathAndQuery.startsWith('/')||!PATHS.has(url.pathname)||url.pathname!==pathAndQuery.split('?')[0])return null;
   for(const [k,v] of url.searchParams){
    if(!PARAMS.has(k))return null;
-   const valid=k==='lane'?['live','rerun'].includes(v):k==='status'?['candidate','known','review','disabled'].includes(v):k==='id'?/^m[a-f0-9]{24}$/.test(v):k==='uid'?/^u[a-zA-Z0-9._-]{1,80}$/.test(v):/^\d{1,16}$/.test(v);
+   const valid=k==='lane'?['live','rerun'].includes(v):k==='status'?['candidate','known','review','disabled'].includes(v):k==='id'?/^m[a-f0-9]{24}$/.test(v):k==='uid'?/^u[a-zA-Z0-9._-]{1,80}$/.test(v):k==='rid'?/^r[a-f0-9]{1,40}$/.test(v):/^\d{1,16}$/.test(v);
    if(!valid||url.searchParams.getAll(k).length!==1)return null;
   }
   return url.pathname+url.search;

@@ -239,10 +239,10 @@ def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,
         _SAY_LOCK.release()
 
 
-def _compact_round(r):
+def compact_round(r):
     keep = ('key', 'text', 'gloss', 'point', 'device', 'dialect', 'score', 'dropped')
     return {'rid': r['rid'], 'moment_id': r['moment_id'], 'at': r['at'], 'written_at': r['written_at'],
-            'lines': [{**{k: x.get(k) for k in keep}, 'voice_label': say_prompts.VOICE_LABELS.get(x.get('voice'), x.get('voice'))}
+            'lines': [{**{k: x.get(k) for k in keep}, 'voice_label': say_prompts.VOICE_LABELS.get(x.get('voice'), '其他嗓子')}
                       for x in r['lines']],
             'order': r['judge']['order'], 'weak': r['judge']['weak'], 'timings': r.get('timings'),
             'plays': [{k: p.get(k) for k in ('key', 'at', 'why', 'uid')} for p in r.get('plays', [])],
@@ -338,7 +338,7 @@ def say_round(env, store, s, roles, tts, now_ms, *, worker, force_new=False, tri
                 threading.Thread(target=_finish, args=(store.db, tts, uid, tts_id), daemon=True).start()
         server_ms = int((time.monotonic() - started) * 1000)
         store.db['say_rounds'].update_one({'rid': r['rid']}, {'$set': {'timings.last_server_ms': server_ms}})
-        return {'rid': r['rid'], 'played': key, 'why': why, 'uid': uid, 'server_ms': server_ms, 'round': _compact_round(r)}
+        return {'rid': r['rid'], 'played': key, 'why': why, 'uid': uid, 'server_ms': server_ms, 'round': compact_round(r)}
     finally:
         _SAY_LOCK.release()
 

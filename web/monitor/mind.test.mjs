@@ -205,3 +205,19 @@ test('now card shows c1', ()=>{
  assert.match(html,/对话：板子地线 — 两人讨论地线接机壳。/);
  assert.doesNotMatch(ui.nowHtml({scene:base,strong:null,segment:null}),/对话：/);
 });
+test('talk-show round routes pass the proxy and the local server', async t=>{
+ const seen=[],proxy=new MindProxy({ssh:'h',token:'k',socketPath:SOCK,prepareFn:()=>{},spawnFn:fakeSsh(),
+  requestFn:async(sock,p)=>{seen.push(p);return {status:200,body:'{}'};}});
+ for(const p of ['/say/round','/say/play','/signal','/say/prefetch'])assert.equal((await proxy.post(p,'{}')).status,200,p);
+ assert.equal((await proxy.get('/say/rounds?from=1&to=2')).status,200);
+ assert.equal((await proxy.get('/say/stats?days=7')).status,200);
+ assert.equal((await proxy.get('/say/explain?rid=rab12')).status,200);
+ assert.equal((await proxy.post('/say/other','{}')).status,400);
+ const calls=[],mind={get:async()=>({status:200,body:'{}'}),post:async(p,b)=>{calls.push(p);return {status:200,body:'{}'};},stop(){}};
+ const server=createMonitorServer(new Monitor({binding:{address:'http://127.0.0.1:8080',token:'b'.repeat(32)}}),undefined,mind);
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const url=`http://127.0.0.1:${server.address().port}`;
+ for(const p of ['/say/round','/say/play','/signal','/say/prefetch'])
+  assert.equal((await fetch(url+'/api/mind'+p,{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{}'})).status,200,p);
+ assert.deepEqual(calls,['/say/round','/say/play','/signal','/say/prefetch']);
+});

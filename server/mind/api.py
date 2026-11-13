@@ -23,6 +23,7 @@ from .memory import MemoryStore, MemoryConflict
 from .attention import NoSituation
 from .model_calls import BudgetExceeded
 from .store import LANE
+from . import owner_signals
 
 MAX_RANGE_MS = 24 * 3600_000
 MAX_BODY = 16 * 1024
@@ -188,6 +189,16 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 return memory_row(mid).history(mid,offset,limit)
             except ValueError as e:
                 raise BadRequest(str(e)) from None
+        if path == '/say/explain' and q.get('rid'):
+            rid = (q.get('rid') or [''])[0]
+            if not re.fullmatch(r'r[a-f0-9]{1,40}', rid):
+                raise BadRequest('invalid round id')
+            r = db['say_rounds'].find_one({'rid': rid}, {'_id': 0})
+            if not r:
+                raise NotFound('没有这一轮')
+            return {**speak.compact_round(r), 'checks': [{k: c.get(k) for k in ('at', 'pick', 'ms', 'error')} for c in r.get('checks', [])],
+                    'triggers': r.get('triggers', []), 'judge': {k: r['judge'].get(k) for k in ('order', 'best_key', 'weak', 'error')},
+                    'context': {k: (r.get('context') or {}).get(k) for k in ('time', 'scene', 'evidence')}}
         if path == '/say/explain':
             uid = (q.get('uid') or [''])[0]
             if not re.fullmatch(r'u[a-zA-Z0-9._-]{1,80}',uid):
@@ -274,6 +285,23 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == "/stats":
             days = _int(q, "days", required=False) or 7
             return stats(max(1, min(days, 3650)))
+        if path == '/say/rounds':
+            lo, hi = _range(q)
+            scope_id = speech_settings.scope(current_settings()[0])['id']
+            rows = list(db['say_rounds'].find({'scope_id': scope_id, 'at': {'$gte': lo, '$lt': hi}}, {'_id': 0}).sort('at', -1).limit(50))
+            folded = {m['first_rid']: m for m in owner_signals.fold_moments(db, scope_id, lo, hi)}
+            out = []
+            for r in reversed(rows):
+                m = next((x for x in folded.values() if x['moment_id'] == r['moment_id']), None)
+                out.append({**speak.compact_round(r), 'marks': {'ratings': {k: v[0] for k, v in (m or {}).get('ratings', {}).items()},
+                                                                 'none': bool((m or {}).get('none'))}})
+            return out
+        if path == '/say/stats':
+            days = max(1, min(_int(q, 'days', required=False) or 7, 365))
+            now = int(time.time() * 1000)
+            scope_id = speech_settings.scope(current_settings()[0])['id']
+            return {**owner_signals.stats(db, scope_id, now - days * 86400_000, now + 60_000), 'days': days,
+                    'prefetch': {'on': bool(ctx.get('say_worker') and ctx['say_worker'].enabled())}}
         raise NotFound("not found")
 
     def post(path, body):
@@ -341,6 +369,55 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             except speak.NotConnected as e:
                 raise Conflict(str(e)) from None
             return compact_utterance(rec)
+        if path == '/say/round':
+            tts, worker = ctx.get('tts'), ctx.get('say_worker')
+            if not tts or not ctx.get('env') or not worker:
+                raise Conflict('soul-tts or model access not configured')
+            if mouth_mode() != 'tts':
+                raise Conflict('嘴没切到 TTS 模式')
+            s, version = current_settings()
+            roles = speak.load_roles(ctx.get('roles_dir') or '')
+            try:
+                return speak.say_round(ctx['env'], store, s, roles, tts, now, worker=worker, force_new=bool(body.get('force_new')),
+                                       trigger={'source': 'page'}, settings_version=version,
+                                       is_current=lambda: current_settings()[1] == version and mouth_mode() == 'tts')
+            except speak.NotConnected as e:
+                raise Conflict(str(e)) from None
+            except RuntimeError as e:
+                raise Conflict(str(e)) from None
+        if path == '/say/play':
+            tts = ctx.get('tts')
+            if not tts:
+                raise Conflict('soul-tts not configured')
+            if mouth_mode() != 'tts':
+                raise Conflict('嘴没切到 TTS 模式')
+            if not isinstance(body.get('rid'), str) or not isinstance(body.get('line'), str):
+                raise BadRequest('rid and line required')
+            if body.get('dialect') is not None and body['dialect'] not in speech_settings.DIALECTS:
+                raise BadRequest('unsupported dialect')
+            if body.get('voice') is not None and body['voice'] not in {v['id'] for v in speak.voice_list(tts)}:
+                raise BadRequest('unknown voice')
+            s, _ = current_settings()
+            try:
+                return speak.play_line(store, s, speak.load_roles(ctx.get('roles_dir') or ''), tts, body['rid'], body['line'], now,
+                                       voice=body.get('voice'), dialect=body.get('dialect'))
+            except (KeyError, StopIteration):
+                raise NotFound('没有这一句') from None
+            except speak.NotConnected as e:
+                raise Conflict(str(e)) from None
+        if path == '/signal':
+            try:
+                return owner_signals.put_signal(db, body, now)
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+        if path == '/say/prefetch':
+            worker = ctx.get('say_worker')
+            if not worker:
+                raise Conflict('pre-writing is not configured here')
+            if not isinstance(body.get('enabled'), bool):
+                raise BadRequest('enabled must be true or false')
+            worker.set_enabled(body['enabled'], now)
+            return {'enabled': worker.enabled()}
         if path == "/voice/try":
             tts = ctx.get("tts")
             if not tts:
@@ -470,7 +547,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try'):
+            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
+                                '/say/round', '/say/play', '/signal', '/say/prefetch'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:
