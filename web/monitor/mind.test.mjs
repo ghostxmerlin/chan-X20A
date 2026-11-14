@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {EventEmitter} from 'node:events';
 import {MindProxy,mindFromEnv} from './mind.mjs';
 import {Monitor} from './core.mjs';
-import {createMonitorServer,localDemo} from './server.mjs';
+import {createMonitorServer,localDemo,DemoRobotClient} from './server.mjs';
 const ui=await import('data:text/javascript;base64,'+readFileSync(new URL('./public/mind-ui.js',import.meta.url)).toString('base64'));
 
 function fakeSsh(log=[]){return (cmd,args)=>{const child=new EventEmitter();child.killed=false;child.kill=()=>{child.killed=true;child.emit('exit',0);};log.push({cmd,args,child});return child;};}
@@ -336,4 +336,26 @@ test('local demo monitor: own port, no robot connection, no private config', asy
 test('local mind: localhost never goes through name lookup; the demo never takes the live port 8787', ()=>{
  assert.deepEqual(new MindProxy({local:'http://localhost:52790',token:'t'}).local,{host:'127.0.0.1',port:52790});
  assert.throws(()=>localDemo({SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo',SOUL_MONITOR_PORT:'8787'}),/8787/);
+});
+
+test('local demo with the stand-in hello: loopback only, its own token, info / telemetry / mode control',async()=>{
+ const base={SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo'};
+ const d=localDemo({...base,SOUL_DEMO_ROBOT:'http://127.0.0.1:52791',SOUL_DEMO_ROBOT_TOKEN:'h'});
+ assert.ok(d.monitor.client instanceof DemoRobotClient);assert.deepEqual(d.monitor.client.target,{host:'127.0.0.1',port:52791});
+ assert.throws(()=>localDemo({...base,SOUL_DEMO_ROBOT:'http://10.0.0.5:52791',SOUL_DEMO_ROBOT_TOKEN:'h'}),/本机回环/);
+ assert.throws(()=>localDemo({...base,SOUL_DEMO_ROBOT:'http://127.0.0.1:52791'}),/SOUL_DEMO_ROBOT_TOKEN/);
+ const sent=[];
+ const requestFn=async(target,path,headers,opts={})=>{sent.push([path,headers.Authorization,opts.method||'GET',opts.body]);
+  if(path==='/v1/info')return {status:200,body:JSON.stringify({boot_id:'demo-1',capabilities:{web_control:'supported',unified_control:'supported'}})};
+  if(path==='/v1/telemetry')return {status:200,body:JSON.stringify({boot_id:'demo-1',seq:1,mode:{mode:'talk'}})};
+  if(path==='/v1/control')return {status:200,body:JSON.stringify({accepted:true})};
+  return {status:404,body:'{"error":"not found"}'};};
+ const c=new DemoRobotClient('http://127.0.0.1:52791','h',requestFn);
+ assert.equal((await c.connect()).boot_id,'demo-1');assert.equal(c.verified,true);
+ assert.equal((await c.json('/v1/telemetry?remote_after=0')).mode.mode,'talk');
+ assert.deepEqual(await c.control('/v1/control',{target:'mode',input:'select',value:{mode:'idle'}},'demo-1',()=>{}),{accepted:true});
+ await assert.rejects(c.control('/v1/control',{target:'mode'},'other',()=>{}),/控制状态已变化/);
+ await assert.rejects(c.request('/v1/frame'),/没有画面/);
+ assert.deepEqual(sent.map(x=>[x[0],x[1],x[2]]),[['/v1/info','Bearer h','GET'],['/v1/telemetry','Bearer h','GET'],['/v1/control','Bearer h','POST']]);
+ assert.deepEqual(JSON.parse(sent[2][3]),{target:'mode',input:'select',value:{mode:'idle'}});
 });

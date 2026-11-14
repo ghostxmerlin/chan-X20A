@@ -8,7 +8,7 @@ import {SerialDeviceClient} from './serial-client.mjs';
 import { Controls } from './control.mjs';
 import { existingHearingConfig } from './hearing.mjs';
 import { M12System } from './m12-system.mjs';
-import { mindFromEnv } from './mind.mjs';
+import { mindFromEnv, loopbackTarget, socketRequest } from './mind.mjs';
 import { parseEnv } from 'node:util';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -127,19 +127,45 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
 
 // Dev-only local demo (docs/mode-demo.md): SOUL_MIND_LOCAL set = a second monitor on its own port (SOUL_MONITOR_PORT,
 // default 8807) pointed at scripts/mind-local-demo.py. It reads neither .private/stackchan-monitor.json nor .env, and
-// it never opens the robot's USB port or Wi-Fi link (the running monitor keeps them). Unset: null, today's startup.
+// it never opens the robot's USB port or Wi-Fi link (the running monitor keeps them); with SOUL_DEMO_ROBOT its robot is
+// the demo's stand-in hello. Unset: null, today's startup.
 class NoRobotClient {
   constructor() { this.binding = { address: '' }; this.verified = false; }
   async connect() { throw new Error('本机演示：没有连机器人（只演示模式切换）'); }
   async json() { throw new Error('本机演示：没有连机器人'); }
   async request() { throw new Error('本机演示：没有连机器人'); }
 }
+// SOUL_DEMO_ROBOT (+ SOUL_DEMO_ROBOT_TOKEN): the demo's stand-in hello (scripts/mind-local-demo.py, loopback only). It
+// answers /v1/info, /v1/telemetry (with telemetry.mode) and /v1/control {target:"mode"} like 0.4.92 will, so the mode
+// bar's clicks take the real control path. Nothing else (no camera, no audio, no motors).
+export class DemoRobotClient {
+  constructor(url, token, requestFn = socketRequest) {
+    if (!token) throw new Error('SOUL_DEMO_ROBOT 需要同时给 SOUL_DEMO_ROBOT_TOKEN（演示脚本打印的那一行）');
+    let target; try { target = loopbackTarget(url); } catch { throw new Error('SOUL_DEMO_ROBOT 只能是本机回环地址，例如 http://127.0.0.1:52791'); }
+    Object.assign(this, { target, token, requestFn }); this.binding = { address: 'demo-hello' }; this.verified = false; this.info = null;
+  }
+  async call(path, body = null) {
+    const r = await this.requestFn(this.target, path, { Authorization: `Bearer ${this.token}` },
+      body == null ? {} : { method: 'POST', body: JSON.stringify(body) });
+    if (r.status !== 200) throw Object.assign(new Error(String(r.body || '').slice(0, 200) || `演示 hello ${r.status}`), { status: r.status });
+    return JSON.parse(r.body);
+  }
+  async connect() { this.info = await this.call('/v1/info'); this.verified = true; return this.info; }
+  async json(pathAndQuery) { return this.call(pathAndQuery.split('?')[0]); }
+  async request() { throw new Error('本机演示：没有画面'); }
+  async control(path, body, boot, check) {
+    check();
+    if (!this.verified || this.info?.boot_id !== boot || path !== '/v1/control') throw new Error('控制状态已变化');
+    return this.call('/v1/control', body);
+  }
+}
 export function localDemo(env) {
   if (!env.SOUL_MIND_LOCAL) return null;
   const mind = mindFromEnv(env, {});
   const port = env.SOUL_MONITOR_PORT === undefined ? 8807 : Number(env.SOUL_MONITOR_PORT);
   if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === 8787) throw new Error('SOUL_MONITOR_PORT 端口无效（1024–65535，不能用正式观察台的 8787）');
-  const monitor = new Monitor(new NoRobotClient(), new M12System(null));
+  const robot = env.SOUL_DEMO_ROBOT ? new DemoRobotClient(env.SOUL_DEMO_ROBOT, env.SOUL_DEMO_ROBOT_TOKEN) : new NoRobotClient();
+  const monitor = new Monitor(robot, new M12System(null));
   const controls = new Controls(monitor, { loadHearingConfig: () => { throw new Error('本机演示不读 .env'); } });
   return { port, monitor, mind, controls };
 }
@@ -162,7 +188,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const server = createMonitorServer(monitor, controls, mind);
   server.on('error', error => { console.error('本机观察台启动失败：' + error.code); process.exit(1); });
-  server.listen(port, '127.0.0.1', () => console.log(demo ? `本机模式演示观察台（没有机器人）：http://127.0.0.1:${port}/` : `StackChan 观察台：http://127.0.0.1:${port}/`));
+  server.listen(port, '127.0.0.1', () => console.log(demo ? `本机模式演示观察台（${monitor.client instanceof DemoRobotClient ? '假 hello，只有模式' : '没有机器人'}）：http://127.0.0.1:${port}/` : `StackChan 观察台：http://127.0.0.1:${port}/`));
   const close = async () => { monitor.stop(); mind.stop(); server.closeAllConnections(); await monitor.client.close?.(); server.close(() => process.exit(0)); };
   process.on('SIGTERM', close); process.on('SIGINT', close);
 }

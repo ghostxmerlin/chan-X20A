@@ -6,6 +6,17 @@ const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',mi
 const route = '/v1/control';
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
 Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[],hearing_forget:['name']});
+// hello modes step 1b (owner 2026-11-14): hello owns the mode; the page asks it to switch like any other control.
+// Only select {mode, dir?} (the mode bar and quick keys 4-8); hello runs the rules and reports to mind.
+Object.assign(fields,{mode:['input','value']});targets.mode='mode';
+const MODE_IDS=['talk','chat','settings','event','subtitle','crowd','companion','idle'];
+export const NO_MODES='hello 固件还不支持模式（等 0.4.92）';
+function validMode(input,value){
+  if(input!=='select'||!value||typeof value!=='object'||Array.isArray(value)||!MODE_IDS.includes(value.mode))return false;
+  const extra=Object.keys(value).filter(k=>k!=='mode');
+  if(value.mode!=='subtitle')return extra.length===0;
+  return extra.every(k=>k==='dir')&&(value.dir===undefined||['zh_en','en_zh'].includes(value.dir));
+}
 export class Controls {
   constructor(monitor,{loadHearingConfig=()=>{throw new Error('not configured');}}={}) { this.monitor=monitor; this.busy=false; this.loadHearingConfig=loadHearingConfig; }
   validate(input) {
@@ -20,6 +31,7 @@ export class Controls {
       const n=input.name;
       if (typeof n!=='string' || !n.length || Buffer.byteLength(n,'utf8')>32 || /[\u0000-\u001f\u007f]/.test(n)) fail(400,'名字须为 1–32 字节，不能含控制字符');
     }
+    if (input.action==='mode' && !validMode(input.input,input.value)) fail(400,'模式参数无效（只接受 select 和八个模式之一）');
     if (input.action==='yaw' && ![-45,45].includes(input.delta_deg)) fail(400,'左右每次只调整一档（45°）');
     if (input.action==='yaw_turn' && (!Number.isInteger(input.duration_ms) || input.duration_ms<100 || input.duration_ms>2000)) fail(400,'转身估计时长须为 100–2000 毫秒的整数');
     if (input.action==='yaw_center' && input.slot!==0) fail(400,'回中只接受 0 档');
@@ -69,6 +81,7 @@ export class Controls {
     if (input.action.startsWith('servo_') && m.info?.capabilities?.servo_tuning!=='supported') fail(409,'当前固件尚未支持舵机参数调节');
     if (input.action.startsWith('wifi_') && m.info?.capabilities?.wifi_profiles!=='supported') fail(409,'当前固件尚未支持网络管理');
     const t=s.telemetry,motor=t.remote?.motor,pitch=t.pitch_setting;
+    if (input.action==='mode' && !(typeof t.mode==='string' || typeof t.mode?.mode==='string')) fail(409,NO_MODES);
     const turnBusy=motor?.yaw_turn?.busy===true || ['queued','rotating','stopping'].includes(motor?.yaw_turn?.state);
     if (turnBusy && (['yaw','yaw_center','yaw_step','yaw_turn','pitch'].includes(input.action) || input.action.startsWith('servo_') || (input.action==='motor' && input.enabled) || (input.action==='interaction' && input.mode==='tracking' && input.enabled))) fail(409,'转身执行中，请等待结束或停用舵机');
     if (input.action==='yaw_turn' && (['queued','moving'].includes(motor?.web_yaw?.state) || ['queued','moving','waiting_feedback'].includes(pitch?.state))) fail(409,'等待当前左右或仰角动作结束');
@@ -105,7 +118,7 @@ export class Controls {
       const result=await this.monitor.client.control(route,body,input.boot,()=>this.validate(input));
       if(result.accepted!==true) fail(502,'设备没有确认接收请求');
       this.monitor.event('control',`网页 ${input.action} 请求已接收，执行状态以遥测为准`);
-      return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='yaw_turn'?'定时转身请求已接收，约 180° 仅为估计；执行状态见转身状态':input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='mic_gain'?`麦克风增益已设为 ${input.value} dB 并保存，立即生效`:input.action.startsWith('m12_')&&input.action!=='m12_mode'?`已发送 ${input.action.slice(4)}，结果见认人库`:input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':'设备已接收请求，执行状态见下方'};
+      return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='yaw_turn'?'定时转身请求已接收，约 180° 仅为估计；执行状态见转身状态':input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='mic_gain'?`麦克风增益已设为 ${input.value} dB 并保存，立即生效`:input.action.startsWith('m12_')&&input.action!=='m12_mode'?`已发送 ${input.action.slice(4)}，结果见认人库`:input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':input.action==='mode'?'已发给 hello，它切了会报上来':'设备已接收请求，执行状态见下方'};
     } catch(error) {
       const known=error.status>=400 && error.status<500;
       const message=known ? (error.status===409?'设备拒绝本次操作，请检查最新状态':error.message) : '请求结果未确认；请查看实时状态，本次不会自动重发';

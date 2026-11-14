@@ -271,3 +271,21 @@ test('queued timed turn rechecks boot and freshness; uncertain responses are nev
  m.client.info.boot_id='boot-a';m.client.requestTail=new Promise(r=>release=r);const stale=c.execute(request);m.telemetryAt=Date.now()-3000;release();await assert.rejects(stale);assert.equal(seen.length,0);
  m.telemetryAt=Date.now();await assert.rejects(c.execute(request),/不会自动重发/);assert.equal(seen.length,1);
 });
+test('mode: hello switches itself (step 1b); select only, boot-checked, needs mode telemetry (0.4.92)',async()=>{
+ const {m,c,calls}=fixture();
+ const pick={action:'mode',input:'select',value:{mode:'crowd'},boot:'boot-a'};
+ await assert.rejects(c.execute(pick),e=>e.status===409&&/等 0\.4\.92/.test(e.message));      // 0.4.91: no telemetry.mode
+ m.telemetry={...m.telemetry,mode:{mode:'talk',dir:null,host:null,return_to:null,seq:3,by:'boot'}};
+ await c.execute(pick);
+ assert.deepEqual(calls[0].slice(0,3),['/v1/control',{target:'mode',input:'select',value:{mode:'crowd'}},'boot-a']);
+ await c.execute({...pick,value:{mode:'subtitle',dir:'en_zh'}});
+ assert.deepEqual(calls[1][1],{target:'mode',input:'select',value:{mode:'subtitle',dir:'en_zh'}});
+ await c.execute({...pick,value:{mode:'subtitle'}});
+ for(const bad of [{...pick,input:'forward'},{...pick,value:{mode:'fly'}},{...pick,value:{mode:'crowd',dir:'zh_en'}},
+  {...pick,value:{mode:'subtitle',dir:'up'}},{...pick,value:'crowd'},{...pick,value:null},{...pick,value:{mode:'crowd',x:1}},
+  {action:'mode',input:'select',boot:'boot-a'},{...pick,extra:1}]) await assert.rejects(c.execute(bad),e=>e.status===400,JSON.stringify(bad));
+ await assert.rejects(c.execute({...pick,boot:'old'}),e=>e.status===409&&/重启/.test(e.message));
+ m.telemetry={...m.telemetry,mode:'idle'};await c.execute(pick);                              // the id alone also counts
+ assert.equal(calls.length,4);
+ assert.match((await c.execute(pick)).message,/已发给 hello/);
+});
