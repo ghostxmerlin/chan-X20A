@@ -4,6 +4,7 @@ speak.auto_play plays only existing stock (one check call at most, never a new w
 the switch, the random wake interval and the state shown on the page.
 """
 import random
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -200,6 +201,50 @@ class AutoPlayTest(AutoCase):
                                   sleep=self.sleep, clock=lambda: self.now / 1000)
         self.assertEqual((res['played'], res['stopped']), (['deadpan'], True))
         self.assertEqual(len(self.said()), 2)             # auto's first line + the click's line, nothing after
+
+    def test_prefetch_writing_skips_without_holding_the_say_lock(self):
+        # Review M1: waiting for 提前写 while holding the say lock would refuse a manual 说一轮 with nothing speaking.
+        self.heard(age=8000)
+        self.stock(self.now - 2000)
+        gate, res = threading.Event(), {}
+        def prefetch_writes():
+            with self.prefetch.writing():
+                self.prefetch._busy = True
+                gate.wait(2)
+                self.prefetch._busy = False
+        pt = threading.Thread(target=prefetch_writes)
+        pt.start()
+        while not self.prefetch.busy():
+            pass
+        at = threading.Thread(target=lambda: res.update(self.auto()))
+        at.start()
+        at.join(0.3)
+        held = speak._SAY_LOCK.locked()
+        gate.set()
+        pt.join()
+        at.join()
+        self.assertFalse(held)                            # a manual round could take the lock meanwhile
+        self.assertEqual((res['reason'], self.said()), ('busy', []))
+
+    def test_stop_during_the_check_call_plays_and_marks_nothing(self):
+        # Review M2: 别说了 while the check call runs.
+        for pick in (0, 1):
+            with self.subTest(pick=pick):
+                self.heard(id=1, age=20000)
+                r = self.stock(self.now - 15000)
+                self.heard(id=2, age=3000, text='客户又说下周交付')
+                inner = RoutedChat(check_pick=pick)
+                def stopping(*a, **k):
+                    out = inner(*a, **k)
+                    speak.cancel_pending()
+                    return out
+                res = self.auto(chat=stopping)
+                self.assertEqual((res['reason'], res['played']), ('stopped', []))
+                self.assertEqual([c[0] for c in inner.calls], ['check'])
+                self.assertEqual(self.said(), [])
+                self.assertFalse(r.get('triggers') or r.get('plays'))
+                row = self.db['say_rounds'].find_one({'rid': r['rid']})
+                self.assertFalse(row.get('triggers') or row.get('plays'))
 
     def test_busy_at_wake_skips(self):
         self.heard(age=8000)

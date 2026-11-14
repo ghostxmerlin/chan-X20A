@@ -144,7 +144,7 @@ test('连续说 state line: on/off, next wake, last result with its time',()=>{
  assert.match(ui.autoStatusHtml({on:false,next_at:null,last:null}),/连续说关着/);
  const html=ui.autoStatusHtml({on:true,next_at:now+150000,last:{reason:'played',at:now-30000,n:2,stopped:false}});
  assert.match(html,/连续说开着/);assert.match(html,/下次 10:02:30/);assert.match(html,/09:59:30 播了 2 句/);
- for(const [reason,text] of [['no_stock','没有可用的提前写'],['no_high_score','没有高分'],['checked_none','都不合适'],['thin','没人说话'],['off','条件不满足']])
+ for(const [reason,text] of [['no_stock','没有可用的提前写'],['no_high_score','没有高分'],['checked_none','都不合适'],['thin','没人说话'],['off','条件不满足'],['stopped','被叫停'],['busy','跳过']])
   assert.match(ui.autoStatusHtml({on:true,next_at:now,last:{reason,at:now,n:0}}),new RegExp(text),reason);
  assert.match(ui.autoStatusHtml({on:true,next_at:now,last:{reason:'played',at:now,n:1,stopped:true}}),/中途停了/);
  assert.match(ui.autoStatusHtml({on:true,next_at:now,last:{reason:'<x>',at:now,n:0}}),/&lt;x&gt;/);

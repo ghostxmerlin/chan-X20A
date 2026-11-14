@@ -84,7 +84,7 @@ export function earlierRoundsHtml(rows){
 const PREFETCH_WHY={off:'条件不满足（嘴不在 TTS 或不是一轮模式）',no_speech:'最近没有听清的话',waiting:'等这段话说完（静 5 秒）',
  nothing_new:'说完后没有新话',spacing:'离上一轮不到 30 秒',same_moment:'还是同一时刻，不重写',budget:'本小时已到 0.6 美元上限',wrote:'刚写完一轮'};
 const AUTO_WHY={no_stock:'没有可用的提前写',no_high_score:'没有高分句',checked_none:'核对新话后都不合适',thin:'最近一分钟没人说话',
- off:'条件不满足（嘴不在 TTS 或不是一轮模式）',no_mouth:'hello 的嘴没连上',busy:'正在说别的，跳过',error:'出错'};
+ off:'条件不满足（嘴不在 TTS 或不是一轮模式）',no_mouth:'hello 的嘴没连上',busy:'正在说别的或正在提前写，跳过',stopped:'被叫停，没说',error:'出错'};
 export function autoStatusHtml(st){
  if(!st?.on)return '<p class="note say-auto-state">连续说关着</p>';
  const l=st.last,what=!l?'还没醒过':`${hhmmss(l.at)} ${l.reason==='played'?`播了 ${Number(l.n)||0} 句${l.stopped?'（中途停了）':''}`:AUTO_WHY[l.reason]||escapeHtml(l.reason)}`;

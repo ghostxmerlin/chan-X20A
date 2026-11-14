@@ -383,9 +383,10 @@ AUTO_TRIGGER = {'source': 'auto'}
 AUTO_GAP_S = 10
 
 
-def _auto_pick(env, store, s, now_ms, worker):
+def _auto_pick(env, store, s, now_ms, worker, alive):
     """(round, keys, None) to play, or (None, None, reason): fresh untouched stock of this voice mode, not thin,
-    its high-score lines in judge order; one check call when clear speech came after it was written."""
+    its high-score lines in judge order; one check call when clear speech came after it was written. A stop
+    during that call leaves the round untouched (review M2)."""
     ctx = speech_context.build(store.db, store, s, now_ms)
     min_score = (s['speech'].get('round') or {}).get('auto_min_score', speech_settings.ROUND_DEFAULTS['auto_min_score'])
     with worker.writing():
@@ -401,10 +402,14 @@ def _auto_pick(env, store, s, now_ms, worker):
             return None, None, 'no_high_score'
         if any(e.get('kind') == 'speech' and e.get('quality') == 'usable' and e['at'] > r['written_at'] for e in ctx['evidence']):
             pick = rounds.check_round(env, store, s, r, ctx, now_ms, chat=CHAT, keys=keys)
+            if not alive():
+                return None, None, 'stopped'
             if not pick:
                 _note_trigger(store, r, now_ms, 'auto_skip', AUTO_TRIGGER)      # never reconsidered
                 return None, None, 'checked_none'
             keys = keys[keys.index(pick):]
+        if not alive():
+            return None, None, 'stopped'
         _note_trigger(store, r, now_ms, 'auto', AUTO_TRIGGER)
         return r, keys, None
 
@@ -418,12 +423,16 @@ def auto_play(env, store, s, tts, now_ms, *, worker, sleep=time.sleep, clock=tim
     out = lambda reason, played=(), stopped=False: {'reason': reason, 'played': list(played), 'stopped': stopped}
     if not ((tts.health().get('mouth') or {}).get('device')):
         return out('no_mouth')
-    if not _SAY_LOCK.acquire(blocking=False):
+    # 提前写 is writing: skip this wake rather than hold the say lock while waiting for it, which would refuse a
+    # manual 说一轮 with nothing speaking (review M1). Checked again under the lock.
+    if worker.busy() or not _SAY_LOCK.acquire(blocking=False):
         return out('busy')
     try:
         if not alive():
             return out('off')
-        r, keys, reason = _auto_pick(env, store, s, now_ms, worker)
+        if worker.busy():
+            return out('busy')
+        r, keys, reason = _auto_pick(env, store, s, now_ms, worker, alive)
         if reason:
             return out(reason)
         try:
