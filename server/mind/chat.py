@@ -28,6 +28,12 @@ Context (refreshed part by part when its TTL ran out: while idle, and at turn ti
 the sentence go in), hello's persona (config/roles deadpan, 无限's delivery), the recognised speaker's library card and
 active notes (links.voice_names), and the last chat turns (chat_turns).
 
+Streaming (chat v1, owner 2026-11-14 "做流式合成"; speech.chat.stream, default on): once a turn is picked up and hello
+is quiet, a soul-tts line is opened at once (TtsHttp.begin, no text yet), so soul-tts starts its synthesis task while
+the model thinks. The reply goes in as two pieces, the first sentence first, then end. Every way a turn ends unspoken
+(model error, empty reply, superseded, left chat, stop, budget, tts error) cancels that line in a finally: no sound,
+nothing reaches the robot (soul-tts sends tts.start only with the first audio). A failing stream falls back to say().
+
 Leaving chat (the on_change hook) cancels the current speech and the pending turn; the speak path refuses outside chat.
 Billing gates nothing (owner); chat costs go to mind_runs (step chat) like every other model call.
 """
@@ -159,6 +165,17 @@ def trim(text, max_chars):
         if i >= max_chars // 3:
             return head[:i + 1] if keep else head[:i] + '。'
     return head + '。'
+
+
+def split_first(text):
+    """(first sentence, rest): the first piece starts synthesizing while the rest is still being sent."""
+    for i, c in enumerate(text):
+        if c in '。！？!?…' and i >= 1:
+            j = i + 1
+            while j < len(text) and text[j] in '。！？!?…”」':
+                j += 1
+            return text[:j], text[j:]
+    return text, ''
 
 
 def _bigrams(text):
@@ -418,6 +435,14 @@ class Chat:
             wait_ms = int((self.mono() - item['received']) * 1000)
         epoch = speak._EPOCH
         cfg = speech_settings.chat_config(s)
+        stream = self._open_stream(s, cfg)   # chat v1: soul-tts gets ready while the model thinks
+        try:
+            return self._think(item, gen, s, cfg, epoch, wait_ms, stream)
+        finally:
+            if stream and stream.get('id') and not stream.get('used'):
+                self._cancel_stream(stream)
+
+    def _think(self, item, gen, s, cfg, epoch, wait_ms, stream):
         t0 = self.mono()
         self._refresh(self.clock_ms(), budget_ms=REFRESH_BUDGET_MS)
         if not self._history_loaded:
@@ -435,7 +460,7 @@ class Chat:
                    'timings.tries': run['tries']}
         fields = {'person_id': (ctx.get('person') or {}).get('person_id'), 'model': cfg['model'],
                   'cost_usd': run['cost_usd'], 'usage': run['usage'], 'run_id': run['run_id'], 'raw_reply': run['raw'],
-                  **timings}
+                  **timings, **self._stream_fields(stream)}
         if not reply:
             return self._skip(item, 'llm_error' if run['error'] else 'empty_reply', error=run['error'], **fields)
         if not self._alive(gen) or epoch != speak._EPOCH:
@@ -448,7 +473,8 @@ class Chat:
             self._history.append({'tid': item['tid'], 'heard': item['text'], 'reply': None, 'who': who})
             return self._skip(item, 'superseded', reply=reply, heard_only=True, **fields)
         try:
-            uid, tts_id, submit_at = self.speak_line(reply, s, gen=gen, epoch=epoch, tid=item['tid'])
+            uid, tts_id, submit_at = self.speak_line(reply, s, gen=gen, epoch=epoch, tid=item['tid'], stream=stream,
+                                                     end_at=item.get('end_at'))
         except speak.NotConnected as e:
             why = 'left_chat' if isinstance(e, NotInChat) else 'cancelled' if '取消' in str(e) else \
                 'mouth_not_tts' if '嘴不是' in str(e) else 'no_mouth'
@@ -457,11 +483,47 @@ class Chat:
             return self._skip(item, 'tts_error', reply=reply, error=type(e).__name__, **fields)
         self._history.append({'tid': item['tid'], 'heard': item['text'], 'reply': reply, 'who': who})
         end_at = item.get('end_at')
+        fields.update(self._stream_fields(stream))
         out = self._update(item['tid'], state='answered', skip=None, reply=reply, uid=uid, tts_id=tts_id,
                            **fields, **{'timings.submit_at': submit_at,
                                         'timings.end_to_submit_ms': submit_at - end_at if end_at else None,
                                         'timings.received_to_submit_ms': submit_at - item['at']})
         self.log(f'mind chat: answered ({item["session"]} {item["id"]}) llm {run["llm_ms"]} ms', flush=True)
+        return out
+
+    def _role_opts(self, s):
+        role = speech_settings.role_config((self.roles_fn() or {}).get(ROLE) or FALLBACK_ROLE, s)
+        return {k: role[k] for k in ('instruction', 'rate') if role.get(k) is not None}
+
+    def _open_stream(self, s, cfg):
+        """Open the soul-tts line for this turn -> {id, open_ms, open_at, used} / {error} / None (stream off)."""
+        if not cfg.get('stream', True) or not hasattr(self.tts, 'begin') or self.mouth_fn() != 'tts':
+            return None
+        t0 = self.mono()
+        try:
+            sid = self.tts.begin(voice=VOICE, interrupt=True, **self._role_opts(s))
+        except Exception as e:               # noqa: BLE001 - 409 no robot / 429 busy / soul-tts down: say() later
+            self.log(f'mind chat: stream open failed: {type(e).__name__}', flush=True)
+            return {'error': type(e).__name__}
+        return {'id': sid, 'open_ms': int((self.mono() - t0) * 1000), 'open_at': self.clock_ms(), 'used': False}
+
+    def _cancel_stream(self, stream):
+        try:
+            self.tts.cancel(stream['id'])
+        except Exception as e:               # noqa: BLE001 - a stop already ended it, or soul-tts is away
+            self.log(f'mind chat: stream cancel failed: {type(e).__name__}', flush=True)
+        stream['cancelled'] = True
+
+    @staticmethod
+    def _stream_fields(stream):
+        if not stream:
+            return {'timings.stream': False}
+        out = {'timings.stream': bool(stream.get('used')), 'timings.stream_open_ms': stream.get('open_ms'),
+               'timings.stream_open_at': stream.get('open_at')}
+        if stream.get('error'):
+            out['stream_error'] = stream['error']
+        if stream.get('first_text_at') and stream.get('open_at'):
+            out['timings.first_text_sent_ms'] = stream['first_text_at'] - stream['open_at']
         return out
 
     def _wait_quiet(self, item, gen):
@@ -511,7 +573,7 @@ class Chat:
                                             'raw': raw[:400]}
 
     # ---- the chat speak path ----
-    def speak_line(self, text, s, *, gen=None, epoch=None, tid=None):
+    def speak_line(self, text, s, *, gen=None, epoch=None, tid=None, stream=None, end_at=None):
         """Say one chat reply in 无限's voice -> (uid, tts_id, submit_at). Refuses outside chat (NotInChat), when 嘴 is
         not TTS, or when a stop / mode change came after `epoch` (speak.NotConnected). Not the talk show's path:
         no only_talk, no _SAY_LOCK (thinking is not speaking)."""
@@ -519,26 +581,50 @@ class Chat:
             raise NotInChat('只在对话模式')
         if self.mouth_fn() != 'tts':
             raise speak.NotConnected('嘴不是 TTS')
-        role = speech_settings.role_config((self.roles_fn() or {}).get(ROLE) or FALLBACK_ROLE, s)
-        opts = {k: role[k] for k in ('instruction', 'rate') if role.get(k) is not None}
+        opts = self._role_opts(s)
         epoch = speak._EPOCH if epoch is None else epoch
+        live = stream if stream and stream.get('id') and not stream.get('cancelled') else None
+        first, rest = split_first(text)
         with speak._ENQUEUE_LOCK:
             speak._check_pending(epoch, lambda: self._active and self.mode_fn() == 'chat' and
                                  (gen is None or gen == self._gen))
-            tts_id = self.tts.say(text, voice=VOICE, interrupt=True, **opts)
+            tts_id = None
+            if live:
+                try:
+                    self.tts.text(live['id'], first)
+                    tts_id, live['used'] = live['id'], True
+                except speak.NotConnected:
+                    raise
+                except Exception as e:       # noqa: BLE001 - the stream is gone (soul-tts restarted): say() instead
+                    self.log(f'mind chat: stream text failed: {type(e).__name__}', flush=True)
+                    live['error'] = type(e).__name__
+            if tts_id is None:
+                tts_id = self.tts.say(text, voice=VOICE, interrupt=True, **opts)
             speak._PLAYING.add(tts_id)       # speaking() at once (the finish thread keeps it until the line ends)
         submit_at = self.clock_ms()
+        if live and live.get('used'):
+            live['first_text_at'] = submit_at
+            try:
+                if rest:
+                    self.tts.text(tts_id, rest)
+            except Exception as e:           # noqa: BLE001 - the first sentence is said; end it anyway
+                self.log(f'mind chat: stream rest failed: {type(e).__name__}', flush=True)
+            try:
+                self.tts.end(tts_id)
+            except Exception as e:           # noqa: BLE001 - soul-tts ends an idle stream by itself after 30 s
+                self.log(f'mind chat: stream end failed: {type(e).__name__}', flush=True)
         uid = 'u' + uuid.uuid4().hex
         self.db['utterances'].insert_one({'uid': uid, 'role': 'chat', 'text': text, 'voice': VOICE, 'tts_id': tts_id,
                                           'at': submit_at, 'state': 'sent', 'pipeline': 'chat',
                                           'scope_id': speech_settings.scope(s)['id'], 'tts_submit_at': submit_at,
                                           'instruction': opts.get('instruction'), 'chat_tid': tid})
+        args = (uid, tts_id, tid, submit_at, end_at)
         if self.finish_async:
-            t = threading.Thread(target=self._finish, args=(uid, tts_id, tid), name='mind-chat-finish', daemon=True)
+            t = threading.Thread(target=self._finish, args=args, name='mind-chat-finish', daemon=True)
             t.start()
             self._finishers = [x for x in self._finishers if x.is_alive()] + [t]
         else:
-            self._finish(uid, tts_id, tid)
+            self._finish(*args)
         return uid, tts_id, submit_at
 
     def _finish_wait(self, timeout=5):
@@ -546,7 +632,7 @@ class Chat:
         for t in list(self._finishers):
             t.join(timeout)
 
-    def _finish(self, uid, tts_id, tid):
+    def _finish(self, uid, tts_id, tid, submit_at=None, end_at=None):
         selfvoice.refresh_spoken(self.db, self.clock_ms())     # her own reply counts as her voice from now on
         speak._finish(self.db, self.tts, uid, tts_id)
         if not tid:
@@ -554,10 +640,22 @@ class Chat:
         u = self.db['utterances'].find_one({'uid': uid}) or {}
         t = u.get('timings_s') or {}
         sec = lambda k: int(round(t[k] * 1000)) if _num(t.get(k)) else None
-        self._update(tid, **{'timings.tts_first_sound_ms': sec('first_sound'),
+        # soul-tts times count from its own line start (= the stream open for a stream): from the first text on is
+        # what compares with a whole-line say.
+        base = t.get('first_text') if _num(t.get('first_text')) else 0
+        since_text = lambda k: int(round((t[k] - base) * 1000)) if _num(t.get(k)) else None
+        sound_at = u.get('play_start_at') if _num(u.get('play_start_at')) else None
+        self._update(tid, **{'timings.tts_first_audio_ms': sec('first_audio'),
+                             'timings.tts_first_sound_ms': sec('first_sound'),
                              'timings.tts_first_accepted_ms': sec('first_accepted'),
-                             'timings.tts_done_ms': sec('done'), 'tts_state': u.get('state'),
-                             'played': u.get('played'), 'tts_cost_cny': u.get('tts_cost_cny')})
+                             'timings.tts_done_ms': sec('done'),
+                             'timings.tts_text_to_audio_ms': since_text('first_audio'),
+                             'timings.tts_text_to_sound_ms': since_text('first_sound'),
+                             'timings.sound_at': sound_at,
+                             'timings.submit_to_sound_ms': sound_at - submit_at if sound_at and submit_at else None,
+                             'timings.end_to_sound_ms': sound_at - end_at if sound_at and end_at else None,
+                             'tts_state': u.get('state'), 'played': u.get('played'),
+                             'tts_cost_cny': u.get('tts_cost_cny')})
 
     # ---- records ----
     def _update(self, tid, **fields):

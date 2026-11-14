@@ -593,5 +593,20 @@ class TtsHttp:
     def status(self, uid, wait=0):
         return self._call("GET", f"/v1/say/{uid}" + (f"?wait={wait:g}" if wait else ""), timeout=wait + 10)
 
+    # Streaming input (chat v1, 2026-11-14): begin() opens a line before its text exists, so soul-tts starts the
+    # synthesis task (and the robot link) while the model is still thinking; text() / end() feed it, cancel() drops
+    # it unspoken. Same ids and status as say().
+    def begin(self, **kw):
+        return self._call("POST", "/v1/say", {"text": "", "stream": True, **kw})["id"]
+
+    def text(self, uid, piece):
+        self._call("POST", f"/v1/say/{uid}/text", {"text": piece})
+
+    def end(self, uid):
+        self._call("POST", f"/v1/say/{uid}/end")
+
+    def cancel(self, uid):
+        return self._call("POST", f"/v1/say/{uid}/cancel")
+
     def stop(self):
         return self._call("POST", "/v1/stop").get("cancelled", [])

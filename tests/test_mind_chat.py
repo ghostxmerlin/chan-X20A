@@ -369,6 +369,218 @@ class TurnTest(ChatBase):
         self.assertEqual(len(self.model.bodies[-1]['messages']), 2)
 
 
+
+class StreamTts(Tts):
+    """soul-tts with streaming input: every call goes to one ordered log shared with the model."""
+    def __init__(self, order):
+        super().__init__()
+        self.order, self.n, self.fail_begin, self.fail_text = order, 0, None, None
+
+    def begin(self, **kw):
+        if self.fail_begin:
+            raise self.fail_begin
+        self.n += 1
+        sid = f'st{self.n}'
+        self.order.append(('begin', sid, kw))
+        return sid
+
+    def text(self, uid, piece):
+        if self.fail_text:
+            raise self.fail_text
+        self.order.append(('text', uid, piece))
+
+    def end(self, uid):
+        self.order.append(('end', uid))
+
+    def cancel(self, uid):
+        self.order.append(('cancel', uid))
+        return {'id': uid, 'state': 'cancelled'}
+
+    def say(self, text, **kw):
+        self.order.append(('say', text))
+        return super().say(text, **kw)
+
+    def status(self, uid, wait=0):
+        gate = getattr(self, 'playing', None)
+        if gate is not None:
+            gate.wait(5)
+        # soul-tts times count from the line start (the stream open): text at 0.9 s, audio 1.3 s, sound 1.6 s
+        return {'state': 'done', 'created': time.time() - 2, 'timings_s': {'first_text': 0.9, 'first_audio': 1.3,
+                                                                          'first_sound': 1.6, 'done': 3.0}}
+
+
+class StreamTest(ChatBase):
+    """chat v1: the soul-tts line opens when the turn is picked up, the reply goes in after the model, first sentence
+    first; every unspoken end cancels the line."""
+
+    def setUp(self):
+        super().setUp()
+        self.order = []
+        self.tts = self.chat.tts = StreamTts(self.order)
+        model = self.model
+        self.chat.chat_fn = lambda *a, **k: (self.order.append(('llm',)), model(*a, **k))[1]
+
+    def kinds(self):
+        return [o[0] for o in self.order]
+
+    def test_the_line_opens_before_the_model_and_gets_the_first_sentence_first(self):
+        self.model.reply = '好的。我在听，你说。'
+        tid = self.chat.heard(heard())['tid']
+        self.chat.process_once()
+        self.assertEqual(self.kinds(), ['begin', 'llm', 'text', 'text', 'end'])
+        _, sid, kw = self.order[0]
+        self.assertEqual((kw['voice'], kw['interrupt']), ('wuxian', True))
+        self.assertIn('平静', kw['instruction'])
+        self.assertEqual([o[2] for o in self.order if o[0] == 'text'], ['好的。', '我在听，你说。'])
+        self.assertTrue(all(o[1] == sid for o in self.order if o[0] in ('text', 'end')))
+        self.assertEqual(self.tts.said, [])                               # no whole-line say
+        row = self.turn(tid)
+        t = row['timings']
+        self.assertEqual((row['state'], row['tts_id'], t['stream']), ('answered', sid, True))
+        self.assertEqual((t['tts_first_audio_ms'], t['tts_first_sound_ms']), (1300, 1600))
+        self.assertEqual((t['tts_text_to_audio_ms'], t['tts_text_to_sound_ms']), (400, 700))
+        for k in ('stream_open_ms', 'stream_open_at', 'first_text_sent_ms', 'sound_at', 'end_to_sound_ms',
+                  'submit_to_sound_ms'):
+            self.assertIn(k, t)
+        self.assertEqual(self.db['utterances'].docs[0]['tts_id'], sid)
+
+    def test_one_sentence_goes_in_one_piece(self):
+        self.chat.heard(heard())
+        self.chat.process_once()
+        self.assertEqual(self.kinds(), ['begin', 'llm', 'text', 'end'])
+        self.assertEqual(self.order[2][2], '我在听，你说。')
+
+    def assert_cancelled_unspoken(self):
+        sid = self.order[0][1]
+        self.assertEqual(self.kinds()[0], 'begin')
+        self.assertIn(('cancel', sid), self.order)
+        self.assertNotIn('text', self.kinds())
+        self.assertNotIn('say', self.kinds())
+        self.assertFalse(speak.speaking())
+
+    def test_an_empty_reply_cancels_the_line(self):
+        self.model.reply = ' '
+        tid = self.chat.heard(heard())['tid']
+        self.chat.process_once()
+        self.assert_cancelled_unspoken()
+        self.assertEqual(self.turn(tid)['skip'], 'empty_reply')
+
+    def test_a_model_error_cancels_the_line(self):
+        self.model.error = 'HTTP 500: x'
+        self.chat.heard(heard())
+        self.chat.process_once()
+        self.assert_cancelled_unspoken()
+
+    def test_a_superseded_reply_cancels_its_line_and_the_newest_gets_its_own(self):
+        self.chat.heard(heard('先问一个问题吧', n=1))
+        self.model.during = lambda: self.chat.heard(heard('不对我换个问题', n=2))
+        self.chat.process_once()
+        self.assert_cancelled_unspoken()
+        self.order.clear()
+        self.chat.process_once()
+        self.assertEqual(self.kinds(), ['begin', 'llm', 'text', 'end'])
+        self.assertNotEqual(self.order[0][1], 'st1')
+
+    def test_leaving_while_thinking_cancels_the_line(self):
+        def leave():
+            self.mode[0] = 'idle'
+            self.chat.leave()
+        self.model.during = leave
+        tid = self.chat.heard(heard())['tid']
+        self.chat.process_once()
+        self.assert_cancelled_unspoken()
+        self.assertEqual(self.turn(tid)['skip'], 'left_chat')
+
+    def test_a_stop_while_thinking_cancels_the_line(self):
+        self.model.during = lambda: speak.cancel_pending(self.tts)
+        tid = self.chat.heard(heard())['tid']
+        self.chat.process_once()
+        self.assert_cancelled_unspoken()
+        self.assertEqual(self.turn(tid)['skip'], 'cancelled')
+
+    def test_no_robot_on_open_falls_back_to_say(self):
+        self.tts.fail_begin = speak.NotConnected('hello 的嘴没连上')
+        tid = self.chat.heard(heard())['tid']
+        self.chat.process_once()
+        self.assertEqual(self.kinds(), ['llm', 'say'])
+        row = self.turn(tid)
+        self.assertEqual((row['state'], row['stream_error'], row['timings']['stream']), ('answered', 'NotConnected', False))
+
+    def test_a_broken_stream_falls_back_to_say_and_is_cancelled(self):
+        self.tts.fail_text = RuntimeError('gone')
+        tid = self.chat.heard(heard())['tid']
+        self.chat.process_once()
+        self.assertEqual(self.kinds(), ['begin', 'llm', 'say', 'cancel'])
+        self.assertEqual(self.turn(tid)['state'], 'answered')
+
+    def test_stream_off_in_settings_is_the_whole_line_say(self):
+        s, v = self.ss.current()
+        s = copy.deepcopy(s)
+        s['speech']['chat']['stream'] = False
+        self.ss.save(s, 'test', expected_version=v)
+        self.chat.heard(heard())
+        self.chat.process_once()
+        self.assertEqual(self.kinds(), ['llm', 'say'])
+
+    def test_a_waiting_sentence_opens_no_line_while_hello_speaks(self):
+        """open() interrupts: it must never happen while the previous reply plays (review I2 with streams)."""
+        self.tts.playing = threading.Event()
+        self.addCleanup(self.tts.playing.set)
+        self.chat.finish_async = True
+        self.chat.heard(heard(n=1, text='第一句话说完'))
+        self.model.during = lambda: self.chat.heard(heard(n=2, text='第二句话说完'))
+        self.chat.process_once()                                      # 1 superseded by 2
+        self.model.during = lambda: self.chat.heard(heard(n=3, text='第三句话说完'))
+        self.chat.process_once()                                      # 2 spoken (playing), 3 waits
+        begins = self.kinds().count('begin')
+        done = threading.Event()
+        threading.Thread(target=lambda: (self.chat.process_once(), done.set()), daemon=True).start()
+        time.sleep(0.3)
+        self.assertEqual(self.kinds().count('begin'), begins)        # no new line while the reply plays
+        self.tts.playing.set()
+        self.assertTrue(done.wait(3))
+        self.assertEqual(self.kinds().count('begin'), begins + 1)
+
+
+class TtsHttpStreamTest(unittest.TestCase):
+    def test_stream_calls_hit_soul_tts_and_say_is_unchanged(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        got = []
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)) or b'{}')
+                got.append((self.path, body, self.headers.get('Authorization')))
+                out = json.dumps({'id': 'u9', 'state': 'synthesizing'}).encode()
+                self.send_response(202 if self.path == '/v1/say' else 200)
+                self.send_header('Content-Length', str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+        srv = ThreadingHTTPServer(('127.0.0.1', 0), H)
+        threading.Thread(target=srv.serve_forever, args=(0.02,), daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        tts = speak.TtsHttp(f'http://127.0.0.1:{srv.server_address[1]}', 'tok')
+        self.assertEqual(tts.begin(voice='wuxian', interrupt=True, instruction='x'), 'u9')
+        tts.text('u9', '好的。')
+        tts.end('u9')
+        tts.cancel('u9')
+        self.assertEqual(tts.say('整句', voice='wuxian', interrupt=True), 'u9')
+        self.assertEqual([(p, b) for p, b, _ in got], [
+            ('/v1/say', {'text': '', 'stream': True, 'voice': 'wuxian', 'interrupt': True, 'instruction': 'x'}),
+            ('/v1/say/u9/text', {'text': '好的。'}), ('/v1/say/u9/end', {}), ('/v1/say/u9/cancel', {}),
+            ('/v1/say', {'text': '整句', 'voice': 'wuxian', 'interrupt': True})])
+        self.assertTrue(all(a == 'Bearer tok' for _, _, a in got))
+
+    def test_split_first(self):
+        self.assertEqual(chat_mod.split_first('好的。我在听，你说。'), ('好的。', '我在听，你说。'))
+        self.assertEqual(chat_mod.split_first('真的吗？！那太好了'), ('真的吗？！', '那太好了'))
+        self.assertEqual(chat_mod.split_first('没有句号的一句'), ('没有句号的一句', ''))
+        self.assertEqual(chat_mod.split_first('。开头'), ('。开头', ''))
+
 class LeaveTest(ChatBase):
     def test_leaving_cancels_speech_and_the_waiting_turn(self):
         tid = self.chat.heard(heard())['tid']
@@ -509,9 +721,9 @@ class SettingsTest(unittest.TestCase):
     def test_defaults_and_validation(self):
         s = settings_mod.load(None)
         self.assertEqual(speech_settings.chat_config(s), {'model': 'gpt-6.1-terra', 'near_db': 8, 'max_chars': 60,
-                                                          'history_turns': 8})
+                                                          'history_turns': 8, 'stream': True})
         self.assertEqual(validate(s), [])
-        for bad in ({'model': ''}, {'model': 'a b'}, {'model': 'gpt-6.1-terra\n'}, {'model': 3}, {'near_db': -1}, {'near_db': True},
+        for bad in ({'stream': 'yes'}, {'stream': 1}, {'model': ''}, {'model': 'a b'}, {'model': 'gpt-6.1-terra\n'}, {'model': 3}, {'near_db': -1}, {'near_db': True},
                     {'max_chars': 10}, {'max_chars': 60.5}, {'history_turns': 21}, {'other': 1}):
             t = copy.deepcopy(s)
             t['speech']['chat'] = {**t['speech']['chat'], **bad}

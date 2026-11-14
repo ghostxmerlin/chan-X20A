@@ -60,8 +60,10 @@ const secs=ms=>Number.isFinite(ms)?`${(ms/1000).toFixed(1)} 秒`:null;
 export function chatTurnHtml(t){
  if(!t||typeof t!=='object')return '';
  const tm=t.timings&&typeof t.timings==='object'?t.timings:{};
- const sound=Number.isFinite(tm.end_to_submit_ms)&&Number.isFinite(tm.tts_first_sound_ms)?tm.end_to_submit_ms+tm.tts_first_sound_ms:null;
- const facts=[secs(tm.llm_ms)&&`模型 ${secs(tm.llm_ms)}`,secs(tm.end_to_submit_ms)&&`说完到送出 ${secs(tm.end_to_submit_ms)}`,
+ // end_to_sound_ms (chat v1) is measured; older turns add the parts (a whole-line say counts from the submit)
+ const sound=Number.isFinite(tm.end_to_sound_ms)?tm.end_to_sound_ms:
+  Number.isFinite(tm.end_to_submit_ms)&&Number.isFinite(tm.tts_first_sound_ms)?tm.end_to_submit_ms+tm.tts_first_sound_ms:null;
+ const facts=[secs(tm.llm_ms)&&`模型 ${secs(tm.llm_ms)}`,tm.stream===true?'流式':null,secs(tm.end_to_submit_ms)&&`说完到送出 ${secs(tm.end_to_submit_ms)}`,
   secs(sound)&&`说完到开口 ${secs(sound)}`,t.model?escapeHtml(t.model):null,
   Number.isFinite(t.cost_usd)?`$${t.cost_usd.toFixed(5)}`:null].filter(Boolean).join(' · ');
  const reply=t.state==='answered'&&t.reply?escapeHtml(t.reply):

@@ -37,6 +37,11 @@ test('the last chat turn: heard -> reply, latency, model, cost',()=>{
  assert.match(h,/模型 1\.3 秒/);assert.match(h,/说完到送出 2\.4 秒/);assert.match(h,/说完到开口 3\.1 秒/);
  assert.match(h,/gpt-6\.1-terra/);assert.match(h,/\$0\.00060/);
 });
+test('a streamed turn shows the measured end-of-speech to first sound',()=>{
+ const h=say.chatTurnHtml({at:1,text:'几点了',reply:'三点。',state:'answered',
+  timings:{llm_ms:1000,stream:true,end_to_submit_ms:2000,tts_first_sound_ms:1600,end_to_sound_ms:2700}});
+ assert.match(h,/流式/);assert.match(h,/说完到开口 2\.7 秒/);assert.doesNotMatch(h,/说完到开口 3\.6 秒/);
+});
 test('a skipped turn says why; nothing is shown without a turn',()=>{
  assert.match(say.chatTurnHtml({at:1,text:'嗯',state:'skipped',skip:'filler'}),/→ <span class="muted">（只有语气词）<\/span>/);
  assert.match(say.chatTurnHtml({at:1,text:'远处',state:'skipped',skip:'far_quiet'}),/太远（声音太小）/);
