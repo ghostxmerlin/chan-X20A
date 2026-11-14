@@ -120,7 +120,13 @@ function render() {
   text('pitch-saved', t.pitch_setting ? `${num(t.pitch_setting.configured_deg)}° · ${bool(t.pitch_setting.persisted, '已保存', '未保存')}` : '—');
   for (const id of ['system-panel','servo-panel','m12-panel','log-panel']) $(id).classList.toggle('stale', !fresh);
   const mic = t.health?.mic_level_dbfs, micPeak = t.health?.mic_peak_dbfs;
-  text('mic', Number.isFinite(mic) ? `${num(mic)} / 峰 ${num(micPeak)} dBFS` : '—');
+  // 底噪 (owner 2026-11-14, "这对收音很重要"): the ear's raw-mic background = 10th percentile of the last
+  // ~60 s of levels (server/ear/ear_server.py mic_floor), relayed in the hearing heartbeat; only while hearing runs.
+  // Reference: −43 dBFS on 11-09; −33 with the M12 fan close by, −40 after moving it (11-14).
+  const floor = t.hearing?.heartbeat?.server_noise_db;
+  const floorText = Number.isFinite(floor) ? `底噪 ${num(floor)}` : '底噪 —（听觉没开）';
+  text('mic', Number.isFinite(mic) ? `${num(mic)} / 峰 ${num(micPeak)} dBFS · ${floorText}` : floorText);
+  $('mic').classList.toggle('warn', !!fresh && Number.isFinite(floor) && floor > -36);
   $('mic-fill').style.width = `${Number.isFinite(mic) ? (Math.max(-60, Math.min(0, mic)) + 60) / 60 * 100 : 0}%`;
   text('asr-state', t.asr ? `${bool(t.asr.valid, '串口就绪', '串口异常')} · ${t.asr.frames} 帧` : '—');
   controls.render(state, fresh && !document.hidden);
