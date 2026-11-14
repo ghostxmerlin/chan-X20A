@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
+#include "chat_stage.h"
 #include "mode_rules.h"
 #include "mode_wire.h"
 #include "mouth_stream.h"
@@ -24,11 +25,14 @@ namespace collector::mouth {
 // - Digits 0 and 9 (all paid off / on) are mind's: they go up as {"type":"mode_input",...} (C1 wire) and mind's
 //   {"type":"mode_result"} brings the toast. No other input is sent to mind as an input.
 // - Settings closes itself after 5 minutes without any input (the robot's clock).
+// - 0.4.93: {"type":"chat_stage","stage":"listen|think|skip","at_ms":..} (<= 200 B) is kept for the chat dots
+//   (chat_stage.h) only while the mode is chat; leaving chat clears it. at_ms (server clock) is not used: the
+//   timeouts run on the robot's clock from arrival.
 
 // One text message from the ear. TooLong (over the 1600 B /mouth limit) and Bad (not complete JSON, or not an
 // object) leave doc cleared: a partly filled document is never read. Other = a type the robot ignores (an old
 // ear's {"type":"mode"} snapshot is one of them now).
-enum class Text : uint8_t { TooLong, Bad, Hello, TtsStart, TtsEnd, TtsStop, ModeResult, Other };
+enum class Text : uint8_t { TooLong, Bad, Hello, TtsStart, TtsEnd, TtsStop, ModeResult, ChatStage, Other };
 inline Text read_text(const char* data, size_t n, ArduinoJson::JsonDocument& doc)
 {
     doc.clear();
@@ -40,7 +44,7 @@ inline Text read_text(const char* data, size_t n, ArduinoJson::JsonDocument& doc
     const char* type = doc["type"] | "";
     static constexpr struct { const char* name; Text kind; } kTypes[] = {
         {"hello", Text::Hello}, {"tts.start", Text::TtsStart}, {"tts.end", Text::TtsEnd}, {"tts.stop", Text::TtsStop},
-        {"mode_result", Text::ModeResult}};
+        {"mode_result", Text::ModeResult}, {"chat_stage", Text::ChatStage}};
     for (const auto& t : kTypes) if (!std::strcmp(type, t.name)) return t.kind;
     return Text::Other;
 }
@@ -68,6 +72,7 @@ struct ModeView {
     uint32_t toasts = 0;            // +1 for every toast to show, even an identical text
     bool have_result = false;
     modes::Result result{};         // mind's latest mode_result (digits 0 / 9)
+    chat::StageState chat{};        // the ear's latest chat stage (chat mode only; cleared on leaving chat)
     uint32_t version = 0;           // changes whenever anything above changes
 };
 
@@ -129,6 +134,7 @@ public:
         a.out = modes::rules::transition(state_, in, v, speaking);
         a.changed = a.out.state != state_;
         if (a.changed) {
+            if (state_.mode != a.out.state.mode) chat_.clear();   // entering or leaving chat: no stage carried over
             state_ = a.out.state; since_us_ = now_us;
             std::strcpy(by_, source);
             ++version_;
@@ -187,6 +193,19 @@ public:
         return true;
     }
 
+    // {"type":"chat_stage",...} (0.4.93): kept only in chat; anything but listen / think / skip is ignored.
+    bool on_chat_stage(ArduinoJson::JsonObjectConst o, size_t bytes, int64_t now_us)
+    {
+        chat::Stage st;
+        if (bytes > chat::kMessageMax || !o["stage"].is<const char*>() || !chat::stage_from(o["stage"].as<const char*>(), st)) {
+            ++chat_bad_; return false;
+        }
+        if (state_.mode != modes::rules::Mode::Chat) { ++chat_dropped_; return false; }
+        chat_.on_stage(st, now_us);
+        ++chat_stages_; ++version_;
+        return true;
+    }
+
     // The next line to send, built now: reports first (in order), then digits (age_ms counts the time queued).
     enum class Out : uint8_t { None, Report, Input };
     Out next(int64_t now_us, OutLine& out, uint32_t& seq)
@@ -227,7 +246,7 @@ public:
         v.online = online_; v.state = state_; v.look = modes::rules::look(state_, seq_); v.seq = seq_;
         std::memcpy(v.by, by_, sizeof v.by); v.since_us = since_us_;
         std::memcpy(v.toast, toast_, sizeof v.toast); v.toasts = toasts_;
-        v.have_result = have_result_; v.result = result_; v.version = version_;
+        v.have_result = have_result_; v.result = result_; v.chat = chat_; v.version = version_;
     }
     uint32_t version() const { return version_; }
     const State& state() const { return state_; }
@@ -254,6 +273,10 @@ public:
             r["seq"] = result_.seq; r["code"] = static_cast<const char*>(result_.code); r["toast"] = static_cast<const char*>(result_.toast);
         }
         out["toast"] = static_cast<const char*>(toast_);
+        auto c = out["chat_stage"].to<ArduinoJson::JsonObject>();
+        c["stage"] = chat::stage_id(chat_.stage);
+        if (chat_.at_us) c["age_ms"] = (now_us - chat_.at_us) / 1000; else c["age_ms"] = nullptr;
+        c["received"] = chat_stages_; c["dropped"] = chat_dropped_; c["bad"] = chat_bad_;
     }
 
 private:
@@ -361,5 +384,7 @@ private:
     uint32_t toasts_ = 0, results_ = 0, bad_results_ = 0, ignored_ = 0;
     uint32_t reports_sent_ = 0, reports_dropped_ = 0, offline_reports_ = 0;
     uint32_t inputs_sent_ = 0, offline_inputs_ = 0, unsendable_ = 0;
+    chat::StageState chat_{};
+    uint32_t chat_stages_ = 0, chat_dropped_ = 0, chat_bad_ = 0;
 };
 }

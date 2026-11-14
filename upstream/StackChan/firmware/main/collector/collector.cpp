@@ -68,6 +68,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -1803,6 +1804,11 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
                     mouth::mode_apply("touch", gesture == ScreenHomeGesture::Tap ? modes::rules::Input::Tap : modes::rules::Input::DoubleTap);
                 static uint32_t mode_seen = 0, toasts_seen = 0;
                 static bool mode_drawn = false;
+                // 0.4.93 chat dots: a small copy of the chat stage (PSRAM, made once); the dots are decided every
+                // tick (timeouts, speaking).
+                struct ChatDots { bool in_chat = false; uint32_t color = 0; chat::StageState state; chat::DotsView view; };
+                static ChatDots* cd = nullptr;
+                if (!cd) if (void* m = heap_caps_calloc(1, sizeof(ChatDots), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) cd = new (m) ChatDots();
                 const uint32_t version = mouth::mode_version();
                 if (!mode_drawn || version != mode_seen) {
                     mouth::ModeView view;
@@ -1810,6 +1816,11 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
                     mode_seen = version; mode_drawn = true;
                     screen_update_mode(view.look.label, view.look.color, view.online);
                     if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
+                    if (cd) { cd->in_chat = view.state.mode == modes::rules::Mode::Chat; cd->color = view.look.color; cd->state = view.chat; }
+                }
+                if (cd) {
+                    const auto dots = cd->view.tick(cd->in_chat, cd->state, cd->in_chat && mouth::speaking(), now);
+                    screen_update_chat_dots(dots.visible, dots.lit, dots.grey, cd->color);
                 }
             }
             static uint32_t reaction_seen = 0;

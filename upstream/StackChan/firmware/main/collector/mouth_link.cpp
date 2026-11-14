@@ -92,6 +92,11 @@ void on_message(const char* data, size_t n, bool binary)
     if (kind == Text::Other) return;
     if (kind == Text::TooLong || kind == Text::Bad) { std::lock_guard<std::mutex> lock(mutex); ++bad_messages; return; }
     if (kind == Text::ModeResult) { on_mode_result(doc.as<ArduinoJson::JsonObjectConst>()); return; }
+    if (kind == Text::ChatStage) {          // 0.4.93 chat dots: state only; the screen task draws them
+        std::lock_guard<std::mutex> lock(mode_mutex);
+        if (modes_session && modes_session->on_chat_stage(doc.as<ArduinoJson::JsonObjectConst>(), n, esp_timer_get_time())) mode_publish_locked();
+        return;
+    }
     bool handshake = false;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -313,6 +318,8 @@ bool speaking_now()
     return ring && stream.active() && !stream.stopped && !stream.finished;
 }
 }
+
+bool speaking() { return speaking_now(); }
 
 Applied mode_apply(const char* source, modes::rules::Input input, const modes::rules::Value& value)
 {

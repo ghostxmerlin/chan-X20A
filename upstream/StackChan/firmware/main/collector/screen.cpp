@@ -79,6 +79,14 @@ lv_obj_t *mode_badge = nullptr, *mode_toast = nullptr;
 uint32_t toast_until_ms = 0;
 bool toast_shown = false;
 constexpr uint32_t kToastMs = 2000;
+// Chat stage dots (0.4.93): three circles at the home page's top left, clear of the top-right badge and the bottom
+// toast; 16 px each, 8 px apart, so they read at arm's length. Small LVGL objects, only while in chat.
+lv_obj_t* chat_dots[3] = {};
+int chat_dots_lit = -2;
+bool chat_dots_grey = false;
+uint32_t chat_dots_color = 0;
+constexpr int kDotPx = 16, kDotGap = 8, kDotX = 10, kDotY = 8;
+constexpr uint32_t kDotDim = 0x5A5A5A, kDotGrey = 0x8C8C8C;
 uint32_t animation_last_ms = 0, animation_render_ms = 0, animation_phase_ms = 0;
 bool animation_clock_ready = false;
 constexpr uint32_t kRotationMs = 12000, kAnimationFrameMs = kRotationMs / COLLECTOR_FACE_FRAME_COUNT;
@@ -1038,5 +1046,37 @@ void screen_show_toast(const char* text, uint32_t now_ms)
     lv_obj_remove_flag(mode_toast, LV_OBJ_FLAG_HIDDEN);
     toast_until_ms = now_ms + kToastMs;
     toast_shown = true;
+}
+void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color)
+{
+    if (!home) return;
+    if (!visible) {
+        for (auto*& d : chat_dots) if (d) { lv_obj_delete(d); d = nullptr; }
+        chat_dots_lit = -2;
+        return;
+    }
+    if (!chat_dots[0]) {
+        for (int i = 0; i < 3; ++i) {
+            auto* d = lv_obj_create(home);
+            lv_obj_remove_style_all(d);
+            lv_obj_set_pos(d, kDotX + i * (kDotPx + kDotGap), kDotY);
+            lv_obj_set_size(d, kDotPx, kDotPx);
+            lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_border_width(d, 2, 0);
+            lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_remove_flag(d, LV_OBJ_FLAG_SCROLLABLE);
+            chat_dots[i] = d;
+        }
+        chat_dots_lit = -2;
+    }
+    if (lit == chat_dots_lit && grey == chat_dots_grey && color == chat_dots_color) return;
+    for (int i = 0; i < 3; ++i) {
+        const bool on = grey || i == lit;
+        const uint32_t c = grey ? kDotGrey : on ? color : kDotDim;
+        lv_obj_set_style_border_color(chat_dots[i], lv_color_hex(c), 0);
+        lv_obj_set_style_bg_color(chat_dots[i], lv_color_hex(c), 0);
+        lv_obj_set_style_bg_opa(chat_dots[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    }
+    chat_dots_lit = lit; chat_dots_grey = grey; chat_dots_color = color;
 }
 }

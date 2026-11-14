@@ -1,5 +1,18 @@
 # Collector 局域网协议 v1
 
+## 0.4.93：对话模式的阶段小圆点（2026-11-14）
+
+主人要求：对话（`chat`）模式里，屏幕上用小圆点显示处理到了哪一步。
+
+- **下行**（ear → hello，`/mouth` 文本消息，只在 hello 处于对话模式时发）：`{"type":"chat_stage","stage":"listen"|"think"|"skip","at_ms":<服务器毫秒时间>}`。单条 ≤ 200 B；别的 `stage`、格式不对、超长的都忽略。hello 不在对话模式时收到也丢掉。`at_ms` 不用于计时（两边时钟不对），超时按 hello 收到的时刻算。
+- **屏幕**：首页左上角三个 16 px 圆点（角标在右上，提示在底部，互不重叠）。当前阶段的点用对话的颜色填满，其他点是暗灰色空心圈：
+  - `○○○` 空闲；`●○○` 在听（`listen`）；`○●○` 在想（`think`）；`○○●` 在说：hello 自己在播 `/mouth` 的声音，不靠服务器；在说的时候盖过"听""想"。
+  - `skip`：三个点一起变灰约 0.6 秒，然后回到空闲（这一轮不回话）。灰闪期间盖过其他状态。
+  - 超时：`listen` 20 秒、`think` 8 秒没有新消息就回到空闲；说完回到空闲。说话开始以后才到的阶段（下一轮的 `listen`）说完后保留。
+  - 离开对话模式就不画，状态清掉；再进对话从空闲开始。
+- **实现**：状态在模式会话里（PSRAM，模式锁），`/mouth` 任务只写状态；圆点只由屏幕任务画，进对话时才建、离开时删掉。逻辑在 `collector/chat_stage.h`，主机测试 `tests/chat_stage_test.cpp`。
+- **遥测** `telemetry.mode.chat_stage`：`stage`（`idle`/`listen`/`think`）、`age_ms`、`received`、`dropped`（不在对话模式时收到的）、`bad`（不认识或超长的）。
+
 ## 0.4.92：hello 的模式（以 hello 为准，2026-11-14）
 
 主人 2026-11-14 定：模式由 hello 自己决定，服务器只记录、只按"效果"开关自己的功能。开机默认脱口秀（`talk`），模式只在内存里，不写 NVS。切换规则和 `server/mind/modes.py` 是同一套：固件 `collector/mode_rules.h` 逐条重放 `tests/data/mode_vectors.json`（由 `tests/gen_mode_vectors.py` 从 `modes.py`、`mode_table.py` 和下面的数字表生成，共 2100 条，新状态、结果码、提示和效果都要一样）。

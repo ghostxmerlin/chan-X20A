@@ -28,6 +28,8 @@ void player_report(const Report& r);
 // One input from `source` (asr, touch, page): runs the rules now; a change, or an input with effects, is reported
 // to mind over /mouth; digits 0 / 9 are sent to mind (a.to_mind). a.out.toast is what the screen shows.
 Applied mode_apply(const char* source, modes::rules::Input input, const modes::rules::Value& value = {});
+// hello is speaking: a /mouth stream is playing (tts.start until done or stopped). Takes the audio lock briefly.
+bool speaking();
 // Main loop: closes settings after 5 minutes without input.
 void mode_tick();
 // A copy of the mode state (state, look, online, latest toast and mode_result) taken under the mode lock.

@@ -299,8 +299,51 @@ void telemetry_and_versions()
 }
 }
 
+void chat_stages()
+{
+    // 0.4.93: the ear's chat stage is kept only in chat mode and cleared on leaving it.
+    Robot r;
+    JsonDocument& doc = r.doc;
+    auto stage = [&](const std::string& text, int64_t now) {
+        assert(read_text(text.data(), text.size(), doc) == Text::ChatStage);
+        return r.s.on_chat_stage(doc.as<JsonObjectConst>(), text.size(), now);
+    };
+    const std::string listen = R"({"type":"chat_stage","stage":"listen","at_ms":1763100000000})";
+    assert(!stage(listen, 1 * kS));                                          // talk: dropped
+    assert(r.view().chat.stage == collector::chat::Stage::Idle);
+    r.in(Input::Play);                                                       // chat
+    const uint32_t v0 = r.view().version;
+    assert(stage(listen, 2 * kS) && r.view().chat.stage == collector::chat::Stage::Listen && r.view().chat.at_us == 2 * kS);
+    assert(r.view().version != v0);
+    assert(stage(R"({"type":"chat_stage","stage":"think","at_ms":1})", 3 * kS) && r.view().chat.stage == collector::chat::Stage::Think);
+    assert(stage(R"({"type":"chat_stage","stage":"skip"})", 4 * kS));
+    assert(r.view().chat.stage == collector::chat::Stage::Idle && r.view().chat.skip_until_us == 4 * kS + collector::chat::kSkipUs);
+    // Unknown or malformed stages are ignored; so is a message over 200 B.
+    for (const char* bad : {R"({"type":"chat_stage","stage":"speak"})", R"({"type":"chat_stage","stage":7})", R"({"type":"chat_stage"})"})
+        assert(!stage(bad, 5 * kS));
+    std::string big = R"({"type":"chat_stage","stage":"listen","pad":")" + std::string(200, 'x') + "\"}";
+    assert(!stage(big, 5 * kS) && r.view().chat.stage == collector::chat::Stage::Idle);
+    assert(stage(listen, 6 * kS));
+    // Leaving chat clears it; a stage outside chat is dropped; back in chat it starts idle.
+    const uint32_t seq = r.view().chat.seq;
+    r.in(Input::Pause);                                                      // idle
+    assert(r.view().chat.stage == collector::chat::Stage::Idle && r.view().chat.seq != seq);
+    assert(!stage(listen, 7 * kS));
+    r.in(Input::Play);
+    assert(r.view().chat.stage == collector::chat::Stage::Idle);
+    // A chat -> chat no-op (tap: not implemented) keeps the stage.
+    assert(stage(listen, 8 * kS));
+    r.in(Input::Tap, "touch");
+    assert(r.view().chat.stage == collector::chat::Stage::Listen);
+    JsonDocument t;
+    r.s.json(t.to<JsonObject>(), 9 * kS);
+    assert(t["chat_stage"]["stage"] == "listen" && t["chat_stage"]["age_ms"] == 1000);
+    assert(t["chat_stage"]["received"] == 5 && t["chat_stage"]["dropped"] == 2 && t["chat_stage"]["bad"] == 4);
+}
+
 int main()
 {
+    chat_stages();
     text_frames();
     boot_and_first_link();
     inputs_become_reports();

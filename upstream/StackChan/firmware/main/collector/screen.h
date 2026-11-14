@@ -96,4 +96,7 @@ ScreenHomeGesture screen_take_home_gesture();
 void screen_update_mode(const char* label, uint32_t color, bool online);
 // A short ASCII line at the bottom for 2 s (the mode's toast). Empty text shows nothing.
 void screen_show_toast(const char* text, uint32_t now_ms);
+// 0.4.93 chat stage dots (chat_stage.h), home page top left: visible only in chat; lit = -1 none, 0 / 1 / 2 =
+// listen / think / speak in `color`; grey = all three grey (skip). Created when shown, deleted when hidden.
+void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color);
 }
