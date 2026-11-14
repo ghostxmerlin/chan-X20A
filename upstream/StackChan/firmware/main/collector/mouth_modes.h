@@ -167,6 +167,7 @@ public:
     {
         reports_n_ = 0; inflight_ok_ = false;
         queue_.clear();
+        clear_chat();                   // no chat dot survives a reconnect (review Minor 1)
         if (!online_) { online_ = true; ++version_; }
         Effect fx[modes::rules::kMaxEffects];
         const uint8_t n = mode_change(boot_sent_ ? sent_state_ : State{modes::rules::Mode::None}, fx);
@@ -178,6 +179,7 @@ public:
     {
         reports_n_ = 0; inflight_ok_ = false;
         queue_.clear();
+        clear_chat();                   // the badge says OFF: no chat dot stays lit (review Minor 1)
         if (online_) { online_ = false; ++version_; }
     }
     bool online() const { return online_; }
@@ -204,6 +206,14 @@ public:
         chat_.on_stage(st, now_us);
         ++chat_stages_; ++version_;
         return true;
+    }
+
+    // tts.start on /mouth (0.4.93 chat dots): when the speech really began, in chat only (review Minor 4).
+    void on_speech_start(int64_t now_us)
+    {
+        if (state_.mode != modes::rules::Mode::Chat) return;
+        chat_.on_speech_start(now_us);
+        ++version_;
     }
 
     // The next line to send, built now: reports first (in order), then digits (age_ms counts the time queued).
@@ -319,6 +329,11 @@ private:
             if (!dup && c.n < modes::rules::kMaxEffects) c.effects[c.n++] = o.effects[i];
         }
         reports_[0] = c; reports_n_ = 1;
+    }
+    void clear_chat()
+    {
+        if (chat_.stage == chat::Stage::Idle && !chat_.skip_until_us && !chat_.speak_from_us) return;
+        chat_.clear(); ++version_;
     }
     void pop_report()
     {

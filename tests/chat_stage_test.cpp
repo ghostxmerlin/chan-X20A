@@ -91,5 +91,24 @@ int main()
         assert(w.tick(false, t, false, 4 * kS) == kHidden);
         assert(w.tick(true, t, false, 5 * kS) == kThink);                      // fresh copy (still within 8 s)
     }
+    // Review Minor 4: a next-turn listen that arrives between tts.start and the first screen tick that sees speaking
+    // is kept: "speech began" is tts.start's time (StageState.speak_from_us), not the tick's.
+    {
+        StageState s; DotsView v;
+        s.on_stage(Stage::Think, 0);
+        assert(v.tick(true, s, false, 1 * kS) == kThink);
+        s.on_speech_start(2 * kS);                                             // tts.start on /mouth
+        s.on_stage(Stage::Listen, 2 * kS + 5 * kMs);                           // the next turn, 5 ms later
+        assert(v.tick(true, s, true, 2 * kS + 20 * kMs) == kSpeak);            // the first tick that sees speaking
+        assert(v.tick(true, s, false, 5 * kS) == kListen);                     // kept
+        // A listen from before tts.start is still cleared at the end of the speech.
+        s.on_stage(Stage::Listen, 6 * kS);
+        s.on_speech_start(6 * kS + 10 * kMs);
+        assert(v.tick(true, s, true, 6 * kS + 20 * kMs) == kSpeak && v.tick(true, s, false, 8 * kS) == kIdle);
+        // A stale speech start (an earlier speech) is not trusted: the tick's own edge counts then.
+        s.on_stage(Stage::Listen, 9 * kS);
+        assert(v.tick(true, s, false, 9 * kS) == kListen);
+        assert(v.tick(true, s, true, 10 * kS) == kSpeak && v.tick(true, s, false, 11 * kS) == kIdle);
+    }
     std::puts("chat stage ok");
 }

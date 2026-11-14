@@ -339,6 +339,21 @@ void chat_stages()
     r.s.json(t.to<JsonObject>(), 9 * kS);
     assert(t["chat_stage"]["stage"] == "listen" && t["chat_stage"]["age_ms"] == 1000);
     assert(t["chat_stage"]["received"] == 5 && t["chat_stage"]["dropped"] == 2 && t["chat_stage"]["bad"] == 4);
+    // Review Minor 1: /mouth dropping (badge OFF) or coming back clears the stage, so no dot stays lit.
+    uint32_t seq2 = r.view().chat.seq;
+    r.s.link_down();
+    assert(r.view().chat.stage == collector::chat::Stage::Idle && r.view().chat.seq != seq2);
+    r.feed(kHello);
+    assert(stage(R"({"type":"chat_stage","stage":"think"})", 10 * kS));
+    seq2 = r.view().chat.seq;
+    r.s.link_up();                                                           // a new handshake without a drop seen
+    assert(r.view().chat.stage == collector::chat::Stage::Idle && r.view().chat.seq != seq2);
+    // tts.start in chat records when the speech began (Minor 4); outside chat it does nothing.
+    r.s.on_speech_start(11 * kS);
+    assert(r.view().chat.speak_from_us == 11 * kS);
+    r.in(Input::Pause);
+    r.s.on_speech_start(12 * kS);
+    assert(r.view().chat.speak_from_us == 0);
 }
 
 int main()

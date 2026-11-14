@@ -18,6 +18,7 @@ namespace collector::chat {
 
 enum class Stage : uint8_t { Idle, Listen, Think, Skip };
 constexpr int64_t kListenUs = 20LL * 1000000, kThinkUs = 8LL * 1000000, kSkipUs = 600LL * 1000;
+constexpr int64_t kStartTrustUs = 1000000;     // a recorded tts.start this close before the tick's edge is this speech's
 constexpr size_t kMessageMax = 200;            // a chat_stage message is at most 200 B
 
 // "listen" / "think" / "skip"; false for anything else (ignored).
@@ -40,8 +41,10 @@ struct StageState {
     Stage stage = Stage::Idle;      // Listen / Think, or Idle (also after a skip)
     int64_t at_us = 0;              // when it arrived
     int64_t skip_until_us = 0;      // the grey flash runs until then
+    int64_t speak_from_us = 0;      // the last tts.start on /mouth (review Minor 4): when the speech really began
     uint32_t seq = 0;
-    void clear() { stage = Stage::Idle; at_us = 0; skip_until_us = 0; ++seq; }
+    void clear() { stage = Stage::Idle; at_us = 0; skip_until_us = 0; speak_from_us = 0; ++seq; }
+    void on_speech_start(int64_t now_us) { speak_from_us = now_us; ++seq; }
     void on_stage(Stage s, int64_t now_us)
     {
         if (s == Stage::Skip) { stage = Stage::Idle; skip_until_us = now_us + kSkipUs; }   // flash, then idle
@@ -69,8 +72,14 @@ public:
         if (!in_chat) { have_ = false; speaking_ = false; return Dots{}; }
         if (!have_ || s.seq != seq_) { cur_ = s; seq_ = s.seq; have_ = true; }
         if (!speaking_ && speaking) speak_from_us_ = now_us;
-        // Speaking ended: idle, unless the stage came after the speech began (the next turn's listen).
-        if (speaking_ && !speaking && cur_.at_us <= speak_from_us_) cur_.stage = Stage::Idle;
+        // Speaking ended: idle, unless the stage came after the speech began (the next turn's listen). "Began" is the
+        // recorded tts.start when it belongs to this speech (at most kStartTrustUs before the tick saw speaking), so a
+        // listen that came between tts.start and that tick is kept; else the tick's own edge.
+        if (speaking_ && !speaking) {
+            const bool recorded = cur_.speak_from_us && cur_.speak_from_us <= speak_from_us_ &&
+                                  speak_from_us_ - cur_.speak_from_us < kStartTrustUs;
+            if (cur_.at_us <= (recorded ? cur_.speak_from_us : speak_from_us_)) cur_.stage = Stage::Idle;
+        }
         speaking_ = speaking;
         Dots d;
         d.visible = true;

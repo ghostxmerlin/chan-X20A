@@ -97,7 +97,7 @@ void on_message(const char* data, size_t n, bool binary)
         if (modes_session && modes_session->on_chat_stage(doc.as<ArduinoJson::JsonObjectConst>(), n, esp_timer_get_time())) mode_publish_locked();
         return;
     }
-    bool handshake = false;
+    bool handshake = false, speech = false;
     {
         std::lock_guard<std::mutex> lock(mutex);
         const uint32_t sid = doc["stream"] | 0u;
@@ -106,7 +106,7 @@ void on_message(const char* data, size_t n, bool binary)
             handshake = hello_ok;
         } else if (kind == Text::TtsStart) {
             stream.start(sid, *ring, [](const Report& r) { queue_locked(r); });
-            ++streams;
+            ++streams; speech = true;
             if (std::strcmp(doc["codec"] | "opus", "opus") || (doc["frame_ms"] | kFrameMs) != kFrameMs) {
                 Report r; r.kind = Report::Error; r.stream = sid; r.error = "unsupported_codec";
                 queue_locked(r); stream.finished = true;
@@ -116,6 +116,10 @@ void on_message(const char* data, size_t n, bool binary)
         } else if (kind == Text::TtsStop) {
             stream.stop(sid, *ring);
         }
+    }
+    if (speech) {           // 0.4.93 chat dots: when the speech began (mode lock taken after the audio lock is released)
+        std::lock_guard<std::mutex> lock(mode_mutex);
+        if (modes_session) { modes_session->on_speech_start(esp_timer_get_time()); mode_publish_locked(); }
     }
     if (handshake) {        // the ear's hello: the current mode goes up first, then every change
         std::lock_guard<std::mutex> lock(mode_mutex);
