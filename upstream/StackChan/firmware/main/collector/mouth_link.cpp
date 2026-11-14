@@ -72,7 +72,7 @@ void on_mode_result(ArduinoJson::JsonObjectConst o)
     {
         std::lock_guard<std::mutex> lock(mode_mutex);
         if (!modes_session) return;
-        ok = modes_session->on_result(o);
+        ok = modes_session->on_result(o, esp_timer_get_time());
         mode_publish_locked();
     }
     if (!ok) ESP_LOGW(kTag, "mode_result dropped");     // after the lock (review M3)

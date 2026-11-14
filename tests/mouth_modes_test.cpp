@@ -199,11 +199,29 @@ void digits()
     r.feed(R"({"type":"mode_result","seq":1,"code":"ok","toast":"ALL PAID OFF"})");
     ModeView v = r.view();
     assert(v.have_result && v.result.seq == 1 && !std::strcmp(v.toast, "ALL PAID OFF") && v.toasts == toasts + 1);
-    // An empty toast (stale) shows nothing new; a bad result is dropped.
+    assert(v.result_digit == 0);                    // 0.4.94: the quick page's "last:" line knows which digit
+    // An empty toast (stale) shows nothing new; a bad result is dropped. seq 2 was never sent: digit unknown.
     r.feed(R"({"type":"mode_result","seq":2,"code":"stale","toast":""})");
-    assert(r.view().toasts == toasts + 1 && r.view().result.seq == 2);
+    assert(r.view().toasts == toasts + 1 && r.view().result.seq == 2 && r.view().result_digit == -1);
     r.feed(R"({"type":"mode_result","code":"ok"})");
     assert(r.view().result.seq == 2);
+    {
+        // The quick page's 全开 sends 9 with source quick, like the ASR digit word; its answer names 9 even after
+        // another digit went up, and carries the robot's arrival time.
+        Applied q = r.digit(9, "quick", 3 * kS);
+        assert(q.to_mind && q.input_seq == 2 && !q.changed);
+        r.digit(0, "asr", 3 * kS);
+        assert(r.drain(3 * kS) ==
+               "{\"type\":\"mode_input\",\"seq\":2,\"age_ms\":0,\"source\":\"quick\",\"input\":\"digit\",\"value\":9}\n"
+               "{\"type\":\"mode_input\",\"seq\":3,\"age_ms\":0,\"source\":\"asr\",\"input\":\"digit\",\"value\":0}\n");
+        JsonDocument d;
+        deserializeJson(d, R"({"type":"mode_result","seq":2,"code":"ok","toast":"PRESET 9"})");
+        assert(r.s.on_result(d.as<JsonObjectConst>(), 7 * kS));
+        const ModeView w = r.view();
+        assert(w.result_digit == 9 && w.result_at_us == 7 * kS && !std::strcmp(w.result.toast, "PRESET 9"));
+        deserializeJson(d, R"({"type":"mode_result","seq":3,"code":"ok","toast":"PRESET 0"})");
+        assert(r.s.on_result(d.as<JsonObjectConst>(), 8 * kS) && r.view().result_digit == 0);
+    }
     // 4-8 are the robot's own: select through the rules, reported with input digit.
     a = r.digit(7);
     assert(!a.to_mind && a.changed && r.view().state.mode == Mode::Subtitle && r.view().state.dir == Dir::ZhEn);

@@ -40,6 +40,10 @@ struct ScreenStatus {
     float pitch_deg = 0;
     // Sample before the LVGL lock; rendering does not call service accessors.
     uint8_t function_flags = 0;
+    // 0.4.94 quick settings page: the station's signal and the speaker volume (10..100; -1 unknown).
+    bool rssi_valid = false;
+    int rssi = 0;
+    int volume = -1;
 };
 enum class ScreenReaction { None, Heart, Reject };
 // All calls run under the display's LVGL lock (or on the LVGL timer task).
@@ -99,4 +103,21 @@ void screen_show_toast(const char* text, uint32_t now_ms);
 // 0.4.93 chat stage dots (chat_stage.h), home page top left: visible only in chat; lit = -1 none, 0 / 1 / 2 =
 // listen / think / speak in `color`; grey = all three grey (skip). Created when shown, deleted when hidden.
 void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color);
+
+// 0.4.94 global swipes (ui_pages.h): on home in every mode, down = quick settings, up = mode picker, left = summary;
+// each page closes with the opposite swipe, its "< Back" title, or 30 s without a touch. Both pages are built when
+// they open and deleted when they close. The screen only draws and hands requests back, one at a time; the
+// caller runs them (mode_apply for picks and billing, the main loop for volume / hearing, which take service locks).
+// The current mode for the picker's highlight (modes::rules::Mode / Dir as numbers).
+void screen_update_mode_state(uint8_t mode, uint8_t dir);
+// mind's latest answer to a digit 0 / 9 (digit -1 = none or not known) and when it came (ms, the screen clock).
+void screen_update_billing(int digit, const char* code, uint32_t at_ms);
+// A picker tile was tapped (index into ui::kTileModes). Once per tap.
+bool screen_take_mode_pick(size_t& tile);
+// Quick page requests, -1 = none: a volume 10..100; billing 9 (all on) / 0 (all off); hearing 1 (on) / 0 (off).
+int screen_take_volume_request();
+int screen_take_billing_request();
+int screen_take_hearing_request();
+bool screen_showing_quick();
+bool screen_showing_picker();
 }
