@@ -230,3 +230,6 @@ button { font: inherit; color: inherit; }
 .dec { margin: 4px 0 0; padding-left: 22px; font-size: 14px; }
 .dec li { margin: 2px 0; }
 .diagram .ntag { font-size: 11px; font-family: ui-monospace, Menlo, monospace; }
+.task.pending { border-style: dashed; }
+.dec li.nonum { list-style: none; margin-left: -18px; color: var(--accent); }
+.quotes blockquote { margin: 8px 0 0; padding: 4px 10px; border-left: 3px solid var(--line); color: var(--muted); font-size: 13.5px; }

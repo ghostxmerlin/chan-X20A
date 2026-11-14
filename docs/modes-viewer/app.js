@@ -57,21 +57,25 @@
     var e = D.effects[id];
     if (!e) return;
     if (e.onlyIn && c.st.mode !== e.onlyIn) { c.notes.push(e.label + ' —— 现在不在' + modeName(e.onlyIn) + '，这一项跳过'); if (e.skipToast) c.skipToast = e.skipToast; return; }
+    if (e.server && !c.st.env.online) {
+      if (!e.offType) { c.notes.push(e.label + ' —— 和服务器断开，mind 收不到；连上后补报状态，晚到超过 3 秒只执行“关”的效果，这一项不执行'); c.deferredRule = true; return; }
+      c.notes.push(e.label + ' —— 断开中：hello 连上后补报，mind 照样执行“关”的效果');
+      c.deferredRule = true;
+    }
     runOps(c.st, e.ops);
     c.effects.push(id);
     if (e.note) c.notes.push(e.note);
+    if (e.robotToast && c.inp.via === 'robot') c.toast = e.robotToast;
   }
   function guardFails(st, id) {
     var e = D.effects[id];
     var gs = (e && e.guards) || [];
     for (var i = 0; i < gs.length; i++) {
       var g = gs[i], ok = true;
-      if (g.need === 'billing') ok = st.billing;
-      else if (g.need === 'mouthTts') ok = st.env.mouthTts;
+      if (g.need === 'mouthTts') ok = st.env.mouthTts;
       else if (g.need === 'off') ok = !getp(st, g.path);
       else if (g.need === 'on') ok = !!getp(st, g.path);
       else if (g.need === 'mode') ok = st.mode === g.mode;
-      else if (g.need === 'billingToTurnOn') ok = !!getp(st, g.path) || st.billing;
       if (!ok) return g;
     }
     return null;
@@ -80,8 +84,13 @@
     for (var i = 0; i < list.length; i++) {
       var g = guardFails(c.st, list[i]);
       if (g) {
+        var ef = D.effects[list[i]];
         c.code = g.code;
-        c.notes.push(D.effects[list[i]].label + '：没做（' + D.codes[g.code].label + '）');
+        c.notes.push(ef.label + '：没做（' + D.codes[g.code].label + '）');
+        if (ef.robotToast && c.inp.via === 'robot' && ef.server && g.code !== 'already') {
+          c.toast = ef.robotToast;
+          c.notes.push('已知小问题（docs/backlog.md）：mind 拒绝了，hello 屏幕上还是提示 ' + ef.robotToast);
+        }
         return false;
       }
     }
@@ -162,18 +171,15 @@
     if (e.by) st.by = e.by;
   }
   function touchStep(c) {
-    var st = c.st, inp = c.inp, t = D.modes[st.mode].touch[inp.touch], robot = inp.via === 'robot';
+    var st = c.st, inp = c.inp, t = D.modes[st.mode].touch[inp.touch];
     if (t.act === 'badge') {
-      if (robot) { st.robot.badge = !st.robot.badge; c.code = 'local'; c.local = 'badge'; c.rule('touch_badge'); }
-      else { c.code = 'no_action'; c.rule('touch_badge_dk'); }
+      st.robot.badge = !st.robot.badge; c.code = 'local'; c.local = 'badge'; c.rule('touch_badge');
       return;
     }
     if (t.act === 'none') {
-      if (robot) { c.code = 'local'; c.toast = 'NO TAP'; c.rule('touch_none'); }
-      else { c.code = 'no_action'; c.rule('touch_none_dk'); }
+      c.code = 'local'; c.toast = 'NO TAP'; c.rule('touch_none');
       return;
     }
-    if (robot && offline(c, true)) return;
     c.rule('touch_server', '补充：' + t.owner);
     var cs = (t.cases || []).filter(function (k) { return !!getp(st, k.if); })[0];
     if (cs) { c.rule(cs.rule); runGuarded(c, cs.effects); return; }
@@ -233,45 +239,18 @@
       if (h.open) c.local = h.open;
       if (h.vol) { var v = Math.max(1, Math.min(5, c.st.robot.volume + h.vol)); if (v === c.st.robot.volume) c.notes.push('音量已经到头'); c.st.robot.volume = v; }
     },
-    noop: function (c, h) { c.code = 'no_effect'; c.rule(h.rule); },
+    noop: function (c, h) { c.code = h.code || 'no_effect'; c.rule(h.rule); },
     entry: function (c, h) { runEntry(c, h); },
     switch: function (c, h) {
       var on = !!getp(c.st, h.path);
-      if (!on && !c.st.billing) { c.code = 'billing_off'; c.rule('switch_blocked'); return; }
       c.rule('switch_toggle'); setp(c.st, h.path, !on);
     },
-    billing: function (c, h) {
-      if (offline(c)) return;
-      if (h.on === c.st.billing) { c.code = 'already'; c.rule(h.on ? 'billing_on' : 'billing_off'); return; }
-      c.rule(h.on ? 'billing_on' : 'billing_off');
-      applyEffect(c, h.on ? 'billing_on' : 'billing_off_all');
-      c.st.seq += 1; c.st.by = c.inp.via;
-    },
     preset: function (c, h) {
-      if (offline(c)) return;
-      var st = c.st, p = D.presets[h.n];
+      if (offline(c)) { c.code = 'unreachable'; return; }
+      var p = D.presets[h.n];
       c.rule('preset', p.n + '「' + p.name + '」');
-      if (p.undefined) { c.code = 'undefined_preset'; c.rule('preset_undefined'); return; }
-      if (p.mode) {
-        if (st.mode === p.mode && !st.host) { c.code = 'already'; c.rule('already', modeName(p.mode)); }
-        else enterMode(c, p.mode, null);
-      }
-      var billingBefore = st.billing;
-      if (p.server.length && !runGuarded(c, p.server)) return;
-      if (st.billing !== billingBefore) { st.seq += 1; st.by = c.inp.via; }
-      if (p.robot.length) {
-        if (c.inp.via !== 'page') {
-          c.code = 'senses_on_page'; c.rule('preset_robot_robot');
-          p.robot.forEach(function (k) { c.notes.push('没做（要在网页上按）：' + D.controls[k].label); });
-        } else if (!st.env.online) {
-          c.rule('preset_robot_offline');
-          p.robot.forEach(function (k) { c.notes.push('没成（机器人离线）：' + D.controls[k].label); });
-        } else {
-          c.rule('preset_robot');
-          p.robot.forEach(function (k) { runOps(st, D.controls[k].ops); c.notes.push(D.controls[k].label + '  （' + D.controls[k].body + '）'); });
-        }
-      }
-      if (c.inp.via === 'robot' && c.code === 'ok') c.toast = c.skipToast || ('PRESET ' + p.n);
+      runGuarded(c, p.server || []);
+      if (c.inp.via === 'robot' && c.code === 'ok') c.toast = 'PRESET ' + p.n;
     }
   };
 
@@ -279,6 +258,7 @@
     var inp = INPUTS[inputId];
     var c = new Ctx(st, inp);
     HANDLERS[inp.handler.type](c, inp.handler);
+    if (c.deferredRule) c.rule('offline_effects');
     if (c.toast == null && inp.via === 'robot' && ['ok', 'local'].indexOf(c.code) < 0) {
       c.toast = (D.codes[c.code].toast || '').replace('{mode}', c.toastArg || '');
     }
@@ -306,10 +286,10 @@
     if (c.code === 'local' && stateKey(a) !== stateKey(b)) return { t: '本地改（音量）', cls: 'local' };
     var map = {
       already: '不变（已经是）', not_in_mode: '无（' + (c.rules[c.rules.length - 1] || {}).extra + '）', only_talk: '无（只在脱口秀）',
-      billing_off: '被拦（计费关着）', mouth_not_tts: '被拦（嘴不在 TTS）', not_implemented: '空壳（第一步没内容）',
+      unreachable: '做不了（mind 收不到）', mouth_not_tts: '被拦（嘴不在 TTS）', not_implemented: '空壳（第一步没内容）',
       no_effect: '无作用', undefined_preset: '未定义', unknown_input: '无定义', local: '只提示一行'
     };
-    return { t: map[c.code] || D.codes[c.code].label, cls: c.code === 'not_implemented' ? 'shell' : (c.code === 'billing_off' || c.code === 'mouth_not_tts' ? 'blocked' : 'none') };
+    return { t: map[c.code] || D.codes[c.code].label, cls: c.code === 'not_implemented' ? 'shell' : (c.code === 'unreachable' || c.code === 'mouth_not_tts' ? 'blocked' : 'none') };
   }
 
   /* ================= 屏幕（320×240 SVG） ================= */
@@ -360,7 +340,7 @@
     }
     if (e === 'settings') {
       var ret = st.mode === 'settings' && st.return_to ? modeName(st.return_to.mode, st.return_to.dir) : '—';
-      var rows = [['音量', String(st.robot.volume)], ['麦克风增益', 'max'], ['俯仰', '10°'], ['计费', st.billing ? '开' : '关'], ['模式', '设置 ← ' + ret]];
+      var rows = [['音量', String(st.robot.volume)], ['麦克风增益', 'max'], ['俯仰', '10°'], ['模式', '设置 ← ' + ret]];
       var s = txt(16, 40, '参数', 20, '#EDEDE4', 'start');
       rows.forEach(function (r, i) {
         s += txt(16, 74 + i * 28, r[0], 15, '#A8A89C', 'start') + txt(304, 74 + i * 28, r[1], 15, '#EDEDE4', 'end') +
@@ -414,15 +394,15 @@
       '<g ' + hit('quick.vol_down') + '><rect x="100" y="36" width="44" height="30" rx="6" fill="#333"/>' + txt(122, 57, '−', 18, '#fff') + '</g>' +
       txt(170, 57, String(st.robot.volume), 16, '#fff') +
       '<g ' + hit('quick.vol_up') + '><rect x="196" y="36" width="44" height="30" rx="6" fill="#333"/>' + txt(218, 57, '＋', 18, '#fff') + '</g>';
-    s += txt(16, 98, '计费', 15, '#bbb', 'start') +
-      '<g ' + hit('quick.billing_on') + '><rect x="100" y="78" width="64" height="30" rx="6" fill="' + (st.billing ? '#2E9E5B' : '#333') + '"/>' + txt(132, 99, '开', 15, '#fff') + '</g>' +
-      '<g ' + hit('quick.billing_off') + '><rect x="176" y="78" width="64" height="30" rx="6" fill="' + (!st.billing ? '#B84040' : '#333') + '"/>' + txt(208, 99, '关', 15, '#fff') + '</g>';
-    if (!st.billing) s += txt(250, 99, '不花钱', 11, '#9fe0b0', 'start');
+    s += txt(16, 98, '花费', 15, '#bbb', 'start') +
+      '<g ' + hit('quick.billing_on') + '><rect x="100" y="78" width="70" height="30" rx="6" fill="#2E9E5B"/>' + txt(135, 99, '全开 9', 14, '#fff') + '</g>' +
+      '<g ' + hit('quick.billing_off') + '><rect x="182" y="78" width="70" height="30" rx="6" fill="#B84040"/>' + txt(217, 99, '全关 0', 14, '#fff') + '</g>';
     D.presets.forEach(function (p, i) {
       var x = 16 + (i % 5) * 58, y = 124 + Math.floor(i / 5) * 52;
-      s += '<g ' + hit('quick.p' + p.n) + '><rect x="' + x + '" y="' + y + '" width="52" height="44" rx="6" fill="' + (p.undefined ? '#222' : '#2c2c3a') + '" stroke="#555"/>' +
-        txt(x + 26, y + 20, String(p.n), 16, p.undefined ? '#555' : '#fff', 'middle', 'font-weight="700"') +
-        txt(x + 26, y + 36, p.undefined ? '空' : p.name, 9, p.undefined ? '#555' : '#bbb') + '</g>';
+      var off = p.kind === 'none', nm = p.kind === 'select' ? (p.dir ? D.modes.subtitle.dirs[p.dir].label : D.modes[p.mode].label) : p.name;
+      s += '<g ' + hit('quick.p' + p.n) + '><rect x="' + x + '" y="' + y + '" width="52" height="44" rx="6" fill="' + (off ? '#222' : p.kind === 'mind' ? '#3a2c2c' : '#2c2c3a') + '" stroke="#555"/>' +
+        txt(x + 26, y + 20, String(p.n), 16, off ? '#555' : '#fff', 'middle', 'font-weight="700"') +
+        txt(x + 26, y + 36, off ? '空' : nm, 8.5, off ? '#555' : '#bbb') + '</g>';
     });
     return s;
   }
@@ -430,10 +410,10 @@
     var g = '#3CE070';
     var lines = D.screens.summary.lines.map(function (l) {
       return l.replace('{hearing}', st.robot.hearing ? 'ON' : 'OFF').replace('{camera}', st.robot.camera ? 'ON' : 'OFF');
-    }).concat(['MODE  ' + modeLabel(st) + ' #' + st.seq, 'BILLING ' + (st.billing ? 'ON' : 'OFF')]);
+    }).concat(['MODE  ' + modeLabel(st) + ' #' + st.seq]);
     var s = '<rect width="320" height="240" fill="#000"/>';
     lines.forEach(function (l, i) {
-      var isNew = i >= lines.length - 2;
+      var isNew = i >= lines.length - 1;
       s += txt(14, 30 + i * 26, l, 14, isNew ? '#FFE070' : g, 'start', 'font-family="monospace"');
     });
     return s;
@@ -459,7 +439,7 @@
       (opt.interactive && opt.overlay ? body.replace('<rect width="320" height="240"', '<rect class="hit" data-close="1" width="320" height="240"') : body) +
       bars(st) + cornerTag(st);
     if (opt.toast) s += '<rect x="40" y="206" width="240" height="24" rx="5" fill="#000c" stroke="#ffffff55"/>' + txt(160, 223, opt.toast, 12, '#fff', 'middle', 'font-family="monospace"');
-    if (opt.flash) s += '<g class="flash"><rect x="40" y="88" width="240" height="64" rx="12" fill="#000d"/>' + txt(160, 131, modeLabel(st), 28, m.color, 'middle', 'font-weight="700" font-family="monospace"') + '</g>';
+    if (opt.flash) s += '<g class="flash"><rect x="40" y="88" width="240" height="64" rx="12" fill="#000d"/>' + txt(160, 128, modeLabel(st), 28, m.color, 'middle', 'font-weight="700" font-family="monospace"') + txt(160, 146, '闪屏 0.4.93', 10, '#aaa') + '</g>';
     if (!st.env.online && !opt.overlay) s += '<rect width="320" height="240" fill="#808080" opacity=".18"/>';
     return s + '</svg>';
   }
@@ -483,7 +463,7 @@
       };
       var dirs = m.dirs ? Object.keys(m.dirs).map(function (k) { return m.dirs[k].name + '（' + m.dirs[k].short + '，' + m.dirs[k].label + '）'; }).join('；') : '';
       html += '<article class="mode-card" id="mode-' + id + '" style="--mc:' + m.color + '">' +
-        '<header>' + tagChip(m) + '<h3>' + esc(m.name) + (m.isDefault ? ' <small>默认</small>' : '') + '</h3><span class="kind k-' + m.kind + '">' + kindLabel(m.kind) + '</span>' + badge(m.step1.status) + '</header>' +
+        '<header>' + tagChip(m) + '<h3>' + esc(m.name) + (m.isDefault ? ' <small>默认</small>' : '') + '</h3><span class="kind k-' + m.kind + '">' + kindLabel(m.kind) + '</span>' + badge(m.step1.status) + (m.step1.pending ? '<span class="badge b-pending">' + esc(m.step1.pending) + '</span>' : '') + '</header>' +
         '<div class="mc-body"><div class="mini">' + screenSVG(st, {}) + '<div class="mini-cap">' + esc(eye.name) + (m.look.pool !== 'none' ? ' · ' + esc(D.pools[m.look.pool].split('：')[0]) : '') + '</div></div>' +
         '<dl>' +
         '<dt>主人原话</dt><dd><q>' + esc(m.owner) + '</q></dd>' +
@@ -540,19 +520,18 @@
       return '<div class="sp-group"><div class="sp-title">' + esc(g) + '</div>' + groups[g].map(function (it) {
         var on = !!getp(st, it.path);
         var missing = (it.needs || []).filter(function (n) {
-          if (n === 'billing') return !st.billing;
           if (n === 'mouthTts') return !st.env.mouthTts;
           if (n.indexOf('mode:') === 0) return st.mode !== n.slice(5);
           return false;
-        }).map(function (n) { return n === 'billing' ? '计费关着' : n === 'mouthTts' ? '嘴不在 TTS' : '只在' + modeName(n.slice(5)); });
+        }).map(function (n) { return n === 'mouthTts' ? '嘴不在 TTS' : '只在' + modeName(n.slice(5)); });
         if (on && it.paid) spending.push(it.label);
         var cls = it.master ? (on ? 'on master' : 'off master') : on ? (it.paid ? 'on paid' : 'on') : 'off';
         var state = on ? (it.onLabel || '开') : (it.offLabel || '关');
         return '<div class="sp ' + cls + '"><span class="dot"></span><span class="sp-l">' + esc(it.label) + '</span><span class="sp-s">' + esc(state) + '</span>' +
-          (it.paid ? '<span class="sp-a">' + (missing.length ? '不能开：' + esc(missing.join('、')) : '可以开') + '</span>' : '') + '</div>';
+          (it.paid && (it.needs || []).length ? '<span class="sp-a">' + (missing.length ? '不执行：' + esc(missing.join('、')) : '会执行') + '</span>' : '') + '</div>';
       }).join('') + '</div>';
     }).join('');
-    var spendLine = '<div class="spend-line ' + (spending.length ? 'is' : 'no') + '">' + (spending.length ? '正在花钱：' + esc(spending.join('、')) : (st.billing ? '现在没有在花钱（总闸开着，可以打开）' : '现在不花钱（计费总闸关）')) + '</div>';
+    var spendLine = '<div class="spend-line ' + (spending.length ? 'is' : 'no') + '">' + (spending.length ? '正在花钱：' + esc(spending.join('、')) : '现在没有在花钱（nine = 全开）') + '</div>';
     $('#sim-state').innerHTML = rows + spendLine + '<div class="sp-wrap">' + sp + '</div>';
   }
 
@@ -592,7 +571,7 @@
       return '<li class="log-e ' + e.sum.cls + '"><div class="log-h"><span class="log-n">#' + e.n + ' ' + hh + '</span>' +
         '<span class="via">' + esc(VIA[c.inp.via] || c.inp.via) + '</span><b>' + esc(inputLabel(c.inp)) + '</b>' +
         '<span class="arrow">→</span><span class="log-s">' + esc(e.sum.t) + '</span><span class="code">' + esc(c.code) + '</span></div>' +
-        detailHtml(c) + '<div class="log-now">之后：' + esc(modeName(c.st.mode, c.st.dir)) + (c.st.host ? '（托管）' : '') + ' · 计费' + (c.st.billing ? '开' : '关') + '</div></li>';
+        detailHtml(c) + '<div class="log-now">之后：' + esc(modeName(c.st.mode, c.st.dir)) + (c.st.host ? '（托管）' : '') + ' · 提前写' + (c.st.talk.prefetch ? '开' : '关') + '</div></li>';
     }).join('') : '<li class="muted">点右边任何一个输入，这里会写出它触发了哪条规则。</li>';
   }
   function renderSim() {
@@ -617,11 +596,12 @@
       var enter = [], leave = [], toggle = false;
       m.enterIn.forEach(function (e) {
         var inp = INPUTS[e.in]; if (!inp) return;
-        if (inp.group === 'asr' || inp.group === 'dk') enter.push(inp.short || inp.label);
+        if (inp.group === 'asr' || inp.group === 'digits') enter.push(inp.short || inp.label);
         if (e.toggle && inp.group === 'dk') toggle = true;
       });
       m.leaveIn.forEach(function (e) { var inp = INPUTS[e.in]; if (inp && inp.group === 'asr') leave.push(inp.short || inp.label); });
       if (toggle) leave.push('再推同一方向');
+      if (!leave.length) leave.push('网页再点');
       edges.push({ from: 'idle', to: id, label: enter.join(' / '), kind: 'solid', bend: 30 });
       edges.push({ from: id, to: 'idle', label: leave.join(' / '), kind: 'leave', bend: 30 });
     });
@@ -669,7 +649,7 @@
         '<rect x="' + (p.x - W / 2 + 8) + '" y="' + (p.y - 10) + '" width="44" height="20" rx="4" fill="' + m.color + '"/>' +
         '<text x="' + (p.x - W / 2 + 30) + '" y="' + (p.y + 4) + '" text-anchor="middle" class="ntag" fill="' + (isLight(m.color) ? '#111' : '#fff') + '">' + esc(m.label) + '</text>' +
         '<text x="' + (p.x - W / 2 + 58) + '" y="' + (p.y - 2) + '" class="nname">' + esc(m.name) + '</text>' +
-        '<text x="' + (p.x - W / 2 + 58) + '" y="' + (p.y + 15) + '" class="nsub">' + esc(kindLabel(m.kind) + (m.isDefault ? ' · 默认' : '') + (id === 'idle' ? ' · 预设 4' : '')) + '</text></g>';
+        '<text x="' + (p.x - W / 2 + 58) + '" y="' + (p.y + 15) + '" class="nsub">' + esc(kindLabel(m.kind) + (m.isDefault ? ' · 默认' : '') + (id === 'idle' ? ' · four' : '')) + '</text></g>';
     });
     Object.keys(G.pseudo).forEach(function (id) {
       var p = pos[id];
@@ -685,19 +665,19 @@
 
   /* ================= 4. 触发表 ================= */
   var MX = { cond: 'normal', groups: {}, sel: null };
-  D.inputGroups.forEach(function (g) { MX.groups[g.id] = ['quick', 'webquick'].indexOf(g.id) < 0; });
+  D.inputGroups.forEach(function (g) { MX.groups[g.id] = ['quick', 'webquick', 'pick'].indexOf(g.id) < 0; });
   function matrixState(modeId) {
     var st = clone(D.initialState), m = D.modes[modeId];
     st.mode = modeId; if (m.dirs) st.dir = Object.keys(m.dirs)[0];
     if (m.kind === 'temporary') st.return_to = { mode: 'talk', dir: null, host: null };
-    if (MX.cond === 'billing_off') { st.billing = false; }
+    if (MX.cond === 'alloff') { st.senses = { tingwu: false, eye: false, scene: false, notes: false }; st.talk.prefetch = false; st.talk.auto = false; }
     if (MX.cond === 'offline') st.env.online = false;
-    if (MX.cond === 'prefetch') { st.talk.prefetch = modeId === 'talk'; }
+    if (MX.cond === 'prefetch') { st.talk.prefetch = false; }
     if (MX.cond === 'speaking') { st.speaking = modeId === 'talk'; }
     return st;
   }
   function renderMatrix() {
-    var conds = [['normal', '正常（计费开、在线、嘴 TTS）'], ['billing_off', '计费总闸关'], ['offline', '机器人离线'], ['prefetch', '脱口秀里提前写已开'], ['speaking', '脱口秀里正在说']];
+    var conds = [['normal', '正常（mind 启动后全开、在线、嘴 TTS）'], ['alloff', '说过 zero 之后'], ['offline', '和服务器断开'], ['prefetch', '提前写是关的'], ['speaking', '脱口秀里正在说']];
     $('#mx-cond').innerHTML = conds.map(function (c) { return '<label><input type="radio" name="mxc" value="' + c[0] + '"' + (MX.cond === c[0] ? ' checked' : '') + '> ' + esc(c[1]) + '</label>'; }).join('');
     $('#mx-groups').innerHTML = D.inputGroups.map(function (g) { return '<label><input type="checkbox" data-mxg="' + g.id + '"' + (MX.groups[g.id] ? ' checked' : '') + '> ' + esc(g.name.split('（')[0]) + '</label>'; }).join('');
     var head = '<tr><th class="rowh">输入</th>' + D.modeOrder.map(function (id) {
@@ -740,18 +720,14 @@
 
   /* ================= 6. 预设 ================= */
   function renderPresets() {
+    var who = { mind: 'mind', select: 'hello', none: '—' };
     var rows = D.presets.map(function (p) {
-      var server = p.mode ? ['进入 ' + modeName(p.mode)] : [];
-      server = server.concat(p.server.map(function (x) {
-        var e = D.effects[x]; var g = (e.guards || []).map(function (gg) { return D.codes[gg.code].label; });
-        return e.label + (g.length ? '（拦：' + g.join('、') + '）' : '');
-      }));
-      var robot = p.robot.map(function (k) { return D.controls[k].label; });
-      return '<tr class="' + (p.undefined ? 'undef' : '') + '"><td class="pn">' + p.n + '</td><td><q>' + esc(p.owner) + '</q></td><td><b>' + esc(p.name) + '</b>' +
-        (p.decided ? ' <span class="badge b-decided">主人已定 2026-11-14</span>' : '') + '</td><td>' + (server.length ? esc(server.join('；')) : '—') + '</td><td>' + (robot.length ? esc(robot.join('；')) : '不动') +
-        '</td><td class="muted">' + esc(p.note) + '</td><td><button class="try" data-try-input="web.p' + p.n + '">试</button></td></tr>';
+      var what = p.kind === 'mind' ? (p.server || []).map(function (x) { return D.effects[x].label; }).join('；') :
+        p.kind === 'select' ? '进入 ' + modeName(p.mode, p.dir) + '（只进不出）' : 'no_action';
+      return '<tr class="' + (p.kind === 'none' ? 'undef' : '') + '"><td class="pn">' + p.n + '</td><td><b>' + esc(p.name) + '</b></td><td>' + esc(what) + '</td><td><code>' + who[p.kind] +
+        '</code></td><td class="muted"><q>' + esc(p.owner) + '</q></td><td class="muted">' + esc(p.note) + '</td><td>' + (p.kind === 'none' ? '' : '<button class="try" data-try-input="asr.d' + p.n + '">试</button>') + '</td></tr>';
     }).join('');
-    $('#presets').innerHTML = '<thead><tr><th>键</th><th>主人原话</th><th>名字</th><th>服务器那一半</th><th>机器人那一半（control）</th><th>说明</th><th></th></tr></thead><tbody>' + rows + '</tbody>';
+    $('#presets').innerHTML = '<thead><tr><th>键</th><th>新意思</th><th>做什么</th><th>谁执行</th><th>补充原文（旧表）</th><th>说明</th><th></th></tr></thead><tbody>' + rows + '</tbody>';
   }
 
   /* ================= 7. 任务 ================= */
@@ -760,12 +736,12 @@
     $('#tasks').innerHTML = D.tasks.map(function (g) {
       return '<section class="tg"><h3>' + esc(g.group) + '</h3>' + g.items.map(function (t) {
         n++;
-        return '<div class="task' + (t.ask ? ' ask' : '') + '"><div class="task-h"><code>' + esc(t.id) + '</code> ' + esc(t.title) + '</div>' +
-          '<div class="muted"><code>' + esc(t.files) + '</code></div><div>' + esc(t.note) + '</div>' +
+        return '<div class="task' + (t.ask ? ' ask' : '') + (t.pending ? ' pending' : '') + '"><div class="task-h"><code>' + esc(t.id) + '</code> ' + esc(t.title) + '</div>' +
+          (t.files ? '<div class="muted"><code>' + esc(t.files) + '</code></div>' : '') + '<div>' + esc(t.note) + '</div>' +
           (t.ask ? '<div class="ask-flag">⏸ ' + esc(t.ask) + '</div>' : '') + '</div>';
       }).join('') + '</section>';
     }).join('');
-    $('#task-count').textContent = n;
+    if ($('#task-count')) $('#task-count').textContent = n;
     $('#deferred').innerHTML = D.deferredList.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('');
   }
 
@@ -779,7 +755,8 @@
         '<div class="muted">影响：' + esc(q.impact) + '</div></div>';
     }).join('') + '<div class="q"><div class="q-h"><b>还没想好</b><span class="badge b-deferred">以后再说</span></div>' + esc(D.openNote) + '</div>';
     $('#decisions').innerHTML = '<div class="q-h"><b>主人 2026-11-14 两轮回答（设计 §1.2）</b><span class="badge b-decided">主人已定 2026-11-14</span></div><ol class="dec">' +
-      D.ownerAlsoConfirmed.map(function (x) { return '<li>' + esc(x.replace(/^\d+\.\s*/, '')) + '</li>'; }).join('') + '</ol>';
+      D.ownerAlsoConfirmed.map(function (x) { var m = x.match(/^(\d+)\.\s*/); return '<li' + (m ? ' value="' + m[1] + '"' : ' class="nonum"') + '>' + esc(x.replace(/^\d+\.\s*/, '')) + '</li>'; }).join('') + '</ol>' +
+      '<div class="quotes">' + (D.ownerQuotes || []).map(function (q) { return '<blockquote>' + esc(q) + '</blockquote>'; }).join('') + '</div>';
     $('#timing').innerHTML = '<thead><tr><th>规则</th><th>值</th><th>结果</th></tr></thead><tbody>' + D.timing.map(function (r) {
       return '<tr><td>' + esc(r[0]) + '</td><td>' + esc(r[1]) + '</td><td><code>' + esc(r[2]) + '</code></td></tr>';
     }).join('') + '</tbody>';

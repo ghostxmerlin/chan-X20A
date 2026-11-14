@@ -27,13 +27,13 @@
 
   <section id="sim">
     <h2>2. 模拟器</h2>
-    <p class="muted">按第一步的规则推演：点一个输入，看模式、眼睛、角标、花钱状态怎么变，日志写出依据哪条规则。按钮下面的小字是“现在按它会怎样”；灰的 = 现在按了不变。</p>
+    <p class="muted">按已上线的规则推演（以 hello 为准：hello 切模式，mind 只记录并执行效果）。点一个输入，看模式、眼睛、角标、花钱状态怎么变，日志写出依据哪条规则。按钮下面的小字是“现在按它会怎样”；灰的 = 按了不变；虚线 = 0.4.93 待做或以后（照设计演示）。</p>
     <div class="sim">
       <div class="sim-left">
         <div class="screen-frame big" id="sim-screen"></div>
         <div class="screen-cap"><span id="sim-overlay-name"></span></div>
         <div class="env">
-          <label><input type="checkbox" id="env-online"> 机器人在线（/mouth 连着）</label>
+          <label><input type="checkbox" id="env-online"> 和服务器连着（/mouth）</label>
           <label><input type="checkbox" id="env-tts"> 嘴在 TTS 档</label>
           <button id="sim-reset" type="button">重来（开机状态）</button>
         </div>
@@ -63,29 +63,29 @@
   </section>
 
   <section id="swipes">
-    <h2>5. 首页滑动页（320×240，机器人屏幕大小）</h2>
+    <h2>5. 首页滑动页（320×240，机器人屏幕大小；上滑、下滑 0.4.93 待做，左滑已上线）</h2>
     <p class="muted">模拟器里点“上滑 / 下滑 / 左滑”也会在机器人屏幕上打开这些页，而且可以直接点里面的格子和键。</p>
     <div id="swipe-grid" class="swipe-grid"></div>
   </section>
 
   <section id="presets-sec">
-    <h2>6. 0–9 快捷预设</h2>
-    <p class="muted">入口：ASR 数字词、下滑快捷设置页、网页，三处走同一个服务器接口。预设是“一次改一组开关”，不改当前模式（4 除外）。</p>
+    <h2>6. 数字口令 0–9（主人 2026-11-14 新表）</h2>
+    <p class="muted">0 / 9 = 花费全关 / 全开，发给 mind；4–8 由 hello 自己进模式，只进不出；1–3 空。网页快捷面板一样：0、9 发 mind，4–8 发 hello，1–3 灰。</p>
     <div class="table-wrap"><table id="presets" class="tbl"></table></div>
   </section>
 
   <section id="tasks-sec">
-    <h2>7. 第一步做什么（计划共 <span id="task-count"></span> 个任务）</h2>
-    <p class="muted">全部还没开始写代码。带 ⏸ 的步骤要停下来问主人。</p>
+    <h2>7. 第一步：已上线 0.4.92、0.4.93 待做、已知小问题</h2>
+    <p class="muted">已上线：2026-11-14 17:13（collector-0.4.92 + mind / ear），18:22 计费简化。主人试过口令和触摸：“还可以”。</p>
     <div id="tasks" class="tasks"></div>
-    <h3>推迟到以后（不在第一步）</h3>
+    <h3>以后</h3>
     <ul id="deferred" class="deferred"></ul>
   </section>
 
   <section id="answers">
     <h2>8. 主人定了什么、和补充 / 第一版的差异、没写明的地方</h2>
     <div id="decisions" class="q decisions"></div>
-    <h3>第 12 节：最后两处默认</h3>
+    <h3>第 12 节</h3>
     <div id="questions" class="questions"></div>
     <h3>与 v1 / 主人补充的差异</h3>
     <div class="table-wrap"><table id="diffs" class="tbl"></table></div>
