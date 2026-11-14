@@ -332,6 +332,7 @@ class MouthModeTest(MouthLinkTest):
         self._time = _time
         self.mind_seq, self.mind_mode, self.mind_up, self.mind_extra = 5, "talk", True, {}
         self.mind_input_delay, self.mind_on_input, self.mind_calls = 0, None, []
+        self.mind_threads, self.mode_get_down = set(), False
         self.conn_no = 0
         await super().asyncSetUp()
         self.hub = self.mouth_link.ModeHub(self.fake_mind, poll_s=0.1, full_s=60, input_timeout_s=0.5,
@@ -343,6 +344,7 @@ class MouthModeTest(MouthLinkTest):
         self.hub_task.cancel()
         await asyncio.gather(self.hub_task, return_exceptions=True)
         await self.hub.drain()
+        self.hub.close()
 
     def make_link(self, ws):
         self.conn_no += 1
@@ -362,9 +364,13 @@ class MouthModeTest(MouthLinkTest):
                 "color": "E040A0"}, "touch": {"tap": "server", "double": "server"}, **self.mind_extra}
 
     def fake_mind(self, method, path, body=None, timeout=5):
+        import threading
         self.mind_calls.append((method, path, json.loads(json.dumps(body))))
+        self.mind_threads.add(threading.current_thread().name)
         if not self.mind_up:
             return 503, {"error": "URLError"}
+        if path == "/mode" and self.mode_get_down:
+            return 503, {"error": "ServerSelectionTimeoutError"}
         if (method, path) == ("GET", "/mode/seq"):
             return 200, {"seq": self.mind_seq}
         if (method, path) == ("GET", "/mode"):
@@ -564,6 +570,111 @@ class MouthModeTest(MouthLinkTest):
             hellos = await self.wait_mind("/mode/robot", "hello", n=2)
             self.assertEqual({(h["boot"], h["conn"]) for h in hellos}, {("b1", self.links[-1].conn)})
             self.assertIsNone(ws.close_code)
+
+    async def test_mode_bug_in_the_reader_is_logged_and_audio_keeps_flowing(self):
+        """review I1: an unexpected error in the mode path must not end /mouth, and must be logged."""
+        async def broken(link_self, m):
+            raise RuntimeError("mode bug")
+        real = self.mouth_link.MouthLink._mode_message
+        self.mouth_link.MouthLink._mode_message = broken
+        self.addCleanup(setattr, self.mouth_link.MouthLink, "_mode_message", real)
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await ws.send(json.dumps({"type": "mode_input", "seq": 1, "age_ms": 0, "source": "asr", "input": "play"}))
+            await asyncio.sleep(0.1)
+            await self.upstream_send(json.dumps({"type": "tts.start", "stream": 2}))
+            self.assertEqual((await self.recv_type(ws, "tts.start"))["stream"], 2)
+            await ws.send(json.dumps({"type": "tts.done", "stream": 2}))
+            for _ in range(100):
+                if '"tts.done"' in "".join(self.upstream_text):
+                    break
+                await asyncio.sleep(0.02)
+            self.assertIn('"tts.done"', "".join(self.upstream_text))
+            self.assertIsNone(ws.close_code)
+        text = "\n".join(self.logs)
+        self.assertIn("RuntimeError: mode bug", text)
+        self.assertIn("Traceback", text)
+
+    async def test_a_reader_that_dies_is_logged_with_traceback(self):
+        """review I1: run() no longer swallows a task's unexpected exception behind "device_closed"."""
+        real = self.mouth_link._parse
+        def exploding(message):
+            if message == '{"type":"explode"}':
+                raise RuntimeError("reader bug")
+            return real(message)
+        self.mouth_link._parse = exploding
+        self.addCleanup(setattr, self.mouth_link, "_parse", real)
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await ws.send('{"type":"explode"}')
+            await asyncio.wait_for(ws.wait_closed(), 2)
+        self.assertEqual(await self.wait_result(), "device_closed")
+        text = "\n".join(self.logs)
+        self.assertIn("RuntimeError: reader bug", text)
+        self.assertIn("Traceback", text)
+
+    async def test_mode_fetch_failing_does_not_flap_or_storm_hellos(self):
+        """review I2: /mode/seq answers but GET /mode fails: logged once, no "mind away/up" flap, no re-hello."""
+        self.mode_get_down = True
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.no_message(ws, "mode", 1.0)                         # ~10 polls
+            self.assertEqual(len(self.mind_calls_to("/mode/robot", "hello")), 1)
+            self.assertLessEqual(len([m for m in self.logs if m.startswith("mode: mind")]), 1)
+            self.assertEqual(len([m for m in self.logs if "GET /mode failing" in m]), 1)
+            self.mode_get_down = False                                     # Mongo back
+            self.assertEqual((await self.recv_type(ws, "mode", timeout=2))["mode"], "talk")
+        self.assertEqual(len([m for m in self.logs if "GET /mode ok again" in m]), 1)
+
+    async def test_re_hello_re_posts_the_last_applied(self):
+        """review M1: a re-hello resets mind's applied_seq; the ear re-posts the robot's last ack after it."""
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.recv_type(ws, "mode")
+            await ws.send(json.dumps({"type": "mode_applied", "seq": 5}))
+            await self.wait_mind("/mode/robot", "applied")
+            self.mind_up = False
+            await asyncio.sleep(0.4)
+            self.mind_up = True
+            await self.wait_mind("/mode/robot", "hello", n=2)
+            applied = await self.wait_mind("/mode/robot", "applied", n=2)
+            self.assertEqual(applied[-1]["applied_seq"], 5)
+            events = [b["event"] for b in self.mind_calls_to("/mode/robot")]
+            last_hello = max(i for i, e in enumerate(events) if e == "hello")
+            self.assertIn("applied", events[last_hello + 1:])                # the ack comes after the re-hello
+        await self.wait_mind("/mode/robot", "closed")
+        self.assertEqual(self.mind_calls_to("/mode/robot")[-1]["event"], "closed")    # nothing after the close
+
+    async def test_hub_uses_its_own_threads(self):
+        """review M5: mind calls never take the default executor (tingwu start/stop and switches use it)."""
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.recv_type(ws, "mode")
+        self.assertTrue(self.mind_threads)
+        self.assertTrue(all(n.startswith("mode-mind") for n in self.mind_threads), self.mind_threads)
+
+    async def test_no_boot_id_no_modes(self):
+        """review M6: a hello without boot_id gets no mode traffic at all (no hello, no pushes, no polling)."""
+        async with self.robot() as ws:
+            await ws.send(json.dumps({k: v for k, v in ROBOT_HELLO.items() if k != "boot_id"}))
+            await asyncio.wait_for(ws.recv(), 2)
+            await self.no_message(ws, "mode", 0.5)
+            await ws.send(json.dumps({"type": "mode_input", "seq": 1, "age_ms": 0, "source": "asr", "input": "play"}))
+            await self.no_message(ws, "mode_result", 0.3)                   # not queued for a worker that is not there
+            self.assertIsNone(ws.close_code)
+        self.assertEqual(self.mind_calls, [])
+        self.assertNotIn("mode_input", "".join(self.upstream_text))
+
+    async def test_reconnects_leave_no_tasks_behind(self):
+        """review M8."""
+        for _ in range(3):
+            async with self.robot() as ws:
+                await self.handshake(ws)
+                await self.recv_type(ws, "mode")
+            await self.wait_result()
+        await self.wait_mind("/mode/robot", "closed", n=3)
+        await self.hub.drain()
+        self.assertEqual((self.hub.links, self.hub._bg), (set(), set()))
 
     async def test_oversized_snapshot_is_not_sent(self):
         self.mind_extra = {"pad": "x" * 1100}

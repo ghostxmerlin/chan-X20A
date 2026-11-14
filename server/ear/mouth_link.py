@@ -34,8 +34,15 @@ Modes (Task A5, with modes=ModeHub): mind owns the mode; the ear only carries it
   apply it; the next snapshot shows it); mind down -> busy "MIND OFFLINE"; 400 -> unknown_input "BAD INPUT".
 - Robot {"type":"mode_applied","seq":S} -> /mode/robot {boot, conn, event:"applied", applied_seq:S} (latest only).
 A robot that ignores these types (0.4.91) just drops the mode messages; audio and the link are unchanged.
+mode_result and the new snapshot can reach the robot in either order (the 1 s poll may see the change first).
+mind is asked on the hub's own small thread pool (never the default executor, which tingwu and switches use).
+Writers: several tasks send() to the robot socket (the upstream loop, hub pushes, input results). websockets writes
+each whole message atomically, so that is safe; never use fragmented sends (async iterators) on the robot ws.
+An unexpected error is logged with its traceback: in the mode path it is caught there and /mouth goes on; a task
+that dies anyway is logged before run() ends.
 """
 import asyncio
+import concurrent.futures
 import json
 import time
 import traceback
@@ -122,21 +129,28 @@ class ModeHub:
         self.get_timeout_s, self.post_timeout_s = get_timeout_s, post_timeout_s
         self.links = set()
         self.seq = None                      # the seq of the last snapshot fetched
-        self.mind_up = None
+        self.mind_up = None                  # decided by /mode/seq only
+        self.fetch_failing = False           # GET /mode failing while /mode/seq answers (logged once per streak)
+        self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="mode-mind")
         self._last_full = time.monotonic()
         self._lock = None                    # one fetch-and-push at a time: links never get an older fetch later
         self._bg = set()                     # (made on first use, inside the running loop)
 
     async def ask(self, method, path, body=None, timeout=None):
-        """(status, reply) from mind, or (None, {}) when it does not answer within timeout (its thread finishes
-        later on its own; the urllib timeout bounds it)."""
+        """(status, reply) from mind, or (None, {}) when it does not answer within timeout. Runs on the hub's own
+        pool; a timed-out call's thread ends by itself within the urllib timeout (timeout + 1 s)."""
         if timeout is None:
             timeout = self.get_timeout_s if method == "GET" else self.post_timeout_s
-        http_timeout = timeout if method == "GET" else max(timeout, 20)
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(self._pool, self.call, method, path, body, timeout + 1)
         try:
-            return await asyncio.wait_for(asyncio.to_thread(self.call, method, path, body, http_timeout), timeout)
+            return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
             return None, {}
+
+    def close(self):
+        """Let the pool go (shutdown / tests); calls still running finish on their own."""
+        self._pool.shutdown(wait=False, cancel_futures=True)
 
     def join(self, link):
         self.links.add(link)
@@ -169,9 +183,9 @@ class ModeHub:
         log(f"mode: mind {'up' if up else 'away'}", flush=True)
         if up and was is False:              # mind came back (maybe restarted): tell it again who is connected
             for link in list(self.links):
-                ok = getattr(link, "mode_hello_ok", None)
-                if ok is not None and ok.is_set():
-                    self.spawn(link.mode_hello_again())
+                rehello = getattr(link, "request_rehello", None)
+                if rehello is not None:
+                    rehello()
 
     async def run(self):
         while True:
@@ -190,7 +204,7 @@ class ModeHub:
             return
         self._mark(True)
         full = time.monotonic() - self._last_full >= self.full_s
-        if full or reply["seq"] != self.seq or any(link.mode_seq is None for link in self.links):
+        if full or reply["seq"] != self.seq or any(link.mode_wants_first for link in self.links):
             await self.refresh(force=full)
 
     async def refresh(self, force=False):
@@ -201,9 +215,13 @@ class ModeHub:
             status, reply = await self.ask("GET", "/mode")
             snap = reply.get("snapshot") if status == 200 else None
             if not (isinstance(snap, dict) and _is_int(snap.get("seq"))):
-                if status is not None and status != 200:
-                    self._mark(False)
+                if not self.fetch_failing:        # up/away is /mode/seq's call; this is logged once per streak
+                    self.fetch_failing = True
+                    log(f"mode: GET /mode failing ({status if status is not None else 'timeout'}), no pushes", flush=True)
                 return None
+            if self.fetch_failing:
+                self.fetch_failing = False
+                log("mode: GET /mode ok again", flush=True)
             if snap["seq"] != self.seq:
                 log(f"mode: seq {snap['seq']} {_ascii(snap.get('mode'), 12)} to {len(self.links)} link(s)", flush=True)
             self.seq = snap["seq"]
@@ -244,6 +262,9 @@ class MouthLink:
         self.mode_hello_ok = asyncio.Event()
         self._mode_hello_tried = False
         self._mode_closing = asyncio.Event()
+        self._mode_wake = asyncio.Event()   # closing or a re-hello request wakes the session
+        self._modes_on = False              # joined to the hub (needs a boot_id)
+        self._rehello = False
         self._mode_too_large = None
         self._inputs = asyncio.Queue(maxsize=modes.input_queue) if modes is not None else None
         self._applied, self._applied_new = None, asyncio.Event()
@@ -267,7 +288,10 @@ class MouthLink:
         reader = asyncio.create_task(self._from_robot())
         upper = asyncio.create_task(self._upstream_loop())
         aux = []
-        if self.modes is not None:
+        if self.modes is not None and not (isinstance(self.boot, str) and self.boot):
+            log(f"mouth m{self.conn}: robot hello has no boot_id, no modes", flush=True)
+        elif self.modes is not None:
+            self._modes_on = True
             self.modes.join(self)
             aux = [asyncio.create_task(self._input_worker()), asyncio.create_task(self._ack_worker())]
             self.modes.spawn(self._mode_session())      # outlives run(): it posts the closed event
@@ -278,9 +302,15 @@ class MouthLink:
             if self.modes is not None:
                 self.modes.leave(self)
                 self._mode_closing.set()
+                self._mode_wake.set()
             for task in (reader, upper, *aux):
                 task.cancel()
             await asyncio.gather(reader, upper, *aux, return_exceptions=True)   # a dropped link ends one with ConnectionClosed
+            for name, task in (("reader", reader), ("soul-tts loop", upper)):
+                e = None if task.cancelled() else task.exception()
+                if e is not None and not isinstance(e, (ConnectionClosed, _RobotGone)):
+                    text = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+                    log(f"mouth m{self.conn} {name}: unexpected error\n{text}", flush=True)
             up, self._up = self._up, None
             if up is not None:
                 await up.close()
@@ -299,7 +329,10 @@ class MouthLink:
         except asyncio.TimeoutError:
             await self.client.close(code=4408, reason="no hello")
             return "no_hello"
-        except Exception:                               # noqa: BLE001 - robot left before its hello
+        except ConnectionClosed:                        # robot left before its hello
+            return "device_closed"
+        except Exception:                               # noqa: BLE001 - anything else: logged, the link ends
+            _trace(f"mouth m{self.conn} hello")
             return "device_closed"
         m = _parse(first)
         if m is None or m.get("type") != "hello":
@@ -319,8 +352,13 @@ class MouthLink:
         async for message in self.client:
             m = _parse(message)
             if m is not None and m.get("type") in ("mode_input", "mode_applied"):
-                if self.modes is not None:              # for mind, never for soul-tts
-                    await self._mode_message(m)
+                if self._modes_on:                      # for mind, never for soul-tts
+                    try:
+                        await self._mode_message(m)
+                    except ConnectionClosed:
+                        raise
+                    except Exception:               # noqa: BLE001 - a mode bug never ends /mouth
+                        _trace(f"mouth m{self.conn} {m.get('type')}")
                 continue
             if m is not None and m.get("type") in ("tts.done", "tts.stopped", "tts.error"):
                 self.playing.discard(_stream(m))
@@ -399,6 +437,11 @@ class MouthLink:
         return up.close_code
 
     # ---- modes (Task A5) ----
+    @property
+    def mode_wants_first(self):
+        """No snapshot sent yet (and none was skipped as too large): the hub fetches for this link."""
+        return self.mode_seq is None and self._mode_too_large is None
+
     async def push_mode(self, snap, force=False):
         """Send a snapshot as {"type":"mode",...} unless this robot already has that seq (force: send anyway)."""
         if not force and snap["seq"] == self.mode_seq:
@@ -473,17 +516,16 @@ class MouthLink:
         status, _ = await self.modes.ask("POST", "/mode/robot", {"boot": self.boot, "conn": self.conn, "event": "hello"})
         return status == 200
 
-    async def mode_hello_again(self):
-        """mind came back after being away: say hello again (same boot, so mind does not count it as a reboot)."""
-        if not self._mode_closing.is_set():
-            await self._hello_mind()
+    def request_rehello(self):
+        """mind came back after being away: the session says hello again (same boot: not a reboot for mind),
+        ordered before its closed post, and then re-posts the last ack (a hello resets mind's applied_seq)."""
+        if self.mode_hello_ok.is_set() and not self._mode_closing.is_set():
+            self._rehello = True
+            self._mode_wake.set()
 
     async def _mode_session(self):
         """hello (retried while mind is away), first snapshot, then wait for the robot to leave and post closed."""
         hub = self.modes
-        if not isinstance(self.boot, str) or not self.boot:
-            log(f"mouth m{self.conn}: robot hello has no boot_id, no modes", flush=True)
-            return
         while not self._mode_closing.is_set():
             if await self._hello_mind():
                 self.mode_hello_ok.set()
@@ -493,6 +535,12 @@ class MouthLink:
                 await asyncio.wait_for(self._mode_closing.wait(), hub.hello_retry_s)
             except asyncio.TimeoutError:
                 pass
-        await self._mode_closing.wait()
+        while not self._mode_closing.is_set():
+            await self._mode_wake.wait()
+            self._mode_wake.clear()
+            if self._rehello and not self._mode_closing.is_set():
+                self._rehello = False
+                if await self._hello_mind() and self._applied is not None:
+                    self._applied_new.set()         # the ack worker re-posts the last applied seq
         if self._mode_hello_tried:
             await hub.ask("POST", "/mode/robot", {"boot": self.boot, "conn": self.conn, "event": "closed"})

@@ -1046,6 +1046,7 @@ def main():
             finally:
                 watcher.cancel()
                 modes.cancel()
+                mode_hub.close()
 
     asyncio.run(serve_forever())
 
