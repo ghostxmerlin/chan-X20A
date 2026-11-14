@@ -19,6 +19,18 @@ node scripts/install-eyes-assets.mjs
 - 台词：`/sdcard/soul/voice/PLAY-001.adpcm` 至 `PLAY-080.adpcm`，共 2,288,128 字节（collector-0.4.56 起 80 条；前 40 条与原文件逐字节一致）。条数由 `voice_policy.h` 的 `kVoiceCount` 决定，准备脚本校验二者一致；每条的回应情绪见 `config/voice-emotions.json`。
 - 眼睛：`/sdcard/soul/{v05,v14,v18}/*.soul`，90 个文件，共 10,384,688 字节。
 - 设备只接收固件白名单中的编号、长度及哈希；HTTP 不接受文件路径。先写 `.part` 并读回校验，再重命名；替换既有文件时保留 `.prev`。
+- 屏幕中文字库（collector-0.4.95-font 起）：`/sdcard/soul/font/cjk16.{0,1,2}.bin`（16 px、4 bpp，533,806 字节）、`cjk24.{0,1,2}.bin`（24 px、2 bpp，581,043 字节），另有同目录 `LICENSE-OFL.txt`（4,463 字节）。见下节。
+
+## 屏幕中文字库
+
+思源黑体（Adobe Source Han Sans 2.005R，区域子集 CN，Medium；与 Noto Sans CJK SC 同一设计），SIL OFL 1.1。字集为 ASCII、GB2312 第 1/3 区（中文标点、符号、全角字符）、GB2312 一级汉字 3,755 个及 `config/ui-font-extra.txt`，共 4,040 字。字形不进应用镜像：`scripts/generate-cjk-font.py` 用 lv_font_conv 1.5.3 生成 LVGL 二进制字体，再转成 HCJK 容器（格式见 `scripts/ui_font_tools.py`），按安装器的单文件上限切成 ≤256 KiB 的分片，放在被忽略的 `assets/ui-font/sdcard/`；`assets/ui-font/manifest.json` 与固件 `ui_font_catalog.generated.h` 固定每片长度和 SHA-256。
+
+```sh
+python3 scripts/generate-cjk-font.py --fetch .cache/ui-font/source   # 下载官方发布包，核对 zip/OTF/许可 SHA-256 后生成
+node scripts/install-font-assets.mjs                                 # 先装许可，再逐片上传；已一致的跳过
+```
+
+开机建屏后，PSRAM 栈的 `ui_font` 任务逐片读入一块 PSRAM 缓冲（每片照常持 LVGL 锁并排空 LCD DMA、核对 SHA-256），再检查容器边界，才交给 LVGL；位图和码表就地使用，只另配字形表（各约 65 KB PSRAM）。没有卡、缺片或校验失败时屏幕保持 ASCII 字体，`info.ui_font.variants[].error` 给出原因；装完最后一片后无需重启即加载。字集变更（改 `config/ui-font-extra.txt`）需要重新生成、重编固件并重装分片，`tests/test_ui_font.py` 会指出固件字符串中不在字集里的字。
 
 ## 播放和总线
 

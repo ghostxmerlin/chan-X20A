@@ -4,6 +4,8 @@ Mac 情绪试验使用 MLX / MLX-VLM、Qwen3-VL 与 OpenCV YuNet，模型来源�
 
 准备中的 0.4.9 首页情绪文字使用 Adobe Source Han Sans SC Regular 的小字集，按 SIL OFL 1.1 分发，完整声明见 [SourceHanSans-OFL.txt](docs/licenses/SourceHanSans-OFL.txt)。字体许可不被本项目 MIT 替代。
 
+0.4.95 屏幕中文字库由 [Adobe Source Han Sans 2.005R](https://github.com/adobe-fonts/source-han-sans/releases/tag/2.005R)（思源黑体，`SourceHanSansCN-Medium.otf`）光栅化为 16 px / 24 px 位图子集，按 SIL OFL 1.1 分发；位图分片随许可原文 [assets/ui-font/LICENSE-OFL.txt](assets/ui-font/LICENSE-OFL.txt)（与上面的声明逐字相同）一起装到 SD 卡 `/sdcard/soul/font/`。生成的字库不使用保留字体名 “Source”，文件与 LVGL 名称为 `cjk16` / `cjk24`。
+
 chan-X20A 基于 [M5Stack StackChan](https://github.com/m5stack/StackChan)，固定开发起点为 `f901cc2969189f3f0e96af1442c0f96e77e1e2c1`。Git 历史保留；为容纳采集 App、测试和项目文档，将上游完整源码放在 `upstream/StackChan/`。
 
 - 上游固件许可证：[MIT](upstream/StackChan/firmware/LICENSE)，Copyright (c) 2026 M5Stack Technology CO LTD。

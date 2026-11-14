@@ -76,6 +76,7 @@ touch::HomeTouch home_gesture;           // a failed read on home is a release i
 ScreenHomeGesture home_pending = ScreenHomeGesture::None;
 // Mode corner badge (top right, every page) and the 2 s toast; small LVGL objects (internal RAM).
 lv_obj_t *mode_badge = nullptr, *mode_toast = nullptr;
+lv_obj_t* summary_mode = nullptr;        // summary title row: "模式 脱口秀" in the CJK font, else ASCII
 uint32_t toast_until_ms = 0;
 bool toast_shown = false;
 constexpr uint32_t kToastMs = 2000;
@@ -482,6 +483,10 @@ void screen_create(lv_obj_t* parent)
 
     summary = box(parent, 0, 0, 320, 240, kInk);
     summary_title = label(summary, 12, 7, "chan-X20A", kSignal);
+    // 0.4.95: the mode's Chinese name (CJK font demo), between the title and the version (x 210, under the badge).
+    summary_mode = label(summary, 104, 5, "", kSignal);
+    lv_obj_set_width(summary_mode, 104);
+    lv_label_set_long_mode(summary_mode, LV_LABEL_LONG_CLIP);
     box(summary, 12, 28, 296, 1, kRule);
     const int row_x[] = {50, 210, 50, 232, 12, 42, 42, 47, 207, 12};
     const int row_y[] = {41, 41, 77, 77, 106, 148, 169, 194, 194, 219};
@@ -1038,6 +1043,13 @@ void screen_update_mode(const char* text, uint32_t color, bool online)
     set_text(mode_badge, buf);
     lv_obj_set_style_bg_color(mode_badge, lv_color_hex(bg), 0);
     lv_obj_set_style_text_color(mode_badge, lv_color_hex((r * 299 + g * 587 + b * 114) / 1000 > 140 ? kInk : 0xFFFFFF), 0);
+}
+void screen_update_mode_name(const char* text, const lv_font_t* font)
+{
+    if (!summary_mode) return;
+    const lv_font_t* use = font ? font : &collector_mono_15;
+    if (lv_obj_get_style_text_font(summary_mode, LV_PART_MAIN) != use) lv_obj_set_style_text_font(summary_mode, use, 0);
+    set_text(summary_mode, text ? text : "");
 }
 void screen_show_toast(const char* text, uint32_t now_ms)
 {

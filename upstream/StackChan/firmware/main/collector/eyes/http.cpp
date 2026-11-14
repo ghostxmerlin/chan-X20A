@@ -3,6 +3,7 @@
 #include "eyes.h"
 #include "protocol.h"
 #include "collector/voice_library.h"
+#include "collector/ui_font.h"
 #include "hal/board/shared_storage.h"
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -30,7 +31,9 @@ esp_err_t send(ControlReply* r,const JsonDocument& doc) {return collector::send_
 esp_err_t reject(ControlReply* r,const char* status,const char* error) {
     r->status=status;JsonDocument doc;doc["accepted"]=false;doc["error"]=error;return send(r,doc);
 }
-struct Upload {httpd_req_t* request=nullptr;const Asset* asset=nullptr;const VoiceClip* voice=nullptr;uint8_t* bytes=nullptr;};
+// font: an SD font part (0.4.95, X-Font-Part "cjk16.0"); its spec is the firmware catalog's, never the request's.
+struct Upload {httpd_req_t* request=nullptr;const Asset* asset=nullptr;const VoiceClip* voice=nullptr;uint8_t* bytes=nullptr;
+    bool font=false;shared_storage::FileSpec font_spec{};char font_id[12]{};};
 QueueHandle_t upload_queue=nullptr;
 StaticQueue_t upload_queue_control;
 StaticTask_t upload_worker_control;
@@ -39,7 +42,7 @@ constexpr size_t kUploadStackBytes=16384;
 StackType_t* upload_stack=nullptr;
 void process_upload(Upload* u) {
     auto* r=u->request;
-    const size_t length=u->voice?u->voice->bytes:u->asset->bytes;
+    const size_t length=u->font?u->font_spec.bytes:u->voice?u->voice->bytes:u->asset->bytes;
     const int64_t deadline=esp_timer_get_time()+10000000;size_t at=0;
     while(at<length && esp_timer_get_time()<deadline) {
         const int got=httpd_req_recv(r,reinterpret_cast<char*>(u->bytes+at),std::min<size_t>(4096,length-at));
@@ -49,11 +52,13 @@ void process_upload(Upload* u) {
     }
     const bool incomplete=at!=length || esp_timer_get_time()>=deadline;
     bool unchanged=false;
-    const char* error=incomplete?"incomplete_or_timed_out_upload":u->voice?
+    const char* error=incomplete?"incomplete_or_timed_out_upload":u->font?
+        shared_storage::install_file(u->font_spec,u->bytes,at,unchanged):u->voice?
         shared_storage::install_file({u->voice->path,u->voice->bytes,u->voice->sha256},u->bytes,at,unchanged):
         shared_storage::install(*u->asset,u->bytes,at,unchanged);
     JsonDocument doc;doc["accepted"]=!error;doc["installed"]=!error;doc["unchanged"]=unchanged;
-    if(u->voice)doc["clip_id"]=u->voice->id;
+    if(u->font) {doc["font_part"]=u->font_id;if(!error)ui_font::reload();}
+    else if(u->voice)doc["clip_id"]=u->voice->id;
     else {doc["style"]=style_id(u->asset->style);doc["state"]=state_id(u->asset->state);}
     doc["error"]=error;
     httpd_resp_set_status(r,error?(incomplete||!std::strcmp(error,"asset_invalid")?"400 Bad Request":"503 Service Unavailable"):"200 OK");
@@ -128,7 +133,13 @@ esp_err_t command_handler(ControlReply* r,JsonObject body) {
 esp_err_t install_handler(httpd_req_t* r) {
     if(!upload_queue)return reject(r,"503 Service Unavailable","installer_unavailable");
     const Asset* a=nullptr;const VoiceClip* voice=nullptr;size_t length=0;
-    if(httpd_req_get_hdr_value_len(r,"X-Voice-Id")) { // one /v1/assets route; the header selects the kind
+    shared_storage::FileSpec font{};char font_id[12]{};
+    const bool is_font=httpd_req_get_hdr_value_len(r,"X-Font-Part")>0;
+    if(is_font) {
+        if(httpd_req_get_hdr_value_str(r,"X-Font-Part",font_id,sizeof(font_id))!=ESP_OK || !ui_font::part(font_id,font))
+            return reject(r,"400 Bad Request","invalid_argument");
+        length=font.bytes;
+    } else if(httpd_req_get_hdr_value_len(r,"X-Voice-Id")) { // one /v1/assets route; the header selects the kind
         char id[3];
         if(httpd_req_get_hdr_value_str(r,"X-Voice-Id",id,sizeof(id))!=ESP_OK || id[0]<'1'||id[0]>'9' ||
             (id[1] && (id[1]<'0'||id[1]>'9')))return reject(r,"400 Bad Request","invalid_argument");
@@ -145,7 +156,7 @@ esp_err_t install_handler(httpd_req_t* r) {
     if(!shared_storage::available())return reject(r,"503 Service Unavailable","storage_unavailable");
     if(installing.exchange(true))return reject(r,"409 Conflict","install_busy");
     auto* u=new(std::nothrow)Upload;
-    if(u) {u->asset=a;u->voice=voice;u->bytes=static_cast<uint8_t*>(heap_caps_malloc(length,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));}
+    if(u) {u->asset=a;u->voice=voice;u->font=is_font;u->font_spec=font;std::memcpy(u->font_id,font_id,sizeof(font_id));u->bytes=static_cast<uint8_t*>(heap_caps_malloc(length,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));}
     if(!u || !u->bytes) {delete u;installing=false;return reject(r,"503 Service Unavailable","no_memory");}
     if(httpd_req_async_handler_begin(r,&u->request)!=ESP_OK) {
         heap_caps_free(u->bytes);delete u;installing=false;return reject(r,"503 Service Unavailable","request_unavailable");

@@ -157,6 +157,15 @@ python3 scripts/generate-screen-assets.py
 
 生成器只修改 collector 内两份 C 资源文件及动画元数据头文件 `laughing_man.h`；来源和许可见根目录 `NOTICE.md`。
 
+0.4.95 起屏幕中文字库（思源黑体 16 px / 24 px）放在 SD 卡，不进应用镜像，生成与安装见 [SD 媒体](sd-media.md#屏幕中文字库)。生成用同一个 `.tools/ui-assets` 的 lv_font_conv 1.5.3，不需要 Pillow；普通固件编译只用已提交的 `ui_font_catalog.generated.h`。生成出分片后，可用真实 LVGL 在主机上画出两种字号和摘要页（有字库/无字库两种）：
+
+```sh
+cmake -S tests/display -B .cache/display -DCMAKE_BUILD_TYPE=Debug
+cmake --build .cache/display -j 8 --target font_preview
+mkdir -p .cache/font-preview
+.cache/display/font_preview assets/ui-font/sdcard/soul/font .cache/font-preview
+```
+
 0.3.7 的界面与协议检查还包括真实日志固定环（非持久存储）、8/16 字节包、中心按压消抖/模式切换按住抑制、心跳保持原角度死区和中心输入不绑定动作。点头试验已经弃用，不再作为待交付功能。Android 区分中心协议支持与动作绑定，0.3.9 显示“中心开关屏”，连接未绑定固件仍显示“中心仅记录”；旧固件明确绑定点头时才显示“中心点头”。旧 8 字节遥控器只能提供左右轴和上下表情，不能由 B 键推断中心按压。
 
 0.3.7 实心无圈表情与图形摘要版已构建、部署并独立校验；最终产物与实机结果以 [验证记录](collector-validation.md) 最新段为准，不能将主机预览或首候选帧率直接作为后续候选的验收结果。

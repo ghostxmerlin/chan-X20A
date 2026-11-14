@@ -28,6 +28,9 @@
 #include "mem_diag.h"
 #include "psram_task.h"
 #include "eye_mode.h"
+#include "ui_font.h"
+#include "ui_font_blob.h"
+#include "ui_text_zh.h"
 #include <ArduinoJson.hpp>
 #include <board.h>
 #include <audio/audio_codec.h>
@@ -952,7 +955,8 @@ void fill_info(JsonDocument& doc)
     control_info_json(doc["control"].to<JsonObject>());
     mouth::mode_json(doc["mode"].to<JsonObject>());
     doc["assets"]["endpoint"] = "/v1/assets";
-    doc["assets"]["selector"] = "X-Voice-Id, or X-Eyes-Style + X-Eyes-State";
+    doc["assets"]["selector"] = "X-Voice-Id, X-Font-Part, or X-Eyes-Style + X-Eyes-State";
+    ui_font::status_json(doc["ui_font"].to<JsonObject>());   // 0.4.95: SD CJK font parts and load state
     doc["capture_active"] = true;
     doc["transport"] = "usb_serial_jtag";
     serial_monitor_stats(doc["monitor"].to<JsonObject>());
@@ -1766,6 +1770,7 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
     display->LvglLock();
     if (!screen_initialized) {
         screen_create(lv_screen_active());
+        ui_font::start();   // 0.4.95: CJK font from SD in a PSRAM task; the screen stays ASCII until it is loaded
         lv_timer_create([](lv_timer_t*) {
             const auto touch = hal_bridge::get_touch_point();
             const int64_t now = esp_timer_get_time();
@@ -1810,11 +1815,21 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
                 static ChatDots* cd = nullptr;
                 if (!cd) if (void* m = heap_caps_calloc(1, sizeof(ChatDots), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) cd = new (m) ChatDots();
                 const uint32_t version = mouth::mode_version();
-                if (!mode_drawn || version != mode_seen) {
+                static uint32_t fonts_seen = 0;         // 0.4.95: redraw the mode name when a CJK font arrives
+                const uint32_t fonts = ui_font::generation();
+                if (!mode_drawn || version != mode_seen || fonts != fonts_seen) {
                     mouth::ModeView view;
                     mouth::mode_view(view);
-                    mode_seen = version; mode_drawn = true;
+                    mode_seen = version; mode_drawn = true; fonts_seen = fonts;
                     screen_update_mode(view.look.label, view.look.color, view.online);
+                    {
+                        // CJK font demo: "模式 脱口秀" on the summary title row; without the SD font "mode TALK".
+                        const lv_font_t* cjk = ui_font::cjk(16);
+                        const auto pick = ui_font::choose(ui_text::mode_name(view.state.mode), view.look.label, cjk != nullptr);
+                        char line[40];
+                        std::snprintf(line, sizeof line, "%s %s", pick.cjk ? ui_text::kModeWord : "mode", pick.text);
+                        screen_update_mode_name(line, pick.cjk ? cjk : nullptr);
+                    }
                     if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
                     if (cd) { cd->in_chat = view.state.mode == modes::rules::Mode::Chat; cd->color = view.look.color; cd->state = view.chat; }
                 }
