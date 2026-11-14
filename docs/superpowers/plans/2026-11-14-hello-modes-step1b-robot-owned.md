@@ -16,12 +16,12 @@
 | 网页模式条 | 页面 → mind | 页面 → 观察台 → hello（`/v1/control {target:"mode"}`，和舵机、相机走同一条路）；hello 报给 mind |
 | DualKey | 打分 + 方向切模式 + 单击停说 + 摇杆灯 | **只打分** |
 | mind 做什么 | 存模式、规则、去重、推快照 | 只记 hello 报上来的模式；按"效果"开关自己的功能（说一轮、停说、进出脱口秀打开/关闭提前写和连续说、家人声音），计费总开关拦着；总计费开关和 0–9 预设仍在 mind |
-| 数字口令 0–9 | mind 执行预设 | hello 把 `digit` 发给 mind，mind 执行预设（花钱的服务都在服务器上） |
+| 数字口令 0–9 | mind 执行预设 | **主人 2026-11-14 新表（取代旧表）**：0 = 花费全关、9 = 花费全开（hello 把 `digit` 发给 mind，mind 执行，因为花钱的服务都在服务器上）；4 = 进 IDLE、5 = 进围观、6 = 进陪伴、7 = 进中音英字、8 = 进英音中字（hello 自己当作 `select` 执行）；1、2、3 空（`no_action`）。旧的 1（数据收集）、2（听悟反转）、3（提前写反转）作废 |
 
 ## 消息（`/mouth`，hello 上行；ear 原样转给 mind）
 
 - `{"type":"mode_report","seq":N,"mode":"talk","dir":null,"host":null,"return_to":null,"by":"asr|touch|page|boot","input":"forward","effects":["stop_speech","talk_enter"]}`：hello 每切一次发一次；连上 `/mouth` 后先发一次当前状态（`by:"boot"` 只在真的开机后第一次）。`seq` 是 hello 自己的递增编号。
-- `{"type":"mode_input","seq":N,"age_ms":A,"source":"asr","input":"digit","value":3}`：只有预设走这条，C1/A5 已经有了。
+- `{"type":"mode_input","seq":N,"age_ms":A,"source":"asr","input":"digit","value":0}`：只有数字 0 和 9 走这条（花费全关 / 全开），C1/A5 已经有了；4–8 是 hello 自己切模式，1–3 不发。
 - 下行 `{"type":"mode_result",...}`：只回给 `mode_input`（预设）。mind 不再推快照。
 
 ## 任务（不再每个单独审；0.4.92 编好以后统一审一次，刷机前问主人）
@@ -30,7 +30,7 @@
    - 把 `server/mind/modes.py` 的 `transition` 导出成测试向量 `tests/data/mode_vectors.json`。脚本放在 `tests/gen_mode_vectors.py`，覆盖每个模式 × 每个输入 × 托管与否 × 正在说与否，包括 `boot`、`timeout`、`select` 各值。
    - 固件 `mode_rules.h` 是纯函数，包含模式表（label、eye、touch）。
    - 主机测试 `tests/mode_rules_test.cpp` 逐条重放向量，要求新状态、结果码、效果完全一致。
-   - `digit` 和 `billing` 不在 `mode_rules` 里。
+   - `digit`：4–8 在 `mode_rules` 里映射成 `select`（idle / crowd / companion / subtitle zh_en / subtitle en_zh），1–3 = `no_action`，0 和 9 不在 `mode_rules` 里（交给 mind）；`billing` 不在 `mode_rules` 里。向量里加上这些。
 2. **F2 接线 + 外观**（复用 C1 `mode_wire.h`、C2 口令映射、C3 手势、C4 的 `/mouth` 收发）：
    - 口令、首页单击/双击/左滑，以及 `/v1/control {target:"mode", input, value}` 都交给 `mode_rules`。
    - 首页单击不再开摘要页，改成左滑开；上滑、下滑这一版先不接。
@@ -40,7 +40,7 @@
    - 状态放 PSRAM；LVGL 小对象放内部 RAM，用时才建。
 3. **S1 mind 改成只记录**：
    - `POST /mode/report`（ear 转来的 `mode_report`）：记下状态，按 `effects` 执行钩子，计费总开关照样拦，同一个 `seq` 只执行一次。
-   - `POST /mode` 和 `/mode/input`，除了 `digit` 和 `billing`，都不再自己切换。`digit` 和 `billing` 仍走 A3 的预设和计费。
+   - `POST /mode` 和 `/mode/input`，除了 `digit` 和 `billing`，都不再自己切换。`digit` 和 `billing` 仍走 A3 的计费；`mode_table.PRESETS` 改成新表：0 = 花费全关、9 = 花费全开（含提前写、连续说，只在脱口秀里开），1–8 在 mind 上 = `undefined_preset`（4–8 由 hello 自己切模式）。网页快捷面板跟着改：0、9 发 mind，4–8 发 hello 的 `select`，1–3 灰掉。
    - 关掉 DualKey 方向键和单击 → 模式，只保留打分。
    - `GET /mode` 返回 hello 报上来的状态。
 4. **S2 ear**：
