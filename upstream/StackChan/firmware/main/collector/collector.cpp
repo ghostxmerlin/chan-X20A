@@ -28,6 +28,8 @@
 #include "mem_diag.h"
 #include "psram_task.h"
 #include "eye_mode.h"
+#include "ui_pages.h"
+#include "ui_font.h"
 #include <ArduinoJson.hpp>
 #include <board.h>
 #include <audio/audio_codec.h>
@@ -164,6 +166,10 @@ bool wifi_join_pending = false, wifi_reconnect_requested = false;
 std::string wifi_join_ssid, wifi_join_password;
 std::string wifi_status_text, wifi_ip;
 bool wifi_status_dirty = false;
+// 0.4.94 quick settings page: volume and hearing go to the main loop, which may take service locks and write NVS
+// (the LVGL timer must not: SD/media paths take the display lock the other way). -1 = nothing asked.
+std::atomic<int> quick_volume_request{-1}, quick_hearing_request{-1};
+std::atomic<uint32_t> quick_hearing_refused{0};   // +1 when hearing could not start (no ear configured)
 void wifi_json(JsonObject target);
 void control_info_json(JsonObject target);
 esp_netif_t* station = nullptr;
@@ -952,7 +958,8 @@ void fill_info(JsonDocument& doc)
     control_info_json(doc["control"].to<JsonObject>());
     mouth::mode_json(doc["mode"].to<JsonObject>());
     doc["assets"]["endpoint"] = "/v1/assets";
-    doc["assets"]["selector"] = "X-Voice-Id, or X-Eyes-Style + X-Eyes-State";
+    doc["assets"]["selector"] = "X-Voice-Id, X-Font-Part, or X-Eyes-Style + X-Eyes-State";
+    ui_font::status_json(doc["ui_font"].to<JsonObject>());   // 0.4.95: SD CJK font parts and load state
     doc["capture_active"] = true;
     doc["transport"] = "usb_serial_jtag";
     serial_monitor_stats(doc["monitor"].to<JsonObject>());
@@ -1714,7 +1721,7 @@ const Route kAudioRoutes[] = {{"/v1/audio", HTTP_GET, audio_handler}};
     }
 }
 
-void update_screen(const std::string& ip, const std::string& ssid = {})
+void update_screen(const std::string& ip, const std::string& ssid = {}, bool rssi_valid = false, int rssi = 0)
 {
     const int64_t now = esp_timer_get_time();
     const auto remote = remote_snapshot();
@@ -1734,6 +1741,7 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
     } else if (!last_fps_us) { last_frame = current_frame; last_fps_us = now; }
     ScreenStatus status{};
     status.version = kVersion; status.ip = ip.c_str(); status.ssid = ssid.c_str(); status.token = token.c_str();
+    status.rssi_valid = rssi_valid; status.rssi = rssi; status.volume = playback_volume();
     status.motor = remote_display_state();
     uint8_t channel = 0; wifi_second_chan_t secondary; esp_wifi_get_channel(&channel, &secondary);
     status.channel = channel; status.frame = current_frame;
@@ -1766,6 +1774,7 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
     display->LvglLock();
     if (!screen_initialized) {
         screen_create(lv_screen_active());
+        ui_font::start();   // 0.4.95: CJK font from SD in a PSRAM task, first read ~10 s after boot; ASCII until then
         lv_timer_create([](lv_timer_t*) {
             const auto touch = hal_bridge::get_touch_point();
             const int64_t now = esp_timer_get_time();
@@ -1802,6 +1811,24 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
                 const auto gesture = screen_take_home_gesture();
                 if (gesture != ScreenHomeGesture::None)
                     mouth::mode_apply("touch", gesture == ScreenHomeGesture::Tap ? modes::rules::Input::Tap : modes::rules::Input::DoubleTap);
+                // 0.4.94 global pages (ui_pages.h). A picker tile is a select through the robot's own rules (source
+                // select; the current mode = leave it). 全开 / 全关 are the digits 9 / 0 for mind, exactly as the
+                // ASR digit words (mode_input over /mouth, source quick); mind's mode_result brings the toast.
+                size_t tile = 0;
+                if (screen_take_mode_pick(tile) && tile < ui::kTiles)
+                    mouth::mode_apply("select", modes::rules::Input::Select, ui::tile_value(tile));
+                if (const int billing = screen_take_billing_request(); billing == 0 || billing == 9) {
+                    modes::rules::Value v;
+                    v.digit = billing;
+                    mouth::mode_apply("quick", modes::rules::Input::Digit, v);
+                }
+                if (const int volume = screen_take_volume_request(); volume >= 0) quick_volume_request = volume;
+                if (const int hearing = screen_take_hearing_request(); hearing >= 0) quick_hearing_request = hearing;
+                static uint32_t refused_seen = 0;
+                if (const uint32_t refused = quick_hearing_refused.load(); refused != refused_seen) {
+                    refused_seen = refused;
+                    screen_show_toast(ui::text::kHearingRefused, static_cast<uint32_t>(now / 1000));
+                }
                 static uint32_t mode_seen = 0, toasts_seen = 0;
                 static bool mode_drawn = false;
                 // 0.4.93 chat dots: a small copy of the chat stage (PSRAM, made once); the dots are decided every
@@ -1810,11 +1837,20 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
                 static ChatDots* cd = nullptr;
                 if (!cd) if (void* m = heap_caps_calloc(1, sizeof(ChatDots), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) cd = new (m) ChatDots();
                 const uint32_t version = mouth::mode_version();
+                // 0.4.95: the SD CJK font, once per variant loaded; until then (or without SD) the pages are ASCII.
+                static uint32_t fonts_seen = 0;
+                if (const uint32_t fonts = ui_font::generation(); fonts != fonts_seen) {
+                    fonts_seen = fonts;
+                    screen_set_cjk_font(ui_font::cjk_exact(16), ui_font::cjk_exact(24));
+                }
                 if (!mode_drawn || version != mode_seen) {
                     mouth::ModeView view;
                     mouth::mode_view(view);
                     mode_seen = version; mode_drawn = true;
                     screen_update_mode(view.look.label, view.look.color, view.online);
+                    screen_update_mode_state(static_cast<uint8_t>(view.state.mode), static_cast<uint8_t>(view.state.dir));
+                    if (view.have_result)
+                        screen_update_billing(view.result_digit, view.result.code, static_cast<uint32_t>(view.result_at_us / 1000));
                     if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
                     if (cd) { cd->in_chat = view.state.mode == modes::rules::Mode::Chat; cd->color = view.look.color; cd->state = view.chat; }
                 }
@@ -1991,6 +2027,8 @@ void run()
     std::string previous_ip;
     while (true) {
         std::string ip, ssid;
+        bool rssi_valid = false;
+        int rssi = 0;
         if (wifi_connected) {
             attempt = 0; // Each reconnection starts again with the preferred profile.
             esp_netif_ip_info_t info{};
@@ -2000,8 +2038,10 @@ void run()
                 ip = buffer;
             }
             wifi_ap_record_t ap{};
-            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
                 ssid.assign(reinterpret_cast<const char*>(ap.ssid), strnlen(reinterpret_cast<const char*>(ap.ssid), sizeof(ap.ssid)));
+                rssi_valid = true; rssi = ap.rssi;
+            }
 #ifdef CONFIG_COLLECTOR_NETWORK_MONITOR
             if (ip != previous_ip) ESP_LOGI(kTag, "PAIRING_URL=http://%s:8080 BOOT_ID=%s SSID=%s", ip.c_str(), boot_id.c_str(), ssid.c_str());
 #endif
@@ -2096,7 +2136,14 @@ void run()
                          result.accepted ? "accepted" : eyes::name(result.error));
             }
         }
-        update_screen(ip, ssid);
+        {
+            // 0.4.94 quick settings page: volume as the web / ASR volume (saved in NVS collector/volume, used from
+            // the next sound); hearing as the remote's toggle (RAM only). Here, not in the LVGL timer.
+            if (const int volume = quick_volume_request.exchange(-1); volume >= 0) playback_set_volume(volume, "screen");
+            if (const int hearing = quick_hearing_request.exchange(-1); hearing >= 0 && !hearing::set_listening(hearing > 0))
+                ++quick_hearing_refused;
+        }
+        update_screen(ip, ssid, rssi_valid, rssi);
         const int64_t now = esp_timer_get_time();
         // One interrupt allocation table per boot (USB log): core 0 must keep free
         // inputs for interrupts that are allocated late, e.g. Wi-Fi's AES on first connect.

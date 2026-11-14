@@ -12,10 +12,11 @@ export async function waitForAssetSlot(client) {
   throw Error('Previous asset installation is still busy');
 }
 export async function uploadResource(binding,boot,resource,bytes) {
-  const b=validateBinding(binding),{kind,style,state,clip_id}=resource,voice=kind==='voice';
-  if(!/^[\w-]{1,79}$/.test(boot)||!['voice','eyes'].includes(kind)||!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>262144)throw Error('Invalid asset');
-  if(voice?(!Number.isInteger(clip_id)||clip_id<1||clip_id>80):(!['v05','v14','v18'].includes(style)||!/^[a-z_]{1,31}$/.test(state)))throw Error('Invalid asset ID');
-  const headers=voice?`X-Voice-Id: ${clip_id}\n`:`X-Eyes-Style: ${style}\nX-Eyes-State: ${state}\n`;
+  const b=validateBinding(binding),{kind,style,state,clip_id,part}=resource,voice=kind==='voice',font=kind==='font';
+  if(!/^[\w-]{1,79}$/.test(boot)||!['voice','eyes','font'].includes(kind)||!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>262144)throw Error('Invalid asset');
+  // font: an SD part of the screen's CJK font (0.4.95), "cjk16.0" style; the robot owns path, size and hash.
+  if(font?!/^(cjk\d{2}\.\d|license)$/.test(part):voice?(!Number.isInteger(clip_id)||clip_id<1||clip_id>80):(!['v05','v14','v18'].includes(style)||!/^[a-z_]{1,31}$/.test(state)))throw Error('Invalid asset ID');
+  const headers=font?`X-Font-Part: ${part}\n`:voice?`X-Voice-Id: ${clip_id}\n`:`X-Eyes-Style: ${style}\nX-Eyes-State: ${state}\n`;
   return new Promise((resolve,reject)=>{
     // Match the monitor's system network path on macOS. No redirects/retries,
     // and credentials stay in stdin rather than argv or curl configuration.
@@ -39,7 +40,7 @@ export async function uploadResource(binding,boot,resource,bytes) {
         if(at<0||at>16384)throw Error('Invalid response headers');
         const status=Number(response.subarray(0,at).toString('latin1').match(/^HTTP\/\S+ (\d{3})/)?.[1]);
         const result=JSON.parse(response.subarray(at+4));
-        if(status!==200||result.installed!==true||(voice?result.clip_id!==clip_id:result.style!==style||result.state!==state))throw Error(`Install rejected: ${status}`);
+        if(status!==200||result.installed!==true||(font?result.font_part!==part:voice?result.clip_id!==clip_id:result.style!==style||result.state!==state))throw Error(`Install rejected: ${status}`);
         resolve(result);
       }catch(e){reject(e);}
     });

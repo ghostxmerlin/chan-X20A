@@ -5,6 +5,8 @@
 #include "packed_palette.h"
 #include "remote_gestures.h"
 #include "home_touch.h"
+#include "ui_pages.h"
+#include "ui_font_blob.h"   // choose() only: pure, no IDF (the font itself comes in through screen_set_cjk_font)
 #include "eyes/view.h"
 #include <cstdio>
 #include <cstdlib>
@@ -52,12 +54,16 @@ uint8_t function_flags = 0, rendered_function_flags = 0;
 bool eyes_visible = false;
 bool enabled = true, status_pending = false;
 ScreenStatus pending_status;
-char pending_version[64], pending_ip[64], pending_token[65], pending_motor[64];
+char pending_version[64], pending_ip[64], pending_token[65], pending_motor[64], pending_ssid[33];
 enum class IconKind { Wifi, Camera, Remote, Battery, Axes, Yaw, Pitch, Mic };
 struct Icon { lv_obj_t* obj = nullptr; IconKind kind; bool valid = false; int value = 0; };
 Icon icons[8];
-enum class Page { Home, Summary, Log, Pairing, Faces, Wifi, WifiKey };
+// Pages and where gestures lead (0.4.94: ui_pages.h). `page` is what is shown; nav keeps the same page plus the
+// Wi-Fi list's opener and the idle clock.
+using Page = ui::Page;
 Page page = Page::Home;
+ui::Nav nav;
+uint32_t screen_now_ms = 0;            // the latest tick / touch time (status updates carry none)
 ScreenReaction reaction = ScreenReaction::None;
 uint32_t reaction_at = 0;
 char log_text[kRuntimeLogTextBytes] = {};
@@ -76,6 +82,11 @@ touch::HomeTouch home_gesture;           // a failed read on home is a release i
 ScreenHomeGesture home_pending = ScreenHomeGesture::None;
 // Mode corner badge (top right, every page) and the 2 s toast; small LVGL objects (internal RAM).
 lv_obj_t *mode_badge = nullptr, *mode_toast = nullptr;
+lv_obj_t* summary_mode = nullptr;        // summary title row: "模式 脱口秀" in the CJK font, else ASCII
+lv_obj_t* summary_version = nullptr;     // summary title row, x 210: the firmware version (ASCII font)
+// 0.4.95 SD CJK font (screen_set_cjk_font), nullptr = not loaded: every page word then falls back to its ASCII
+// stand-in in collector_mono_15 (ui_font::choose). The 16 px variant decides; 24 px is only for page titles.
+const lv_font_t *cjk16 = nullptr, *cjk24 = nullptr;
 uint32_t toast_until_ms = 0;
 bool toast_shown = false;
 constexpr uint32_t kToastMs = 2000;
@@ -87,6 +98,27 @@ bool chat_dots_grey = false;
 uint32_t chat_dots_color = 0;
 constexpr int kDotPx = 16, kDotGap = 8, kDotX = 10, kDotY = 8;
 constexpr uint32_t kDotDim = 0x5A5A5A, kDotGrey = 0x8C8C8C;
+// 0.4.94 quick settings (swipe down) and mode picker (swipe up), ui_pages.h: small LVGL objects (internal RAM),
+// built when the page opens and deleted when it closes. Requests wait here until the LVGL timer takes them.
+lv_obj_t *quick_page = nullptr, *quick_volume = nullptr, *quick_net[2] = {}, *quick_last = nullptr, *quick_hear = nullptr;
+lv_obj_t* quick_allon = nullptr;          // the 全开 button's label: "再点确认" while armed (ui::BillingConfirm)
+ui::BillingConfirm billing_confirm;
+constexpr uint32_t kArmed = 0xFFBF40;     // amber (the ribbon's recognition colour) while 全开 waits for a second tap
+lv_obj_t *picker_page = nullptr, *picker_tiles[ui::kTiles] = {}, *picker_labels[ui::kTiles] = {};
+int volume_request = -1, billing_request = -1, hearing_request = -1, pick_request = -1;
+int quick_volume_shown = -1;
+bool hearing_shown = false;
+// A value just pressed is shown until the main loop has applied it and the status caught up.
+constexpr uint32_t kRequestHoldMs = 1500;
+uint32_t volume_hold_until = 0, hearing_hold_until = 0, billing_line_ms = 0;
+uint8_t mode_now = 0, dir_now = 0;
+int billing_last = -1;
+char billing_code[20] = "";
+uint32_t billing_at_ms = 0;
+// The latest status, for the quick page (it may open between two status updates).
+bool net_connected = false, net_rssi_valid = false, status_hearing = false;
+int net_rssi = 0, status_volume = -1;
+char net_ssid[33] = "", net_ip[16] = "";
 uint32_t animation_last_ms = 0, animation_render_ms = 0, animation_phase_ms = 0;
 bool animation_clock_ready = false;
 constexpr uint32_t kRotationMs = 12000, kAnimationFrameMs = kRotationMs / COLLECTOR_FACE_FRAME_COUNT;
@@ -162,6 +194,52 @@ void set_text(lv_obj_t* obj, const char* text)
 {
     if (std::strcmp(lv_label_get_text(obj), text) != 0) lv_label_set_text(obj, text);
 }
+// 0.4.95 Chinese words (ui_text_zh.h) with their ASCII stand-in (ui::text). `font` nullptr = collector_mono_15.
+void use_font(lv_obj_t* obj, const lv_font_t* font)
+{
+    const lv_font_t* f = font ? font : &collector_mono_15;
+    if (lv_obj_get_style_text_font(obj, LV_PART_MAIN) != f) lv_obj_set_style_text_font(obj, f, 0);
+}
+// The y that puts a label in `font` on the same middle line as a collector_mono_15 label at `y`.
+int font_y(int y, const lv_font_t* font)
+{
+    return font ? y + (int(collector_mono_15.line_height) - int(font->line_height)) / 2 : y;
+}
+// A label showing zh in the CJK font when it is loaded, else the ASCII stand-in (ui_font::choose).
+lv_obj_t* zlabel(lv_obj_t* parent, int x, int y, const char* zh, const char* ascii, uint32_t color,
+                 const lv_font_t* font = nullptr)
+{
+    if (!font) font = cjk16;
+    const auto c = ui_font::choose(zh, ascii, font != nullptr);
+    auto obj = label(parent, x, font_y(y, c.cjk ? font : nullptr), c.text, color);
+    if (c.cjk) use_font(obj, font);
+    return obj;
+}
+void set_ztext(lv_obj_t* obj, const char* zh, const char* ascii)
+{
+    const auto c = ui_font::choose(zh, ascii, cjk16 != nullptr);
+    use_font(obj, c.cjk ? cjk16 : nullptr);
+    set_text(obj, c.text);
+}
+// The summary page's words: title (状态摘要 / chan-X20A), the mode name next to it and the hint row. The page
+// lives for the whole boot, so a font that arrives later moves its labels to the CJK font's middle line.
+void render_summary_words()
+{
+    if (!summary_title) return;
+    set_ztext(summary_title, ui_text::kSummaryTitle, "chan-X20A");
+    lv_obj_set_y(summary_title, font_y(7, cjk16));
+    modes::rules::State s;
+    s.mode = static_cast<modes::rules::Mode>(mode_now);
+    s.dir = static_cast<modes::rules::Dir>(dir_now);
+    char line[48];
+    if (cjk16) std::snprintf(line, sizeof line, "%s %s", ui_text::kModeWord, ui_text::mode_name(s.mode));
+    else std::snprintf(line, sizeof line, "%s", modes::rules::label(s));   // "SUB EN>ZH" fits, "mode ..." would not
+    use_font(summary_mode, cjk16);
+    set_text(summary_mode, line);
+    lv_obj_set_y(summary_mode, font_y(7, cjk16));
+    set_ztext(summary_rows[9], ui_text::kSummaryHint, ui::text::kSummaryHint);
+    lv_obj_set_y(summary_rows[9], font_y(219, cjk16));
+}
 void render_log()
 {
     if (!log_dirty || !log_body) return;
@@ -190,10 +268,21 @@ bool update_eyes()
     update_ribbon();
     return eyes_visible;
 }
+void open_quick();
+void close_quick();
+void open_picker();
+void close_picker();
+void render_quick();
+void render_allon(uint32_t now_ms);
 void show_page(Page target, uint32_t now_ms)
 {
     if (target != Page::Home) { home_gesture.reset(); home_pending = ScreenHomeGesture::None; }
+    if (target != Page::Quick) close_quick();
+    if (target != Page::Picker) close_picker();
+    nav.go(target, now_ms);
     page = target;
+    if (page == Page::Quick) open_quick();
+    if (page == Page::Picker) open_picker();
     lv_obj_update_flag(home, LV_OBJ_FLAG_HIDDEN, page != Page::Home);
     lv_obj_update_flag(summary, LV_OBJ_FLAG_HIDDEN, page != Page::Summary);
     lv_obj_update_flag(terminal, LV_OBJ_FLAG_HIDDEN, page != Page::Log);
@@ -482,6 +571,13 @@ void screen_create(lv_obj_t* parent)
 
     summary = box(parent, 0, 0, 320, 240, kInk);
     summary_title = label(summary, 12, 7, "chan-X20A", kSignal);
+    lv_obj_set_width(summary_title, 88);
+    lv_label_set_long_mode(summary_title, LV_LABEL_LONG_CLIP);
+    // 0.4.95: the mode's name ("模式 脱口秀" / "TALK") between the title and the version (x 210, under the badge).
+    summary_mode = label(summary, 104, 7, "", kSignal);
+    lv_obj_set_width(summary_mode, 100);
+    lv_label_set_long_mode(summary_mode, LV_LABEL_LONG_CLIP);
+    summary_version = label(summary, 210, 7, "", kSignal);
     box(summary, 12, 28, 296, 1, kRule);
     const int row_x[] = {50, 210, 50, 232, 12, 42, 42, 47, 207, 12};
     const int row_y[] = {41, 41, 77, 77, 106, 148, 169, 194, 194, 219};
@@ -508,7 +604,7 @@ void screen_create(lv_obj_t* parent)
     lv_obj_set_user_data(icons[static_cast<unsigned>(IconKind::Mic)].obj, mic_text);
     box(summary, 12, 125, 296, 1, kRule);
     box(summary, 12, 212, 296, 1, kRule);
-    set_text(summary_rows[9], "Tap:face  <log  Hold:pair");
+    render_summary_words();
 
     terminal = box(parent, 0, 0, 320, 240, kInk);
     box(terminal, 0, 0, 320, 28, kChrome);
@@ -598,6 +694,7 @@ void screen_create(lv_obj_t* parent)
     lv_obj_add_flag(summary, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(terminal, LV_OBJ_FLAG_HIDDEN);
     page = Page::Home;
+    nav = ui::Nav();
     reaction = ScreenReaction::None;
     log_dirty = true;
     pressed = touch_cancelled = long_press_fired = false;
@@ -664,6 +761,7 @@ void screen_set_enabled(bool value, uint32_t now_ms)
         return;
     }
     lv_display_enable_invalidation(screen_display, true);
+    nav.touched(now_ms);                 // the idle clock starts again when the screen comes back
     if (status_pending) screen_update(pending_status);
     if (page == Page::Log) render_log();
     lv_obj_invalidate(screen_root);
@@ -677,14 +775,26 @@ bool screen_enabled() { return enabled; }
 void screen_tick(uint32_t now_ms)
 {
     if (!enabled) return;
+    screen_now_ms = now_ms;
     if (toast_shown && int32_t(now_ms - toast_until_ms) >= 0) { lv_obj_add_flag(mode_toast, LV_OBJ_FLAG_HIDDEN); toast_shown = false; }
     if (page == Page::Home) {
-        switch (home_gesture.take(now_ms)) {
+        // 0.4.94: the swipes are global (every mode): down quick settings, up mode picker, left summary.
+        switch (const auto g = home_gesture.take(now_ms)) {
         case touch::Gesture::Tap: home_pending = ScreenHomeGesture::Tap; break;
         case touch::Gesture::DoubleTap: home_pending = ScreenHomeGesture::DoubleTap; break;
-        case touch::Gesture::SwipeLeft: show_page(Page::Summary, now_ms); break;
-        default: break;          // up / down / right: not wired in this version
+        case touch::Gesture::None: break;
+        default: if (const Page target = nav.swipe(g); target != page) show_page(target, now_ms); break;
         }
+    } else if (nav.idle(now_ms)) {
+        show_page(Page::Home, now_ms);   // quick / picker 30 s without a touch, Wi-Fi pages 90 s (ui::idle_limit)
+    }
+    if (billing_confirm.lapsed(now_ms)) render_allon(now_ms);   // no second tap within 2 s: 全开 again
+    if (quick_page && now_ms - billing_line_ms >= 1000) {
+        billing_line_ms = now_ms;
+        char text[64];
+        ui::billing_line(text, sizeof text, billing_last, billing_code, int64_t(uint32_t(now_ms - billing_at_ms) / 1000),
+                         cjk16 != nullptr);
+        set_text(quick_last, text);
     }
     if (reaction != ScreenReaction::None && now_ms - reaction_at >= kReactionDurationMs) {
         reaction = ScreenReaction::None;
@@ -733,6 +843,8 @@ void screen_update(const ScreenStatus& s)
         std::snprintf(pending_ip, sizeof(pending_ip), "%s", s.ip ? s.ip : "");
         std::snprintf(pending_token, sizeof(pending_token), "%s", s.token ? s.token : "");
         std::snprintf(pending_motor, sizeof(pending_motor), "%s", s.motor ? s.motor : "");
+        std::snprintf(pending_ssid, sizeof(pending_ssid), "%s", s.ssid ? s.ssid : "");
+        pending_status.ssid = pending_ssid;
         pending_status.version = pending_version;
         pending_status.ip = pending_ip;
         pending_status.token = pending_token;
@@ -744,11 +856,22 @@ void screen_update(const ScreenStatus& s)
     function_flags = s.function_flags & (ScreenFunctionTracking | ScreenFunctionListening |
                                          ScreenFunctionSpeaking | ScreenFunctionRecognition);
     update_ribbon();
+    net_connected = s.wifi_connected && s.ip && s.ip[0];
+    std::snprintf(net_ssid, sizeof net_ssid, "%s", s.ssid ? s.ssid : "");
+    std::snprintf(net_ip, sizeof net_ip, "%s", s.ip ? s.ip : "");
+    net_rssi_valid = s.rssi_valid; net_rssi = s.rssi;
+    status_volume = s.volume;
+    status_hearing = (s.function_flags & ScreenFunctionListening) != 0;
+    if (quick_page) {
+        if (int32_t(screen_now_ms - volume_hold_until) >= 0) quick_volume_shown = status_volume;
+        if (int32_t(screen_now_ms - hearing_hold_until) >= 0) hearing_shown = status_hearing;
+        render_quick();
+    }
     char text[160];
     const char* version = s.version ? s.version : "";
     if (std::strncmp(version, "collector-", 10) == 0) version += 10;
-    std::snprintf(text, sizeof(text), "chan-X20A             %.8s", version);
-    set_text(summary_title, text);
+    std::snprintf(text, sizeof(text), "%.8s", version);
+    set_text(summary_version, text);
     set_text(summary_rows[0], s.wifi_connected ? (s.ssid && s.ssid[0] ? s.ssid : "online") : "offline");
     if (s.camera_working)
         std::snprintf(text, sizeof(text), "%4.1f fps", std::isfinite(s.camera_fps) ? s.camera_fps : 0);
@@ -858,7 +981,7 @@ void wifi_page_tap(int x, int y, uint32_t now_ms)
 {
     if (y < 28) {
         if (x >= 220) { wifi_scan_request = true; wifi_scanning = true; wifi_status_text[0] = '\0'; render_wifi_rows(); }
-        else show_page(Page::Pairing, now_ms);
+        else show_page(nav.back(), now_ms);          // pairing, or quick settings when it opened the list
         return;
     }
     for (size_t i = 0; i < wifi_count; ++i) {
@@ -897,6 +1020,188 @@ void key_page_tap(int x, int y, uint32_t now_ms)
         return;
     }
 }
+namespace {
+// Black or white text, whichever reads on `bg` (the badge's rule).
+uint32_t ink_for(uint32_t bg)
+{
+    const unsigned r = bg >> 16 & 0xFF, g = bg >> 8 & 0xFF, b = bg & 0xFF;
+    return (r * 299 + g * 587 + b * 114) / 1000 > 140 ? kInk : 0xFFFFFF;
+}
+uint32_t dimmed(uint32_t c)
+{
+    return ((c >> 16 & 0xFF) * 115 / 255) << 16 | ((c >> 8 & 0xFF) * 115 / 255) << 8 | (c & 0xFF) * 115 / 255;
+}
+// A full-screen page with a title bar: "< Back" on the left (the top-right corner is the mode badge's). Chinese
+// words when the CJK font is loaded (built on open, so a font that arrives later shows on the next open, or at once
+// through screen_set_cjk_font).
+lv_obj_t* titled_page(const char* title_zh, const char* title)
+{
+    auto p = box(screen_root, 0, 0, 320, 240, kInk);
+    box(p, 0, 0, 320, ui::kTitleH, kChrome);
+    box(p, 0, ui::kTitleH, 320, 1, kRule);
+    zlabel(p, 12, 6, ui_text::kBack, ui::text::kBack, kMuted);
+    zlabel(p, 100, 6, title_zh, title, kSignal, cjk16 && cjk24 ? cjk24 : nullptr);
+    return p;
+}
+lv_obj_t* button(lv_obj_t* parent, const ui::Rect& r, const char* zh, const char* text)
+{
+    auto b = box(parent, r.x, r.y, r.w, r.h, kChrome);
+    lv_obj_set_style_border_color(b, lv_color_hex(kRule), 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    auto t = zlabel(b, 0, 0, zh, text, kSignal);
+    lv_obj_center(t);
+    return t;
+}
+// A one-line label for changing text: in the CJK font (Chinese and ASCII alike) when it is loaded.
+lv_obj_t* clipped(lv_obj_t* parent, int x, int y, int w, uint32_t color)
+{
+    auto l = label(parent, x, font_y(y, cjk16), "", color);
+    use_font(l, cjk16);
+    lv_obj_set_width(l, w);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+    return l;
+}
+void render_quick()
+{
+    if (!quick_page) return;
+    const bool zh = cjk16 != nullptr;   // the page was built in the same font (rebuilt when it changes)
+    char text[64];
+    if (quick_volume_shown >= 0) std::snprintf(text, sizeof text, "%3d", quick_volume_shown);
+    else std::snprintf(text, sizeof text, " --");
+    set_text(quick_volume, text);
+    if (net_connected) {
+        // The SSID and IP / RSSI are shown as they are; only the words around them change.
+        std::snprintf(text, sizeof text, zh ? ui_text::kWifiNamed : ui::text::kWifiNamed,
+                      net_ssid[0] ? net_ssid : zh ? ui_text::kWifiHidden : ui::text::kWifiHidden);
+        set_text(quick_net[0], text);
+        if (net_rssi_valid) std::snprintf(text, sizeof text, "%s  %d dBm", net_ip, net_rssi);
+        else std::snprintf(text, sizeof text, "%s", net_ip);
+        set_text(quick_net[1], text);
+    } else {
+        set_ztext(quick_net[0], ui_text::kWifiOffline, ui::text::kWifiOffline);
+        set_ztext(quick_net[1], ui_text::kNotConnected, ui::text::kNotConnected);
+    }
+    if (hearing_shown) set_ztext(quick_hear, ui_text::kOn, ui::text::kOn);
+    else set_ztext(quick_hear, ui_text::kOff, ui::text::kOff);
+    ui::billing_line(text, sizeof text, billing_last, billing_code, int64_t(uint32_t(screen_now_ms - billing_at_ms) / 1000), zh);
+    set_text(quick_last, text);
+}
+void open_quick()
+{
+    if (quick_page) return;
+    quick_page = titled_page(ui_text::kQuickTitle, ui::text::kQuickTitle);
+    zlabel(quick_page, 12, 44, ui_text::kVolume, ui::text::kVolume, kSignal);
+    button(quick_page, ui::kVolumeDown, "", "-");
+    button(quick_page, ui::kVolumeUp, "", "+");
+    quick_volume = label(quick_page, 202, 44, "", kSignal);
+    box(quick_page, 12, 73, 296, 1, kRule);
+    quick_net[0] = clipped(quick_page, 12, 76, 204, kSignal);
+    quick_net[1] = clipped(quick_page, 12, 95, 204, kMuted);
+    button(quick_page, ui::kWifiButton, ui_text::kWifiButton, ui::text::kWifiButton);
+    box(quick_page, 12, 115, 296, 1, kRule);
+    zlabel(quick_page, 12, 128, ui_text::kBilling, ui::text::kBilling, kSignal);
+    quick_allon = button(quick_page, ui::kAllOn, ui_text::kAllOn, ui::text::kAllOn);
+    button(quick_page, ui::kAllOff, ui_text::kAllOff, ui::text::kAllOff);
+    quick_last = clipped(quick_page, 12, 158, 296, kMuted);
+    zlabel(quick_page, 12, 188, ui_text::kHearing, ui::text::kHearing, kSignal);
+    quick_hear = button(quick_page, ui::kHearing, "", "");
+    if (int32_t(screen_now_ms - volume_hold_until) >= 0) quick_volume_shown = status_volume;
+    if (int32_t(screen_now_ms - hearing_hold_until) >= 0) hearing_shown = status_hearing;
+    billing_line_ms = screen_now_ms;
+    render_quick();
+}
+void close_quick()
+{
+    if (!quick_page) return;
+    lv_obj_delete(quick_page);           // its children with it
+    quick_page = quick_volume = quick_last = quick_hear = quick_allon = nullptr;
+    quick_net[0] = quick_net[1] = nullptr;
+    billing_confirm.reset();             // a closed page never sends a half-confirmed 全开
+}
+// 全开 or, while armed (ui::BillingConfirm), "再点确认" / "TAP AGAIN" in amber.
+void render_allon(uint32_t now_ms)
+{
+    if (!quick_allon) return;
+    const bool armed = billing_confirm.armed(now_ms);
+    if (armed) set_ztext(quick_allon, ui_text::kConfirm, ui::text::kConfirm);
+    else set_ztext(quick_allon, ui_text::kAllOn, ui::text::kAllOn);
+    lv_obj_set_style_text_color(quick_allon, lv_color_hex(armed ? kArmed : kSignal), 0);
+    lv_obj_t* frame = lv_obj_get_parent(quick_allon);
+    lv_obj_set_style_border_color(frame, lv_color_hex(armed ? kArmed : kRule), 0);
+}
+void render_picker()
+{
+    if (!picker_page) return;
+    modes::rules::State s;
+    s.mode = static_cast<modes::rules::Mode>(mode_now);
+    s.dir = static_cast<modes::rules::Dir>(dir_now);
+    for (size_t i = 0; i < ui::kTiles; ++i) {
+        const bool current = ui::tile_current(i, s);
+        const uint32_t bg = current ? ui::tile_color(i) : dimmed(ui::tile_color(i));
+        lv_obj_set_style_bg_color(picker_tiles[i], lv_color_hex(bg), 0);
+        lv_obj_set_style_border_width(picker_tiles[i], current ? 3 : 0, 0);
+        lv_obj_set_style_text_color(picker_labels[i], lv_color_hex(ink_for(bg)), 0);
+    }
+}
+void open_picker()
+{
+    if (picker_page) return;
+    picker_page = titled_page(ui_text::kPickerTitle, ui::text::kPickerTitle);
+    for (size_t i = 0; i < ui::kTiles; ++i) {
+        const ui::Rect r = ui::tile_rect(i);
+        picker_tiles[i] = box(picker_page, r.x, r.y, r.w, r.h, ui::tile_color(i));
+        lv_obj_set_style_radius(picker_tiles[i], 6, 0);
+        lv_obj_set_style_border_color(picker_tiles[i], lv_color_hex(0xFFFFFF), 0);
+        picker_labels[i] = zlabel(picker_tiles[i], 0, 0, ui::tile_name_zh(i), ui::tile_label(i), kInk);
+        lv_obj_center(picker_labels[i]);
+    }
+    render_picker();
+}
+void close_picker()
+{
+    if (!picker_page) return;
+    lv_obj_delete(picker_page);
+    picker_page = nullptr;
+    for (auto& t : picker_tiles) t = nullptr;
+    for (auto& l : picker_labels) l = nullptr;
+}
+void quick_tap(int x, int y, uint32_t now_ms)
+{
+    const ui::Quick b = ui::quick_hit(x, y);
+    switch (b) {
+    case ui::Quick::Back: show_page(nav.back(), now_ms); break;
+    case ui::Quick::VolumeDown: case ui::Quick::VolumeUp: {
+        // Shown at once; the main loop saves it (NVS) and the next sound uses it.
+        const int base = quick_volume_shown >= 0 ? quick_volume_shown : status_volume >= 0 ? status_volume : kVolumeDefault;
+        quick_volume_shown = volume_request = ui::volume_after(b, base);
+        volume_hold_until = now_ms + kRequestHoldMs;
+        render_quick();
+        break;
+    }
+    case ui::Quick::Wifi: open_wifi_page(now_ms); break;
+    case ui::Quick::AllOn: case ui::Quick::AllOff:
+        // 全开 needs a second tap within 2 s (paid services); 全关 is one tap. The toast is mind's answer.
+        if (const int digit = billing_confirm.tap(b, now_ms); digit >= 0) billing_request = digit;
+        render_allon(now_ms);
+        break;
+    case ui::Quick::Hearing:
+        hearing_shown = !hearing_shown;
+        hearing_request = hearing_shown ? 1 : 0;
+        hearing_hold_until = now_ms + kRequestHoldMs;
+        render_quick();
+        break;
+    case ui::Quick::None: break;
+    }
+}
+void picker_tap(int x, int y, uint32_t now_ms)
+{
+    if (ui::kBack.hit(x, y)) { show_page(Page::Home, now_ms); return; }
+    const int tile = ui::picker_hit(x, y);
+    if (tile < 0) return;                // a gap between tiles
+    pick_request = tile;                 // the rules decide (enter, leave, switch direction); the toast says what
+    show_page(Page::Home, now_ms);
+}
+}
 void screen_touch(bool down, uint32_t now_ms, int x, int y)
 {
     if (!home) return;
@@ -914,6 +1219,8 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
         pressed = down;
         return;
     }
+    screen_now_ms = now_ms;
+    if (down) nav.touched(now_ms);       // a finger on the page keeps it open
     if (down && !pressed) {
         pressed_at = now_ms;
         touch_start_x = touch_last_x = x;
@@ -934,20 +1241,21 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
         last_release = now_ms;
     }
     if (!down && pressed && !long_press_fired && now_ms - last_release >= 180) {
-        const uint32_t held = now_ms - pressed_at;
-        const int dx = touch_last_x - touch_start_x, dy = touch_last_y - touch_start_y;
-        const bool horizontal = touch_start_x >= 0 && std::abs(dx) >= 55 &&
-                                std::abs(dx) > std::abs(dy) * 2 && touch_max_dy <= 55;
-        if (held >= 30 && held <= 1000 && horizontal) {
-            if (page == Page::Summary && dx < 0) show_page(Page::Log, now_ms);
-            else if (page == Page::Log && dx > 0) show_page(Page::Summary, now_ms);
-            else if (page == Page::Pairing && dx < 0) open_wifi_page(now_ms);
-            else if (page == Page::Wifi && dx > 0) show_page(Page::Pairing, now_ms);
-            last_release = now_ms;
-        } else if (held >= 30 && held <= 700 && touch_max_dx <= 18 && touch_max_dy <= 18) {
+        const bool located = touch_start_x >= 0 && touch_start_y >= 0;
+        const ui::Gesture g = ui::stroke(now_ms - pressed_at, located ? touch_last_x - touch_start_x : 0,
+                                         located ? touch_last_y - touch_start_y : 0, touch_max_dx, touch_max_dy);
+        if (g == ui::Gesture::Tap) {
             if (page == Page::Wifi) wifi_page_tap(touch_last_x, touch_last_y, now_ms);
             else if (page == Page::WifiKey) key_page_tap(touch_last_x, touch_last_y, now_ms);
-            else show_page(page == Page::Home || page == Page::Pairing ? Page::Summary : Page::Home, now_ms);
+            else if (page == Page::Quick) quick_tap(touch_last_x, touch_last_y, now_ms);
+            else if (page == Page::Picker) picker_tap(touch_last_x, touch_last_y, now_ms);
+            else show_page(page == Page::Pairing ? Page::Summary : Page::Home, now_ms);
+            last_release = now_ms;
+        } else if (g != ui::Gesture::None) {
+            // Each page closes with the swipe opposite to the one that opened it (ui_pages.h).
+            const Page target = nav.swipe(g);
+            if (target == Page::Wifi && page != Page::Wifi) open_wifi_page(now_ms);
+            else if (target != page) show_page(target, now_ms);
             last_release = now_ms;
         }
     }
@@ -1034,10 +1342,18 @@ void screen_update_mode(const char* text, uint32_t color, bool online)
     char buf[24];
     std::snprintf(buf, sizeof buf, "%s%s", text ? text : "", online ? "" : " OFF");
     const uint32_t bg = online ? color : 0x505050;
-    const unsigned r = bg >> 16 & 0xFF, g = bg >> 8 & 0xFF, b = bg & 0xFF;
     set_text(mode_badge, buf);
     lv_obj_set_style_bg_color(mode_badge, lv_color_hex(bg), 0);
-    lv_obj_set_style_text_color(mode_badge, lv_color_hex((r * 299 + g * 587 + b * 114) / 1000 > 140 ? kInk : 0xFFFFFF), 0);
+    lv_obj_set_style_text_color(mode_badge, lv_color_hex(ink_for(bg)), 0);
+}
+void screen_set_cjk_font(const lv_font_t* small, const lv_font_t* large)
+{
+    if (small == cjk16 && large == cjk24) return;
+    cjk16 = small; cjk24 = large;
+    render_summary_words();
+    // The quick / picker pages are built in one font: an open one is built again (same page, nothing else changes).
+    if (quick_page) { close_quick(); open_quick(); }
+    if (picker_page) { close_picker(); open_picker(); }
 }
 void screen_show_toast(const char* text, uint32_t now_ms)
 {
@@ -1079,4 +1395,31 @@ void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color)
     }
     chat_dots_lit = lit; chat_dots_grey = grey; chat_dots_color = color;
 }
+void screen_update_mode_state(uint8_t mode, uint8_t dir)
+{
+    if (mode >= modes::rules::kModeCount || dir > uint8_t(modes::rules::Dir::EnZh)) return;
+    if (mode == mode_now && dir == dir_now) return;
+    mode_now = mode; dir_now = dir;
+    render_picker();
+    render_summary_words();
+}
+void screen_update_billing(int digit, const char* code, uint32_t at_ms)
+{
+    billing_last = digit == 0 || digit == 9 ? digit : -1;
+    std::snprintf(billing_code, sizeof billing_code, "%s", code ? code : "");
+    billing_at_ms = at_ms;
+    if (quick_page) render_quick();
+}
+bool screen_take_mode_pick(size_t& tile)
+{
+    if (pick_request < 0) return false;
+    tile = static_cast<size_t>(pick_request);
+    pick_request = -1;
+    return true;
+}
+int screen_take_volume_request() { const int v = volume_request; volume_request = -1; return v; }
+int screen_take_billing_request() { const int v = billing_request; billing_request = -1; return v; }
+int screen_take_hearing_request() { const int v = hearing_request; hearing_request = -1; return v; }
+bool screen_showing_quick() { return page == Page::Quick; }
+bool screen_showing_picker() { return page == Page::Picker; }
 }

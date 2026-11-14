@@ -72,6 +72,8 @@ struct ModeView {
     uint32_t toasts = 0;            // +1 for every toast to show, even an identical text
     bool have_result = false;
     modes::Result result{};         // mind's latest mode_result (digits 0 / 9)
+    int8_t result_digit = -1;       // 0.4.94: the digit that result answers (-1 = not one this link sent)
+    int64_t result_at_us = 0;       // when it arrived (the robot's clock)
     chat::StageState chat{};        // the ear's latest chat stage (chat mode only; cleared on leaving chat)
     uint32_t version = 0;           // changes whenever anything above changes
 };
@@ -121,6 +123,7 @@ public:
             a.out.state = state_;
             if (online_) {
                 a.input_seq = queue_.push(now_us, source, "digit", v.digit);
+                if (a.input_seq) { digits_[digits_at_] = {a.input_seq, int8_t(v.digit)}; digits_at_ = (digits_at_ + 1) % kDigitsKept; }
                 char t[16];
                 std::snprintf(t, sizeof t, "PRESET %d", v.digit);
                 toast(t);
@@ -188,12 +191,15 @@ public:
     bool online() const { return online_; }
 
     // {"type":"mode_result",...} for a digit: its toast. false = malformed (dropped) or before hello.
-    bool on_result(ArduinoJson::JsonObjectConst o)
+    // 0.4.94: also which digit (0 / 9) it answers, from the last few sent, for the quick page's "last:" line.
+    bool on_result(ArduinoJson::JsonObjectConst o, int64_t now_us = 0)
     {
         if (!online_) { ++ignored_; return false; }
         modes::Result r;
         if (!modes::parse_result(o, r)) { ++bad_results_; return false; }
         result_ = r; have_result_ = true; ++results_; ++version_;
+        result_digit_ = -1; result_at_us_ = now_us;
+        for (const SentDigit& d : digits_) if (d.seq && d.seq == r.seq) result_digit_ = d.digit;
         if (r.toast[0]) toast(r.toast);
         return true;
     }
@@ -260,6 +266,7 @@ public:
         std::memcpy(v.by, by_, sizeof v.by); v.since_us = since_us_;
         std::memcpy(v.toast, toast_, sizeof v.toast); v.toasts = toasts_;
         v.have_result = have_result_; v.result = result_; v.chat = chat_; v.version = version_;
+        v.result_digit = result_digit_; v.result_at_us = result_at_us_;
     }
     uint32_t version() const { return version_; }
     const State& state() const { return state_; }
@@ -398,6 +405,13 @@ private:
     modes::InputQueue queue_;               // after slots_: built on them
     modes::Result result_{};
     bool have_result_ = false;
+    // The last digits sent (input seq -> 0 / 9); input seqs are unique per boot, so a late answer still matches.
+    struct SentDigit { uint32_t seq; int8_t digit; };
+    static constexpr size_t kDigitsKept = 8;
+    SentDigit digits_[kDigitsKept] = {};
+    size_t digits_at_ = 0;
+    int8_t result_digit_ = -1;
+    int64_t result_at_us_ = 0;
     char toast_[modes::rules::kToastMax + 1] = {};
     uint32_t toasts_ = 0, results_ = 0, bad_results_ = 0, ignored_ = 0;
     uint32_t reports_sent_ = 0, reports_dropped_ = 0, offline_reports_ = 0;
