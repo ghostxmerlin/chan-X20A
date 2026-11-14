@@ -955,7 +955,7 @@ def main():
     vision_no = [0]
     signal_active = set()
     signal_post = signal_link.mind_poster(token_value)
-    mode_hub = mouth_link.ModeHub(mouth_link.mind_client(token_value))   # mind's mode -> robots on /mouth (A5)
+    mode_hub = mouth_link.ModeRelay(mouth_link.mind_client(token_value))   # hello's mode reports -> mind (step 1b)
 
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
@@ -987,7 +987,7 @@ def main():
             peer = ws.remote_address
             print(f"+ {peer} signal", flush=True)
             try:
-                link = await signal_link.serve_link(ws, signal_post, f"{peer[0]}:{peer[1]}", hub=mode_hub)
+                link = await signal_link.serve_link(ws, signal_post, f"{peer[0]}:{peer[1]}")
             finally:
                 signal_active.discard(ws)
             print(f"- {peer} signal {link.device}: {link.signals} signals", flush=True)
@@ -1040,12 +1040,10 @@ def main():
         async with serve(handler, a.host, a.port, max_size=65536):
             print(f"listening on {a.host}:{a.port}", flush=True)
             watcher = asyncio.create_task(watch_tingwu_switch())
-            modes = asyncio.create_task(mode_hub.run())     # polls mind only while a robot is on /mouth
             try:
                 await asyncio.Future()
             finally:
                 watcher.cancel()
-                modes.cancel()
                 mode_hub.close()
 
     asyncio.run(serve_forever())

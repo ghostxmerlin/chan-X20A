@@ -6,6 +6,8 @@ the device only after mind stored it, so a signal is never lost silently; the de
   {"type":"signal","seq":N,"age_ms":A,"kind":"rating|mode|click","value":{…}}
   {"type":"ping"}
 Replies: {"type":"hello","ok":true}, {"type":"ack","seq":N}, {"type":"error",…}. A link silent for 60 s closes.
+DualKey is for ratings only (owner 2026-11-14, modes step 1b): hello owns the mode, so nothing is pushed back to the
+DualKey (no joystick light) and mind only stores mode / click signals, they switch nothing.
 """
 import asyncio
 import json
@@ -41,38 +43,10 @@ def _clean(value, n=64):
 
 
 class SignalLink:
-    SEND_TIMEOUT = 2.0                  # a stuck DualKey must not hold the mode hub (ratings use their own path)
-
-    def __init__(self, post, peer, ws=None):
-        self.post, self.peer, self.ws = post, peer, ws
+    def __init__(self, post, peer):
+        self.post, self.peer = post, peer
         self.device = self.boot = self.fw = None
         self.signals = 0
-        self.mode_seq = None            # seq of the last snapshot pushed to this DualKey
-
-    # ---- mode light (A6): the ModeHub pushes through these ----
-    @staticmethod
-    def mode_message(snap):
-        """{"type":"mode","current":<id>} for the DualKey's joystick light; idle = light off (firmware decides)."""
-        mode = snap.get("mode") if isinstance(snap, dict) else None
-        return {"type": "mode", "current": mode} if isinstance(mode, str) and mode else None
-
-    @property
-    def mode_wants_first(self):
-        return bool(self.device) and self.mode_seq is None
-
-    async def push_mode(self, snap, force=False):
-        if not isinstance(snap, dict) or self.ws is None or not self.device:
-            return
-        if not force and snap.get("seq") == self.mode_seq:
-            return
-        msg = self.mode_message(snap)
-        if msg is None:
-            return
-        try:
-            await asyncio.wait_for(self.ws.send(json.dumps(msg)), self.SEND_TIMEOUT)
-        except Exception:                               # noqa: BLE001 - gone or stuck: the serve loop ends the link
-            return
-        self.mode_seq = snap.get("seq")
 
     async def on_text(self, text):
         try:
@@ -107,10 +81,8 @@ class SignalLink:
         return {"type": "error", "seq": seq, "message": "mind unavailable"}
 
 
-async def serve_link(ws, post, peer, hub=None):
-    """hub: the ear's ModeHub; the link joins it after its hello reply, so the light follows the mode."""
-    link = SignalLink(post, peer, ws=ws)
-    joined = False
+async def serve_link(ws, post, peer):
+    link = SignalLink(post, peer)
     try:
         while True:
             try:
@@ -124,12 +96,6 @@ async def serve_link(ws, post, peer, hub=None):
             reply = await link.on_text(data)
             if reply:
                 await ws.send(json.dumps(reply))
-            if hub is not None and not joined and link.device and reply and reply.get("type") == "hello":
-                joined = True
-                hub.join(link)
     except Exception:                                   # noqa: BLE001 - connection closed or broken
         pass
-    finally:
-        if joined:
-            hub.leave(link)
     return link

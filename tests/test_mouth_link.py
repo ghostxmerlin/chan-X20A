@@ -318,31 +318,29 @@ class MouthLinkTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("RuntimeError: boom", text)
         self.assertIn("Traceback", text)
 
-MODE_LOOK = {"talk": ("laughing_man", "TALK"), "chat": ("v05", "CHAT"), "idle": ("page_idle", "IDLE"),
-             "settings": ("page_settings", "SET")}
+def report(seq, mode="talk", effects=(), by="asr", inp="forward", **st):
+    return json.dumps({"type": "mode_report", "seq": seq, "mode": mode, "dir": st.get("dir"), "host": None,
+                       "return_to": st.get("return_to"), "by": by, "input": inp, "effects": list(effects)})
 
 
 @unittest.skipUnless(HAVE_WS, "needs websockets")
 class MouthModeTest(MouthLinkTest):
-    """Task A5: the same /mouth with mind's modes behind it. Every A0 test above also runs here (a robot that
-    ignores mode messages, like 0.4.91, keeps audio and liveness); the tests below are the mode messages."""
+    """Step 1b: hello owns the mode; the ear relays its mode_report and mode_input (digits 0 / 9) to mind and pushes
+    nothing down. Every A0 test above also runs here (a robot that sends no mode messages, like 0.4.91, keeps audio
+    and liveness)."""
 
     async def asyncSetUp(self):
         import time as _time
         self._time = _time
-        self.mind_seq, self.mind_mode, self.mind_up, self.mind_extra = 5, "talk", True, {}
-        self.mind_input_delay, self.mind_on_input, self.mind_calls = 0, None, []
-        self.mind_threads, self.mode_get_down = set(), False
+        self.mind_up, self.mind_input_delay, self.mind_report_status = True, 0, 200
+        self.mind_calls, self.mind_threads = [], set()
         self.conn_no = 0
         await super().asyncSetUp()
-        self.hub = self.mouth_link.ModeHub(self.fake_mind, poll_s=0.1, full_s=60, input_timeout_s=0.5,
-                                           input_queue=4, hello_retry_s=0.2)
-        self.hub_task = asyncio.create_task(self.hub.run())
+        self.hub = self.mouth_link.ModeRelay(self.fake_mind, input_timeout_s=0.5, input_queue=4, report_queue=3,
+                                             report_timeout_s=0.5, report_retry_s=0.1)
 
     async def asyncTearDown(self):
         await super().asyncTearDown()
-        self.hub_task.cancel()
-        await asyncio.gather(self.hub_task, return_exceptions=True)
         await self.hub.drain()
         self.hub.close()
 
@@ -351,175 +349,161 @@ class MouthModeTest(MouthLinkTest):
         return self.mouth_link.MouthLink(ws, upstream_url=self.up_url, token="device-token", retry_s=0.3,
                                          connect=self.connect_override, conn=self.conn_no, modes=self.hub)
 
-    def _skip(self, m):                       # a robot that ignores mode messages: they are not "unexpected" here
-        if isinstance(m, str) and json.loads(m).get("type") in ("mode", "mode_result"):
+    def _skip(self, m):                       # mode results are expected here, not "unexpected"
+        if isinstance(m, str) and json.loads(m).get("type") == "mode_result":
             return
         self.skipped.append(m)
 
     # ---- fake mind: one function, records every call by path ----
-    def snapshot(self):
-        eye, label = MODE_LOOK[self.mind_mode]
-        return {"seq": self.mind_seq, "mode": self.mind_mode, "dir": None, "host": None, "return_to": None,
-                "billing": True, "since": 0, "by": "page", "look": {"eye": eye, "pool": None, "label": label,
-                "color": "E040A0"}, "touch": {"tap": "server", "double": "server"}, **self.mind_extra}
-
     def fake_mind(self, method, path, body=None, timeout=5):
         import threading
         self.mind_calls.append((method, path, json.loads(json.dumps(body))))
         self.mind_threads.add(threading.current_thread().name)
         if not self.mind_up:
             return 503, {"error": "URLError"}
-        if path == "/mode" and self.mode_get_down:
-            return 503, {"error": "ServerSelectionTimeoutError"}
-        if (method, path) == ("GET", "/mode/seq"):
-            return 200, {"seq": self.mind_seq}
-        if (method, path) == ("GET", "/mode"):
-            return 200, {"snapshot": self.snapshot(), "robot": {}, "log": []}
+        if (method, path) == ("POST", "/mode/report"):
+            st = self.mind_report_status
+            return (st, {"snapshot": {}, "result": {"code": "ok", "toast": "OK"}, "effects": body["effects"]}) \
+                if st == 200 else (st, {"error": "bad report"})
         if (method, path) == ("POST", "/mode/robot"):
-            return 200, {"snapshot": self.snapshot()}
+            return 200, {"snapshot": {}}
         if (method, path) == ("POST", "/mode/input"):
             if self.mind_input_delay:
                 self._time.sleep(self.mind_input_delay)
-            if self.mind_on_input:
-                self.mind_on_input(body)
-            return 200, {"snapshot": self.snapshot(), "result": {"code": "ok", "toast": "OK"}, "effects": []}
+            return 200, {"snapshot": {}, "result": {"code": "ok", "toast": "PRESET 0"}, "effects": []}
         return 404, {"error": "not found"}
 
-    def mind_calls_to(self, path, event=None):
-        return [b for _, p, b in self.mind_calls if p == path and (event is None or (b or {}).get("event") == event)]
+    def mind_calls_to(self, path):
+        return [b for _, p, b in self.mind_calls if p == path]
 
-    def mind_set(self, mode=None, seq=None):
-        if mode is not None:
-            self.mind_mode = mode
-        if seq is not None:
-            self.mind_seq = seq
-
-    async def wait_mind(self, path, event=None, n=1, timeout=3):
+    async def wait_mind(self, path, n=1, timeout=3):
         for _ in range(int(timeout / 0.02)):
-            if len(self.mind_calls_to(path, event)) >= n:
-                return self.mind_calls_to(path, event)
+            if len(self.mind_calls_to(path)) >= n:
+                return self.mind_calls_to(path)
             await asyncio.sleep(0.02)
-        self.fail(f"mind did not get {n} x {path} {event or ''}")
+        self.fail(f"mind did not get {n} x {path}")
 
     async def no_message(self, ws, kind, timeout):
         with self.assertRaises(asyncio.TimeoutError):
             await self.recv_type(ws, kind, timeout=timeout)
 
-    # ---- the brief's tests ----
-    async def test_pushes_mode_after_hello(self):
+    # ---- reports ----
+    async def test_report_goes_to_mind_not_soul_tts(self):
         async with self.robot() as ws:
             await self.handshake(ws)
-            mode = await self.recv_type(ws, "mode")
-            self.assertEqual(mode["mode"], "talk")
-        self.assertEqual(self.mind_calls_to("/mode/robot")[0]["event"], "hello")
+            await ws.send(report(4, "crowd", ["stop_speech", "talk_leave"], by="touch", inp="select"))
+            body = (await self.wait_mind("/mode/report"))[0]
+            await self.no_message(ws, "mode", 0.2)                          # nothing comes back down
+        self.assertEqual({k: body[k] for k in ("boot", "conn", "seq", "mode", "dir", "host", "return_to", "by", "input",
+                                                "effects")},
+                         {"boot": "b1", "conn": 1, "seq": 4, "mode": "crowd", "dir": None, "host": None,
+                          "return_to": None, "by": "touch", "input": "select", "effects": ["stop_speech", "talk_leave"]})
+        self.assertTrue(0 <= body["age_ms"] < 1000)
+        self.assertNotIn("mode_report", "".join(self.upstream_text))
 
-    async def test_mode_input_goes_to_mind_not_soul_tts(self):
+    async def test_reports_keep_their_order(self):
         async with self.robot() as ws:
             await self.handshake(ws)
-            await ws.send(json.dumps({"type": "mode_input", "seq": 4, "age_ms": 50, "source": "asr", "input": "play"}))
-            res = await self.recv_type(ws, "mode_result")
-            self.assertEqual((res["seq"], res["code"]), (4, "ok"))
-        self.assertEqual(self.mind_calls_to("/mode/input")[0]["boot"], "b1")
-        self.assertNotIn("mode_input", "".join(self.upstream_text))
+            for seq, mode in ((1, "idle"), (2, "crowd"), (3, "talk")):
+                await ws.send(report(seq, mode))
+            got = await self.wait_mind("/mode/report", n=3)
+        self.assertEqual([(b["seq"], b["mode"]) for b in got], [(1, "idle"), (2, "crowd"), (3, "talk")])
 
-    async def test_page_change_reaches_robot_with_upstream_down(self):
-        await self.stop_upstream()
+    async def test_mind_away_retries_the_same_report_then_the_next(self):
+        self.mind_up = False
         async with self.robot() as ws:
             await self.handshake(ws)
-            await self.recv_type(ws, "mode")
-            self.mind_set(mode="chat", seq=self.mind_seq + 1)               # changed on the page
-            self.assertEqual((await self.recv_type(ws, "mode", timeout=3))["mode"], "chat")
+            await ws.send(report(1, "idle"))
+            await ws.send(report(2, "crowd"))
+            await self.wait_mind("/mode/report", n=3)
+            self.mind_up = True
+            for _ in range(150):
+                ok = [b["seq"] for m, p, b in self.mind_calls if p == "/mode/report"]
+                if ok and ok[-1] == 2:
+                    break
+                await asyncio.sleep(0.02)
             self.assertIsNone(ws.close_code)
+        seqs = [b["seq"] for b in self.mind_calls_to("/mode/report")]
+        self.assertEqual(seqs[-2:], [1, 2])                                # 1 again until mind took it, then 2
+        self.assertTrue(all(s == 1 for s in seqs[:-1]))
+        later = [b["age_ms"] for b in self.mind_calls_to("/mode/report") if b["seq"] == 1]
+        self.assertGreater(later[-1], later[0])                            # mind sees how late it is
 
-    # ---- carried items and the rest of the wire ----
-    async def test_mode_message_is_the_snapshot_under_1kb(self):
+    async def test_full_report_queue_drops_the_oldest(self):
+        self.mind_up = False
         async with self.robot() as ws:
             await self.handshake(ws)
-            raw = None
-            while raw is None:
-                m = await asyncio.wait_for(ws.recv(), 2)
-                if isinstance(m, str) and json.loads(m).get("type") == "mode":
-                    raw = m
-            self.assertLessEqual(len(raw.encode()), 1024)
-            self.assertEqual({k: v for k, v in json.loads(raw).items() if k != "type"}, self.snapshot())
+            for seq in range(1, 7):
+                await ws.send(report(seq, "talk"))
+            await asyncio.sleep(0.3)
+            self.mind_up = True
+            await asyncio.sleep(0.6)
+        seqs = [b["seq"] for b in self.mind_calls_to("/mode/report")]
+        self.assertEqual(seqs[-3:], [4, 5, 6])                             # the newest three (queue of 3)
+        self.assertTrue(any("dropped" in m for m in self.logs))
 
-    async def test_input_body_for_mind(self):
+    async def test_refused_report_is_dropped_not_retried(self):
+        self.mind_report_status = 400
         async with self.robot() as ws:
             await self.handshake(ws)
-            await ws.send(json.dumps({"type": "mode_input", "seq": 7, "age_ms": 40, "source": "touch",
-                                      "input": "select", "value": {"mode": "chat"}}))
-            await self.recv_type(ws, "mode_result")
-        body = self.mind_calls_to("/mode/input")[0]
-        self.assertEqual({k: body[k] for k in ("device", "boot", "seq", "source", "input", "value")},
-                         {"device": "robot", "boot": "b1", "seq": 7, "source": "touch", "input": "select",
-                          "value": {"mode": "chat"}})
-        self.assertGreaterEqual(body["age_ms"], 40)                        # plus the time it waited in the ear
-        self.assertLess(body["age_ms"], 1000)
+            await ws.send(report(1, "fly"))
+            await ws.send(report(2, "talk"))
+            await self.wait_mind("/mode/report", n=2)
+            await asyncio.sleep(0.3)
+        self.assertEqual([b["seq"] for b in self.mind_calls_to("/mode/report")], [1, 2])
+        self.assertTrue(any("refused" in m for m in self.logs))
 
-    async def test_result_first_then_the_new_snapshot(self):
-        self.hub.poll_s = 30                                               # only the input path pushes here
-        await asyncio.sleep(0.15)
-        self.mind_on_input = lambda body: self.mind_set(mode="settings", seq=self.mind_seq + 1)
+    async def test_closed_goes_to_mind_with_this_links_conn_after_a_report(self):
         async with self.robot() as ws:
             await self.handshake(ws)
-            await self.recv_type(ws, "mode")
-            await ws.send(json.dumps({"type": "mode_input", "seq": 3, "age_ms": 0, "source": "asr", "input": "open"}))
-            got = []
-            while len(got) < 2:
-                m = json.loads(await asyncio.wait_for(ws.recv(), 2))
-                if m.get("type") in ("mode", "mode_result"):
-                    got.append(m)
-            self.assertEqual((got[0]["type"], got[0]["seq"], got[0]["code"]), ("mode_result", 3, "ok"))
-            self.assertEqual((got[1]["type"], got[1]["mode"], got[1]["seq"]), ("mode", "settings", 6))
+            await ws.send(report(1))
+            await self.wait_mind("/mode/report")
+        closed = await self.wait_mind("/mode/robot")
+        self.assertEqual(closed, [{"boot": "b1", "conn": 1, "event": "closed"}])
+        async with self.robot() as ws:                                     # no report on this link: no close
+            await self.handshake(ws)
+        await self.wait_result()
+        await asyncio.sleep(0.2)
+        await self.hub.drain()
+        self.assertEqual(len(self.mind_calls_to("/mode/robot")), 1)
 
-    async def test_seq_going_backwards_is_pushed(self):
-        """mind DB failure + restart can move seq back: any change (!=) pushes the full snapshot."""
+    async def test_mode_applied_is_dropped(self):
         async with self.robot() as ws:
             await self.handshake(ws)
-            self.assertEqual((await self.recv_type(ws, "mode"))["seq"], 5)
-            self.mind_set(mode="idle", seq=2)
-            m = await self.recv_type(ws, "mode", timeout=3)
-            self.assertEqual((m["seq"], m["mode"]), (2, "idle"))
-
-    async def test_same_seq_is_pushed_again_only_every_full_period(self):
-        async with self.robot() as ws:
-            await self.handshake(ws)
-            first = await self.recv_type(ws, "mode")
-            await self.no_message(ws, "mode", 0.5)                         # unchanged: polled, not pushed
-            self.hub.full_s = 0.3
-            again = await self.recv_type(ws, "mode", timeout=2)
-            self.assertEqual(again, first)
-
-    async def test_hello_and_closed_carry_this_links_conn(self):
-        async with self.robot() as ws:
-            await self.handshake(ws)
-            await self.recv_type(ws, "mode")
-        await self.wait_mind("/mode/robot", "closed")
-        async with self.robot() as ws:
-            await self.handshake(ws)
-            await self.recv_type(ws, "mode")
-        closed = await self.wait_mind("/mode/robot", "closed", n=2)
-        hellos = self.mind_calls_to("/mode/robot", "hello")
-        self.assertEqual([h["conn"] for h in hellos], [1, 2])
-        self.assertEqual([c["conn"] for c in closed], [1, 2])
-        self.assertEqual({h["boot"] for h in hellos + closed}, {"b1"})
-
-    async def test_mode_applied_goes_to_mind_with_conn(self):
-        async with self.robot() as ws:
-            await self.handshake(ws)
-            await self.recv_type(ws, "mode")
             await ws.send(json.dumps({"type": "mode_applied", "seq": 5}))
-            applied = (await self.wait_mind("/mode/robot", "applied"))[0]
-        self.assertEqual((applied["applied_seq"], applied["conn"], applied["boot"]), (5, self.links[-1].conn, "b1"))
+            await ws.send(report(1))
+            await self.wait_mind("/mode/report")
         await asyncio.wait_for(self.up_closed.wait(), 2)
         self.assertNotIn("mode_applied", "".join(self.upstream_text))
+        self.assertEqual({p for _, p, _ in self.mind_calls} - {"/mode/robot"}, {"/mode/report"})
+
+    async def test_no_polling_and_nothing_pushed(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.no_message(ws, "mode", 0.5)
+        self.assertEqual(self.mind_calls, [])
+
+    # ---- digit inputs (unchanged from A5, minus the snapshot push) ----
+    async def test_mode_input_goes_to_mind_and_back(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await ws.send(json.dumps({"type": "mode_input", "seq": 7, "age_ms": 40, "source": "asr", "input": "digit",
+                                      "value": 0}))
+            res = await self.recv_type(ws, "mode_result")
+            self.assertEqual((res["seq"], res["code"], res["toast"]), (7, "ok", "PRESET 0"))
+        body = self.mind_calls_to("/mode/input")[0]
+        self.assertEqual({k: body[k] for k in ("device", "boot", "seq", "source", "input", "value")},
+                         {"device": "robot", "boot": "b1", "seq": 7, "source": "asr", "input": "digit", "value": 0})
+        self.assertGreaterEqual(body["age_ms"], 40)                        # plus the time it waited in the ear
+        self.assertLess(body["age_ms"], 1000)
+        self.assertNotIn("mode_input", "".join(self.upstream_text))
 
     async def test_slow_mind_answers_busy_and_audio_keeps_flowing(self):
         self.mind_input_delay = 1.0                                        # e.g. a soul-tts stop inside a hook
         async with self.robot() as ws:
             await self.handshake(ws)
-            await self.recv_type(ws, "mode")
-            await ws.send(json.dumps({"type": "mode_input", "seq": 9, "age_ms": 0, "source": "asr", "input": "stop"}))
+            await ws.send(json.dumps({"type": "mode_input", "seq": 9, "age_ms": 0, "source": "asr", "input": "digit",
+                                      "value": 9}))
             await asyncio.sleep(0.05)
             await self.upstream_send(json.dumps({"type": "tts.start", "stream": 3}))
             await self.upstream_send(b"\x03\x00\x00\x00" + b"\x01" * 40)
@@ -534,9 +518,9 @@ class MouthModeTest(MouthLinkTest):
         self.mind_input_delay = 1.0
         async with self.robot() as ws:
             await self.handshake(ws)
-            await self.recv_type(ws, "mode")
             for seq in range(1, 11):
-                await ws.send(json.dumps({"type": "mode_input", "seq": seq, "age_ms": 0, "source": "asr", "input": "play"}))
+                await ws.send(json.dumps({"type": "mode_input", "seq": seq, "age_ms": 0, "source": "asr",
+                                          "input": "digit", "value": 0}))
             results = {}
             while len(results) < 10:
                 r = await self.recv_type(ws, "mode_result", timeout=4)
@@ -546,33 +530,18 @@ class MouthModeTest(MouthLinkTest):
             self.assertIsNone(ws.close_code)
         self.assertLessEqual(len(self.mind_calls_to("/mode/input")), 5)    # queue of 4 + the one in flight
 
-    async def test_mind_down_keeps_robot_answers_busy_and_recovers(self):
+    async def test_mind_down_answers_busy_and_keeps_the_robot(self):
         self.mind_up = False
         async with self.robot() as ws:
             await self.handshake(ws)
-            await ws.send(json.dumps({"type": "mode_input", "seq": 2, "age_ms": 0, "source": "asr", "input": "play"}))
+            await ws.send(json.dumps({"type": "mode_input", "seq": 2, "age_ms": 0, "source": "asr", "input": "digit",
+                                      "value": 0}))
             res = await self.recv_type(ws, "mode_result")
-            self.assertEqual((res["seq"], res["code"]), (2, "busy"))
-            await self.no_message(ws, "mode", 0.5)                         # mind away: nothing pushed
-            self.assertIsNone(ws.close_code)
-            self.mind_up = True                                            # mind back: hello retried, snapshot sent
-            self.assertEqual((await self.recv_type(ws, "mode", timeout=3))["mode"], "talk")
-        self.assertGreaterEqual(len(self.mind_calls_to("/mode/robot", "hello")), 2)
-
-    async def test_mind_back_after_away_gets_hello_again(self):
-        """mind restarted while the robot stayed: it is told again who is connected (same boot, same conn)."""
-        async with self.robot() as ws:
-            await self.handshake(ws)
-            await self.recv_type(ws, "mode")
-            self.mind_up = False
-            await asyncio.sleep(0.4)                                       # the poll sees mind away
-            self.mind_up = True
-            hellos = await self.wait_mind("/mode/robot", "hello", n=2)
-            self.assertEqual({(h["boot"], h["conn"]) for h in hellos}, {("b1", self.links[-1].conn)})
+            self.assertEqual((res["seq"], res["code"], res["toast"]), (2, "busy", "MIND OFFLINE"))
             self.assertIsNone(ws.close_code)
 
     async def test_mode_bug_in_the_reader_is_logged_and_audio_keeps_flowing(self):
-        """review I1: an unexpected error in the mode path must not end /mouth, and must be logged."""
+        """A5 review I1: an unexpected error in the mode path must not end /mouth, and must be logged."""
         async def broken(link_self, m):
             raise RuntimeError("mode bug")
         real = self.mouth_link.MouthLink._mode_message
@@ -580,7 +549,7 @@ class MouthModeTest(MouthLinkTest):
         self.addCleanup(setattr, self.mouth_link.MouthLink, "_mode_message", real)
         async with self.robot() as ws:
             await self.handshake(ws)
-            await ws.send(json.dumps({"type": "mode_input", "seq": 1, "age_ms": 0, "source": "asr", "input": "play"}))
+            await ws.send(report(1))
             await asyncio.sleep(0.1)
             await self.upstream_send(json.dumps({"type": "tts.start", "stream": 2}))
             self.assertEqual((await self.recv_type(ws, "tts.start"))["stream"], 2)
@@ -596,7 +565,7 @@ class MouthModeTest(MouthLinkTest):
         self.assertIn("Traceback", text)
 
     async def test_a_reader_that_dies_is_logged_with_traceback(self):
-        """review I1: run() no longer swallows a task's unexpected exception behind "device_closed"."""
+        """A5 review I1: run() no longer swallows a task's unexpected exception behind "device_closed"."""
         real = self.mouth_link._parse
         def exploding(message):
             if message == '{"type":"explode"}':
@@ -613,91 +582,51 @@ class MouthModeTest(MouthLinkTest):
         self.assertIn("RuntimeError: reader bug", text)
         self.assertIn("Traceback", text)
 
-    async def test_mode_fetch_failing_does_not_flap_or_storm_hellos(self):
-        """review I2: /mode/seq answers but GET /mode fails: logged once, no "mind away/up" flap, no re-hello."""
-        self.mode_get_down = True
+    async def test_relay_uses_its_own_threads(self):
+        """A5 review M5: mind calls never take the default executor (tingwu start/stop and switches use it)."""
         async with self.robot() as ws:
             await self.handshake(ws)
-            await self.no_message(ws, "mode", 1.0)                         # ~10 polls
-            self.assertEqual(len(self.mind_calls_to("/mode/robot", "hello")), 1)
-            self.assertLessEqual(len([m for m in self.logs if m.startswith("mode: mind")]), 1)
-            self.assertEqual(len([m for m in self.logs if "GET /mode failing" in m]), 1)
-            self.mode_get_down = False                                     # Mongo back
-            self.assertEqual((await self.recv_type(ws, "mode", timeout=2))["mode"], "talk")
-        self.assertEqual(len([m for m in self.logs if "GET /mode ok again" in m]), 1)
-
-    async def test_re_hello_re_posts_the_last_applied(self):
-        """review M1: a re-hello resets mind's applied_seq; the ear re-posts the robot's last ack after it."""
-        async with self.robot() as ws:
-            await self.handshake(ws)
-            await self.recv_type(ws, "mode")
-            await ws.send(json.dumps({"type": "mode_applied", "seq": 5}))
-            await self.wait_mind("/mode/robot", "applied")
-            self.mind_up = False
-            await asyncio.sleep(0.4)
-            self.mind_up = True
-            await self.wait_mind("/mode/robot", "hello", n=2)
-            applied = await self.wait_mind("/mode/robot", "applied", n=2)
-            self.assertEqual(applied[-1]["applied_seq"], 5)
-            events = [b["event"] for b in self.mind_calls_to("/mode/robot")]
-            last_hello = max(i for i, e in enumerate(events) if e == "hello")
-            self.assertIn("applied", events[last_hello + 1:])                # the ack comes after the re-hello
-        await self.wait_mind("/mode/robot", "closed")
-        self.assertEqual(self.mind_calls_to("/mode/robot")[-1]["event"], "closed")    # nothing after the close
-
-    async def test_hub_uses_its_own_threads(self):
-        """review M5: mind calls never take the default executor (tingwu start/stop and switches use it)."""
-        async with self.robot() as ws:
-            await self.handshake(ws)
-            await self.recv_type(ws, "mode")
+            await ws.send(report(1))
+            await self.wait_mind("/mode/report")
         self.assertTrue(self.mind_threads)
         self.assertTrue(all(n.startswith("mode-mind") for n in self.mind_threads), self.mind_threads)
 
     async def test_no_boot_id_no_modes(self):
-        """review M6: a hello without boot_id gets no mode traffic at all (no hello, no pushes, no polling)."""
         async with self.robot() as ws:
             await ws.send(json.dumps({k: v for k, v in ROBOT_HELLO.items() if k != "boot_id"}))
             await asyncio.wait_for(ws.recv(), 2)
-            await self.no_message(ws, "mode", 0.5)
-            await ws.send(json.dumps({"type": "mode_input", "seq": 1, "age_ms": 0, "source": "asr", "input": "play"}))
-            await self.no_message(ws, "mode_result", 0.3)                   # not queued for a worker that is not there
+            await ws.send(report(1))
+            await ws.send(json.dumps({"type": "mode_input", "seq": 1, "age_ms": 0, "source": "asr", "input": "digit",
+                                      "value": 0}))
+            await self.no_message(ws, "mode_result", 0.3)
             self.assertIsNone(ws.close_code)
         self.assertEqual(self.mind_calls, [])
-        self.assertNotIn("mode_input", "".join(self.upstream_text))
+        self.assertNotIn("mode_", "".join(self.upstream_text))
 
     async def test_reconnects_leave_no_tasks_behind(self):
-        """review M8."""
         for _ in range(3):
             async with self.robot() as ws:
                 await self.handshake(ws)
-                await self.recv_type(ws, "mode")
+                await ws.send(report(1))
+                await self.wait_mind("/mode/report", n=len(self.mind_calls_to("/mode/report")) + 1)
             await self.wait_result()
-        await self.wait_mind("/mode/robot", "closed", n=3)
+        await self.wait_mind("/mode/robot", n=3)
         await self.hub.drain()
-        self.assertEqual((self.hub.links, self.hub._bg), (set(), set()))
+        self.assertEqual(self.hub._bg, set())
+        self.assertEqual([b["conn"] for b in self.mind_calls_to("/mode/robot")], [1, 2, 3])
 
-    async def test_oversized_snapshot_is_not_sent(self):
-        self.mind_extra = {"pad": "x" * 1100}
+    async def test_bad_mode_messages_are_dropped(self):
         async with self.robot() as ws:
             await self.handshake(ws)
-            await self.no_message(ws, "mode", 0.6)
-            self.assertIsNone(ws.close_code)
-        self.assertTrue(any("too large" in m for m in self.logs))
-
-    async def test_bad_mode_input_is_dropped(self):
-        async with self.robot() as ws:
-            await self.handshake(ws)
-            await ws.send(json.dumps({"type": "mode_input", "seq": "x", "input": "play"}))
-            await ws.send(json.dumps({"type": "mode_input", "seq": 2, "age_ms": 0, "source": "asr", "input": "play"}))
+            await ws.send(json.dumps({"type": "mode_input", "seq": "x", "input": "digit"}))
+            await ws.send(json.dumps({"type": "mode_report", "mode": "talk"}))          # no seq
+            await ws.send(json.dumps({"type": "mode_report", "seq": 3, "mode": "talk", "effects": "x"}))
+            await ws.send(json.dumps({"type": "mode_input", "seq": 2, "age_ms": 0, "source": "asr", "input": "digit",
+                                      "value": 0}))
             self.assertEqual((await self.recv_type(ws, "mode_result"))["seq"], 2)
+            await self.wait_mind("/mode/report")
         self.assertEqual([b["seq"] for b in self.mind_calls_to("/mode/input")], [2])
-
-    async def test_no_mind_calls_without_a_hello(self):
-        async with self.robot() as ws:
-            await ws.send('{"type":"tts.done","stream":1}')
-            await asyncio.wait_for(ws.wait_closed(), 2)
-        await asyncio.sleep(0.3)
-        self.assertEqual(self.mind_calls, [])                              # nobody connected: not even polling
+        self.assertEqual([(b["seq"], b["effects"]) for b in self.mind_calls_to("/mode/report")], [(3, [])])
 
 
 class MindClientTest(unittest.TestCase):
