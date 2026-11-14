@@ -4,6 +4,7 @@
 #include "laughing_man.h"
 #include "packed_palette.h"
 #include "remote_gestures.h"
+#include "touch_gesture.h"
 #include "eyes/view.h"
 #include <cstdio>
 #include <cstdlib>
@@ -69,6 +70,16 @@ lv_image_dsc_t animation_image;
 uint32_t animation_frame = 0;
 bool pressed = false, touch_cancelled = false, long_press_fired = false;
 uint32_t pressed_at = 0, last_release = 0;
+// Home page (hello modes step 1b): taps and swipes go through the C3 classifier; tap / double tap are the
+// mode's (screen_take_home_gesture), a left swipe opens the summary. Up / down swipes are not wired yet.
+touch::GestureClassifier home_gesture;
+ScreenHomeGesture home_pending = ScreenHomeGesture::None;
+uint32_t last_touch_ms = 0;
+// Mode corner badge (top right, every page) and the 2 s toast; small LVGL objects (internal RAM).
+lv_obj_t *mode_badge = nullptr, *mode_toast = nullptr;
+uint32_t toast_until_ms = 0;
+bool toast_shown = false;
+constexpr uint32_t kToastMs = 2000;
 uint32_t animation_last_ms = 0, animation_render_ms = 0, animation_phase_ms = 0;
 bool animation_clock_ready = false;
 constexpr uint32_t kRotationMs = 12000, kAnimationFrameMs = kRotationMs / COLLECTOR_FACE_FRAME_COUNT;
@@ -174,6 +185,7 @@ bool update_eyes()
 }
 void show_page(Page target, uint32_t now_ms)
 {
+    if (target != Page::Home) { home_gesture.reset(); home_pending = ScreenHomeGesture::None; }
     page = target;
     lv_obj_update_flag(home, LV_OBJ_FLAG_HIDDEN, page != Page::Home);
     lv_obj_update_flag(summary, LV_OBJ_FLAG_HIDDEN, page != Page::Summary);
@@ -596,17 +608,40 @@ void screen_create(lv_obj_t* parent)
         function_segments[i] = box(function_ribbon, i * 64, 0, i == 4 ? 64 : 63, 3, kRibbonDark);
         lv_obj_remove_flag(function_segments[i], LV_OBJ_FLAG_CLICKABLE);
     }
+    home_gesture.reset();
+    home_pending = ScreenHomeGesture::None;
+    auto* top = lv_display_get_layer_top(screen_display);
+    mode_badge = label(top, 0, 0, "TALK", kInk);
+    lv_obj_set_style_bg_color(mode_badge, lv_color_hex(0xE040A0), 0);
+    lv_obj_set_style_bg_opa(mode_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(mode_badge, 4, 0);
+    lv_obj_set_style_pad_ver(mode_badge, 1, 0);
+    lv_obj_align(mode_badge, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_remove_flag(mode_badge, LV_OBJ_FLAG_CLICKABLE);
+    mode_toast = label(top, 0, 0, "", kSignal);
+    lv_obj_set_style_bg_color(mode_toast, lv_color_hex(kInk), 0);
+    lv_obj_set_style_bg_opa(mode_toast, LV_OPA_80, 0);
+    lv_obj_set_style_pad_hor(mode_toast, 6, 0);
+    lv_obj_set_style_pad_ver(mode_toast, 3, 0);
+    lv_obj_align(mode_toast, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_remove_flag(mode_toast, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(mode_toast, LV_OBJ_FLAG_HIDDEN);
+    toast_shown = false;
 }
 void screen_set_enabled(bool value, uint32_t now_ms)
 {
     if (!screen_display || enabled == value) return;
     enabled = value;
     lv_obj_update_flag(function_ribbon, LV_OBJ_FLAG_HIDDEN, !enabled);
+    if (mode_badge) lv_obj_update_flag(mode_badge, LV_OBJ_FLAG_HIDDEN, !enabled);
+    if (mode_toast && !enabled) { lv_obj_add_flag(mode_toast, LV_OBJ_FLAG_HIDDEN); toast_shown = false; }
     update_eyes();
     // Neither a pending tap nor a finger held across the transition may
     // navigate. A fresh release is required before accepting another touch.
     screen_cancel_touch();
     touch_cancelled = true;
+    home_gesture.reset();
+    home_pending = ScreenHomeGesture::None;
     animation_last_ms = animation_render_ms = now_ms;
     animation_clock_ready = true;
     auto* refresh = lv_display_get_refr_timer(screen_display);
@@ -635,6 +670,15 @@ bool screen_enabled() { return enabled; }
 void screen_tick(uint32_t now_ms)
 {
     if (!enabled) return;
+    if (toast_shown && int32_t(now_ms - toast_until_ms) >= 0) { lv_obj_add_flag(mode_toast, LV_OBJ_FLAG_HIDDEN); toast_shown = false; }
+    if (page == Page::Home) {
+        switch (home_gesture.take(now_ms)) {
+        case touch::Gesture::Tap: home_pending = ScreenHomeGesture::Tap; break;
+        case touch::Gesture::DoubleTap: home_pending = ScreenHomeGesture::DoubleTap; break;
+        case touch::Gesture::SwipeLeft: show_page(Page::Summary, now_ms); break;
+        default: break;          // up / down / right: not wired in this version
+        }
+    }
     if (reaction != ScreenReaction::None && now_ms - reaction_at >= kReactionDurationMs) {
         reaction = ScreenReaction::None;
         mark_transition("hide");
@@ -857,6 +901,13 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
         if (!down) touch_cancelled = false;
         return;
     }
+    last_touch_ms = now_ms;
+    if (page == Page::Home) {
+        home_gesture.feed(down, now_ms, x, y);
+        if (!down && pressed) last_release = now_ms;
+        pressed = down;
+        return;
+    }
     if (down && !pressed) {
         pressed_at = now_ms;
         touch_start_x = touch_last_x = x;
@@ -898,6 +949,8 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
 }
 void screen_cancel_touch()
 {
+    // Home: a lost sample is a release for the classifier (it rejoins a stroke that continues within 60 ms).
+    if (page == Page::Home) home_gesture.feed(false, last_touch_ms, -1, -1);
     touch_cancelled = pressed || touch_cancelled;
     pressed = false;
     touch_start_x = touch_start_y = touch_last_x = touch_last_y = -1;
@@ -961,4 +1014,29 @@ bool screen_wifi_take_credentials(char* ssid, size_t ssid_size, char* password, 
     return true;
 }
 bool screen_showing_wifi() { return page == Page::Wifi || page == Page::WifiKey; }
+ScreenHomeGesture screen_take_home_gesture()
+{
+    const ScreenHomeGesture g = home_pending;
+    home_pending = ScreenHomeGesture::None;
+    return g;
+}
+void screen_update_mode(const char* text, uint32_t color, bool online)
+{
+    if (!mode_badge) return;
+    char buf[24];
+    std::snprintf(buf, sizeof buf, "%s%s", text ? text : "", online ? "" : " OFF");
+    const uint32_t bg = online ? color : 0x505050;
+    const unsigned r = bg >> 16 & 0xFF, g = bg >> 8 & 0xFF, b = bg & 0xFF;
+    set_text(mode_badge, buf);
+    lv_obj_set_style_bg_color(mode_badge, lv_color_hex(bg), 0);
+    lv_obj_set_style_text_color(mode_badge, lv_color_hex((r * 299 + g * 587 + b * 114) / 1000 > 140 ? kInk : 0xFFFFFF), 0);
+}
+void screen_show_toast(const char* text, uint32_t now_ms)
+{
+    if (!mode_toast || !enabled || !text || !*text) return;
+    set_text(mode_toast, text);
+    lv_obj_remove_flag(mode_toast, LV_OBJ_FLAG_HIDDEN);
+    toast_until_ms = now_ms + kToastMs;
+    toast_shown = true;
+}
 }

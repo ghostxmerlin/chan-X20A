@@ -1,45 +1,44 @@
-// hello modes step 1 (collector-0.4.92): the mode side of the robot's /mouth link (mouth_modes.h), frame by
-// frame: text messages are length-checked and fully parsed before any parser sees them; snapshots apply on
-// seq != current and always first after each handshake; mode_result and snapshot in either order; every
-// applied snapshot is acked with mode_applied, and the ack stays pending until the socket took it; inputs are
-// taken only while online, carry age_ms at send time, and are dropped on disconnect.
+// hello modes step 1b (collector-0.4.92): hello owns the mode. The /mouth side of it (fw/mouth_modes.h), frame by
+// frame: text messages are length-checked and fully parsed before anything reads them; every input runs through
+// mode_rules.h on the robot; a change (or an input with effects) becomes a mode_report for mind; after each
+// handshake the current state goes first (by boot once after a real boot, else by link, with the mode-change
+// effects since the last report mind got); digits 0 and 9 go to mind as mode_input and mode_result brings their
+// toast; settings closes after 5 minutes without input; a report stays pending until the socket took it.
 #include "mouth_modes.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <string>
 using namespace collector::mouth;
-using namespace collector::modes;
+using collector::modes::rules::Dir;
+using collector::modes::rules::Input;
+using collector::modes::rules::Mode;
+using collector::modes::rules::Value;
 using namespace ArduinoJson;
 
 namespace {
-std::string snap(uint32_t seq, const char* mode = "talk", const char* label = "TALK")
-{
-    return "{\"type\":\"mode\",\"seq\":" + std::to_string(seq) + ",\"mode\":\"" + mode +
-           "\",\"dir\":null,\"host\":null,\"return_to\":null,\"billing\":true,\"since\":1763100000000,\"by\":\"asr\","
-           "\"look\":{\"eye\":\"laughing_man\",\"pool\":null,\"label\":\"" + label + "\",\"color\":\"E040A0\"},"
-           "\"touch\":{\"tap\":\"server\",\"double\":\"server\"}}";
-}
+constexpr int64_t kS = 1000000;
+const char* kHello = R"({"type":"hello","codec":"opus","frame_ms":60,"sample_rate":24000})";
 
-// What mouth_link.cpp's on_message does with a text frame, minus the locks and the audio types.
+// What mouth_link.cpp does with text frames and the send loop, minus the locks and the audio.
 struct Robot {
     ModeSession s;
     JsonDocument doc;
     uint32_t bad = 0;
+    explicit Robot(bool booted = true) { if (booted) s.boot(0); }
     Text feed(const std::string& text)
     {
         const Text k = read_text(text.data(), text.size(), doc);
         if (k == Text::TooLong || k == Text::Bad) ++bad;
         else if (k == Text::Hello) s.link_up();
-        else if (k == Text::Mode) s.on_mode(doc.as<JsonObjectConst>());
         else if (k == Text::ModeResult) s.on_result(doc.as<JsonObjectConst>());
         return k;
     }
-    // One pass of the send loop: every line next() gives, "sent" by a socket that takes them all.
-    std::string drain(int64_t now_us)
+    // One pass of the send loop with a socket that takes every line.
+    std::string drain(int64_t now_us = 0)
     {
         std::string out;
-        Line l;
+        OutLine l;
         uint32_t seq;
         for (ModeSession::Out k; (k = s.next(now_us, l, seq)) != ModeSession::Out::None;) {
             out += l.c_str(); out += '\n';
@@ -47,253 +46,258 @@ struct Robot {
         }
         return out;
     }
+    Applied in(Input i, const char* source = "asr", Value v = Value{}, bool speaking = false, int64_t now = 0)
+    {
+        return s.apply(now, source, i, v, speaking);
+    }
+    Applied digit(int d, const char* source = "asr", int64_t now = 0) { Value v; v.digit = d; return in(Input::Digit, source, v, false, now); }
     ModeView view() const { ModeView v; s.view(v); return v; }
 };
-const char* kHello = R"({"type":"hello","codec":"opus","frame_ms":60,"sample_rate":24000})";
+std::string report(uint32_t seq, const char* mode, const char* by, const char* input, const char* effects,
+                   const char* dir = "null", const char* ret = "null")
+{
+    char b[400];
+    std::snprintf(b, sizeof b, "{\"type\":\"mode_report\",\"seq\":%u,\"mode\":\"%s\",\"dir\":%s,\"host\":null,\"return_to\":%s,"
+                  "\"by\":\"%s\",\"input\":%s,\"effects\":[%s]}\n", seq, mode, dir, ret, by, input, effects);
+    return b;
+}
 
 void text_frames()
 {
     JsonDocument doc;
-    const std::string ok = snap(4);
-    assert(read_text(ok.data(), ok.size(), doc) == Text::Mode && doc["seq"] == 4);
-
-    // Length is checked first: 1601 B is refused even if it is valid JSON; 1600 B is parsed.
-    std::string big = R"({"type":"mode","pad":")";
+    const char* ok = R"({"type":"mode_result","seq":1,"code":"ok","toast":"ALL OFF"})";
+    assert(read_text(ok, std::strlen(ok), doc) == Text::ModeResult && doc["seq"] == 1);
+    // Length first: 1601 B is refused even if it is valid JSON; 1600 B is parsed.
+    std::string big = R"({"type":"tts.end","pad":")";
     big += std::string(kMaxMessage - big.size() - 2, 'x') + "\"}";
-    assert(big.size() == kMaxMessage);
-    assert(read_text(big.data(), big.size(), doc) == Text::Mode);
+    assert(big.size() == kMaxMessage && read_text(big.data(), big.size(), doc) == Text::TtsEnd);
     std::string bigger = big; bigger.insert(bigger.size() - 2, "x");
-    assert(bigger.size() == kMaxMessage + 1);
     assert(read_text(bigger.data(), bigger.size(), doc) == Text::TooLong && doc.isNull());
-
-    // A cut-off snapshot is Bad and leaves nothing in the document (never a partly filled one).
-    const std::string cut = ok.substr(0, ok.size() / 2);
+    // A cut-off message is Bad and leaves nothing in the document (never a partly filled one).
+    const std::string cut = std::string(ok).substr(0, 30);
     assert(read_text(cut.data(), cut.size(), doc) == Text::Bad && doc.isNull());
     for (const char* t : {"", "[1,2]", "\"mode\"", "42", "null", "{\"type\":\"mode\""}) {
         assert(read_text(t, std::strlen(t), doc) == Text::Bad && doc.isNull());
     }
     assert(read_text(nullptr, 0, doc) == Text::Bad);
-    // A length shorter than the buffer: only n bytes count.
-    assert(read_text(ok.data(), ok.size() - 1, doc) == Text::Bad);
-
+    assert(read_text(ok, std::strlen(ok) - 1, doc) == Text::Bad);          // only n bytes count
     struct { const char* text; Text kind; } types[] = {
         {kHello, Text::Hello}, {R"({"type":"tts.start","stream":3})", Text::TtsStart},
         {R"({"type":"tts.end","stream":3})", Text::TtsEnd}, {R"({"type":"tts.stop","stream":3})", Text::TtsStop},
-        {R"({"type":"mode_result","seq":1,"code":"ok"})", Text::ModeResult},
-        {R"({"type":"mode_input","seq":1})", Text::Other}, {R"({"type":"mode_applied","seq":1})", Text::Other},
-        {R"({"type":7})", Text::Other}, {R"({})", Text::Other}, {R"({"type":"MODE"})", Text::Other}};
+        {R"({"type":"mode","seq":3,"mode":"chat"})", Text::Other},          // mind no longer pushes snapshots
+        {R"({"type":"mode_report","seq":1})", Text::Other}, {R"({"type":7})", Text::Other}, {R"({})", Text::Other}};
     for (const auto& t : types) assert(read_text(t.text, std::strlen(t.text), doc) == t.kind);
 }
 
-void offline_until_hello()
+void boot_and_first_link()
 {
     Robot r;
-    assert(!r.s.online() && r.view().version == 0);
-    // Before the ear's hello: snapshots and results are ignored, inputs refused, nothing is sent.
-    r.feed(snap(5));
-    r.feed(R"({"type":"mode_result","seq":1,"code":"ok","toast":"OK"})");
-    assert(!r.view().have && !r.view().have_result);
-    assert(r.s.push_input(0, "asr", "forward", -1) == 0 && r.s.push_select(0, "select", "chat", nullptr) == 0);
-    assert(r.drain(0).empty());
-    r.feed(kHello);
-    assert(r.s.online() && r.view().online && r.view().version == 1);
-    // The snapshot that came too early is not remembered: the next one is the first.
-    r.feed(snap(5));
-    assert(r.view().have && r.view().snap.seq == 5);
-    assert(r.drain(0) == "{\"type\":\"mode_applied\",\"seq\":5}\n");
-    JsonDocument t;
-    r.s.json(t.to<JsonObject>());
-    assert(t["ignored"] == 2 && t["inputs_offline"] == 2 && t["applied_seq"] == 5 && t["applied"] == 1);
-}
-
-void snapshots_and_acks()
-{
-    Robot r;
-    r.feed(kHello);
-    r.feed(snap(12));
     ModeView v = r.view();
-    assert(v.have && v.snap.seq == 12 && !std::strcmp(v.snap.mode, "talk") && v.snap.color == 0xE040A0);
-    const uint32_t ver = v.version;
-    // The ack waits for the send loop and stays pending while the socket has not taken it.
-    Line l; uint32_t seq;
-    assert(r.s.next(0, l, seq) == ModeSession::Out::Ack && seq == 12);
-    assert(r.s.next(0, l, seq) == ModeSession::Out::Ack && seq == 12);   // a failed send: still there
-    r.s.sent(ModeSession::Out::Ack, 12);
+    assert(v.state.mode == Mode::Talk && v.seq == 1 && !std::strcmp(v.by, "boot") && !v.online);
+    assert(!std::strcmp(v.look.label, "TALK") && v.look.eye == collector::modes::Eye::LaughingMan);
+    assert(r.drain().empty());                                               // nothing goes out before the hello
+    r.feed(kHello);
+    assert(r.view().online);
+    assert(r.drain() == report(2, "talk", "boot", "\"boot\"", "\"stop_speech\",\"talk_enter\""));
+    assert(r.drain().empty());
+
+    // A switch made before the first link: the boot report carries the state now and what mind must do.
+    Robot o;
+    assert(o.in(Input::Play).changed && o.view().state.mode == Mode::Chat && !std::strcmp(o.view().toast, "CHAT"));
+    o.feed(kHello);
+    assert(o.drain() == report(3, "chat", "boot", "\"boot\"", "\"stop_speech\""));
+}
+
+void inputs_become_reports()
+{
+    Robot r;
+    r.feed(kHello);
+    r.drain();
+    // Inside talk: tap = one round (no change, an effect); speaking: tap = stop.
+    Applied a = r.in(Input::Tap, "touch");
+    assert(!a.changed && a.reported && !std::strcmp(r.view().toast, "SAYING"));
+    a = r.in(Input::Tap, "touch", Value{}, true);
+    assert(a.reported && !std::strcmp(r.view().toast, "STOP"));
+    // play -> chat; in chat, tap is not implemented: nothing for mind.
+    a = r.in(Input::Play);
+    assert(a.changed && a.reported && r.view().state.mode == Mode::Chat && !std::strcmp(r.view().by, "asr"));
+    a = r.in(Input::Tap, "touch");
+    assert(!a.changed && !a.reported && !std::strcmp(r.view().toast, "NOT YET"));
+    // next outside talk: only_talk, no report.
+    assert(!r.in(Input::Next).reported && !std::strcmp(r.view().toast, "ONLY IN TALK"));
+    assert(r.drain() ==
+           report(3, "talk", "touch", "\"tap\"", "\"say_round\"") +
+           report(4, "talk", "touch", "\"tap\"", "\"stop_speech\"") +
+           report(5, "chat", "asr", "\"play\"", "\"stop_speech\",\"talk_leave\""));
+    // The page's select of subtitle: dir in the report; the source is whatever the caller says.
+    Value sel; sel.target = Mode::Subtitle; sel.dir = Dir::EnZh;
+    assert(r.in(Input::Select, "page", sel).changed);
+    assert(r.drain() == report(6, "subtitle", "page", "\"select\"", "\"stop_speech\"", "\"en_zh\""));
+    // A source that is not a wire word is refused and changes nothing.
+    const uint32_t seq = r.view().seq;
+    a = r.in(Input::Forward, "Bad Src");
+    assert(a.out.code == collector::modes::rules::Code::UnknownInput && !a.reported && r.view().seq == seq);
+}
+
+void links()
+{
+    Robot r;
+    r.feed(kHello);
+    r.drain();
+    r.in(Input::Play);
+    r.drain();                                                               // mind knows: chat
+    // Offline: changes still apply on the robot; an effect-only input says OFFLINE.
+    r.s.link_down();
+    assert(!r.view().online);
+    assert(r.in(Input::Forward).changed);                                   // chat -> talk
+    assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "OFFLINE"));
+    assert(r.drain().empty());
+    // Back: one "link" report with what mind needs to get from chat to talk.
+    r.feed(kHello);
+    assert(r.drain() == report(5, "talk", "link", "null", "\"stop_speech\",\"talk_enter\""));
+    // Reconnect with nothing changed: the state again, no effects.
+    r.s.link_down(); r.feed(kHello);
+    assert(r.drain() == report(6, "talk", "link", "null", ""));
+    // Reports not sent when the link drops are replaced by the link report (from the last one mind got).
+    r.in(Input::Play);
+    r.in(Input::Pause);                                                      // chat -> idle
+    r.s.link_down(); r.feed(kHello);
+    assert(r.drain() == report(9, "idle", "link", "null", "\"stop_speech\",\"talk_leave\""));
+    // A send that fails keeps the report at the front.
+    r.in(Input::Forward);
+    OutLine l; uint32_t seq;
+    assert(r.s.next(0, l, seq) == ModeSession::Out::Report && seq == 10);
+    assert(r.s.next(0, l, seq) == ModeSession::Out::Report && seq == 10);
+    r.s.sent(ModeSession::Out::Report, 10);
     assert(r.s.next(0, l, seq) == ModeSession::Out::None);
-
-    // Equal seq (the 60 s refresh, or the double push after the handshake): no-op, not bad, no ack.
-    r.feed(snap(12, "chat", "CHAT"));
-    assert(r.view().version == ver && !std::strcmp(r.view().snap.mode, "talk") && r.drain(0).empty());
-    // A bad snapshot changes nothing and is counted.
-    std::string bad = snap(13); bad.replace(bad.find("E040A0"), 6, "E040AZ");
-    r.feed(bad);
-    assert(r.view().version == ver && r.view().snap.seq == 12 && r.drain(0).empty());
-    // seq != current applies, also backwards (mind's seq can go back after a restart).
-    r.feed(snap(13, "chat", "CHAT"));
-    assert(r.view().snap.seq == 13 && r.view().version != ver);
-    r.feed(snap(9, "idle", "IDLE"));
-    assert(r.view().snap.seq == 9 && !std::strcmp(r.view().snap.mode, "idle"));
-    // Two applies before the send loop runs: only the latest is acked.
-    assert(r.drain(0) == "{\"type\":\"mode_applied\",\"seq\":9}\n");
-    // A cut-off frame never reaches the parser.
-    const std::string s14 = snap(14);
-    r.feed(s14.substr(0, 40));
-    assert(r.bad == 1 && r.view().snap.seq == 9);
-
-    JsonDocument t;
-    r.s.json(t.to<JsonObject>());
-    assert(t["seq"] == 9 && t["mode"] == "idle" && t["applied_seq"] == 9 && t["same_snapshots"] == 1 &&
-           t["bad_snapshots"] == 1 && t["applied"] == 3 && t["ack_pending"] == false);
 }
 
-void reconnects()
+void digits()
+{
+    Robot r;
+    // Offline, 0 / 9 cannot reach mind.
+    Applied a = r.digit(9);
+    assert(a.to_mind && !a.input_seq && !std::strcmp(r.view().toast, "OFFLINE"));
+    r.feed(kHello);
+    r.drain();
+    // 0 goes to mind as mode_input; the state does not change; mind's toast replaces the local one.
+    a = r.digit(0, "asr", 2 * kS);
+    assert(a.to_mind && a.input_seq == 1 && !a.changed && !std::strcmp(r.view().toast, "PRESET 0"));
+    assert(r.drain(2 * kS + 30000) ==
+           "{\"type\":\"mode_input\",\"seq\":1,\"age_ms\":30,\"source\":\"asr\",\"input\":\"digit\",\"value\":0}\n");
+    const uint32_t toasts = r.view().toasts;
+    r.feed(R"({"type":"mode_result","seq":1,"code":"ok","toast":"ALL PAID OFF"})");
+    ModeView v = r.view();
+    assert(v.have_result && v.result.seq == 1 && !std::strcmp(v.toast, "ALL PAID OFF") && v.toasts == toasts + 1);
+    // An empty toast (stale) shows nothing new; a bad result is dropped.
+    r.feed(R"({"type":"mode_result","seq":2,"code":"stale","toast":""})");
+    assert(r.view().toasts == toasts + 1 && r.view().result.seq == 2);
+    r.feed(R"({"type":"mode_result","code":"ok"})");
+    assert(r.view().result.seq == 2);
+    // 4-8 are the robot's own: select through the rules, reported with input digit.
+    a = r.digit(7);
+    assert(!a.to_mind && a.changed && r.view().state.mode == Mode::Subtitle && r.view().state.dir == Dir::ZhEn);
+    assert(!std::strcmp(r.view().toast, "SUB ZH>EN"));
+    a = r.digit(2);
+    assert(!a.changed && !a.reported && !std::strcmp(r.view().toast, "NO ACTION"));
+    assert(r.drain() == report(3, "subtitle", "asr", "\"digit\"", "\"stop_speech\",\"talk_leave\"", "\"zh_en\""));
+    // A digit queue overflow while the link is slow drops the oldest (C1 queue).
+    for (int i = 0; i < 9; ++i) r.digit(9);
+    JsonDocument t;
+    r.s.json(t.to<JsonObject>(), 0);
+    assert(t["inputs_queued"] == 8 && t["inputs_dropped"] == 1 && t["inputs_offline"] == 1);
+}
+
+void settings_timeout()
 {
     Robot r;
     r.feed(kHello);
-    r.feed(snap(20));
-    r.drain(0);
-    // Link lost, then back: the first snapshot after the new handshake is applied and acked again, even with the
-    // same seq; the one after it is a Same.
-    r.s.link_down();
-    assert(!r.view().online && r.view().have && r.view().snap.seq == 20);   // the screen keeps the last look
-    r.feed(kHello);
-    r.feed(snap(20));
-    assert(r.drain(0) == "{\"type\":\"mode_applied\",\"seq\":20}\n");
-    r.feed(snap(20));
-    assert(r.drain(0).empty());
-
-    // A bad first snapshot does not use up "first after handshake".
-    r.s.link_down(); r.feed(kHello);
-    std::string bad = snap(20); bad.replace(bad.find("\"billing\":true"), 14, "\"billing\":1");
-    r.feed(bad);
-    r.feed(snap(20));
-    assert(r.drain(0) == "{\"type\":\"mode_applied\",\"seq\":20}\n");
-
-    // An ack the socket never took survives the disconnect and goes out on the next link...
-    r.feed(snap(21));
-    r.s.link_down();
-    Line l; uint32_t seq;
-    assert(r.s.next(0, l, seq) == ModeSession::Out::None);                  // nothing goes out while offline
-    r.feed(kHello);
-    assert(r.drain(0) == "{\"type\":\"mode_applied\",\"seq\":21}\n");
-    // ...unless a newer snapshot was applied first.
-    r.feed(snap(22));
-    r.s.link_down(); r.feed(kHello);
-    r.feed(snap(23));
-    assert(r.drain(0) == "{\"type\":\"mode_applied\",\"seq\":23}\n");
+    r.drain();
+    r.in(Input::Play, "asr", Value{}, false, 10 * kS);                   // chat
+    r.in(Input::Open, "asr", Value{}, false, 20 * kS);                   // settings, return_to chat
+    assert(r.view().state.mode == Mode::Settings && r.view().state.return_to == Mode::Chat);
+    assert(!r.s.tick(20 * kS + kSettingsTimeoutUs - 1, false));
+    r.in(Input::Tap, "touch", Value{}, false, 200 * kS);                 // any input restarts the 5 minutes
+    assert(!r.s.tick(20 * kS + kSettingsTimeoutUs, false));
+    assert(r.s.tick(200 * kS + kSettingsTimeoutUs, false));
+    assert(r.view().state.mode == Mode::Chat && !std::strcmp(r.view().by, "timeout") && !std::strcmp(r.view().toast, "CHAT"));
+    assert(!r.s.tick(900 * kS, false));                                    // only in settings
+    const std::string out = r.drain();
+    assert(out == report(3, "chat", "asr", "\"play\"", "\"stop_speech\",\"talk_leave\"") +
+                  report(4, "settings", "asr", "\"open\"", "\"stop_speech\"", "null", "\"chat\"") +
+                  report(5, "chat", "timeout", "\"timeout\"", "\"stop_speech\""));
 }
 
-void results_either_order()
+void collapse()
 {
-    // The robot's input 1 changes the mode: result first, then the snapshot...
-    Robot a;
-    a.feed(kHello);
-    a.feed(snap(1));
-    assert(a.s.push_input(1000000, "asr", "play", -1) == 1);
-    a.drain(1000000);
-    a.feed(R"({"type":"mode_result","seq":1,"code":"ok","toast":"CHAT"})");
-    a.feed(snap(2, "chat", "CHAT"));
-    // ...or the snapshot first, then the result. Both end the same.
-    Robot b;
-    b.feed(kHello);
-    b.feed(snap(1));
-    assert(b.s.push_input(1000000, "asr", "play", -1) == 1);
-    b.drain(1000000);
-    b.feed(snap(2, "chat", "CHAT"));
-    b.feed(R"({"type":"mode_result","seq":1,"code":"ok","toast":"CHAT"})");
-    const ModeView va = a.view(), vb = b.view();
-    assert(va.snap.seq == 2 && vb.snap.seq == 2 && !std::memcmp(&va.snap, &vb.snap, sizeof va.snap));
-    assert(va.have_result && vb.have_result && va.results == 1 && vb.results == 1);
-    assert(!std::strcmp(va.result.toast, "CHAT") && !std::strcmp(vb.result.code, "ok") && vb.result.seq == 1);
-    assert(a.drain(0) == "{\"type\":\"mode_applied\",\"seq\":2}\n");
-    assert(b.drain(0) == "{\"type\":\"mode_applied\",\"seq\":2}\n");
-
-    // The same toast twice still counts as a new result (the screen shows it again); a bad one is dropped.
-    const uint32_t ver = b.view().version;
-    b.feed(R"({"type":"mode_result","seq":2,"code":"busy","toast":"BUSY"})");
-    b.feed(R"({"type":"mode_result","seq":3,"code":"busy","toast":"BUSY"})");
-    assert(b.view().results == 3 && b.view().result.seq == 3 && b.view().version == ver + 2);
-    b.feed(R"({"type":"mode_result","seq":4,"code":"ok","toast":"bad\ttoast"})");
-    b.feed(R"({"type":"mode_result","code":"ok"})");
-    assert(b.view().results == 3 && b.view().result.seq == 3 && b.view().version == ver + 2);
-    // A stale input gets an empty toast.
-    b.feed(R"({"type":"mode_result","seq":5,"code":"stale","toast":""})");
-    assert(b.view().result.seq == 5 && !std::strcmp(b.view().result.toast, ""));
-    JsonDocument t;
-    b.s.json(t.to<JsonObject>());
-    assert(t["results"] == 4 && t["bad_results"] == 2 && t["last_result"]["code"] == "stale");
-}
-
-void inputs()
-{
+    // Nine changes before the first report could go: the queue (boot report + 7) collapses into one, still the
+    // boot report, from "unknown"; the next change queues behind it.
     Robot r;
     r.feed(kHello);
-    const int64_t t0 = 5000000;
-    assert(r.s.push_input(t0, "asr", "forward", -1) == 1);
-    assert(r.s.push_input(t0 + 10000, "asr", "digit", 7) == 2);
-    assert(r.s.push_select(t0 + 20000, "select", "subtitle", "en_zh") == 3);
-    assert(r.s.push_input(t0, "asr", "Forward", -1) == 0);                  // not a wire word: refused
-    r.feed(snap(30));
-    // The ack goes first; age_ms is counted when the line is built.
-    assert(r.drain(t0 + 40000) ==
-           "{\"type\":\"mode_applied\",\"seq\":30}\n"
-           "{\"type\":\"mode_input\",\"seq\":1,\"age_ms\":40,\"source\":\"asr\",\"input\":\"forward\",\"value\":null}\n"
-           "{\"type\":\"mode_input\",\"seq\":2,\"age_ms\":30,\"source\":\"asr\",\"input\":\"digit\",\"value\":7}\n"
-           "{\"type\":\"mode_input\",\"seq\":3,\"age_ms\":20,\"source\":\"select\",\"input\":\"select\",\"value\":{\"mode\":\"subtitle\",\"dir\":\"en_zh\"}}\n");
-
-    // A failed send keeps the input at the front.
-    assert(r.s.push_input(t0, "touch", "tap", -1) == 4);
-    Line l; uint32_t seq;
-    assert(r.s.next(t0, l, seq) == ModeSession::Out::Input && seq == 4);
-    assert(r.s.next(t0 + 1000, l, seq) == ModeSession::Out::Input && seq == 4);
-    // While a line is in flight (lock released), the queue overflows and drops it: sent() must not pop the
-    // input that took the front.
-    for (int i = 0; i < 8; ++i) assert(r.s.push_input(t0, "touch", "double_tap", -1) == uint32_t(5 + i));
-    r.s.sent(ModeSession::Out::Input, 4);
-    assert(r.s.next(t0, l, seq) == ModeSession::Out::Input && seq == 5);
+    for (int i = 0; i < 4; ++i) { r.in(Input::Play); r.in(Input::Pause); }   // chat, idle, chat, idle ...
+    assert(r.view().state.mode == Mode::Idle);
+    r.in(Input::Forward);                                                     // talk: the 9th report
+    assert(r.drain() == report(10, "idle", "boot", "\"pause\"", "\"stop_speech\"") +
+                        report(11, "talk", "asr", "\"forward\"", "\"stop_speech\",\"talk_enter\""));
+    // After the boot report: collapse from the last sent state, plus the newest input's own effects.
+    for (int i = 0; i < 8; ++i) r.in(Input::Tap, "touch");                   // 8 say_round reports
+    r.in(Input::DoubleTap, "touch");                                          // the 9th: prefetch_on
+    assert(r.drain() == report(20, "talk", "touch", "\"double_tap\"", "\"prefetch_on\""));
     JsonDocument t;
-    r.s.json(t.to<JsonObject>());
-    assert(t["inputs_queued"] == 8 && t["inputs_dropped"] == 1 && t["inputs_sent"] == 3 && t["last_input_seq"] == 12);
+    r.s.json(t.to<JsonObject>(), 0);
+    assert(t["reports_collapsed"] == 16 && t["reports_sent"] == 3 && t["reports_pending"] == 0);
 
-    // Disconnect drops the queue; seq keeps counting on the next link (mind dedups on boot + seq).
-    r.s.link_down();
-    assert(r.s.push_input(t0, "asr", "next", -1) == 0);
-    r.feed(kHello);
-    assert(r.drain(t0).empty());
-    assert(r.s.push_input(t0, "asr", "next", -1) == 13);
-    assert(r.drain(t0) == "{\"type\":\"mode_input\",\"seq\":13,\"age_ms\":0,\"source\":\"asr\",\"input\":\"next\",\"value\":null}\n");
-    t.clear();
-    r.s.json(t.to<JsonObject>());
-    assert(t["inputs_queued"] == 0 && t["inputs_sent"] == 4 && t["inputs_offline"] == 1);
+    // The report in flight survives a collapse: sent() still records it, and does not pop the new one.
+    Robot f;
+    f.feed(kHello);
+    f.drain();
+    f.in(Input::Play);
+    OutLine l; uint32_t seq;
+    assert(f.s.next(0, l, seq) == ModeSession::Out::Report && seq == 3);
+    for (int i = 0; i < 8; ++i) f.in(i % 2 ? Input::Play : Input::Pause);    // overflow while seq 3 is in flight
+    f.s.sent(ModeSession::Out::Report, 3);
+    // The collapse was computed from the last confirmed report (talk), so it repeats seq 3's effects: harmless.
+    assert(f.drain() == report(11, "chat", "asr", "\"play\"", "\"stop_speech\",\"talk_leave\""));
+    JsonDocument t2;
+    f.s.json(t2.to<JsonObject>(), 0);
+    assert(t2["reports_sent"] == 3 && t2["reports_collapsed"] == 8);
 }
 
-void versions()
+void telemetry_and_versions()
 {
     Robot r;
     uint32_t v = r.view().version;
     auto bumped = [&] { const uint32_t n = r.view().version; const bool b = n != v; v = n; return b; };
-    r.feed(kHello);              assert(bumped());
-    r.feed(kHello);              assert(!bumped());   // a second hello: still online, a new handshake
-    r.feed(snap(1));             assert(bumped());
-    r.feed(snap(1));             assert(!bumped());
-    r.drain(0);                  assert(!bumped());   // sending changes nothing on the screen
-    r.s.push_input(0, "asr", "play", -1); assert(!bumped());
-    r.feed(R"({"type":"mode_result","seq":1,"code":"ok"})"); assert(bumped());
-    r.s.link_down();             assert(bumped());
-    r.s.link_down();             assert(!bumped());
-    r.feed(kHello);              assert(bumped());
-    r.feed(snap(1));             assert(bumped());    // first after the handshake: applied again
+    r.feed(kHello);                      assert(bumped());
+    r.drain();                           assert(!bumped());   // sending changes nothing on the screen
+    r.in(Input::Forward);                assert(bumped());    // a toast (SAYING)
+    r.in(Input::Play);                   assert(bumped());
+    r.s.link_down();                     assert(bumped());
+    r.s.link_down();                     assert(!bumped());
+
+    JsonDocument t;
+    r.s.json(t.to<JsonObject>(), 5 * kS);
+    r.in(Input::Open, "page");                                  // change the session after json(): the doc keeps its copy
+    std::string text;
+    serializeJson(t, text);
+    assert(t["mode"] == "chat" && t["dir"].isNull() && t["host"].isNull() && t["return_to"].isNull());
+    assert(t["by"] == "asr" && t["label"] == "CHAT" && t["online"] == false && t["toast"] == "CHAT" && t["seq"] == 4);
+    assert(t["since_ms"] == 5000 && text.find("\"by\":\"asr\"") != std::string::npos);
+    t.clear();
+    r.s.json(t.to<JsonObject>(), 0);
+    assert(t["mode"] == "settings" && t["return_to"] == "chat" && t["by"] == "page" && t["label"] == "SET");
 }
 }
 
 int main()
 {
     text_frames();
-    offline_until_hello();
-    snapshots_and_acks();
-    reconnects();
-    results_either_order();
-    inputs();
-    versions();
+    boot_and_first_link();
+    inputs_become_reports();
+    links();
+    digits();
+    settings_timeout();
+    collapse();
+    telemetry_and_versions();
     std::puts("mouth modes ok");
 }

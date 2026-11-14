@@ -947,7 +947,9 @@ void fill_info(JsonDocument& doc)
     capabilities["wifi_profiles"] = "supported"; // target wifi: saved networks, scan; telemetry wifi carries the state
     capabilities["mic_gain"] = "supported"; // 0.4.60: target mic_gain, digital gain + limiter on the mic channel
     capabilities["unified_control"] = "supported"; // 0.4.46: every JSON control/config goes through POST /v1/control {target,...}
+    capabilities["modes"] = "robot"; // 0.4.92: hello owns the mode; target mode {input, value}; info/telemetry mode
     control_info_json(doc["control"].to<JsonObject>());
+    mouth::mode_json(doc["mode"].to<JsonObject>());
     doc["assets"]["endpoint"] = "/v1/assets";
     doc["assets"]["selector"] = "X-Voice-Id, or X-Eyes-Style + X-Eyes-State";
     doc["capture_active"] = true;
@@ -1129,6 +1131,7 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     m12_json(doc["m12"].to<JsonObject>());
     vision_uplink_json(doc["m12"]["uplink"].to<JsonObject>());
     mouth::json(doc["mouth"].to<JsonObject>());
+    mouth::mode_json(doc["mode"].to<JsonObject>());   // hello modes step 1b: hello owns the mode
     interaction::json(doc["interaction"].to<JsonObject>());
     health["servo_commands_enabled"] = remote_enabled();
     wifi_ap_record_t ap{};
@@ -1433,6 +1436,29 @@ esp_err_t servo_control(ControlReply* request, JsonObject doc, const char*)
 }
 
 struct ControlTarget { const char* name; ControlHandler handle; };
+// {"target":"mode","input":"forward|...|select|digit|...","value":...} (hello modes step 1b): the page's mode bar.
+// Runs the robot's own rules (mouth_link.h) like a spoken word, source "page"; digits 0 / 9 go on to mind.
+// 200 with the outcome; an input word the rules do not know answers code unknown_input. billing is mind's: 400.
+esp_err_t mode_control(ControlReply* r, JsonObject body, const char*)
+{
+    const char* word = body["input"].is<const char*>() ? body["input"].as<const char*>() : nullptr;
+    bool fields_ok = true;
+    for (JsonPair p : body) fields_ok = fields_ok && (!std::strcmp(p.key().c_str(), "input") || !std::strcmp(p.key().c_str(), "value"));
+    if (!word || !fields_ok || !std::strcmp(word, "billing")) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Expected input (a mode input word, not billing) and optional value"); return ESP_OK;
+    }
+    const auto input = modes::rules::input_from(word);
+    const mouth::Applied a = mouth::mode_apply("page", input, modes::rules::value_from(input, body["value"]));
+    JsonDocument result;
+    result["accepted"] = true;
+    result["code"] = a.to_mind ? (a.input_seq ? "sent_to_mind" : "offline") : modes::rules::code_id(a.out.code);
+    result["toast"] = static_cast<const char*>(a.out.toast);
+    result["changed"] = a.changed; result["reported"] = a.reported;
+    if (a.input_seq) result["input_seq"] = a.input_seq;
+    mouth::mode_json(result["mode"].to<JsonObject>());
+    return send_json(r, result);
+}
+
 const ControlTarget kControlTargets[] = {
     {"yaw_turn", yaw_turn_control}, {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control},
     {"servo", servo_control}, {"wifi", wifi_control},
@@ -1461,6 +1487,7 @@ const ControlTarget kControlTargets[] = {
         }
         JsonDocument result; result["accepted"] = true; result["op"] = m12_op_name(op); result["id"] = id;
         httpd_resp_set_status(r, "202 Accepted"); return send_json(r, result); }},
+    {"mode", mode_control},
     {"interaction", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t { return interaction::handle(r, body); }},
     {"hearing", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t { return hearing::handle(r, body); }},
     {"eyes", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t { return eyes::command_handler(r, body); }},
@@ -1768,6 +1795,23 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
                 screen_touch(touch.num > 0, static_cast<uint32_t>(now / 1000),
                              touch.num > 0 ? touch.x : -1, touch.num > 0 ? touch.y : -1);
             else screen_cancel_touch();
+            {
+                // hello modes step 1b: home tap / double tap are the mode's (rules on the robot, mouth_link.h);
+                // the corner badge and the toast follow the mode state.
+                const auto gesture = screen_take_home_gesture();
+                if (gesture != ScreenHomeGesture::None)
+                    mouth::mode_apply("touch", gesture == ScreenHomeGesture::Tap ? modes::rules::Input::Tap : modes::rules::Input::DoubleTap);
+                static uint32_t mode_seen = 0, toasts_seen = 0;
+                static bool mode_drawn = false;
+                const uint32_t version = mouth::mode_version();
+                if (!mode_drawn || version != mode_seen) {
+                    mouth::ModeView view;
+                    mouth::mode_view(view);
+                    mode_seen = version; mode_drawn = true;
+                    screen_update_mode(view.look.label, view.look.color, view.online);
+                    if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
+                }
+            }
             static uint32_t reaction_seen = 0;
             if (remote.reaction_seq != reaction_seen) {
                 reaction_seen = remote.reaction_seq;
@@ -1805,7 +1849,7 @@ void update_screen(const std::string& ip, const std::string& ssid = {})
             const uint32_t requested_view = m12_view_request();
             if (requested_view != view_seen) {
                 // Normal eye mode (user, 2026-11-10): turning vision on no longer opens the full-screen
-                // face-box page; the home page stays and shows the v14 mech eyes (eye_mode.h).
+                // face-box page; the home page stays and shows the mode's eyes (eye_mode.h).
                 view_seen = requested_view; face_view = false;
                 if (screen_showing_faces()) screen_show_faces(false, tick_ms);
             }
@@ -2011,20 +2055,33 @@ void run()
         previous_ip = ip;
         interaction::tick(esp_timer_get_time());
         {
-            // Normal eye mode (eye_mode.h): laughing man without vision; v14 mech eyes while the
-            // M12 is asked to detect (tracking, recognition or the face view).
+            // Eyes per mode (eye_mode.h, hello modes step 1b): talk = the laughing man always (vision on or
+            // off); chat v05, crowd v14 (lively pool), companion v18; the page_* modes keep the laughing man
+            // until their pages come. Settings closes itself after 5 minutes (mode_tick).
+            mouth::mode_tick();
             static EyeModeController eye_mode;
             static bool eye_mode_ready = false;
             const int64_t t = esp_timer_get_time();
-            if (!eye_mode_ready) { eyes::set_natural_pool(kNormalNaturalPool); eyes::set_voice_auto_enable(false); eye_mode_ready = true; }
-            const bool vision = m12_requested_function(m12_mode_request()) == M12Function::detect;
-            if (eye_mode.due(vision, t)) {
+            if (!eye_mode_ready) { eyes::set_voice_auto_enable(false); eye_mode_ready = true; }
+            mouth::ModeView mode;
+            mouth::mode_view(mode);
+            EyeLook want;
+            switch (mode.look.eye) {
+            case modes::Eye::V05: want.enabled = true; want.style = eyes::Style::V05; break;
+            case modes::Eye::V14: want.enabled = true; want.style = eyes::Style::V14; break;
+            case modes::Eye::V18: want.enabled = true; want.style = eyes::Style::V18; break;
+            default: break;      // laughing_man, page_subtitle / page_settings / page_idle
+            }
+            want.pool = mode.look.pool == modes::Pool::Lively ? kLivelyNaturalPool : kNormalNaturalPool;
+            if (eye_mode.due(want, t)) {
+                eyes::set_natural_pool(want.pool);
                 eyes::Command c;
-                c.op = eyes::Operation::Configure; c.enabled = vision; c.style = kNormalVisionStyle;
+                c.op = eyes::Operation::Configure; c.enabled = want.enabled; c.style = want.style;
                 eye_request_id(c.request_id, [] { return esp_random(); });
                 const auto result = eyes::submit(c, eyes::Source::Manual);
-                eye_mode.applied(vision, result.accepted, t);
-                ESP_LOGI(kTag, "eyes: vision %s -> %s (%s)", vision ? "on" : "off", vision ? "v14 mech eyes" : "laughing man",
+                eye_mode.applied(want, result.accepted, t);
+                ESP_LOGI(kTag, "eyes: mode %s -> %s (%s)", mode.look.label,
+                         want.enabled ? eyes::kStyleIds[static_cast<size_t>(want.style)] : "laughing man",
                          result.accepted ? "accepted" : eyes::name(result.error));
             }
         }

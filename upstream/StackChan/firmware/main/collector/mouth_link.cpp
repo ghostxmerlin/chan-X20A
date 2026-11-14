@@ -33,16 +33,16 @@ bool connected = false, hello_ok = false;
 uint32_t connects = 0, failures = 0, silent_drops = 0, streams = 0, reports_sent = 0, reports_dropped = 0, bad_messages = 0;
 int64_t connected_us = 0;
 
-// JSON documents on /mouth keep their pool in PSRAM (a snapshot is up to 1 KB).
+// JSON documents on /mouth keep their pool in PSRAM (a text message is up to 1600 B).
 struct PsramAllocator final : ArduinoJson::Allocator {
     void* allocate(size_t n) override { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
     void deallocate(void* p) override { heap_caps_free(p); }
     void* reallocate(void* p, size_t n) override { return heap_caps_realloc(p, n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
 } psram_allocator;
 
-// hello modes step 1: the mode state has its own lock, never the audio one (`mutex`), and the two are never
-// held together. The session lives in PSRAM; `mode_ver` mirrors its version for lock-free polling (an atomic
-// in internal RAM: S32C1I does not work on PSRAM).
+// hello modes step 1b: hello owns the mode (mouth_modes.h). The mode state has its own lock, never the audio
+// one (`mutex`), and the two are never held together. The session lives in PSRAM; `mode_ver` mirrors its
+// version for lock-free polling (an atomic in internal RAM: S32C1I does not work on PSRAM).
 std::mutex mode_mutex;
 ModeSession* modes_session = nullptr;
 std::atomic<uint32_t> mode_ver{0};
@@ -66,15 +66,11 @@ void queue_locked(const Report& r)
     outbox[outbox_n++] = r;
 }
 
-void on_mode_message(Text kind, ArduinoJson::JsonObjectConst o)
+void on_mode_result(ArduinoJson::JsonObjectConst o)
 {
     std::lock_guard<std::mutex> lock(mode_mutex);
     if (!modes_session) return;
-    if (kind == Text::Mode) {
-        if (modes_session->on_mode(o) == modes::Parse::Bad) ESP_LOGW(kTag, "bad mode snapshot");
-    } else {
-        modes_session->on_result(o);
-    }
+    if (!modes_session->on_result(o)) ESP_LOGW(kTag, "mode_result dropped");
     mode_publish_locked();
 }
 
@@ -91,7 +87,7 @@ void on_message(const char* data, size_t n, bool binary)
     const Text kind = read_text(data, n, doc);
     if (kind == Text::Other) return;
     if (kind == Text::TooLong || kind == Text::Bad) { std::lock_guard<std::mutex> lock(mutex); ++bad_messages; return; }
-    if (kind == Text::Mode || kind == Text::ModeResult) { on_mode_message(kind, doc.as<ArduinoJson::JsonObjectConst>()); return; }
+    if (kind == Text::ModeResult) { on_mode_result(doc.as<ArduinoJson::JsonObjectConst>()); return; }
     bool handshake = false;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -112,7 +108,7 @@ void on_message(const char* data, size_t n, bool binary)
             stream.stop(sid, *ring);
         }
     }
-    if (handshake) {        // the ear's hello: inputs are taken, the next snapshot is applied whatever its seq
+    if (handshake) {        // the ear's hello: the current mode goes up first, then every change
         std::lock_guard<std::mutex> lock(mode_mutex);
         if (modes_session) { modes_session->link_up(); mode_publish_locked(); }
     }
@@ -141,20 +137,20 @@ void drop_stream_locked()
     outbox_n = 0; hello_ok = false;
 }
 
-// Disconnect: queued inputs go (the ear answers none of them); an unsent mode_applied waits for the next link.
+// Disconnect: unsent reports and digits go; the next link sends the current state again.
 void drop_modes()
 {
     std::lock_guard<std::mutex> lock(mode_mutex);
     if (modes_session) { modes_session->link_down(); mode_publish_locked(); }
 }
 
-// Pending mode_applied first, then queued mode_inputs, at most 4 lines a pass. Each line is built under the
-// mode lock and sent without it (the ASR task and the screen only queue). false = the send failed and the
-// link is gone; the line stays pending.
+// mode_reports first, then digit mode_inputs, at most 4 lines a pass. Each line is built under the mode lock
+// and sent without it (the ASR task, the screen and the page only queue). false = the send failed and the link
+// is gone; the line stays pending until then.
 bool send_modes(hearing::HearingSocket& socket)
 {
     for (int i = 0; i < 4; ++i) {
-        modes::Line line;
+        OutLine line;
         uint32_t seq = 0;
         ModeSession::Out kind;
         {
@@ -293,6 +289,8 @@ void init(const std::string& device_id, const std::string& boot_id)
     if (void* mem = heap_caps_calloc(1, sizeof(ModeSession), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) {
         std::lock_guard<std::mutex> lock(mode_mutex);
         modes_session = new (mem) ModeSession();      // never freed: lives as long as the link task
+        modes_session->boot(esp_timer_get_time());    // power-on: talk; its "boot" report waits for the first link
+        mode_publish_locked();
     } else {
         ESP_LOGE(kTag, "no memory for the mode session: modes off");
     }
@@ -303,16 +301,34 @@ void init(const std::string& device_id, const std::string& boot_id)
     }
 }
 
-uint32_t mode_link_send_input(const char* source, const char* input, int value)
+namespace {
+// hello is speaking: a /mouth stream is playing (from tts.start until it is done or stopped).
+bool speaking_now()
 {
-    std::lock_guard<std::mutex> lock(mode_mutex);
-    return modes_session ? modes_session->push_input(esp_timer_get_time(), source, input, value) : 0;
+    std::lock_guard<std::mutex> lock(mutex);
+    return ring && stream.active() && !stream.stopped && !stream.finished;
+}
 }
 
-uint32_t mode_link_send_select(const char* mode, const char* dir, const char* source)
+Applied mode_apply(const char* source, modes::rules::Input input, const modes::rules::Value& value)
 {
+    const bool speaking = speaking_now();       // the audio lock first, released before the mode lock
     std::lock_guard<std::mutex> lock(mode_mutex);
-    return modes_session ? modes_session->push_select(esp_timer_get_time(), source, mode, dir) : 0;
+    if (!modes_session) { Applied a; std::snprintf(a.out.toast, sizeof a.out.toast, "NO MODES"); a.out.code = modes::rules::Code::UnknownInput; return a; }
+    const Applied a = modes_session->apply(esp_timer_get_time(), source, input, value, speaking);
+    mode_publish_locked();
+    if (a.changed) ESP_LOGI(kTag, "mode %s by %s (%s)", modes::rules::label(a.out.state), source, modes::rules::input_id(input));
+    return a;
+}
+
+void mode_tick()
+{
+    const bool speaking = speaking_now();
+    std::lock_guard<std::mutex> lock(mode_mutex);
+    if (modes_session && modes_session->tick(esp_timer_get_time(), speaking)) {
+        mode_publish_locked();
+        ESP_LOGI(kTag, "mode %s by timeout", modes::rules::label(modes_session->state()));
+    }
 }
 
 bool mode_view(ModeView& out)
@@ -323,14 +339,16 @@ bool mode_view(ModeView& out)
     return true;
 }
 
+void mode_json(ArduinoJson::JsonObject out)
+{
+    std::lock_guard<std::mutex> lock(mode_mutex);
+    if (modes_session) modes_session->json(out, esp_timer_get_time());
+}
+
 uint32_t mode_version() { return mode_ver.load(std::memory_order_acquire); }
 
 void json(ArduinoJson::JsonObject out)
 {
-    {
-        std::lock_guard<std::mutex> lock(mode_mutex);
-        if (modes_session) modes_session->json(out["mode"].to<ArduinoJson::JsonObject>());
-    }
     std::lock_guard<std::mutex> lock(mutex);
     out["state"] = state; out["connected"] = connected;
     out["connects"] = connects; out["failures"] = failures; out["silent_drops"] = silent_drops; out["streams"] = streams;

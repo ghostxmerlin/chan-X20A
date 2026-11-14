@@ -35,15 +35,25 @@ int main()
     }
     assert(ids.size() == 200);
 
-    // controller: configure once per vision change; retry after a refused submit
+    // controller: configure once per look change; retry after a refused submit
     EyeModeController m;
-    assert(m.due(false, 0));                          // boot: make the home page explicit once
-    m.applied(false, true, 0);
-    assert(!m.due(false, 1) && m.due(true, 1));
-    m.applied(true, false, 1);                         // e.g. storage not ready
-    assert(!m.due(true, 2) && m.due(true, 1 + EyeModeController::kRetryUs));
-    m.applied(true, true, 1 + EyeModeController::kRetryUs);
-    assert(m.vision() && !m.due(true, 9000000) && m.due(false, 9000000));
+    const EyeLook laughing{}, v05{true, Style::V05, kNormalNaturalPool}, v14_lively{true, Style::V14, kLivelyNaturalPool};
+    assert(m.due(laughing, 0));                       // boot: make the home page explicit once
+    m.applied(laughing, true, 0);
+    assert(!m.due(laughing, 1) && m.due(v05, 1));
+    m.applied(v05, false, 1);                          // e.g. storage not ready
+    assert(!m.due(v05, 2) && m.due(v05, 1 + EyeModeController::kRetryUs));
+    m.applied(v05, true, 1 + EyeModeController::kRetryUs);
+    assert(m.known() && m.look() == v05 && !m.due(v05, 9000000) && m.due(laughing, 9000000) && m.due(v14_lively, 9000000));
+    // a refused submit does not delay a later, different look forever: the retry clock is per attempt
+    m.applied(v14_lively, false, 9000000);
+    assert(!m.due(laughing, 9000001) && m.due(laughing, 9000000 + EyeModeController::kRetryUs));
+    // the laughing man ignores the style; the pool still counts (it is set before the configure)
+    assert((EyeLook{false, Style::V18, kNormalNaturalPool} == laughing));
+    assert((EyeLook{false, Style::V14, kLivelyNaturalPool} != laughing));
+    // the lively pool: greeting, happy, curious, goofy, surprised (spec 3.2)
+    for (State s : {State::Greeting, State::Happy, State::Curious, State::Goofy, State::Surprised}) assert(eye_bit(s) & kLivelyNaturalPool);
+    assert(!(eye_bit(State::Sleepy) & kLivelyNaturalPool));
 
     // voice cues no longer enable the eyes: without vision the home page stays
     {

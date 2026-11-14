@@ -88,4 +88,12 @@ void screen_update_wifi_status(const char* text);
 bool screen_wifi_take_scan_request();
 bool screen_wifi_take_credentials(char* ssid, size_t ssid_size, char* password, size_t password_size);
 bool screen_showing_wifi();
+// hello modes step 1b. Home-page taps are the mode's: the classifier (touch_gesture.h) waits 300 ms for a
+// double tap; each call returns the latest one once. A left swipe on home opens the summary (was: a tap).
+enum class ScreenHomeGesture : uint8_t { None, Tap, DoubleTap };
+ScreenHomeGesture screen_take_home_gesture();
+// Corner badge, every page: the mode's ASCII label on its color; offline = grey with " OFF".
+void screen_update_mode(const char* label, uint32_t color, bool online);
+// A short ASCII line at the bottom for 2 s (the mode's toast). Empty text shows nothing.
+void screen_show_toast(const char* text, uint32_t now_ms);
 }

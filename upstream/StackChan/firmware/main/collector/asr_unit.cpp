@@ -51,11 +51,16 @@ struct RemoteYawPort {
 AsrYawPlan yaw_plan;
 BootTracking boot_tracking; // only asr_task changes it; asr_json reads the result string
 
-// Mode words go to mind over /mouth (hello modes step 1): queued for the /mouth task, never sent
-// from here (digit < 0 = value null). false = /mouth is offline, reported as "(offline)".
-bool send_mode_input(const char* input, int digit)
+// Mode words (hello modes step 1b): hello owns the mode, so the word runs through mode_rules.h right
+// here (fast, under the mode lock; never waits on the network). Changes are reported to mind over
+// /mouth; digits 0 / 9 are sent to mind. Fills code / toast for the log.
+void apply_mode_word(const char* input, int digit, const char*& code, char (&toast)[33])
 {
-    return mouth::mode_link_send_input("asr", input, digit) != 0;
+    modes::rules::Value v;
+    v.digit = digit;
+    const mouth::Applied a = mouth::mode_apply("asr", modes::rules::input_from(input), v);
+    code = a.to_mind ? (a.input_seq ? "to mind" : "offline") : modes::rules::code_id(a.out.code);
+    std::snprintf(toast, sizeof toast, "%s", a.out.toast);
 }
 struct MotionState {
     uint32_t seq = 0;           // ASR event that started the latest action
@@ -143,7 +148,9 @@ void asr_task(void*)
             interaction::asr_command(frame.id,frame.has_value);
             int digit = -1;
             const char* mode_input = asr_mode_input(frame.id, frame.has_value, &digit);
-            const bool mode_sent = mode_input && send_mode_input(mode_input, digit);
+            const char* mode_code = "";
+            char mode_toast[33] = "";
+            if (mode_input) apply_mode_word(mode_input, digit, mode_code, mode_toast);
             const char* word = asr_word(frame.id);
             const auto outcome = yaw_plan.command(asr_motion_word(frame.id, frame.has_value), port, esp_timer_get_time());
             event.action = outcome.action; event.result = outcome.result;
@@ -166,8 +173,8 @@ void asr_task(void*)
                 ESP_LOGI(kTag, "#%lu id=0x%02X %s -> %s %s", static_cast<unsigned long>(event.seq), frame.id,
                          word ? word : "(unknown)", outcome.action, outcome.result);
             else if (mode_input)
-                ESP_LOGI(kTag, "#%lu id=0x%02X %s -> mode %s%s", static_cast<unsigned long>(event.seq), frame.id,
-                         word ? word : "(unknown)", mode_input, mode_sent ? "" : " (offline)");
+                ESP_LOGI(kTag, "#%lu id=0x%02X %s -> mode %s: %s %s", static_cast<unsigned long>(event.seq), frame.id,
+                         word ? word : "(unknown)", mode_input, mode_code, mode_toast);
             else
                 ESP_LOGI(kTag, "#%lu id=0x%02X %s", static_cast<unsigned long>(event.seq), frame.id,
                          word ? word : "(unknown)");
@@ -241,8 +248,9 @@ void asr_info_json(ArduinoJson::JsonObject out)
     reactions["0x15 turn off"] = "home";
     out["reaction_sound"] = false;
     out["boot_tracking"] = boot_tracking.result();
-    // Mode words (hello modes step 1, owner 2026-11-14): sent to mind as /mouth mode_input; mind
-    // decides what they do in the current mode. Their old local uses are gone.
+    // Mode words (hello modes step 1b, owner 2026-11-14): hello runs them through its own mode rules
+    // (mode_rules.h) and reports changes to mind over /mouth; digits 0 / 9 go to mind (paid off / on),
+    // 4-8 pick a mode, 1-3 do nothing. Their old local uses are gone.
     auto modes = out["mode_words"].to<ArduinoJson::JsonObject>();
     modes["0x07 forward"] = "forward (enter talk show)";
     modes["0x09 backward"] = "backward (leave talk show)";
@@ -254,7 +262,7 @@ void asr_info_json(ArduinoJson::JsonObject out)
     modes["0x13 stop"] = "stop (event-driven; no longer hearing stop)";
     modes["0x1B next"] = "next (per mode; no longer a random clip)";
     modes["0x1A previous"] = "previous (per mode)";
-    modes["0x20-0x29 zero..nine"] = "digit 0-9 (presets)";
+    modes["0x20-0x29 zero..nine"] = "digit: 0 / 9 = mind's all paid off / on; 4 idle, 5 crowd, 6 companion, 7 subtitle zh>en, 8 subtitle en>zh; 1-3 none";
     // Spoken yaw words (2026-11-13), robot's own left/right like the web buttons.
     auto yaw = out["yaw_words"].to<ArduinoJson::JsonObject>();
     yaw["0x01 up"] = "tracking_on";

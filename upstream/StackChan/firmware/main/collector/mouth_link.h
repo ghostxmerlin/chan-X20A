@@ -23,19 +23,19 @@ constexpr size_t kPacketMax = 768;
 // Queue a report for the server; Done / Stopped / Error also finish the stream.
 void player_report(const Report& r);
 
-// hello modes step 1 (collector-0.4.92). mind owns the mode; the ear pushes its snapshot down /mouth and
-// answers each input with a mode_result. Safe from any task (ASR, screen/main); none of these blocks on the
-// network or the audio path, and none writes NVS.
-// Queue a mode_input (value < 0 = null, else e.g. the digit 0..9); sent on the /mouth task with age_ms since
-// this call. Returns the input's seq (unique per boot, matches mode_result.seq), 0 = not queued: /mouth is not
-// connected with the ear's hello (show OFFLINE), or a word is not a wire word. A full queue (8) drops its oldest.
-uint32_t mode_link_send_input(const char* source, const char* input, int value = -1);
-// input "select" with value {mode, dir?} (dir null or "" = none): the mode picker, page or quick settings.
-uint32_t mode_link_send_select(const char* mode, const char* dir = nullptr, const char* source = "select");
-// A copy of the current mode state (snapshot, online, latest mode_result) taken under the mode lock.
-// false (and an empty view) only when the session could not be allocated at boot.
+// hello modes step 1b (collector-0.4.92): hello owns the mode (mouth_modes.h, mode_rules.h). Safe from any
+// task (ASR, the LVGL timer, httpd, main); none of these blocks on the network or the audio path, none writes NVS.
+// One input from `source` (asr, touch, page): runs the rules now; a change, or an input with effects, is reported
+// to mind over /mouth; digits 0 / 9 are sent to mind (a.to_mind). a.out.toast is what the screen shows.
+Applied mode_apply(const char* source, modes::rules::Input input, const modes::rules::Value& value = {});
+// Main loop: closes settings after 5 minutes without input.
+void mode_tick();
+// A copy of the mode state (state, look, online, latest toast and mode_result) taken under the mode lock.
+// false (and a default view: talk) only when the session could not be allocated at boot.
 bool mode_view(ModeView& out);
-// Changes whenever the view changes (snapshot applied, online/offline, new mode_result). Lock free: poll it
-// each screen tick and call mode_view() only when it moved.
+// Telemetry / info "mode": mode, dir, host, return_to, seq, label, by, since_ms, online, counters.
+void mode_json(ArduinoJson::JsonObject out);
+// Changes whenever the view changes (mode, online/offline, toast, mode_result). Lock free: poll it each screen
+// tick and call mode_view() only when it moved.
 uint32_t mode_version();
 }
