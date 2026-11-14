@@ -367,6 +367,10 @@ class MouthModeTest(MouthLinkTest):
                 if st == 200 else (st, {"error": "bad report"})
         if (method, path) == ("POST", "/mode/robot"):
             return 200, {"snapshot": {}}
+        if (method, path) == ("POST", "/chat/heard"):
+            if getattr(self, "mind_chat_delay", 0):
+                self._time.sleep(self.mind_chat_delay)
+            return 200, {"tid": "t1", "accepted": True, "skip": None}
         if (method, path) == ("POST", "/mode/input"):
             if self.mind_input_delay:
                 self._time.sleep(self.mind_input_delay)
@@ -628,6 +632,126 @@ class MouthModeTest(MouthLinkTest):
         self.assertEqual([b["seq"] for b in self.mind_calls_to("/mode/input")], [2])
         self.assertEqual([(b["seq"], b["effects"]) for b in self.mind_calls_to("/mode/report")], [(3, [])])
 
+
+SPEECH = {"type": "speech", "phase": "end", "id": "s-3", "pos": [16000, 32000], "t": 1794300000000, "dur": 1.0,
+          "speaker": {"band": "known", "name": "me", "score": 0.7, "runner_up": None}, "text": "今天几号",
+          "lang": "zh", "emotion": "neutral", "emotion_reliable": False, "event": "speech",
+          "voice": {"p": 0.3, "band": "unclear", "acoustic_band": "unclear", "loud_db": 18.5, "rate": 4.0},
+          "tags": {"speech_p": 0.9, "kinds": []}, "self": {"sounding": False, "moving": False}, "respond": True,
+          "debug": {"vad_wait_ms": 400, "queue_ms": 1, "asr_ms": 150, "server_ms": 520}}
+
+
+@unittest.skipUnless(HAVE_WS, "needs websockets")
+class ChatPushTest(MouthModeTest):
+    """Chat v0: the relay remembers hello's reported mode; in chat a speech end goes to mind /chat/heard at once,
+    on the relay's pool, bounded, never blocking the loop."""
+
+    async def in_mode(self, ws, mode, seq=1):
+        await ws.send(report(seq, mode, ["stop_speech"], inp="play" if mode == "chat" else "pause"))
+        for _ in range(150):
+            if self.hub.robot_mode == mode:
+                return
+            await asyncio.sleep(0.02)
+        self.fail(f"relay did not see {mode}")
+
+    async def test_in_chat_a_sentence_goes_to_mind(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+            self.assertTrue(self.hub.chat_heard(dict(SPEECH), "20261114/120000-stackchan-c1"))
+            body = (await self.wait_mind("/chat/heard"))[0]
+        self.assertEqual({k: body[k] for k in ("session", "id", "pos", "text", "lang", "emotion", "loud_db", "self")},
+                         {"session": "20261114/120000-stackchan-c1", "id": "s-3", "pos": [16000, 32000],
+                          "text": "今天几号", "lang": "zh", "emotion": "neutral", "loud_db": 18.5,
+                          "self": {"sounding": False, "moving": False}})
+        self.assertEqual(body["speaker"], {"band": "known", "name": "me", "score": 0.7})
+        self.assertEqual(body["voice"], {"p": 0.3, "band": "unclear", "acoustic_band": "unclear", "loud_db": 18.5})
+        self.assertEqual(body["debug"]["server_ms"], 520)
+        self.assertIsInstance(body["sent_at"], int)
+        self.assertTrue(all(n.startswith("mode-mind") for n in self.mind_threads), self.mind_threads)
+        self.assertFalse(any("今天几号" in line for line in self.logs))
+
+    async def test_outside_chat_nothing_is_sent(self):
+        self.assertFalse(self.hub.chat_heard(dict(SPEECH), "s"))                 # no mode reported yet
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat", seq=1)
+            await self.in_mode(ws, "idle", seq=2)
+            self.assertFalse(self.hub.chat_heard(dict(SPEECH), "s"))
+            await self.in_mode(ws, "chat", seq=3)
+            self.assertFalse(self.hub.chat_heard({**SPEECH, "text": "  "}, "s"))    # no text: nothing to answer
+            await asyncio.sleep(0.1)
+        self.assertEqual(self.mind_calls_to("/chat/heard"), [])
+
+    async def test_settings_over_chat_is_not_chat(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat", seq=1)
+            await ws.send(report(2, "settings", ["stop_speech"], inp="open", return_to="chat"))
+            for _ in range(100):
+                if self.hub.robot_mode == "settings":
+                    break
+                await asyncio.sleep(0.02)
+            self.assertFalse(self.hub.chat_heard(dict(SPEECH), "s"))
+
+    async def test_slow_mind_never_blocks_and_extra_sentences_are_dropped(self):
+        self.mind_chat_delay = 0.8
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+            t0 = self._time.monotonic()
+            sent = [self.hub.chat_heard({**SPEECH, "id": f"s-{i}"}, "s") for i in range(4)]
+            self.assertLess(self._time.monotonic() - t0, 0.05)                    # the loop never waited
+            self.assertEqual(sent, [True, True, False, False])                     # at most 2 in flight
+            await self.upstream_send(json.dumps({"type": "tts.start", "stream": 5}))   # audio keeps flowing meanwhile
+            self.assertEqual((await self.recv_type(ws, "tts.start", timeout=0.3))["stream"], 5)
+            await ws.send(report(2, "chat", [], inp="tap"))                        # and mode reports still reach mind
+            await self.wait_mind("/mode/report", n=2, timeout=0.6)
+            await self.wait_mind("/chat/heard", n=2)
+            for _ in range(100):
+                if self.hub.chat_inflight == 0:
+                    break
+                await asyncio.sleep(0.02)
+            self.assertEqual(self.hub.chat_inflight, 0)
+            self.assertTrue(self.hub.chat_heard({**SPEECH, "id": "s-9"}, "s"))   # room again
+        self.assertTrue(any("dropped" in line for line in self.logs))
+
+    async def test_mind_timeout_frees_the_slot(self):
+        self.mind_chat_delay = 1.5
+        self.hub.chat_timeout_s = 0.2
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+            self.hub.chat_heard(dict(SPEECH), "s")
+            await asyncio.sleep(0.4)
+            self.assertEqual(self.hub.chat_inflight, 0)
+        self.assertTrue(any("not taken" in line for line in self.logs))
+
+    async def test_the_link_closing_forgets_its_mode(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+        await self.wait_result()
+        self.assertIsNone(self.hub.robot_mode)
+        self.assertFalse(self.hub.chat_heard(dict(SPEECH), "s"))
+
+    async def test_an_old_link_closing_keeps_the_new_links_mode(self):
+        self.hub.note_report({"mode": "chat"}, 7)
+        self.hub.link_closed(6)
+        self.assertTrue(self.hub.in_chat())
+        self.hub.link_closed(7)
+        self.assertFalse(self.hub.in_chat())
+
+
+class EarHookTest(unittest.TestCase):
+    """ear_server's end_speech hands the event to the relay (source check: ear_server needs the models to import)."""
+    def test_end_speech_calls_chat_heard_for_robot_sources(self):
+        src = (Path(__file__).resolve().parents[1] / "server" / "ear" / "ear_server.py").read_text()
+        body = src[src.index("    async def end_speech"):src.index("    # ---------- sound ----------")]
+        self.assertIn("self.chat.chat_heard(ev, self.session)", body)
+        self.assertIn("self.device_profile and text", body)
+        self.assertLess(body.index("self.post(ev)"), body.index("chat_heard"))   # the robot's event first
+        self.assertIn("ear.chat = mode_hub", src)
 
 class MindClientTest(unittest.TestCase):
     def test_never_raises_when_mind_is_down(self):

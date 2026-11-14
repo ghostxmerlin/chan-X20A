@@ -8,6 +8,7 @@ POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voic
 POST /say/round /say/play /signal /say/prefetch /say/auto (talk show; 连续说 state is in GET /say/stats under auto)
 GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
 POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
+GET  /chat/turns; POST /chat/heard (ear: one sentence heard while hello is in chat; chat v0, mind/chat.py)
 GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/robot (ear: hello's /mouth closed)
      /mode/input (ear: hello's digits 0 / 9) /mode (page: billing only) /preset (modes step 1b: hello owns the mode,
      mind mirrors it; /switches also takes {name: billing, on} = preset 9 / preset 0). With a mode store in ctx, 说话类
@@ -424,6 +425,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == '/signals':
             lo, hi = _range(q)
             return owner_signals.recent(db, lo, hi)
+        if path == '/chat/turns':
+            chat = ctx.get('chat')
+            if not chat:
+                raise Conflict('chat is not configured here')
+            return chat.turns(max(1, min(_int(q, 'limit', required=False) or 5, 20)))
         if path == '/say/stats':
             days = max(1, min(_int(q, 'days', required=False) or 7, 365))
             now = int(time.time() * 1000)
@@ -619,6 +625,14 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return modes().apply("billing", body.get("value"), source="page", now_ms=now)
         if path == "/mode/input":
             return mode_input(body)
+        if path == "/chat/heard":
+            chat = ctx.get("chat")
+            if not chat:
+                raise Conflict("chat is not configured here")
+            try:
+                return chat.heard(body)
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
         if path == "/mode/report":
             ms = modes()
             if not (_is_int(body.get("age_ms", 0)) and body.get("age_ms", 0) >= 0):
@@ -737,7 +751,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             url = urlsplit(self.path)
             if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
                                 '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
-                                '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset'):
+                                '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats", "/mode/seq"):
                     self._send(405, {"error": "read only"})
                 else:

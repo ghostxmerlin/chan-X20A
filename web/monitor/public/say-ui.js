@@ -49,6 +49,25 @@ export function utterancesHtml(list,roles){
   return `<li><span class="muted">${hhmmss(u.at)}</span> <b>${escapeHtml(name[u.role]||u.role||'')}</b> ${escapeHtml(u.text||'')} <span class="muted">${extra}</span>${u.uid&&u.role!=='try'?` <button data-say-explain="${escapeHtml(u.uid)}" class="inline-button">为什么说这句</button>`:''}</li>`;
  }).join('')+'</ul>';
 }
+// Chat v0: the last chat turn (mind /chat/turns), heard -> reply, why it was skipped, and how long it took.
+const CHAT_SKIPS={not_chat:'不在对话模式',self:'hello 自己在出声',hello_voice:'是 hello 自己的声音',hello_speaking:'hello 正在说话',
+ empty:'没听清',filler:'只有语气词',far_band:'太远（不像人声）',far_quiet:'太远（声音太小）',mouth_not_tts:'嘴不是 TTS',
+ no_model:'没配模型',no_tts:'没配 TTS',replaced:'被下一句顶掉',stale:'等太久，过期了',superseded:'想的时候又来了新的一句，回新的',
+ empty_reply:'模型没写出话',llm_error:'模型出错',left_chat:'已离开对话',cancelled:'被叫停',no_mouth:'嘴没连上',tts_error:'合成出错'};
+const CHAT_STATES={queued:'排队中',thinking:'正在想',answered:'回了'};
+const secs=ms=>Number.isFinite(ms)?`${(ms/1000).toFixed(1)} 秒`:null;
+export function chatTurnHtml(t){
+ if(!t||typeof t!=='object')return '';
+ const tm=t.timings&&typeof t.timings==='object'?t.timings:{};
+ const sound=Number.isFinite(tm.end_to_submit_ms)&&Number.isFinite(tm.tts_first_sound_ms)?tm.end_to_submit_ms+tm.tts_first_sound_ms:null;
+ const facts=[secs(tm.llm_ms)&&`模型 ${secs(tm.llm_ms)}`,secs(tm.end_to_submit_ms)&&`说完到送出 ${secs(tm.end_to_submit_ms)}`,
+  secs(sound)&&`说完到开口 ${secs(sound)}`,t.model?escapeHtml(t.model):null,
+  Number.isFinite(t.cost_usd)?`$${t.cost_usd.toFixed(5)}`:null].filter(Boolean).join(' · ');
+ const reply=t.state==='answered'&&t.reply?escapeHtml(t.reply):
+  `<span class="muted">（${escapeHtml(t.skip?CHAT_SKIPS[t.skip]||t.skip:CHAT_STATES[t.state]||t.state||'—')}）</span>`;
+ return `<p class="chat-turn"><span class="muted">${Number.isFinite(t.at)?hhmmss(t.at):'—'} 对话</span> `+
+  `${t.who?`<b>${escapeHtml(t.who)}</b>：`:''}${escapeHtml(t.text||'')} → ${reply}${facts?` <span class="muted">${facts}</span>`:''}</p>`;
+}
 export function sayErrorMessage(e){
  let m=String(e?.message||e),code;
  try{const body=JSON.parse(m);if(typeof body?.error==='string'){m=body.error;code=body.code;}}catch{}
@@ -263,6 +282,8 @@ export class SayPanel{
   this.refreshRound();
   const sig=this.doc.getElementById('say-signals');
   if(sig){try{sig.innerHTML=signalsHtml(await getJson(`/signals?from=${Date.now()-3600000}&to=${Date.now()+60000}`));}catch{}}
+  const chat=this.doc.getElementById('say-chat');
+  if(chat){try{const rows=await getJson('/chat/turns?limit=1');chat.innerHTML=chatTurnHtml(rows?.[0]);}catch{chat.innerHTML='';}}
   const d0=new Date();d0.setHours(0,0,0,0);
   try{const list=await getJson(`/utterances?from=${d0.getTime()}&to=${Date.now()+60000}`);
    this.doc.getElementById('say-utterances').innerHTML=utterancesHtml(list,this.roles);}catch{}

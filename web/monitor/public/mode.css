@@ -13,6 +13,7 @@
 .modebar .mode-sync-yes{border-color:#2e9d4f;color:#b9f5c8}
 .modebar .mode-sync-waiting{border-color:#8a6d3b;color:#f4bd72}
 .modebar .mode-sync-offline{border-style:dashed;color:#aaa}
+.modebar .mode-warn{font-size:12px;padding:1px 6px;border-radius:5px;border:1px solid #c98a2e;color:#f4bd72;white-space:nowrap}
 .modebar .mode-buttons{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
 .modebar button{min-height:28px;padding:2px 8px;font-size:13px;border-radius:6px;border:1px solid #555;background:#222;color:inherit;cursor:pointer;white-space:nowrap}
 .modebar button[aria-pressed=true]{border-color:#2e9d4f;background:#1f5c35;color:#e8ffef;font-weight:700}

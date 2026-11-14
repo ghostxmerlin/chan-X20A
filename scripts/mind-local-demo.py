@@ -2,6 +2,10 @@
 database, and a stand-in hello that runs the reference rules (mind/modes.py transition, the same rules the firmware
 replays as test vectors) and reports every change to mind the way hello does over /mouth.
 
+Chat v0: in 对话 (chat) a sentence typed into this terminal goes to mind's real chat worker as if the ear had heard it
+(demo.hear); a fake model writes the reply and a fake soul-tts "says" it, so a whole turn shows on the page (台词 panel,
+the chat card) without cost.
+
 No Mongo, no robot, no soul-tts, no model, no paid worker: the 提前写 / 连续说 workers are the real classes with their
 loops never started (their switches only flip, so the page shows them on / off); write / play functions raise if
 anything ever tried. State is lost when this process stops. Steps in docs/mode-demo.md.
@@ -28,13 +32,58 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, 'tests'), os.path.join(ROOT, 'server')]
 
 from mind_fixtures import FakeDB                       # noqa: E402
-from mind import api, mode_store, modes, runner, say_auto, say_prefetch   # noqa: E402
+from mind import api, chat as chat_mod, mode_store, modes, runner, say_auto, say_prefetch, speak   # noqa: E402
 from mind.settings_store import SettingsStore          # noqa: E402
 from mind.store import Store                           # noqa: E402
 
 
 def _never(*_a, **_k):
     raise RuntimeError('demo: nothing is written or played')
+
+
+class DemoTts:
+    """A fake soul-tts for chat: says nothing, answers at once with plausible timings."""
+    def __init__(self):
+        self.said = []
+
+    def health(self):
+        return {'mouth': {'device': {'device_id': 'demo'}}}
+
+    def say(self, text, **kw):
+        self.said.append((text, kw))
+        return f'demo-tts-{len(self.said)}'
+
+    def status(self, uid, wait=0):
+        return {'state': 'done', 'created': time.time(), 'timings_s': {'first_accepted': 0.45, 'first_sound': 0.65, 'done': 2.5}}
+
+    def stop(self):
+        return []
+
+
+def demo_model(base, key, body, timeout=90):
+    """A fake model for chat: echoes the last sentence after a short think, with usage so the cost shows."""
+    time.sleep(0.4)
+    last = body['messages'][-1]['content'].split('\n')[-1]
+    if last.startswith('【') and '】' in last:
+        last = last.split('】', 1)[1]
+    reply = f'演示回答：你刚才说的是{last[:16]}，我听见了。'
+    return {'choices': [{'message': {'content': reply}}], 'usage': {'prompt_tokens': 900, 'completion_tokens': 24}}, 400, None
+
+
+_HEARD = [0]
+
+
+def hear(ctx, text, *, loud_db=20.0, speaker=None):
+    """A sentence as the ear sends it to /chat/heard while hello is in chat -> chat.heard's answer."""
+    _HEARD[0] += 1
+    now = int(time.time() * 1000)
+    body = {'session': 'demo', 'id': f's-{_HEARD[0]}', 'pos': [0, 16000], 't': now - 1500, 'dur': 1.0, 'text': text,
+            'lang': 'zh', 'emotion': 'neutral', 'event': 'speech',
+            'speaker': speaker or {'band': 'unknown', 'name': None, 'score': None},
+            'voice': {'p': 0.5, 'band': 'voice', 'acoustic_band': 'voice', 'loud_db': loud_db}, 'loud_db': loud_db,
+            'self': {'sounding': False, 'moving': False},
+            'debug': {'vad_wait_ms': 400, 'asr_ms': 150, 'server_ms': 500}, 'sent_at': now - 5}
+    return ctx['chat'].heard(body)
 
 
 def _interrupt(*_):
@@ -155,13 +204,41 @@ def build(settings_timeout_s=300, clock_ms=lambda: int(time.time() * 1000)):
                                  write_fn=_never)
     auto = say_auto.Worker(store, prefetch=worker, settings_fn=lambda: ss.current()[0], mouth_fn=mouth,
                            play_fn=_never)
+    tts = DemoTts()
+    chat = chat_mod.Chat(db, store, settings_fn=lambda: ss.current()[0],
+                         roles_fn=lambda: speak.load_roles(os.path.join(ROOT, 'config', 'roles')), tts=tts,
+                         env={'base_url': 'demo', 'api_key': 'demo'}, chat_fn=demo_model, clock_ms=clock_ms,
+                         log=lambda *a, **k: None)
     ms, billing, gate = runner.wire_modes(db, store, settings_store=ss, tts=None, say_worker=worker, say_auto=auto,
-                                          say_round_fn=None, clock_ms=clock_ms)
+                                          say_round_fn=None, clock_ms=clock_ms, chat=chat)
     worker.mode_fn = auto.mode_fn = lambda: ms.current()['mode']
     hello = FakeHello(ms, settings_timeout_ms=int(settings_timeout_s * 1000), clock_ms=clock_ms)
     ctx = {'settings_store': ss, 'say_worker': worker, 'say_auto': auto, 'mode_store': ms, 'billing': billing,
-           'round_gate': gate, 'hello': hello}
+           'round_gate': gate, 'hello': hello, 'chat': chat, 'demo_tts': tts}
     return store, ctx
+
+
+def _typed(ctx):
+    """Every line typed into the demo terminal = one heard sentence; prints what chat did with it."""
+    for line in sys.stdin:
+        text = line.strip()
+        if not text:
+            continue
+        r = hear(ctx, text)
+        if not r['accepted']:
+            print(f'  没回：{r["skip"]}' + ('（先在网页上点“对话”）' if r['skip'] == 'not_chat' else ''), flush=True)
+            continue
+        row = {}
+        for _ in range(100):
+            row = ctx['chat'].db['chat_turns'].find_one({'tid': r['tid']}) or {}
+            if row.get('state') not in ('queued', 'thinking'):
+                break
+            time.sleep(0.1)
+        t = row.get('timings') or {}
+        if row.get('state') == 'answered':
+            print(f'  hello：{row["reply"]}（模型 {t.get("llm_ms")} ms）', flush=True)
+        else:
+            print(f'  没回：{row.get("skip") or row.get("state")}', flush=True)
 
 
 def main():
@@ -196,6 +273,9 @@ def main():
     else:
         monitor = subprocess.Popen(['node', 'web/monitor/server.mjs'], cwd=ROOT, env={**os.environ, **env})
     print(f'打开 http://127.0.0.1:{a.monitor_port}/ ；按 Ctrl+C 停止演示', flush=True)
+    if sys.stdin.isatty():
+        print('对话演示：先在网页上点“对话”，然后在这里打一句话回车，就像 hello 听到了这句（假模型、假 TTS，不花钱）', flush=True)
+        threading.Thread(target=_typed, args=(ctx,), daemon=True).start()
     signal.signal(signal.SIGTERM, _interrupt)
     try:
         while True:              # as on hello: settings closes itself after the timeout without input

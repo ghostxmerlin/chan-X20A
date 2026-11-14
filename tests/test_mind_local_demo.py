@@ -119,9 +119,31 @@ class LocalDemoTest(unittest.TestCase):
         self.assertEqual(self.hello_call('/v1/control', {'target': 'yaw_step', 'delta_deg': 45})[0], 404)
         self.assertEqual(self.hello_call('/v1/control', {'target': 'mode', 'input': 'billing', 'value': False})[0], 400)
 
+    def test_a_chat_turn_end_to_end_without_cost(self):
+        self.assertEqual(demo.hear(self.ctx, '你好呀')['skip'], 'not_chat')          # talk: chat does not answer
+        self.select('chat')
+        self.now[0] += 1000
+        r = demo.hear(self.ctx, '你好呀，今天忙不忙')
+        self.assertTrue(r['accepted'])
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            st, rows = self.call('/chat/turns?limit=1')
+            if rows and rows[0]['state'] not in ('queued', 'thinking'):
+                break
+            time.sleep(0.05)
+        self.assertEqual((rows[0]['state'], rows[0]['text']), ('answered', '你好呀，今天忙不忙'))
+        self.assertIn('你好呀', rows[0]['reply'])
+        text, kw = self.ctx['demo_tts'].said[-1]
+        self.assertEqual((text, kw['voice']), (rows[0]['reply'], 'wuxian'))
+        self.assertEqual(demo.hear(self.ctx, '嗯')['skip'], 'filler')
+        self.select('chat')                                                          # leave: chat stops
+        self.assertFalse(self.ctx['chat'].active())
+
     def test_nothing_paid_is_configured(self):
         self.assertNotIn('env', self.ctx)
         self.assertNotIn('tts', self.ctx)
+        self.assertEqual(self.ctx['chat'].chat_fn, demo.demo_model)
+        self.assertIsInstance(self.ctx['chat'].tts, demo.DemoTts)
         with self.assertRaises(RuntimeError):
             self.ctx['say_worker'].write_fn()
 

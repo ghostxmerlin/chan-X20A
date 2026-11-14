@@ -293,6 +293,7 @@ class Ear:
         self.tw_retry_at = 0.0     # monotonic: no new stream before this (60 s after a start error)
         self.tingwu_switch = tingwu_switch.SwitchReader(lambda: None)   # the server switch; off unless main injects one
         self.mouth_mode = mouth_mode.ModeReader(lambda: None)          # 嘴 mode; clips unless main injects one
+        self.chat = None               # mouth_link.ModeRelay (main): sentences go to mind while hello is in chat
         self.on_tingwu_change = None   # main: called when a stream starts or stops (status document)
         self.audio_declared = False
         self._tw_box = None
@@ -657,6 +658,11 @@ class Ear:
               "debug": {"vad_wait_ms": ms(t_pop - arr_mono), "queue_ms": ms(t0 - t_q), "spk_ms": ms(t1 - t0),
                         "asr_ms": ms(t2 - t1), "tag_ms": ms(t3 - t2), "server_ms": ms(time.monotonic() - t_pop)}}
         self.post(ev)
+        if self.chat is not None and self.device_profile and text:
+            try:                       # chat v0: never waits; the relay's pool posts it to mind
+                self.chat.chat_heard(ev, self.session)
+            except Exception as error:     # noqa: BLE001 - chat must never cost a sentence or the tick
+                print(f"chat: push failed: {type(error).__name__}", flush=True)
         # The robot mic's CED voice probability runs low (office noise, hum): the user's clear
         # sentences scored 0.17-0.26 on 2026-11-10, so robot sources also accept "unclear" (>= voice_lo).
         voiced = ev["voice"]["acoustic_band"] == "voice" or (self.device_profile and ev["voice"]["acoustic_band"] == "unclear")
@@ -1019,6 +1025,7 @@ def main():
         ear.tingwu_keys = tingwu_keys
         ear.tingwu_switch, ear.on_tingwu_change = tw_switch, write_tingwu_status
         ear.mouth_mode = mouth
+        ear.chat = mode_hub
         ears.add(ear)
         ticker = asyncio.create_task(ear.ticker())
         try:

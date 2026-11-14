@@ -32,6 +32,16 @@ const CODES={ok:'',already:'已经是这个模式了',not_in_mode:'不在这个�
 const SWITCH_NAMES={tingwu:'听悟',eye:'识别',notes:'纪要',mind:'情景',scene:'情景',prefetch:'提前写',auto:'连续说',speech:'说话',family:'家人声音',talk:'提前写 / 连续说',cancel:'停说',mouth:'嘴'};
 const modeName=(mode,dir)=>NAMES[mode]?(mode==='subtitle'&&DIRS[dir]?`字幕 ${DIRS[dir]}`:NAMES[mode]):String(mode??'—');
 export const NO_MODES='hello 固件还不支持模式（等 0.4.92）';
+export const CHAT_NEEDS_HEARING='对话要先开听觉';
+
+// Chat v0: in chat, hello hears nothing while its hearing is off (it defaults off after a reboot). Only a fresh, known
+// "off" says so; unknown says nothing.
+export function chatHearingHint(view,st){
+ if(!view?.known||view.mode!=='chat')return '';
+ const h=st?.telemetry?.hearing;
+ if(st?.online!==true||st?.fresh?.telemetry!==true||st?.capabilities?.hearing!=='supported'||!h||typeof h!=='object')return '';
+ return h.requested?'':CHAT_NEEDS_HEARING;
+}
 
 // /api/state -> hello's own mode. ok: online, fresh telemetry with a known telemetry.mode (0.4.92: {mode, dir, host,
 // return_to, seq, label, by, since_ms = how long ago}, or the id alone); unsupported: online and fresh but no mode in it
@@ -79,7 +89,7 @@ export function lockedWhy(v){
  if(v?.robot==='unsupported')return NO_MODES;
  return 'hello 没连上：要等它连上才能切';
 }
-export function modeBarHtml(view,log){
+export function modeBarHtml(view,log,hint=''){
  const v=view||modeView(null),locked=lockedWhy(v),dis=locked?' disabled':'';
  const head=!v.known?(v.robot==='unsupported'?`<span class="mode-name">${NO_MODES}</span><span class="mode-note">情景服务也没连上，按钮先不能用</span>`:
    v.why==='absent'?'<span class="mode-name">mind 还没有模式功能（等上线）</span><span class="mode-note">hello 没连上，按钮先不能用</span>':
@@ -90,7 +100,8 @@ export function modeBarHtml(view,log){
   (v.returnTo?`<span class="mode-note">关了回到 ${esc(modeName(v.returnTo,v.dir))}（没动作会自己回去）</span>`:'')+
   `<span class="mode-note">${esc(hhmmss(v.since))} · ${esc(SOURCES[v.by]||v.by||'—')}</span>`+
   (v.source==='hello'?'<span class="mode-sync mode-sync-yes">hello 上的模式</span>':
-   `<span class="mode-sync mode-sync-offline">${v.robot==='unsupported'?NO_MODES:'hello 没连上：这是 mind 最后记下的'}</span>`);
+   `<span class="mode-sync mode-sync-offline">${v.robot==='unsupported'?NO_MODES:'hello 没连上：这是 mind 最后记下的'}</span>`)+
+  (hint?`<span class="mode-warn" role="note">${esc(hint)}</span>`:'');
  const buttons=MODE_BUTTONS.map(([m,d])=>{
   const cur=v.known&&v.mode===m&&(m!=='subtitle'||v.dir===d);
   const title=locked||(cur?'当前模式，再点 = 离开':'进入');
@@ -194,7 +205,7 @@ export class ModeModel{
  // robotSource() -> the newest /api/state snapshot the page already has (the bar's event stream), or null: fetch it
  constructor({fetchFn=globalThis.fetch,post=null,paint=()=>{},emit=()=>{},now=Date.now,robotSource=()=>null}={}){
   Object.assign(this,{fetchFn,paint,emit,now,robotSource});this.post=post||poster(fetchFn);
-  this.state=null;this.robot=robotMode(null);this.why='down';this.view=modeView(null);this.talk=null;this.msg='';this.pending=false;
+  this.state=null;this.robot=robotMode(null);this.robotState=null;this.why='down';this.view=modeView(null);this.talk=null;this.msg='';this.pending=false;
   this.key=undefined;this.ownAt=-Infinity;this.pollSeq=0;this.talkSeq=0;this.mindAt=-Infinity;
  }
  delay(){return 2000;}
@@ -204,7 +215,7 @@ export class ModeModel{
   const [m,r]=await Promise.all([askMind?fetchJson(this.fetchFn,'/api/mind/mode'):null,have?{body:have}:fetchJson(this.fetchFn,'/api/state')]);
   if(my!==this.pollSeq)return false;
   if(m){this.mindAt=this.now();this.why=m.body?null:m.status===404?'absent':'down';this.state=m.body;}
-  this.robot=robotMode(r.body);this.view=modeView(this.state,this.robot,this.why);
+  this.robotState=r.body;this.robot=robotMode(r.body);this.view=modeView(this.state,this.robot,this.why);
   const key=this.view.known?`${this.view.source}|${this.view.seq}|${lookOf(this.view)}`:`unknown|${this.view.why}|${this.view.robot}`;
   if(key!==this.key){
    const first=this.key===undefined;this.key=key;
@@ -297,7 +308,7 @@ export class ModeBar{
    el.innerHTML=html;this.seen[key]=html;
    for(const d of el.querySelectorAll('details'))if(open.includes(d.className))d.open=true;
   };
-  keepOpen(main,modeBarHtml(m.view,m.state?.log),'main');
+  keepOpen(main,modeBarHtml(m.view,m.state?.log,chatHearingHint(m.view,m.robotState)),'main');
   const chip=main.querySelector('.mode-chip[data-color]');
   if(chip)chip.style.setProperty('--mode-color','#'+chip.dataset.color);    // CSSOM, allowed by the CSP
   keepOpen(quick,quickHtml(m.view,m.talk),'quick');

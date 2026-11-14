@@ -36,6 +36,12 @@ mind. None of this goes to soul-tts, and nothing about the mode is pushed down a
   (conn is this link's number, so mind ignores a late close of an old link).
 - {"type":"mode_applied"} (0.4.92 test builds before step 1b) is dropped. A robot that sends none of these (0.4.91)
   just has no modes; audio and the link are unchanged.
+Chat v0 (2026-11-14): the relay remembers hello's mode from the reports as they arrive (robot_mode; cleared when the link
+that reported it closes). While it is `chat`, the ear's end_speech calls chat_heard(ev, session) for every sentence
+with text: a non-blocking POST mind /chat/heard {text, lang, emotion, event, speaker, voice, loud_db (above the ear's
+floor), self, session, id, pos, t, dur, debug, sent_at} on the same pool. At most chat_max_inflight posts at a time
+(more: dropped and logged); a post waits chat_timeout_s at most; no retry (a late sentence is no use). The text is never
+logged.
 mind is asked on the relay's own small thread pool (never the default executor, which tingwu and switches use).
 Writers: several tasks send() to the robot socket (the upstream loop, input results). websockets writes each whole
 message atomically, so that is safe; never use fragmented sends (async iterators) on the robot ws.
@@ -125,12 +131,51 @@ class ModeRelay:
     call is mind_client(...) (or a test fake)."""
 
     def __init__(self, call, *, input_timeout_s=5.0, input_queue=8, report_queue=16, report_timeout_s=5.0,
-                 report_retry_s=2.0, post_timeout_s=10.0):
+                 report_retry_s=2.0, post_timeout_s=10.0, chat_max_inflight=2, chat_timeout_s=3.0):
         self.call, self.input_timeout_s, self.input_queue = call, input_timeout_s, input_queue
         self.report_queue, self.report_timeout_s, self.report_retry_s = report_queue, report_timeout_s, report_retry_s
         self.post_timeout_s = post_timeout_s
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="mode-mind")
         self._bg = set()
+        self.robot_mode, self._mode_conn = None, None      # hello's mode as last reported, and which link said it
+        self.chat_inflight, self.chat_max_inflight, self.chat_timeout_s = 0, chat_max_inflight, chat_timeout_s
+        self.chat_sent = self.chat_dropped = 0
+
+    # ---- chat v0 ----
+    def note_report(self, m, conn):
+        mode = m.get("mode")
+        if isinstance(mode, str):
+            self.robot_mode, self._mode_conn = _ascii(mode, 16), conn
+
+    def link_closed(self, conn):
+        if self._mode_conn == conn:
+            self.robot_mode, self._mode_conn = None, None
+
+    def in_chat(self):
+        return self.robot_mode == "chat"
+
+    def chat_heard(self, ev, session):
+        """Call on the event loop with a speech end event: in chat, hand it to mind without waiting. -> True if sent."""
+        if not self.in_chat() or not isinstance(ev, dict) or not str(ev.get("text") or "").strip():
+            return False
+        if self.chat_inflight >= self.chat_max_inflight:
+            self.chat_dropped += 1
+            log(f"chat: mind busy, sentence {_ascii(ev.get('id'), 16)} dropped", flush=True)
+            return False
+        body = chat_body(ev, session)
+        self.chat_inflight += 1
+        self.chat_sent += 1
+        self.spawn(self._post_heard(body))
+        return True
+
+    async def _post_heard(self, body):
+        try:
+            status, reply = await self.ask("POST", "/chat/heard", body, timeout=self.chat_timeout_s)
+        finally:
+            self.chat_inflight -= 1
+        if status != 200:
+            log(f"chat: sentence {_ascii(body.get('id'), 16)} not taken by mind ({status} "
+                f"{_ascii(reply.get('error'), 60)})", flush=True)
 
     async def ask(self, method, path, body=None, timeout=None):
         """(status, reply) from mind, or (None, {}) when it does not answer within timeout. Runs on the relay's own
@@ -165,6 +210,17 @@ class ModeRelay:
         """Wait for background posts (closed events) to finish; tests and shutdown."""
         while self._bg:
             await asyncio.gather(*list(self._bg), return_exceptions=True)
+
+
+def chat_body(ev, session):
+    """The /chat/heard body from an ear speech end event (copies: the tick adds to ev's debug later)."""
+    sp, v, me = ev.get("speaker") or {}, ev.get("voice") or {}, ev.get("self") or {}
+    return {"session": session, "id": ev.get("id"), "pos": list(ev.get("pos") or []) or None, "t": ev.get("t"),
+            "dur": ev.get("dur"), "text": ev.get("text"), "lang": ev.get("lang"), "emotion": ev.get("emotion"),
+            "event": ev.get("event"), "speaker": {k: sp.get(k) for k in ("band", "name", "score")},
+            "voice": {k: v.get(k) for k in ("p", "band", "acoustic_band", "loud_db")}, "loud_db": v.get("loud_db"),
+            "self": {k: me.get(k) for k in ("sounding", "moving")}, "debug": dict(ev.get("debug") or {}),
+            "sent_at": int(time.time() * 1000)}
 
 
 def _parse(message):
@@ -230,6 +286,8 @@ class MouthLink:
             for task in (reader, upper, *aux):
                 task.cancel()
             await asyncio.gather(reader, upper, *aux, return_exceptions=True)   # a dropped link ends one with ConnectionClosed
+            if self._modes_on:
+                self.modes.link_closed(self.conn)       # chat: this link's mode is no longer hello's word
             if self._modes_on and self.reported:        # outlives run(): mind marks this link closed
                 self.modes.spawn(self.modes.ask("POST", "/mode/robot",
                                                 {"boot": self.boot, "conn": self.conn, "event": "closed"}))
@@ -379,6 +437,7 @@ class MouthLink:
             log(f"mouth m{self.conn}: {m.get('type')} without an integer seq, dropped", flush=True)
             return
         if m["type"] == "mode_report":
+            self.modes.note_report(m, self.conn)
             if len(self._reports) >= self.modes.report_queue:
                 old, _ = self._reports.popleft()
                 log(f"mouth m{self.conn}: report queue full, report {old.get('seq')} dropped", flush=True)

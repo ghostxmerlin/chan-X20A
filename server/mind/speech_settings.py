@@ -1,6 +1,7 @@
 """Scene-scoped speech preferences. Private environment/identity values stay in settings."""
 import copy
 import math
+import re
 
 PROFILES = ('office', 'home', 'friends')
 ROUND_DEFAULTS = {'thin_no_speech': True, 'thin_judge_weak': False, 'huyu': True, 'family': False, 'moment_gap_s': 90,
@@ -9,6 +10,12 @@ ROUND_DEFAULTS = {'thin_no_speech': True, 'thin_judge_weak': False, 'huyu': True
 ROUND_LIMITS = {'moment_gap_s': (10, 600), 'moment_window_s': (10, 600), 'prefetch_quiet_s': (1, 60),
                 'prefetch_spacing_s': (5, 600), 'prefetch_usd_per_hour': (0, 5), 'auto_min_score': (1, 10)}
 ROUND_INTEGERS = {'auto_min_score'}
+# Chat v0 (plan 2026-11-14-chat-v0): the model is a setting (coordinator 2026-11-14: terra with reasoning_effort none
+# tested fastest); near_db = how far above the ear's floor a voice must be to count as near (owner: filter far voices).
+CHAT_DEFAULTS = {'model': 'gpt-6.1-terra', 'near_db': 12, 'max_chars': 60, 'history_turns': 8}
+CHAT_LIMITS = {'near_db': (0, 40), 'max_chars': (20, 120), 'history_turns': (0, 20)}
+CHAT_INTEGERS = {'max_chars', 'history_turns'}
+MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$')
 ROLES = ('comfort', 'deadpan', 'roast', 'sad', 'worst')
 DIALECTS = {'普通话': '请讲普通话。', '上海话': '请讲上海话。',
             '四川话': '请讲四川话。', '武汉话': '请讲湖北武汉话。'}
@@ -18,6 +25,7 @@ def defaults():
     return {'pipeline': 'v2', 'profile': 'office', 'scope_since': 0, 'max_chars': 40, 'roles': {},
             # One-button talk show (spec 2026-11-13-unified-say-button-design.md, sections 6, 6A, 14).
             'round': dict(ROUND_DEFAULTS),
+            'chat': dict(CHAT_DEFAULTS),
             'profiles': {
                 'office': {'scope_id': 'office', 'environment': None,
                            'topics': ['销售空头承诺', '客户无理要求', '活多钱少', '抱怨忙', '项目要完蛋', '出馊主意', '发牢骚'], 'avoid': []},
@@ -53,6 +61,7 @@ def validate(speech, memory):
                 errors.append(f'speech.round.{key}: integer {limits[0]}–{limits[1]}')
             elif limits and not _number(value, *limits):
                 errors.append(f'speech.round.{key}: {limits[0]}–{limits[1]}')
+    errors.extend(validate_chat(speech.get('chat', CHAT_DEFAULTS)))
     if speech.get('profile') not in PROFILES:
         errors.append('speech.profile: office/home/friends')
     if not isinstance(speech.get('max_chars'), int) or not _number(speech.get('max_chars'), 8, 40):
@@ -93,6 +102,29 @@ def validate(speech, memory):
     if set(memory) - {'learning', 'apply'} or any(not isinstance(memory.get(k), bool) for k in ('learning', 'apply')):
         errors.append('memory: learning/apply must be booleans')
     return errors
+
+
+def validate_chat(chat):
+    if not isinstance(chat, dict) or set(chat) - set(CHAT_DEFAULTS):
+        return ['speech.chat: unknown setting']
+    errors = []
+    if 'model' in chat and not (isinstance(chat['model'], str) and MODEL_RE.match(chat['model'])):
+        errors.append('speech.chat.model: a model name (letters, digits, . _ : / -, up to 64)')
+    for key, (lo, hi) in CHAT_LIMITS.items():
+        if key not in chat:
+            continue
+        v = chat[key]
+        if key in CHAT_INTEGERS and not (type(v) is int and _number(v, lo, hi)):
+            errors.append(f'speech.chat.{key}: integer {lo}–{hi}')
+        elif not _number(v, lo, hi):
+            errors.append(f'speech.chat.{key}: {lo}–{hi}')
+    return errors
+
+
+def chat_config(s):
+    """The chat settings with defaults filled in (older stored versions have none)."""
+    chat = (s.get('speech') or {}).get('chat')
+    return {**CHAT_DEFAULTS, **(chat if isinstance(chat, dict) else {})}
 
 
 def scope(s):

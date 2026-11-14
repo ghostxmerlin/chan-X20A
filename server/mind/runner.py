@@ -196,11 +196,13 @@ class _BillingCtx:
 
 
 def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_round_fn, speaking_fn=None,
-               clock_ms=lambda: int(time.time() * 1000), log=print):
+               clock_ms=lambda: int(time.time() * 1000), log=print, chat=None):
     """Build ModeStore + Billing with the guard and the hook -> (mode_store, billing, round_gate). hello reports its own
     mode (ModeStore.report); the hook carries out the reported effects.
 
     say_round_fn(trigger, is_current) runs one 说一轮 (live: speak.say_round, today's pipeline); None = not here.
+    chat (chat.Chat, chat v0): runs only while the mirrored mode is chat; entering chat starts it, leaving stops it and
+    cancels its speech (its mode_fn reads this ModeStore).
     Startup (owner 2026-11-14 evening, "启动默认全开"): billing on and preset 9's server half: 听悟 / 识别 / 纪要 / 情景 on,
     嘴 TTS, 提前写 + 连续说 on when the mirrored mode is talk. Billing gates nothing; only the mode holds paid work.
     """
@@ -279,11 +281,23 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
                     say_worker.set_enabled(False, now)
             except Exception as ex:               # noqa: BLE001 - logged, the next effect still runs
                 log(f'mind mode: effect {e} failed: {type(ex).__name__}: {str(ex)[:160]}', flush=True)
+        if chat is not None:                     # chat v0: the worker lives exactly as long as the chat mode
+            try:
+                if new['mode'] == 'chat' and old['mode'] != 'chat':
+                    chat.enter(now)
+                elif old['mode'] == 'chat' and new['mode'] != 'chat':
+                    chat.leave(now)
+            except Exception as ex:           # noqa: BLE001 - logged; the mode change itself happened
+                log(f'mind mode: chat {new["mode"]}: {type(ex).__name__}: {str(ex)[:160]}', flush=True)
         on = (say_worker is not None and say_worker.enabled()) or (say_auto is not None and say_auto.enabled())
         if new['mode'] != 'talk' and on:
             log(f'mind mode: {new["mode"]} with 提前写 / 连续说 on (no talk_leave came): turned off', flush=True)
             talk_off(now)
     ms.on_change.append(on_change)
+    if chat is not None:
+        chat.mode_fn = lambda: ms.current()['mode']
+        if ms.current()['mode'] == 'chat':
+            chat.enter(clock_ms())               # mind restarted while hello was chatting
 
     # Owner 2026-11-14 evening: "启动默认全开" = every mind start runs preset 9's server half (提前写 / 连续说 only when
     # the mirrored mode is talk). Billing is never read back from the database.
@@ -362,8 +376,14 @@ def main():
                                is_current=lambda: is_current() and settings_store.current()[1] == version and mouth_fn() == 'tts')
     # Modes (step 1b): hello owns the mode and reports it (/mode/report); mind mirrors it and runs its effects
     # through the guard / hooks in wire_modes. The master switch and presets 0 / 9 stay on mind.
+    # Chat v0 (plan 2026-11-14-chat-v0): the ear POSTs /chat/heard in chat mode; the worker runs only in chat.
+    from . import chat as chat_mod
+    chat = chat_mod.Chat(db, store, settings_fn=lambda: settings_store.current()[0],
+                         roles_fn=lambda: speak.load_roles(a.roles), tts=tts, env=env, mouth_fn=mouth_fn)
+    chat.ensure_indexes()
     mode_store, billing, round_gate = wire_modes(db, store, settings_store=settings_store, tts=tts, say_worker=say_worker,
-                                                 say_auto=say_auto_live, say_round_fn=say_round_live if env and tts else None)
+                                                 say_auto=say_auto_live, say_round_fn=say_round_live if env and tts else None,
+                                                 chat=chat)
     say_worker.mode_fn = auto_worker.mode_fn = lambda: mode_store.current()["mode"]
     if env:
         threading.Thread(target=say_worker.run, daemon=True).start()
@@ -374,7 +394,8 @@ def main():
                                                                          "recordings_root": a.recordings, "roles_dir": a.roles,
                                                                          "tts": tts, "say_worker": say_worker,
                                                                          "say_auto": say_auto_live, "mode_store": mode_store,
-                                                                         "billing": billing, "round_gate": round_gate}), daemon=True).start()
+                                                                         "billing": billing, "round_gate": round_gate,
+                                                                         "chat": chat}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}, mode {mode_store.current()['mode']} "
           f"seq {mode_store.seq()}, billing {'on' if billing.allowed() else 'off'} (start = 全开)", flush=True)
