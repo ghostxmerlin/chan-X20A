@@ -40,7 +40,7 @@ export class WifiPanel {
   for(const id of ['wifi-scan','wifi-reconnect','wifi-add','wifi-ssid','wifi-password','wifi-preferred'])this.el(id).disabled=blocked;
   this.el('wifi-scan').disabled=blocked||!!w.scanning;
   this.el('wifi-status').textContent=!fresh?'状态已过期':!supported?'当前固件不支持网络管理':`${w.connected?`已连接 ${w.ssid||'—'} · ${w.rssi_dbm??'—'} dBm · ${w.ip||'—'}`:'未连接'}${w.status?` · ${w.status}`:''}`;
-  const key=`${state?.boot}|${JSON.stringify(w.profiles)}|${JSON.stringify(w.scan)}|${w.scanning}|${blocked}`;
+  const key=`${state?.boot}|${JSON.stringify(w.profiles)}|${JSON.stringify(w.factory)}|${JSON.stringify(w.scan)}|${w.scanning}|${blocked}`;
   if(key===this.rendered)return;this.rendered=key;
   const profiles=this.el('wifi-profiles');profiles.replaceChildren();
   for(const p of w.profiles||[]){
@@ -48,6 +48,12 @@ export class WifiPanel {
    const name=this.doc.createElement('span');name.textContent=`${p.preferred?'★ ':''}${p.ssid}`;li.append(name);
    if(!p.preferred){const prefer=this.doc.createElement('button');prefer.textContent='设为首选';prefer.dataset.op='prefer';prefer.dataset.ssid=p.ssid;prefer.disabled=blocked;li.append(prefer);}
    const remove=this.doc.createElement('button');remove.textContent='删除';remove.className='stop-button';remove.dataset.op='remove';remove.dataset.ssid=p.ssid;remove.disabled=blocked;li.append(remove);
+   profiles.append(li);
+  }
+  for(const ssid of w.factory||[]){
+   const li=this.doc.createElement('li');
+   const name=this.doc.createElement('span');name.textContent=`出厂 · ${ssid}`;li.append(name);
+   const remove=this.doc.createElement('button');remove.textContent='删除';remove.className='stop-button';remove.dataset.op='remove';remove.dataset.ssid=ssid;remove.disabled=blocked;li.append(remove);
    profiles.append(li);
   }
   this.el('wifi-profiles-note').textContent=supported?`已保存 ${w.profiles?.length??0}/${w.profile_limit??6} 个；首选最先尝试，之后依次尝试，最后回落到出厂配置（${w.factory_count??0} 个）。`:'—';

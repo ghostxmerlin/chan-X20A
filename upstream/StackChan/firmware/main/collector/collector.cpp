@@ -294,7 +294,7 @@ void load_wifi_profiles_locked()
     ESP_LOGI(kTag, "Wi-Fi profiles: %u saved%s", static_cast<unsigned>(wifi_profiles.items().size()), migrate ? " (migrated)" : "");
 }
 
-// Candidate order: operator profiles, then the untouched factory list.
+// Candidate order: operator profiles, then the factory list (only `remove` ever changes it, since 0.4.91).
 void rebuild_networks_locked()
 {
     networks.clear();
@@ -311,7 +311,7 @@ void set_wifi_status(const std::string& text)
 
 void init_wifi()
 {
-    // Read factory Wi-Fi credentials, never rewrite that namespace or calibration.
+    // Read factory Wi-Fi credentials; only an explicit remove rewrites that namespace (0.4.91). Never calibration.
     {
         std::lock_guard<std::mutex> lock(wifi_mutex);
         load_wifi_profiles_locked();
@@ -1318,6 +1318,8 @@ void wifi_json(JsonObject target)
         entry["ssid"] = wifi_profiles.items()[i].ssid; entry["preferred"] = i == 0;
     }
     target["factory_count"] = static_cast<uint32_t>(SsidManager::GetInstance().GetSsidList().size());
+    auto factory = target["factory"].to<JsonArray>();
+    for (const auto& item : SsidManager::GetInstance().GetSsidList()) factory.add(item.ssid);
     target["scanning"] = wifi_scan_running;
     target["scan_age_ms"] = wifi_scan_us ? (esp_timer_get_time() - wifi_scan_us) / 1000 : -1;
     auto scan = target["scan"].to<JsonArray>();
@@ -1325,7 +1327,7 @@ void wifi_json(JsonObject target)
         auto entry = scan.add<JsonObject>();
         entry["ssid"] = e.ssid; entry["rssi_dbm"] = e.rssi; entry["secure"] = e.secure; entry["saved"] = e.saved;
     }
-    target["semantics"] = "profiles are tried in order, then the untouched factory list; passwords are never returned";
+    target["semantics"] = "profiles are tried in order, then the factory list (remove works on both); passwords are never returned";
 }
 
 
@@ -1343,8 +1345,23 @@ esp_err_t wifi_control(ControlReply* request, JsonObject doc, const char*)
             if (!wifi_profiles.add(ssid, password, doc["preferred"] | true)) error = "Invalid SSID/password or profile limit reached";
             else { save_wifi_profiles_locked(); rebuild_networks_locked(); if (doc["connect"] | true) wifi_reconnect_requested = true; set_wifi_status("saved " + ssid); }
         } else if (strcmp(op, "remove") == 0) {
-            if (!wifi_profiles.remove(ssid)) error = "Unknown profile";
-            else { save_wifi_profiles_locked(); rebuild_networks_locked(); }
+            // 0.4.91: an SSID that is not an operator profile may be a factory entry (owner asked to drop
+            // Force-M, 2026-11-14). Removing it rewrites the factory "wifi" namespace; nothing else there changes.
+            bool removed = false;
+            if (wifi_profiles.remove(ssid)) { save_wifi_profiles_locked(); removed = true; }
+            else {
+                auto& factory = SsidManager::GetInstance();
+                const auto& list = factory.GetSsidList();
+                for (size_t i = 0; i < list.size(); ++i)
+                    if (list[i].ssid == ssid) { factory.RemoveSsid(static_cast<int>(i)); removed = true; break; }
+            }
+            if (!removed) error = "Unknown profile";
+            else {
+                rebuild_networks_locked(); set_wifi_status("removed " + ssid);
+                wifi_ap_record_t ap{};
+                if (wifi_connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK && ssid == reinterpret_cast<const char*>(ap.ssid))
+                    wifi_reconnect_requested = true;   // leave the removed network now
+            }
         } else if (strcmp(op, "prefer") == 0) {
             if (!wifi_profiles.prefer(ssid)) error = "Unknown profile";
             else { save_wifi_profiles_locked(); rebuild_networks_locked(); if (doc["connect"] | false) wifi_reconnect_requested = true; }

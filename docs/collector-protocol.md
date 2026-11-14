@@ -28,8 +28,8 @@
 ## 0.4.45：已保存网络、扫描与本体 Wi-Fi 设置页
 
 - 网络列表改为单个 collector NVS 值 `wifi_profiles`（JSON 数组，最多 6 个，首项最先尝试）；首次启动自动从旧 `wifi_primary` / `wifi_ssid` 迁移。候选顺序：已保存网络 → 未改动的出厂列表。断线/重连总从首项开始，每项最多 3 次、间隔 10 s。
-- `GET /v1/wifi`（Bearer）：`connected`、`ssid`、`rssi_dbm`、`channel`、`ip`、`status`（本体当前的连接状态文字）、`profiles[{ssid,preferred}]`、`profile_limit`、`factory_count`、`scanning`、`scan_age_ms`、`scan[{ssid,rssi_dbm,secure,saved}]`（最近一次扫描，按信号排序、去重、最多 8 个）。不返回密码。遥测 `wifi` 为同一对象。能力 `wifi_profiles`。
-- `POST /v1/wifi`（Bearer + `X-Boot-Id`）：`{"op":"add","ssid","password","preferred":true,"connect":true}` 保存（同名替换密码，开放网络密码为空）并按优先级重连；`{"op":"remove","ssid"}`；`{"op":"prefer","ssid","connect":false}`；`{"op":"scan"}` 请求一次扫描（连接中时自动稍后重试）；`{"op":"reconnect"}`。202 表示已受理，结果看 `GET /v1/wifi`。
+- `GET /v1/wifi`（Bearer）：`connected`、`ssid`、`rssi_dbm`、`channel`、`ip`、`status`（本体当前的连接状态文字）、`profiles[{ssid,preferred}]`、`profile_limit`、`factory_count`、`factory[ssid]`（出厂列表的网络名，0.4.91 起）、`scanning`、`scan_age_ms`、`scan[{ssid,rssi_dbm,secure,saved}]`（最近一次扫描，按信号排序、去重、最多 8 个）。不返回密码。遥测 `wifi` 为同一对象。能力 `wifi_profiles`。
+- `POST /v1/wifi`（Bearer + `X-Boot-Id`）：`{"op":"add","ssid","password","preferred":true,"connect":true}` 保存（同名替换密码，开放网络密码为空）并按优先级重连；`{"op":"remove","ssid"}`（0.4.91 起，不在已保存列表里的名字会从出厂列表删除；删的是当前连着的网络时立即按顺序重连）；`{"op":"prefer","ssid","connect":false}`；`{"op":"scan"}` 请求一次扫描（连接中时自动稍后重试）；`{"op":"reconnect"}`。202 表示已受理，结果看 `GET /v1/wifi`。
 - USB 串口命令 `{"cmd":"wifi","ssid","password","priority":true}` 现在写入同一列表并直接重连，不再重启本体。
 - 本体屏幕：摘要页长按进入配对页，向左滑进入 Wi-Fi 页（自动扫描，`*` 已保存，`#` 加密，右上 Rescan，标题返回）；点选热点进入数字键盘（1–9/0、`<` 删除、OK 加入；加密网络至少 8 位；开放网络直接 OK）。保存后作为首选并重连，状态行显示 connecting/connected。
 
