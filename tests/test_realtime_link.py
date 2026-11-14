@@ -516,6 +516,37 @@ class GreetTest(HubBase):
         self.assertTrue(self.hub.tap())
 
 
+class SeenTest(HubBase):
+    async def test_live_view_in_instructions_and_pushed_on_change(self):
+        ws = await self.open_ready()
+        first = ws.sent[0]["session"]["instructions"]
+        self.assertIn("【此刻看到】\n眼前没有人脸。", first)
+        self.assertIn("你有眼睛", first)
+        self.hub.on_vision({"event": "face_named", "face": 1, "name": "boss_face", "box": [0, 0, 100, 100]})
+        self.hub.on_vision({"event": "face_attrs", "face": 2, "gender": "f", "age_group": "adult", "box": [0, 0, 50, 50]})
+        self.t[0] += 0.5
+        self.hub.step()
+        await settle()
+        self.assertEqual(sum(1 for m in ws.sent if m["type"] == "session.update"), 1)      # < seen_min_s
+        self.t[0] += 3
+        self.hub.step()
+        await settle()
+        ups = [m for m in ws.sent if m["type"] == "session.update"]
+        self.assertEqual(len(ups), 2)
+        self.assertIn("眼前有 2 个人：主人（阿大）、一位美女。", ups[-1]["session"]["instructions"])
+        self.t[0] += 5
+        self.hub.step()
+        await settle()
+        self.assertEqual(sum(1 for m in ws.sent if m["type"] == "session.update"), 2)      # unchanged: no resend
+        self.assertFalse(any("阿大" in line or "美女" in line for line in self.logs))
+
+    def test_seen_text(self):
+        rl = self.rl
+        self.assertEqual(rl.seen_text([], {}, [], "x"), "眼前没有人脸。")
+        faces = [{"name": "g1"}, {"name": None, "gender": None, "age_group": None}]
+        self.assertEqual(rl.seen_text(faces, {"g1": "人物甲"}, [], "x"), "眼前有 2 个人：人物甲、一个认不出的人。")
+
+
 class TextTest(unittest.TestCase):
     def test_emoji_cost_voice(self):
         import realtime_link as rl

@@ -94,7 +94,10 @@ PERSONA = (
     "可以顺口说一句你看到的情景，一两句就好。\n"
     "- 收到“[事件] 有人点了你一下，让你跟面前的人打招呼”时：按事件里说的称呼主动打招呼，嘴甜一点、热情一点；"
     "认识的人叫名字，不认识的就用事件给的称呼（美女、帅哥、小朋友、爷爷、奶奶）。只夸，不评论长相的缺点，不开人身玩笑。"
-    "事件说没看到人脸，就说“我看看……咦，没看到人呀”这样的话，再友好地问声好。")
+    "事件说没看到人脸，就说“我看看……咦，没看到人呀”这样的话，再友好地问声好。\n"
+    "- 你有眼睛：头上的摄像头和人脸识别。【此刻看到】是你眼前现在的人（实时），背景里的“画面”是你最近一分钟看到的样子。"
+    "有人问你能不能看见、看到了谁、看到了什么，就照这些回答：认得的人叫名字，不认得的说个大概；"
+    "【此刻看到】说没有人脸，就说现在没看到人。不要说自己没有眼睛、看不见。")
 
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE00-\U0000FE0F\U0001F1E6-\U0001F1FF"
                     "\U0000200D\U000020E3\U00002B00-\U00002BFF\U000E0020-\U000E007F]")
@@ -104,8 +107,24 @@ def strip_emoji(text):
     return _EMOJI.sub("", str(text or "")).strip()
 
 
-def instructions(context_text=None):
-    return PERSONA + (f"\n\n【背景】\n{context_text}" if context_text else "")
+def instructions(context_text=None, seen=None):
+    return (PERSONA + (f"\n\n【背景】\n{context_text}" if context_text else "") +
+            (f"\n\n【此刻看到】\n{seen}" if seen else ""))
+
+
+def seen_text(faces, names, owner_faces, owner_call):
+    """What hello sees right now, from FaceView.recent() (largest first): one line, never logged or stored."""
+    if not faces:
+        return "眼前没有人脸。"
+    parts = []
+    for f in faces[:5]:
+        n = f.get("name")
+        if n:
+            parts.append(f"主人（{owner_call}）" if n in owner_faces else (names.get(n) or n))
+        else:
+            parts.append(address(f.get("gender"), f.get("age_group"))[1] or "一个认不出的人")
+    more = f"，还有 {len(faces) - 5} 个人" if len(faces) > 5 else ""
+    return f"眼前有 {len(faces)} 个人：" + "、".join(parts) + more + "。"
 
 
 def session_config(voice, instr, silence_ms=500, threshold=0.5):
@@ -329,6 +348,7 @@ class Config:
     away_s = 300
     greet_max_age_s = 10
     tap_cooldown_s = 3
+    seen_min_s = 3                                     # live view re-sent at most this often
     face_recent_s = 2.0
     status_s = 30
 
@@ -373,6 +393,7 @@ class RealtimeHub:
         self._next_kind = "speech"
         self.ctx = {}                                  # last /realtime/context answer
         self._ctx_at = None
+        self._seen_sent, self._seen_at = None, None    # last 【此刻看到】 line sent, and when
         self.watch = FaceView(self.cfg.away_s, recent_s=self.cfg.face_recent_s)
         self._greet = None                             # pending greeting: {at, kind: owner / tap, pick}
         self._last_tap = None
@@ -584,6 +605,7 @@ class RealtimeHub:
                 if self._ready.is_set() and self._ctx_at is not None and now - self._ctx_at >= self.cfg.context_s:
                     self._ctx_at = now
                     self.spawn(self._refresh_context())
+                self._push_seen(now)
                 self._deliver_greet(now)
         if self._greet is not None and now - self._greet["at"] > self.cfg.greet_max_age_s:
             log("realtime: owner greeting dropped (too old)", flush=True)
@@ -653,7 +675,7 @@ class RealtimeHub:
             self._ws = ws
             await self._take_context(ctx_fut)
             await ws.send(json.dumps({"type": "session.update", "session": session_config(
-                self.voice, instructions(self.ctx.get("text")), self.cfg.silence_ms, self.cfg.vad_threshold)}))
+                self.voice, self._instructions(), self.cfg.silence_ms, self.cfg.vad_threshold)}))
             self._ctx_at = self.clock()
             log(f"realtime: session {n} open ({why}), context {len(self.ctx.get('text') or '')} chars", flush=True)
             self.stats["sessions"] += 1
@@ -703,7 +725,25 @@ class RealtimeHub:
         loop = asyncio.get_running_loop()
         fut = loop.run_in_executor(self._pool, self.call, "GET", "/realtime/context", None, self.cfg.context_timeout_s)
         if await self._take_context(fut) == 200:
-            self._send_soon({"type": "session.update", "session": {"instructions": instructions(self.ctx.get("text"))}})
+            self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
+
+    def _seen(self):
+        owner = self.ctx.get("owner") or {}
+        return seen_text(self.watch.recent(self.clock()), self.ctx.get("names") or {},
+                         owner.get("face_names") or [], owner.get("call") or "主人")
+
+    def _instructions(self):
+        seen = self._seen()
+        self._seen_sent, self._seen_at = seen, self.clock()
+        return instructions(self.ctx.get("text"), seen)
+
+    def _push_seen(self, now):
+        """Re-send the instructions when what hello sees changed (≤ once per seen_min_s), so 'can you see me' is
+        answered from the live M12 view, not the 60 s context."""
+        if self._ws is None or not self._ready.is_set() or now - (self._seen_at or 0) < self.cfg.seen_min_s:
+            return
+        if self._seen() != self._seen_sent:
+            self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
 
     def _send_soon(self, obj):
         ws = self._ws
