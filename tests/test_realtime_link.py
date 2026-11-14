@@ -299,7 +299,8 @@ class OutputTest(HubBase):
         self.assertEqual((turn["state"], turn["kind"], turn["reply_chars"]), ("done", "speech", 3))
         self.assertGreater(turn["cost_cny"], 0)
         self.assertEqual(turn["usage"], {"in_text": 400, "in_audio": 10, "out_text": 5, "out_audio": 20})
-        self.assertFalse(any(isinstance(v, str) and "你好" in v for v in turn.values()))
+        self.assertEqual(turn["reply"], "你好呀")                      # text in the DB record (as chat_turns) ...
+        self.assertFalse(any("你好" in line for line in self.logs))   # ... never in the log
         self.assertIsNotNone(turn["timings"]["speech_end_to_robot_sound_ms"])
 
     async def test_next_stream_waits_for_the_robot_done(self):
@@ -559,7 +560,7 @@ class SeenTest(HubBase):
     async def test_live_view_in_instructions_and_pushed_on_change(self):
         ws = await self.open_ready()
         first = ws.sent[0]["session"]["instructions"]
-        self.assertIn("【此刻看到】\n眼前没有人脸。", first)
+        self.assertIn("【你的眼睛】\n人脸识别（实时）：眼前没有人脸。", first)
         self.assertIn("你有眼睛", first)
         self.hub.on_vision({"event": "face_named", "face": 1, "name": "boss_face", "box": [0, 0, 100, 100]})
         self.hub.on_vision({"event": "face_attrs", "face": 2, "gender": "f", "age_group": "adult", "box": [0, 0, 50, 50]})
@@ -584,6 +585,20 @@ class SeenTest(HubBase):
         self.assertEqual(rl.seen_text([], {}, [], "x"), "眼前没有人脸。")
         faces = [{"name": "g1"}, {"name": None, "gender": None, "age_group": None}]
         self.assertEqual(rl.seen_text(faces, {"g1": "人物甲"}, [], "x"), "眼前有 2 个人：人物甲、一个认不出的人。")
+
+
+class EyesTest(unittest.TestCase):
+    def test_eye_lines_move_to_the_end(self):
+        import realtime_link as rl
+        ctx = "现在：11-14 22:40\n画面：主人在喝水。书架前。\n看到的人（M12 认出）：主人（阿大）\n最近的情景（半小时内，按时间）：22:10 主人在调电路"
+        out = rl.instructions(ctx, "眼前有 1 个人：主人（阿大）。")
+        bg, eyes = out.split("【背景】")[1].split("【你的眼睛】")
+        self.assertNotIn("画面：", bg)
+        self.assertIn("最近的情景", bg)
+        self.assertIn("人脸识别（实时）：眼前有 1 个人：主人（阿大）。", eyes)
+        self.assertIn("人脸识别（最近 3 分钟认出过）：主人（阿大）", eyes)
+        self.assertIn("摄像头照片识图（大约一分钟前）：主人在喝水。书架前。", eyes)
+        self.assertTrue(out.rstrip().endswith("书架前。"))
 
 
 class BeepTest(unittest.TestCase):

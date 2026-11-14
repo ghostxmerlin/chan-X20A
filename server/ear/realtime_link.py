@@ -98,8 +98,8 @@ PERSONA = (
     "- 收到“[事件] 有人点了你一下，让你跟面前的人打招呼”时：按事件里说的称呼主动打招呼，嘴甜一点、热情一点；"
     "认识的人叫名字，不认识的就用事件给的称呼（美女、帅哥、小朋友、爷爷、奶奶）。只夸，不评论长相的缺点，不开人身玩笑。"
     "事件说没看到人脸，就说“我看看……咦，没看到人呀”这样的话，再友好地问声好。\n"
-    "- 你有眼睛：头上的摄像头和人脸识别。【此刻看到】是人脸识别实时认出的人；背景里的“画面”是摄像头照片的识图结果"
-    "（一分钟整理一次：人在做什么、环境、这一分钟的变化）。有人问你能不能看见、看到了谁、看到了什么，"
+    "- 你有眼睛：头上的摄像头和人脸识别，看到的都写在最后的【你的眼睛】里：人脸识别是实时认出的人，"
+    "摄像头照片识图是一分钟整理一次的画面（人在做什么、环境、变化）。有人问你能不能看见、看到了谁、看到了什么，"
     "就把这两样合起来回答：谁在（认得的叫名字，不认得的说个大概），在做什么，周围什么样；"
     "两样都没有，就说现在没看清。不要说自己没有眼睛、看不见。\n"
     "- 有人问刚才、最近、今天早些时候发生了什么、聊了什么，先照背景里的“最近的情景”和“最近的纪要”回答，"
@@ -113,9 +113,30 @@ def strip_emoji(text):
     return _EMOJI.sub("", str(text or "")).strip()
 
 
+EYE_LINES = ("画面：", "看到的人（M12 认出）：")
+
+
 def instructions(context_text=None, seen=None):
-    return (PERSONA + (f"\n\n【背景】\n{context_text}" if context_text else "") +
-            (f"\n\n【此刻看到】\n{seen}" if seen else ""))
+    """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
+    where the voice model tended to miss them; owner 2026-11-14)."""
+    rest, eye = [], {}
+    for line in (context_text or "").splitlines():
+        key = next((k for k in EYE_LINES if line.startswith(k)), None)
+        if key:
+            eye[key] = line[len(key):]
+        else:
+            rest.append(line)
+    out = PERSONA + ("\n\n【背景】\n" + "\n".join(rest) if rest else "")
+    eyes = []
+    if seen:
+        eyes.append(f"人脸识别（实时）：{seen}")
+    if eye.get("看到的人（M12 认出）："):
+        eyes.append(f"人脸识别（最近 3 分钟认出过）：{eye['看到的人（M12 认出）：']}")
+    if eye.get("画面："):
+        eyes.append(f"摄像头照片识图（大约一分钟前）：{eye['画面：']}")
+    if eyes:
+        out += "\n\n【你的眼睛】\n" + "\n".join(eyes)
+    return out
 
 
 def seen_text(faces, names, owner_faces, owner_call):
@@ -853,6 +874,7 @@ class RealtimeHub:
             text = strip_emoji(e.get("transcript"))
             if self._heard_turn is not None:
                 self._heard_turn["heard_chars"] = len(text)
+                self._heard_turn["heard"] = text[:300]
             if self.on_transcript:
                 self.on_transcript("heard", text)
         elif t == "response.created":
@@ -885,6 +907,7 @@ class RealtimeHub:
             text = strip_emoji(e.get("transcript"))
             if turn is not None:
                 turn["reply_chars"] = len(text)
+                turn["reply"] = text[:400]
                 if turn.get("kind") == "greet" and text:
                     self._said.append(text[:80])
             if self.on_transcript:
@@ -1060,6 +1083,7 @@ class RealtimeHub:
         doc = {"tid": f"{self.wall_ms()}-{rid}"[:96], "at": turn.get("at"), "session": turn.get("session"),
                "kind": turn.get("kind"), "state": state, "model": self.cfg.model, "timings": timings,
                "heard_chars": turn.get("heard_chars"), "reply_chars": turn.get("reply_chars"),
+               "heard": turn.get("heard"), "reply": turn.get("reply"),     # DB only (as chat_turns), never logged
                "audio_ms": turn.get("audio_ms"), "usage": usage, "cost_cny": cost_cny(turn.get("usage"))}
         self.stats["turns"] += 1
         self.stats["cost_micro_cny"] += int(doc["cost_cny"] * 1e6)
