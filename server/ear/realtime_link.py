@@ -90,8 +90,9 @@ PERSONA = (
     "- 不给医疗、健康、用药方面的建议；背景里提到身体情况也不要劝人看医生。\n"
     "- 听不清、没头没尾，就简短反问一句；不确定的事不要编。\n"
     "- 背景只在跟话题有关时才用，不要硬扯，不要每句都提同一件事。\n"
-    "- 收到“[事件] 主人（名字）出现在你面前了”时：马上用这个名字大声、热情地喊主人，开心地打招呼，"
-    "可以顺口说一句你看到的情景，一两句就好。\n"
+    "- 收到“[事件] 主人（名字）出现在你面前了，长招呼”时：用这个名字大声、热情地喊主人，开心地打招呼，"
+    "再顺口说一句你看到的情景或想到的事，两三句。每次都换新说法，不要跟事件里列的“之前说过”的一样。\n"
+    "- 收到“[事件] 主人又出现了，短招呼”时：刚才已经见过，只用一句很短的话打个招呼（比如“又回来啦”），不用喊全名。\n"
     "- 收到“[事件] 有人点了你一下，让你跟面前的人打招呼”时：按事件里说的称呼主动打招呼，嘴甜一点、热情一点；"
     "认识的人叫名字，不认识的就用事件给的称呼（美女、帅哥、小朋友、爷爷、奶奶）。只夸，不评论长相的缺点，不开人身玩笑。"
     "事件说没看到人脸，就说“我看看……咦，没看到人呀”这样的话，再友好地问声好。\n"
@@ -134,8 +135,15 @@ def session_config(voice, instr, silence_ms=500, threshold=0.5):
             "turn_detection": {"type": "server_vad", "threshold": threshold, "silence_duration_ms": silence_ms}}
 
 
-def greet_text(call):
-    return f"[事件] 主人（{call}）出现在你面前了。"
+def greet_text(call, kind="long", said=()):
+    """Owner greeting event (owner 2026-11-14): one long, named, always-new greeting per long_greet_s; a re-recognition
+    inside that window gets a short hello. said: hello's last long greetings (memory only), so it does not repeat."""
+    if kind == "short":
+        return "[事件] 主人又出现了，短招呼。"
+    text = f"[事件] 主人（{call}）出现在你面前了，长招呼。"
+    if said:
+        text += "之前说过：" + "；".join(f"「{t}」" for t in said) + "。这次换个完全不同的说法。"
+    return text
 
 
 def usage_tokens(usage):
@@ -345,7 +353,10 @@ class Config:
     max_lead_ms = 8000
     stall_s = 10
     done_grace_s = 10
-    away_s = 300
+    away_s = 60                  # owner unseen this long, then seen again = a new recognition
+    long_greet_s = 600           # at most one long named greeting per 10 min (owner); inside it: a short hello
+    short_greet_min_s = 60       # short hellos at most this often
+    greet_said_keep = 3          # last long greetings kept in memory so the next one differs
     greet_max_age_s = 10
     tap_cooldown_s = 3
     seen_min_s = 3                                     # live view re-sent at most this often
@@ -397,7 +408,9 @@ class RealtimeHub:
         self.watch = FaceView(self.cfg.away_s, recent_s=self.cfg.face_recent_s)
         self._greet = None                             # pending greeting: {at, kind: owner / tap, pick}
         self._last_tap = None
-        self._last_greet = None
+        self._last_greet = None                        # any owner greeting (long, short, tap on the owner)
+        self._last_long = None                         # the last long named owner greeting
+        self._said = collections.deque(maxlen=self.cfg.greet_said_keep)   # its texts: memory only, never logged
         self._quiet_until = 0.0                        # no input / greeting right after hello finished speaking
         self._appear = None                            # (name, at): appeared before mind's owner names were known
         self._bg = set()
@@ -504,10 +517,14 @@ class RealtimeHub:
             self._queue_greet(now)
 
     def _queue_greet(self, now):
-        if self._last_greet is not None and now - self._last_greet < self.cfg.away_s:
+        if self._last_long is None or now - self._last_long >= self.cfg.long_greet_s:
+            size = "long"
+        elif self._last_greet is None or now - self._last_greet >= self.cfg.short_greet_min_s:
+            size = "short"
+        else:
             return
         if self._greet is None:
-            self._greet = {"at": now, "kind": "owner", "pick": None}
+            self._greet = {"at": now, "kind": "owner", "pick": None, "size": size}
             self.stats["greet_queued"] += 1
         if self.state == "closed" and self.want():
             self._open(now, "owner")
@@ -835,6 +852,8 @@ class RealtimeHub:
             text = strip_emoji(e.get("transcript"))
             if turn is not None:
                 turn["reply_chars"] = len(text)
+                if turn.get("kind") == "greet" and text:
+                    self._said.append(text[:80])
             if self.on_transcript:
                 self.on_transcript("reply", text)
         elif t == "response.done":
@@ -953,14 +972,17 @@ class RealtimeHub:
         if g["kind"] == "owner":
             if not call:
                 return
-            text = greet_text(call)
+            text = greet_text(call, g.get("size", "long"), tuple(self._said))
         else:
             text = tap_text(g["pick"], self.ctx.get("names") or {}, owner.get("face_names") or [], call or "主人")
         self._greet = None
         if g["kind"] == "owner" or (g["pick"]["kind"] == "known" and g["pick"]["face"]["name"] in
                                     (owner.get("face_names") or [])):
             self._last_greet = now
-        self._next_kind = "greet" if g["kind"] == "owner" else "tap"
+        if g["kind"] == "owner" and g.get("size", "long") == "long":
+            self._last_long = now
+        self._next_kind = ("greet" if g.get("size", "long") == "long" else "greet_short") if g["kind"] == "owner" \
+            else "tap"
         self.stats["greeted"] += 1
         log(f"realtime: session {self.session_no} {self._next_kind} greeting", flush=True)
         self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",

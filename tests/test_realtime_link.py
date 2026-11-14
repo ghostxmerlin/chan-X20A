@@ -441,24 +441,48 @@ class FaceViewTest(unittest.TestCase):
 
 class GreetTest(HubBase):
     async def test_owner_appearing_is_greeted_once(self):
+        self.hub.cfg.max_session_s = self.hub.cfg.idle_s = self.hub.cfg.hour_cap_s = 10 ** 6   # one session throughout
         ws = await self.open_ready()
-        self.hub.on_vision({"event": "face_named", "face": 1, "name": "boss_face"})
-        self.hub.step()
-        await settle()
-        items = [m for m in ws.sent if m["type"] == "conversation.item.create"]
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["item"]["content"][0]["text"], "[事件] 主人（阿大）出现在你面前了。")
+        items = lambda: [m["item"]["content"][0]["text"] for m in ws.sent if m["type"] == "conversation.item.create"]
+
+        async def appear(face):
+            self.hub.on_vision({"event": "face_named", "face": face, "name": "boss_face"})
+            self.speak(1, speaking=False)
+            self.t[0] += 0.1
+            self.hub.step()
+            await settle()
+
+        async def reply(text):
+            rid = f"g{len(items())}"
+            ws.push({"type": "response.created", "response": {"id": rid}})
+            ws.push({"type": "response.audio_transcript.done", "transcript": text})
+            ws.push({"type": "response.done", "response": {"id": rid, "status": "completed", "usage": {}}})
+            await settle(20)
+
+        def leave(face, s):
+            self.hub.on_vision({"event": "face_lost", "face": face})
+            self.t[0] += s
+
+        await appear(1)                                   # first sight: one long, named greeting
+        self.assertEqual(items(), ["[事件] 主人（阿大）出现在你面前了，长招呼。"])
         self.assertEqual(ws.kinds()[-1], "response.create")
-        self.assertFalse(any("阿大" in line for line in self.logs))
-        self.hub.on_vision({"event": "face_lost", "face": 1})
-        self.t[0] += 301
-        self.speak(1)
-        self.hub.on_vision({"event": "face_named", "face": 2, "name": "boss_face"})
-        self.speak(1, speaking=False)
-        self.t[0] += 0.1
-        self.hub.step()
-        await settle()
-        self.assertEqual(len([m for m in ws.sent if m["type"] == "conversation.item.create"]), 2)
+        await reply("阿大回来啦，今天也在忙电路呀")
+        leave(1, 30)
+        await appear(2)                                   # gone only 30 s: not a new recognition
+        self.assertEqual(len(items()), 1)
+        leave(2, 120)
+        await appear(3)                                   # inside 10 min: a short hello
+        self.assertEqual(items()[-1], "[事件] 主人又出现了，短招呼。")
+        await reply("又回来啦")
+        leave(3, 61)
+        await appear(4)                                   # another short hello (>= 60 s apart), still no name
+        self.assertEqual(items()[-1], "[事件] 主人又出现了，短招呼。")
+        leave(4, 600)
+        await appear(5)                                   # 10 min after the long one: a new long one, told what it said
+        self.assertEqual(items()[-1], "[事件] 主人（阿大）出现在你面前了，长招呼。之前说过：「阿大回来啦，今天也在忙电路呀」。"
+                                      "这次换个完全不同的说法。")
+        self.assertEqual(len(items()), 4)
+        self.assertFalse(any("阿大" in line or "电路" in line for line in self.logs))
 
     async def test_others_and_unknown_are_not_greeted_and_not_outside_crowd(self):
         ws = await self.open_ready()
