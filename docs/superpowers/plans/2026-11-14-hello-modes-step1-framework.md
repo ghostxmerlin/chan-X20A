@@ -6,6 +6,8 @@
 
 **Architecture:** 先把 ear 改成自己终结 `/mouth`、行为不变，单独上线验证（A0、D0）。然后加 `server/mind/mode_table.py`（模式表、预设表）、`modes.py`（纯状态机）、`mode_store.py`（持久化、去重、日志、开机默认、设置超时、前置检查、离开钩子）、`billing.py`（总闸）。ear 在 `/mouth` 上推模式快照、转模式输入，给 DualKey 推摇杆灯。固件新增三个纯逻辑头文件（消息、口令、手势）和屏幕上的 ASCII 角标、每模式外观、上滑模式页、下滑快捷设置页。页面新增 `mode-ui.js` 模式条和快捷设置面板。
 
+**任务清单（共 18 个）：** 实现 15 个 = A0–A6（7）、B1–B2（2）、C1–C6（6）；上线 3 个 = D0–D2。A0 / D0 是"ear 终结 `/mouth`"的单独一步，D0 通过之后才做 A5。
+
 **Tech Stack:** Python 3.11 标准库 + pymongo（服务器 venv），测试用 `tests/mind_fixtures.py` 的 `FakeDB` 和 `unittest`；ear 测试要 `websockets`（在 `.private/venv-ear` 里跑，见 `tests/test_mouth_link.py:1`）；Node 24 `node --test`；固件 ESP-IDF 5.5.4，主机测试 `c++ -std=c++17`（写法照 `tests/test_mouth_liveness.py`、`tests/test_monitor_protocol.py:12`）。
 
 **Spec:** `docs/superpowers/specs/2026-11-14-hello-modes-design-v2.md`（第 1.2 节主人的回答、第 3–7 节、第 10 节）。主人 2026-11-14 两轮回答已经定下全部问题（spec 第 1.2 节第 1–13 条），spec 第 12 节没有待定项。听觉先手动、预设 5 空着。模式和预设的定义都在 `server/mind/mode_table.py` 的两张表里。
@@ -54,7 +56,7 @@
   - `billing`（`true`/`false`）；
   - `boot`、`timeout`（只 mind 内部）。
 - 来源 `source`：`asr`、`touch`、`select`、`quick`、`dualkey`、`page`、`boot`、`timeout`。
-- 结果 `code`：`ok`、`already`、`not_in_mode`、`only_talk`、`billing_off`、`busy`、`too_soon`、`mouth_not_tts`、`not_implemented`、`undefined_preset`、`stale`、`unknown_input`、`senses_on_page`（机器人发的预设 1 / 9：服务器那一半做了，机器人那一半要在页面上做）。
+- 结果 `code`：`ok`、`already`、`not_in_mode`、`only_talk`、`billing_off`、`busy`、`too_soon`、`mouth_not_tts`、`not_implemented`、`undefined_preset`、`stale`、`unknown_input`、`no_action`（这个模式里这个输入本来就没有动作）、`senses_on_page`（机器人发的预设 1 / 9：服务器那一半做了，机器人那一半要在页面上做）。
 
 ### 快照（mind 产生，ear 原样转给机器人；页面也读它）
 
@@ -232,13 +234,13 @@ git commit -m "ear: terminate /mouth itself; tts.stop on upstream loss, upstream
   - 进入词、`select` → 那个模式（直接进，不经 IDLE）；`select` 当前模式 → 离开。
   - 离开词：在那个模式里 → `idle`（被托管时回 `event`）；不在 → `not_in_mode`，状态不变。
   - 已在那个模式的进入词 → `already`；例外：`talk` 里 `forward` → `[say_round]`。
-  - `talk` 里：`tap` → `speaking` 时 `[stop_speech]`，否则 `[say_round]`；`double_tap` → `[prefetch_on]`；`next` → `[prefetch_on]`；`previous` → `[prefetch_off]`。别的模式里 `next`/`previous` → `only_talk`。
-  - 空壳模式里 `tap`/`double_tap` → `not_implemented`；`idle` 里 `double_tap` → `not_implemented`。
+  - `talk` 里：`tap` 分两种：`speaking` 时 `[stop_speech]`，没在说 `[say_round]`（DualKey 单击同样）；`double_tap` → `[prefetch_on]`；`next` → `[prefetch_on]`；`previous` → `[prefetch_off]`。别的模式里 `next`/`previous` → `only_talk`。
+  - `chat`、`crowd`、`companion` 里 `tap`：`speaking` 时 `[stop_speech]`，否则 `not_implemented`；它们的 `double_tap` → `not_implemented`。`subtitle`、`settings`、`event`（等待）里 `tap`、`double_tap` → `no_action`（屏幕上这些是 `touch: none`，机器人本地提示不发；只有 DualKey 点击会到这里）。`idle` 里 `tap` → `no_action`（屏幕单击在机器人本地翻 badge；DualKey 单击不翻），`double_tap` → `not_implemented`（音乐以后做）。
   - `direction`：`up` → `subtitle/zh_en`，`down` → `subtitle/en_zh`，`left` → `crowd`，`right` → `companion`；已在该模式且同方向 → 离开；在字幕里推另一个上下方向 → 换 `dir`。
   - `long` → `talk`，`effects` 含 `stop_speech`。
-  - `open` 进入 `settings` 时 `return_to = 旧模式`；`close`、`timeout` → `return_to`（没有就 `idle`）；在设置里 `select` 别的模式 → 那个模式，`return_to` 清掉。
-  - `start` → `event`；在 `event` 里 `stop` → `idle`；`event` 里手动选别的模式 → 事件驱动停，直接进那个模式（`host` 不设，主人 2026-11-14）。`event` 的 `look` = `page_idle`、`label = AUTO`（还没进入任何模式时显示 IDLE 屏幕，【我定】）；以后托管客人模式时用客人模式的 `look`、`host = 'event'`。
-  - `boot` → `talk`。
+  - `open` 进入 `settings` 时 `return_to = 旧模式`（事件驱动开着时：算手动选模式，事件驱动停，`return_to` = 当时显示的模式，等待中就是 `idle`，`host` 清掉）；`close`、`timeout` → `return_to`（没有就 `idle`）。**只要离开 `settings`，不论哪条路（close、timeout、select、别的进入词、direction、long、boot、预设 4），`return_to` 都清成 `None`。**
+  - `start` → `event`；`stop` 在 `event` 里或在被托管的客人模式里（`host == 'event'`）→ `idle`，`host` 清掉；`event` 里手动选别的模式 → 事件驱动停，直接进那个模式（`host` 不设，主人 2026-11-14）。`event` 的 `look` = `page_idle`、`label = AUTO`（还没进入任何模式时显示 IDLE 屏幕，【我定】）；以后托管客人模式时用客人模式的 `look`、`host = 'event'`。
+  - `boot` → `talk`；**即使本来就在 `talk`**，`effects` 也是 `[stop_speech, talk_leave]`（机器人重启后提前写、连续说关掉，spec 3.8）。
   - 只要 `mode` 变了，`effects` 以 `stop_speech` 开头；从 `talk` 变走时再加 `talk_leave`。
   - `digit`、`billing` 不在这里处理（Task A3、A2）。
 
@@ -296,11 +298,27 @@ class TransitionTest(unittest.TestCase):
         self.assertEqual((s['mode'], s['return_to']), ('chat', None))
 
     def test_shell_taps_and_long_press(self):
-        for m in ('chat', 'crowd', 'companion', 'subtitle', 'event', 'settings'):
+        for m in ('chat', 'crowd', 'companion'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'not_implemented')
+            self.assertEqual(self.go(m, 'tap', speaking=True)[2], ['stop_speech'])
+        for m in ('subtitle', 'event', 'settings'):
+            self.assertEqual(self.go(m, 'tap')[1]['code'], 'no_action')
+        self.assertEqual(self.go('idle', 'tap')[1]['code'], 'no_action')            # DualKey click: no badge flip
+        self.assertEqual(self.go('talk', 'boot')[2], ['stop_speech', 'talk_leave'])  # robot reboot while already in talk
         s, r, e = self.go('crowd', 'long')
         self.assertEqual((s['mode'], e[0]), ('talk', 'stop_speech'))
         self.assertEqual(self.go('idle', 'boot')[0]['mode'], 'talk')
+
+    def test_leaving_settings_any_way_clears_return_to(self):
+        for inp, val in (('play', None), ('direction', 'left'), ('long', None), ('boot', None), ('select', {'mode': 'idle'})):
+            self.assertIsNone(self.go('settings', inp, val, return_to='crowd')[0]['return_to'])
+
+    def test_stop_ends_hosted_guest_and_open_stops_event(self):
+        s, _, _ = self.go('crowd', 'stop', host='event')
+        self.assertEqual((s['mode'], s['host']), ('idle', None))
+        s, _, _ = self.go('crowd', 'open', host='event')
+        self.assertEqual((s['mode'], s['return_to'], s['host']), ('settings', 'crowd', None))
+        self.assertEqual(self.go('event', 'open')[0]['return_to'], 'idle')
 
     def test_manual_pick_stops_event_driven(self):
         s, _, e = self.go('event', 'play')
@@ -782,7 +800,7 @@ git commit -m "ear: push the current mode to DualKey for its joystick light"
   - `modeBarHtml(view, log)`：当前模式、"机器人已显示 / 等机器人 / 机器人离线（连上后照这个显示）"、九个按钮（当前高亮，再点 = 离开）、最近 10 次切换。所有文字经转义。
   - `quickHtml(view)`：计费总闸开关（关着时写"现在不花钱"）、0–9 十个键（5–8 灰）。
   - `presetRobotSteps(robot) -> [['hearing','local'] | ['vision','upload']]`。
-  - `class ModeBar(doc)`：每 2 秒读 `/api/mind/mode`；点按钮发请求；按预设时先发服务器那一半，再按 `robot` 跑 `runLevel` / `runVision`，任何一步失败就照实写哪一步没成；409 时把 mind 的错误文字写在条上；广播 `modechange` 事件给台词面板。
+  - `class ModeBar(doc)`：每 2 秒读 `/api/mind/mode`；点按钮发请求；按预设时先发服务器那一半，再按 `robot` 跑 `runLevel` / `runVision`，任何一步失败（包括机器人不在线）就照实写哪一步没成，服务器那一半照样算数，不排队、不重试（spec 3.8）；409 时把 mind 的错误文字写在条上；广播 `modechange` 事件给台词面板。
   - `mind.mjs`：`PATHS` 加 `/mode`、`/mode/seq`；`POST_PATHS` 加 `/mode`、`/preset`（**不**放行 `/mode/input`、`/mode/robot`：只有 ear 用）。`server.mjs` 两个列表同样。
 
 - [ ] **Step 1: 写失败的测试** `web/monitor/mode-ui.test.mjs`（加载方式照 `say-ui.test.mjs`）
