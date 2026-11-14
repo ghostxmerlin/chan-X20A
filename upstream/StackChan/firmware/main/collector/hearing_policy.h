@@ -7,7 +7,9 @@
 #include <string>
 
 namespace collector::hearing {
-inline int asr_action(uint8_t id, bool value) { return value ? 0 : id==0x12 ? 1 : id==0x13 ? -1 : 0; }
+// start/stop no longer toggle hearing (owner 2026-11-14): they are mode inputs (event-driven,
+// asr_mode_words.h) and hearing has no voice control in hello modes step 1. +1 start, -1 stop, 0 none.
+inline int asr_action(uint8_t, bool) { return 0; }
 inline bool valid_url(const std::string& url) {
     size_t start=url.rfind("ws://",0)==0 ? 5 : url.rfind("wss://",0)==0 ? 6 : 0;
     if(!start || url.size()>256)return false;

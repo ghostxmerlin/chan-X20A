@@ -23,7 +23,7 @@ const char* voice_decode(const VoiceClip& clip, int16_t* pcm)
 void voice_library_json(ArduinoJson::JsonObject out)
 {
     out["count"]=kVoiceCount; out["endpoint"]="/v1/voice/play";
-    out["asr_command"]="open"; out["stored_on_device"]=true;
+    out["asr_command"]=nullptr; out["stored_on_device"]=true; // next is a mode input since step 1
     out["storage"]="sd";out["asset_install"]=true;out["asset_endpoint"]="/v1/voice/assets";
     out["asr_start_delay_ms"]=kAsrVoiceStartDelayMs;
     auto clips=out["clips"].to<ArduinoJson::JsonArray>();

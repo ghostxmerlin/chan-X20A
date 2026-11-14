@@ -27,7 +27,8 @@ int main(int argc, char** argv) {
     }
     assert(choose_voice(-1,0,0)==0 && choose_voice(kVoiceCount+1,0,0)==0);
     assert(choose_voice(21,0,0)==21 && choose_voice(40,0,0)==40 && choose_voice(80,0,0)==80 && choose_voice(81,0,0)==0);
-    assert(voice_asr_next(0x1b,false) && !voice_asr_next(0x10,false) && !voice_asr_next(0x1b,true));
+    // next is a mode input since hello modes step 1 (owner 2026-11-14): it no longer plays a clip.
+    assert(!voice_asr_next(0x1b,false) && !voice_asr_next(0x10,false) && !voice_asr_next(0x1b,true));
     VoiceCooldown cooldown;
     assert(cooldown.allowed(0)); cooldown.finished(1000);
     assert(!cooldown.allowed(1000) && !cooldown.allowed(1200999) && cooldown.allowed(1201000));

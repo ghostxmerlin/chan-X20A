@@ -39,12 +39,16 @@ int main(){
     face.valid=true;assert(interaction::set_mode("advanced",true)==ESP_OK);assert(camera_calls==0&&!listening.requested()&&!tracking);
     assert(interaction::set_mode("invalid",false)==ESP_ERR_INVALID_ARG);
     motor_ready=false;assert(interaction::set_mode("tracking",true)==ESP_ERR_INVALID_STATE);motor_ready=true;
+    // open/close are mode inputs since hello modes step 1 (owner 2026-11-14): they no longer
+    // toggle tracking, so tracking is switched by its own mode here.
     interaction::asr_command(0x10,true);assert(!tracking);
-    interaction::asr_command(0x10,false);assert(tracking&&face.function==M12Function::detect);
-    const auto first_calls=camera_calls;interaction::asr_command(0x10,false);assert(camera_calls==first_calls);
+    interaction::asr_command(0x10,false);assert(!tracking&&camera_calls==0);
+    assert(interaction::set_mode("tracking",true)==ESP_OK);assert(tracking&&face.function==M12Function::detect);
+    const auto first_calls=camera_calls;interaction::asr_command(0x10,false);assert(tracking&&camera_calls==first_calls);
     interaction::asr_command(0x1b,false);assert(tracking&&camera_calls==first_calls);
     assert(interaction::set_mode("recognition",true)==ESP_OK);assert(face.function==M12Function::detect);
-    interaction::asr_command(0x11,false);assert(!tracking&&face.function==M12Function::detect);
+    interaction::asr_command(0x11,false);assert(tracking&&face.function==M12Function::detect);
+    assert(interaction::set_mode("tracking",false)==ESP_OK);assert(!tracking&&face.function==M12Function::detect);
     // A newly requested recognition mode must not accept frames from the previous UART command.
     const auto applied_revision=face.mode_request_revision;
     face.mode_request_revision=applied_revision-4;
@@ -70,7 +74,8 @@ int main(){
     assert(!tracking&&face.function==M12Function::standby); // turn off applies immediately, without LVGL polling
     interaction::asr_command(0x12,false);assert(face.function==M12Function::standby);
     interaction::asr_command(0x14,false);assert(!tracking&&face.function==M12Function::detect);
-    interaction::asr_command(0x10,false);tick();assert(tracking&&face.function==M12Function::detect);
+    interaction::asr_command(0x10,false);tick();assert(!tracking&&face.function==M12Function::detect); // open: mode input now
+    interaction::set_mode("tracking",true);tick();assert(tracking&&face.function==M12Function::detect);
     // 0.4.46: /v1/control parses the body and hands the target-free object to the module.
     auto handle=[](const std::string& body){ControlReply r;ArduinoJson::JsonDocument d;deserializeJson(d,body);interaction::handle(&r,d.as<ArduinoJson::JsonObject>());return r.status;};
     assert(handle("{\"mode\":\"advanced\",\"enabled\":false}")=="202 Accepted");

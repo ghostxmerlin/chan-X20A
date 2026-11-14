@@ -5,6 +5,7 @@
 #include "interaction.h"
 #include "remote.h"
 #include "asr_motion.h"
+#include "asr_mode_words.h"
 #include "boot_tracking.h"
 #include "interaction_policy.h"
 #include "m12_unit.h"
@@ -48,6 +49,15 @@ struct RemoteYawPort {
 };
 AsrYawPlan yaw_plan;
 BootTracking boot_tracking; // only asr_task changes it; asr_json reads the result string
+
+// Mode words go to mind over /mouth (hello modes step 1). The /mouth input queue arrives with
+// Task C4, which replaces this body with mode_link_send_input("asr", input, digit) (digit < 0 =
+// value null). Until then every mode word is reported as not sent ("offline").
+bool send_mode_input(const char* input, int digit)
+{
+    (void)input; (void)digit;
+    return false;
+}
 struct MotionState {
     uint32_t seq = 0;           // ASR event that started the latest action
     const char* word = "";
@@ -123,14 +133,18 @@ void asr_task(void*)
             AsrFrame frame;
             if (!parser.push(buffer[i], frame)) continue;
             Event event{++seq, esp_timer_get_time(), frame};
-            // A spoken motion or tracking word wins over boot auto-tracking, which then never fires.
-            if (asr_motion_word(frame.id, frame.has_value) != AsrMotionWord::None ||
-                interaction::asr_mode_action(frame.id, frame.has_value) == interaction::AsrModeAction::OpenTracking ||
-                interaction::asr_mode_action(frame.id, frame.has_value) == interaction::AsrModeAction::CloseTracking) boot_tracking.cancel();
+            // A spoken motion word (up/down tracking, the yaw words) wins over boot auto-tracking,
+            // which then never fires. open/close are mode inputs since step 1 and do not cancel it.
+            if (asr_motion_word(frame.id, frame.has_value) != AsrMotionWord::None) boot_tracking.cancel();
             // Consume each newly parsed frame once, independent of webpage/LVGL polling.
+            // Local uses left: volume (playback), turn on/off (interaction). hearing::asr_command
+            // and voice next are no-ops since step 1 (their words are mode inputs).
             playback_asr_command(frame.id,frame.has_value);
             hearing::asr_command(frame.id,frame.has_value);
             interaction::asr_command(frame.id,frame.has_value);
+            int digit = -1;
+            const char* mode_input = asr_mode_input(frame.id, frame.has_value, &digit);
+            const bool mode_sent = mode_input && send_mode_input(mode_input, digit);
             const char* word = asr_word(frame.id);
             const auto outcome = yaw_plan.command(asr_motion_word(frame.id, frame.has_value), port, esp_timer_get_time());
             event.action = outcome.action; event.result = outcome.result;
@@ -152,6 +166,9 @@ void asr_task(void*)
             else if (outcome.action)
                 ESP_LOGI(kTag, "#%lu id=0x%02X %s -> %s %s", static_cast<unsigned long>(event.seq), frame.id,
                          word ? word : "(unknown)", outcome.action, outcome.result);
+            else if (mode_input)
+                ESP_LOGI(kTag, "#%lu id=0x%02X %s -> mode %s%s", static_cast<unsigned long>(event.seq), frame.id,
+                         word ? word : "(unknown)", mode_input, mode_sent ? "" : " (offline)");
             else
                 ESP_LOGI(kTag, "#%lu id=0x%02X %s", static_cast<unsigned long>(event.seq), frame.id,
                          word ? word : "(unknown)");
@@ -199,6 +216,12 @@ void asr_json(ArduinoJson::JsonObject out,uint32_t after)
         if (const char* word = asr_word(e.frame.id)) item["word"] = word;
         if (e.frame.has_value) item["value"] = e.frame.value;
         if (e.action) { item["action"] = e.action; item["result"] = e.result; }
+        // Derived from the id, so the history keeps no extra bytes per event.
+        int digit = -1;
+        if (const char* mode = asr_mode_input(e.frame.id, e.frame.has_value, &digit)) {
+            item["mode_input"] = mode;
+            if (digit >= 0) item["mode_value"] = digit;
+        }
     }
 }
 
@@ -215,21 +238,28 @@ void asr_info_json(ArduinoJson::JsonObject out)
     // Independent ASR home reactions; display only, no sound
     // (the unit already speaks its own reply).
     auto reactions = out["screen_reactions"].to<ArduinoJson::JsonObject>();
-    reactions["0x07 forward"] = "none (reserved, 2026-11-13)";
-    reactions["0x09 backward"] = "none (reserved, 2026-11-13)";
     reactions["0x14 turn on"] = "M12 face view";
     reactions["0x15 turn off"] = "home";
     out["reaction_sound"] = false;
     out["boot_tracking"] = boot_tracking.result();
-    out["open_action"] = "horizontal_face_tracking_on";
-    out["close_action"] = "horizontal_face_tracking_off";
-    out["next_action"] = "random_local_voice_after_800ms";
-    out["start_action"] = "continuous_hearing_start";
-    out["stop_action"] = "continuous_hearing_stop";
+    // Mode words (hello modes step 1, owner 2026-11-14): sent to mind as /mouth mode_input; mind
+    // decides what they do in the current mode. Their old local uses are gone.
+    auto modes = out["mode_words"].to<ArduinoJson::JsonObject>();
+    modes["0x07 forward"] = "forward (enter talk show)";
+    modes["0x09 backward"] = "backward (leave talk show)";
+    modes["0x16 play"] = "play (conversation)";
+    modes["0x17 pause"] = "pause (conversation)";
+    modes["0x10 open"] = "open (settings; no longer tracking on)";
+    modes["0x11 close"] = "close (settings; no longer tracking off)";
+    modes["0x12 start"] = "start (event-driven; no longer hearing start)";
+    modes["0x13 stop"] = "stop (event-driven; no longer hearing stop)";
+    modes["0x1B next"] = "next (per mode; no longer a random clip)";
+    modes["0x1A previous"] = "previous (per mode)";
+    modes["0x20-0x29 zero..nine"] = "digit 0-9 (presets)";
     // Spoken yaw words (2026-11-13), robot's own left/right like the web buttons.
     auto yaw = out["yaw_words"].to<ArduinoJson::JsonObject>();
-    yaw["0x01 up"] = "tracking_on (same as open)";
-    yaw["0x02 down"] = "tracking_off (same as close)";
+    yaw["0x01 up"] = "tracking_on";
+    yaw["0x02 down"] = "tracking_off";
     yaw["0x03 left"] = "one 45 deg notch left";
     yaw["0x04 turn left"] = "two notches left, clipped at -90 deg";
     yaw["0x05 right"] = "one 45 deg notch right";

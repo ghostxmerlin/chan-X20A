@@ -8,10 +8,14 @@ int main() {
     assert(camera_mode(true,false)==M12Function::detect);
     assert(camera_mode(true,true)==M12Function::detect);    // m12d: recognition = detection + names
     assert(camera_mode(false,true)==M12Function::detect);
-    assert(asr_mode_action(0x10,false)==AsrModeAction::OpenTracking);
-    assert(asr_mode_action(0x11,false)==AsrModeAction::CloseTracking);
+    // open/close are mode inputs since hello modes step 1 (owner 2026-11-14): no tracking toggle.
+    assert(asr_mode_action(0x10,false)==AsrModeAction::None);
+    assert(asr_mode_action(0x11,false)==AsrModeAction::None);
     assert(asr_mode_action(0x1b,false)==AsrModeAction::None);
     assert(asr_mode_action(0x10,true)==AsrModeAction::None);
+    assert(asr_mode_action(0x14,false)==AsrModeAction::ReleaseModes);
+    assert(asr_mode_action(0x15,false)==AsrModeAction::ReleaseModes);
+    assert(asr_mode_action(0x15,true)==AsrModeAction::None);
     assert(toggle_due(0xffffffff,0));assert(!toggle_due(2,4));
     M12Face face{};face.x=200;face.y=100;face.w=120;face.h=140;face.prob=.9f;std::strcpy(face.name,"known_a");
     OwnerGate g;g.reset(1000);

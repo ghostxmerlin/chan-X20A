@@ -71,8 +71,6 @@ esp_err_t set_mode(const char* mode,bool enabled) {
 void release_for_manual_m12() {std::lock_guard<std::mutex> lock(mutex);release_locked();}
 void asr_command(uint8_t id,bool has_value) {
     switch(asr_mode_action(id,has_value)) {
-    case AsrModeAction::OpenTracking:set_mode("tracking",true);break;
-    case AsrModeAction::CloseTracking:set_mode("tracking",false);break;
     case AsrModeAction::ReleaseModes: {
         // Consume the visual mode in UART order, never later from a collapsed LVGL snapshot.
         std::lock_guard<std::mutex> lock(mutex);
