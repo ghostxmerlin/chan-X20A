@@ -14,8 +14,10 @@
 
 ## Global Constraints
 
-- **第一步进入任何模式都不开始花钱；IDLE 和开机不动付费感官**（主人 2026-11-14）。唯一的花钱行为是脱口秀今天已有的：说一轮（按了才写）、提前写、连续说（默认关，重启后关，`server/mind/say_prefetch.py:36`、`say_auto.py:22`）。不新增任何付费调用、不新增模型提示词。
+- **进入脱口秀以外的模式都不开始花钱；IDLE 和开机不动付费感官**（主人 2026-11-14）。花钱行为只有脱口秀今天已有的：说一轮（按了才写）、提前写、连续说。不新增任何付费调用、不新增模型提示词。
+- **每次进入脱口秀**（开机 `boot`、从别的模式切过来、从设置回来）发 `talk_enter` = 提前写开 + 连续说开 + 家人声音关；总闸关着时 `talk_enter` 整个不执行（主人 2026-11-14 第 14 条）。已在脱口秀里说 forward 不算进入；mind 重启不算进入（提前写、连续说照今天回到关，`server/mind/say_prefetch.py:36`、`say_auto.py:22`）。
 - **离开脱口秀**：提前写、连续说关掉，存货丢掉；**任何模式切换**：正在说的停（`speak.cancel_pending`）。
+- **库里存的计费值坏了**（不是布尔）按关处理（主人 2026-11-14 第 15 条）；文档不存在时才建成开。
 - **计费总闸（第一步）= 关掉 + 禁止再开 + 拦说话**：关时把听悟、识别、纪要、情景、提前写、连续说关掉、停正在说的；关着时打开这些开关、调说话类接口一律 409"计费关着"。**不**改 `llm.chat`、不改 ear 的听悟逻辑（进程级闸门是后一步，见"不在本计划内"）。
 - **mind 是唯一改模式的地方。** 设备输入按 `device + boot + seq` 去重；`age_ms > 3000` 的设备输入（含 DualKey 的方向和点击）丢掉，结果记 `stale`。模式变了或总闸变了，`seq` 都加 1。
 - **模式表和预设表都在 `server/mind/mode_table.py`（`MODES`、`PRESETS` 两个字典），是唯一定义。** 放成 Python 模块，是因为 `server/mind/deploy.sh:15` 只部署 `server/mind/*.py`。固件不写死"哪个模式用哪款眼睛"，只认快照里的 `look` 词表。
@@ -35,6 +37,7 @@
 - 机器人断开：上游立刻关（Task A0 `test_robot_close_closes_upstream`），soul-tts 不会给不在线的机器人合成。
 - 计费总闸关掉：`/mode/seq` 变大，快照 `billing = false`，付费开关不能再开（Task A4 `test_billing_change_bumps_seq`、`test_billing_off_blocks_paid_switches_and_speech`）。
 - 离开脱口秀后提前写、连续说都是关的，存货清空；在 IDLE 里点"说一轮"返回 409（Task A4）。
+- 进入脱口秀（含开机）后提前写、连续说是开的、家人声音是关的；总闸关着时进入脱口秀，两个都不开（Task A4 `test_entering_talk_turns_writing_on`、`test_entering_talk_with_billing_off`）。
 - 同一设备输入重发两次只切一次；DualKey 重连后重发的旧方向不切模式（Task A2 `test_device_input_dedup`，A4 `test_dualkey_stale_direction_ignored`）。
 - 机器人收到坏的快照不改屏幕；相同 `seq` 不算坏消息；握手后第一条快照总收下（Task C1）。
 - 手势分类器按真机数据（多次按下采样，松手 `(-1,-1)`）测，含途中抬起、松手抖动（Task C3）。
@@ -220,6 +223,8 @@ git commit -m "ear: terminate /mouth itself; tts.stop on upstream loss, upstream
 
 ### Task A1: 模式表和纯状态机
 
+> **已实现**（提交 `0687540`、`2474414`）。下面是当时的规格。主人 2026-11-14 第 14 条后加的 `talk_enter` 效果，作为对 `server/mind/modes.py` 的后续修改放在 Task A3 里做；这里关于 `boot` 和进入脱口秀的效果以 A3 为准。
+
 **Files:**
 - Create: `server/mind/mode_table.py`（这一步只写 `MODES`）、`server/mind/modes.py`
 - Test: `tests/test_mind_modes.py`
@@ -240,7 +245,7 @@ git commit -m "ear: terminate /mouth itself; tts.stop on upstream loss, upstream
   - `long` → `talk`，`effects` 含 `stop_speech`。
   - `open` 进入 `settings` 时 `return_to = 旧模式`（事件驱动开着时：算手动选模式，事件驱动停，`return_to` = 当时显示的模式，等待中就是 `idle`，`host` 清掉）；`close`、`timeout` → `return_to`（没有就 `idle`）。**只要离开 `settings`，不论哪条路（close、timeout、select、别的进入词、direction、long、boot、预设 4），`return_to` 都清成 `None`。**
   - `start` → `event`；`stop` 在 `event` 里或在被托管的客人模式里（`host == 'event'`）→ `idle`，`host` 清掉；`event` 里手动选别的模式 → 事件驱动停，直接进那个模式（`host` 不设，主人 2026-11-14）。`event` 的 `look` = `page_idle`、`label = AUTO`（还没进入任何模式时显示 IDLE 屏幕，【我定】）；以后托管客人模式时用客人模式的 `look`、`host = 'event'`。
-  - `boot` → `talk`；**即使本来就在 `talk`**，`effects` 也是 `[stop_speech, talk_leave]`（机器人重启后提前写、连续说关掉，spec 3.8）。
+  - `boot` → `talk`；**即使本来就在 `talk`**，`effects` 也是 `[stop_speech, talk_leave]`（A1 当时的规格；主人第 14 条后由 Task A3 改成 `[stop_speech, talk_enter]`）。
   - 只要 `mode` 变了，`effects` 以 `stop_speech` 开头；从 `talk` 变走时再加 `talk_leave`。
   - `digit`、`billing` 不在这里处理（Task A3、A2）。
 
@@ -379,12 +384,12 @@ git commit -m "mind: mode table and pure mode transitions (modes step 1)"
 **Interfaces:**
 - Consumes: Task A1。
 - Produces: `class ModeStore(db, *, guard=None, speaking_fn=lambda: False, clock_ms=lambda: int(time.time() * 1000))`：
-  - 启动时读 `hello.mode {_id: 'current'}`（含 `seq`、`billing`）；没有就写 `talk`、`seq = 1`、`billing = True`、`by = 'boot'`。
+  - 启动时读 `hello.mode {_id: 'current'}`（含 `seq`、`billing`）；没有就写 `talk`、`seq = 1`、`billing = True`、`by = 'boot'`。文档在但 `billing` 不是布尔 → 当作 `False`（主人第 15 条），并记一条日志。
   - `apply(input, value, *, source, device=None, boot=None, dev_seq=None, age_ms=0, sid=None, now_ms=None) -> {snapshot, result, effects}`：模块级锁内：
     1. 设备输入按 `(device, boot, dev_seq)` 去重：重复的返回第一次的结果，不再执行；
     2. `age_ms > 3000` → `stale`；
     3. `transition(..., speaking=speaking_fn())`；
-    4. **前置检查**：对 `say_round`、`prefetch_on` 这两种要花钱的效果调 `guard(effect, meta) -> code | None`（`meta = {source, input, device, sid, mode}`）；返回了代码（`busy`、`too_soon`、`mouth_not_tts`、`billing_off`）就把这个效果去掉、`result.code` 换成它；模式变化不受影响；
+    4. **前置检查**：对 `say_round`、`prefetch_on`、`talk_enter`（A3 加）这些要花钱的效果调 `guard(effect, meta) -> code | None`（`meta = {source, input, device, sid, mode}`）；返回了代码（`busy`、`too_soon`、`mouth_not_tts`、`billing_off`）就把这个效果去掉、`result.code` 换成它；例外：`talk_enter` 被拦时 `result.code` 保持 `ok`、`toast` 写 `BILLING OFF`（进入脱口秀本身成功了）；模式变化不受影响；
     5. 状态变了才 `seq += 1` 并写 `hello.mode`；每次（含没变的）追加一条 `hello.mode_log {at, source, device, input, value, from, to, code, seq, effects}`，同时存去重结果。
     锁外按顺序调 `on_change` 回调 `f(old_state, new_state, effects, meta, now_ms)`：只负责**执行**（停说话、关提前写、开始一轮），不再决定结果。
   - `set_billing(on, *, source, now_ms) -> snapshot`：值变了才 `seq += 1`、写库、记日志（`input = 'billing'`）。总闸的读写只经过这里，所以 ear 和机器人总能看到变化。
@@ -398,6 +403,10 @@ git commit -m "mind: mode table and pure mode transitions (modes step 1)"
 class ModeStoreTest(unittest.TestCase):
     def setUp(self):
         self.db = FakeDB(); self.ms = ModeStore(self.db, clock_ms=lambda: 0)
+
+    def test_corrupt_billing_reads_as_off(self):
+        db = FakeDB(); db['mode'].insert_one({'_id': 'current', 'mode': 'talk', 'seq': 3, 'billing': 'yes'})
+        self.assertFalse(ModeStore(db).current()['billing'])
 
     def test_starts_in_talk_and_persists(self):
         self.assertEqual((self.ms.current()['mode'], self.ms.current()['billing']), ('talk', True))
@@ -476,15 +485,16 @@ git commit -m "mind: mode store with log, dedup, guard, billing seq, boot defaul
 
 ---
 
-### Task A3: 计费总闸和预设（服务器那一半）
+### Task A3: 计费总闸和预设（服务器那一半）；`modes.py` 加 `talk_enter`
 
 **Files:**
 - Create: `server/mind/billing.py`
-- Modify: `server/mind/mode_table.py`（加 `PRESETS`）
-- Test: `tests/test_mind_billing.py`
+- Modify: `server/mind/mode_table.py`（加 `PRESETS`）、`server/mind/modes.py`（A1 已实现，这里是后续修改：加 `talk_enter`）
+- Test: `tests/test_mind_billing.py`、`tests/test_mind_modes.py`（改 A1 的几条期望、加两条）
 
 **Interfaces:**
 - Produces:
+  - **`modes.transition` 的后续修改（主人第 14 条）**：新效果 `talk_enter`（执行时 = 提前写开 + 连续说开 + 家人声音关）。新状态是 `talk` 而旧状态不是，或者输入是 `boot`（即使本来就在 `talk`），`effects` = `[stop_speech, talk_enter]`：从别的模式进来、设置 close / timeout 回到 `talk`、DualKey 长按、`boot`（取代 A1 的 `boot` 在 `talk` 里 = `[stop_speech, talk_leave]`）。已在 `talk` 里 `forward` 仍是 `[say_round]`。`talk_enter` 经 A2 的 `guard`：总闸关 → 去掉，`toast = BILLING OFF`。
   - `mode_table.PRESETS`：`{n: {name, server: [...], robot: {hearing?, vision?}}}`；`server` 的动作名：`billing_off`（含关付费开关、关提前写和连续说、停说话）、`billing_on`、`paid_senses_on`（听悟、识别、纪要、情景）、`mouth_tts`、`talk_on`（提前写、连续说；不在脱口秀时跳过并在 `toast` 里说）、`toggle_tingwu`、`toggle_prefetch`、`mode_idle`。按 spec 第 7 节表：0 = `[billing_off]`；1 = `[billing_off]` + `robot {hearing:'local', vision:'upload'}`；2 = `[toggle_tingwu]`；3 = `[toggle_prefetch]`；4 = `[mode_idle]`；9 = `[billing_on, paid_senses_on, mouth_tts, talk_on]` + 同样的 `robot`；5–8 空。
   - `class Billing(ctx)`：`ctx` 提供 `mode_store`、`set_switch(name, on)`、`set_mind(on)`、`set_mouth(mode)`、`prefetch`、`auto`、`cancel()`、`mode()`。
     - `off(source, now_ms)`：`mode_store.set_billing(False, ...)`，然后关听悟、识别、纪要、情景、提前写、连续说，停说话。
@@ -537,16 +547,33 @@ class BillingTest(unittest.TestCase):
 
     def test_undefined(self):
         self.assertEqual(apply_preset(6, self.b, source='page', now_ms=1)['result']['code'], 'undefined_preset')
+
+    def test_zero_in_talk_stays_off_until_next_entry(self):
+        apply_preset(0, self.b, source='asr', now_ms=1); self.b.on('page', 2)
+        self.assertEqual((self.ctx.prefetch, self.ctx.auto), (False, False))      # billing on restores nothing
+```
+
+加到 `tests/test_mind_modes.py`（A1 里 `idle` + `forward` 的期望、`talk` + `boot` 的期望照这里改）：
+
+```python
+    def test_entering_talk_emits_talk_enter(self):
+        self.assertEqual(self.go('idle', 'forward')[2], ['stop_speech', 'talk_enter'])
+        self.assertEqual(self.go('settings', 'close', return_to='talk')[2], ['stop_speech', 'talk_enter'])
+        self.assertEqual(self.go('talk', 'boot')[2], ['stop_speech', 'talk_enter'])     # robot reboot while already in talk
+        self.assertEqual(self.go('crowd', 'long')[2], ['stop_speech', 'talk_enter'])
+
+    def test_forward_inside_talk_is_not_an_entry(self):
+        self.assertEqual(self.go('talk', 'forward')[2], ['say_round'])
 ```
 
 （`FakeCtx` 在测试文件里定义：记录每个开关，内含一个用 `FakeDB` 的真 `ModeStore`；`ctx.prefetch.set_enabled(True)` 在 `mode_value != 'talk'` 时由 Billing 自己跳过。）
 
 - [ ] **Step 2: 运行，确认失败**
 
-Run: `python3 -B -m unittest tests.test_mind_billing -v`
+Run: `python3 -B -m unittest tests.test_mind_billing tests.test_mind_modes -v`
 Expected: FAIL，`ModuleNotFoundError: No module named 'mind.billing'`
 
-- [ ] **Step 3: 实现 `billing.py` 和 `mode_table.PRESETS`**
+- [ ] **Step 3: 实现 `billing.py` 和 `mode_table.PRESETS`；改 `modes.py` 加 `talk_enter`，并把 A1 测试里 `idle` + `forward`、`talk` + `boot` 的期望改成 `['stop_speech', 'talk_enter']`**
 
 - [ ] **Step 4: 运行，确认通过；跑全部 mind 测试**
 
@@ -556,8 +583,8 @@ Expected: 全部 OK
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/mind/billing.py server/mind/mode_table.py tests/test_mind_billing.py
-git commit -m "mind: billing master switch (off + no re-enable) and 0-9 presets, server half"
+git add server/mind/billing.py server/mind/mode_table.py server/mind/modes.py tests/test_mind_billing.py tests/test_mind_modes.py
+git commit -m "mind: billing master switch, 0-9 presets (server half), talk_enter on every talk-show entry"
 ```
 
 ---
@@ -573,13 +600,13 @@ git commit -m "mind: billing master switch (off + no re-enable) and 0-9 presets,
 - Consumes: A1–A3。
 - Produces: 接口一节的 mind 路径。另外：
   - `runner.py` 建 `ModeStore(db, guard=..., speaking_fn=...)` 和 `Billing(...)`，放进 `ctx['mode_store']`、`ctx['billing']`；主循环每轮 `mode_store.tick(now)`。
-  - `guard(effect, meta)`：`say_round` → 总闸关 `billing_off`；嘴不在 TTS `mouth_not_tts`；已有一轮在跑 `busy`；离上一轮开始不到 10 秒 `too_soon`。`prefetch_on` → 总闸关 `billing_off`。`speaking_fn` = mind 有没有正在说的一句（`speak` 模块已经记着待播的那句，`cancel_pending` 用的就是它，`speak.py:41-46`）。
-  - 钩子（只执行）：`stop_speech` → `speak.cancel_pending(tts)`；`talk_leave` → `say_worker.set_enabled(False)`、`say_auto.set_enabled(False)`；`say_round` → 后台线程跑 `speak.say_round(..., trigger={'source': meta.source, 'input': meta.input, 'sid': meta.sid})`；`prefetch_on/off` → `say_worker.set_enabled(...)`。
+  - `guard(effect, meta)`：`say_round` → 总闸关 `billing_off`；嘴不在 TTS `mouth_not_tts`；已有一轮在跑 `busy`；离上一轮开始不到 10 秒 `too_soon`。`prefetch_on`、`talk_enter` → 总闸关 `billing_off`。`speaking_fn` = mind 有没有正在说的一句（`speak` 模块已经记着待播的那句，`cancel_pending` 用的就是它，`speak.py:41-46`）。
+  - 钩子（只执行）：`stop_speech` → `speak.cancel_pending(tts)`；`talk_leave` → `say_worker.set_enabled(False)`、`say_auto.set_enabled(False)`；`say_round` → 后台线程跑 `speak.say_round(..., trigger={'source': meta.source, 'input': meta.input, 'sid': meta.sid})`；`prefetch_on/off` → `say_worker.set_enabled(...)`；`talk_enter` → `say_worker.set_enabled(True)`、`say_auto.set_enabled(True)`，`speech.round.family` 是开的就存一版设置把它关掉（写法照页面的 `familySettingsBody`，`web/monitor/public/say-ui.js:16`，`note = 家人声音 关（进脱口秀）`；本来就关就不写，免得每次开机多一个设置版本）。
   - 拦截：`/say`、`/say/round`、`/say/play` 不在脱口秀 → 409 `只在脱口秀模式`；`/say/prefetch`、`/say/auto` 打开时同上；总闸关时以上和 `/voice/try`、`/role/try` → 409 `计费关着`；`/switches` 打开 `tingwu`/`eye`/`notes`、`/switch` 打开情景，总闸关时 → 409 `计费关着`；`/say/stop` 永远放行。
   - `/switches {name: 'billing', on}`：关 = `billing.off`；开 = `billing.on`。`switches()` 输出多 `billing: {on, at}`。
   - `/signal`：`put_signal` 之后，`kind == 'mode'` → `mode_store.apply('direction', value.direction, source='dualkey', device, boot, dev_seq=seq, age_ms=body.age_ms, sid)`；`kind == 'click'` → `single`/`double`/`long` 对应 `tap`/`double_tap`/`long`；结果写进那条信号的 `result`（`update_one` 只加 `result` 字段）。打分（`rating`）不受 3 秒规则影响。
   - `say_prefetch.Worker`、`say_auto.Worker` 加 `mode_fn=lambda: 'talk'`，运行循环里 `mode_fn() != 'talk'` 就跳过并记 `last = {reason: 'not_talk'}`。
-  - README 加"模式（第一步）"：集合、接口、"进入模式不花钱"、总闸的做法；写明 `probe.py`、`runner.py --rebuild --fusion` 这类一次性命令行不受总闸约束。
+  - README 加"模式（第一步）"：集合、接口、"进入脱口秀开提前写和连续说、其他模式进入不花钱"、总闸的做法（含坏值按关）；写明 `probe.py`、`runner.py --rebuild --fusion` 这类一次性命令行不受总闸约束。
 
 - [ ] **Step 1: 写失败的测试** `tests/test_mind_mode_api.py`（结构照 `tests/test_mind_speech_api.py`：起 `api.make_server(..., ctx={...})`，`call(path, body=None) -> (status, json)`；`tts`、`say_worker`、`say_auto`、`say_round` 用测试替身记录调用；时钟可注入）
 
@@ -594,6 +621,20 @@ git commit -m "mind: billing master switch (off + no re-enable) and 0-9 presets,
         self.worker.set_enabled(True, 1); self.auto.set_enabled(True, 1)
         self.call('/mode', {'input': 'backward'})
         self.assertEqual((self.worker.enabled(), self.auto.enabled(), self.tts.stops >= 1), (False, False, True))
+
+    def test_entering_talk_turns_writing_on(self):
+        self.settings_family(True)
+        self.call('/mode', {'input': 'backward'}); self.call('/mode', {'input': 'forward'})
+        self.assertEqual((self.worker.enabled(), self.auto.enabled(), self.family()), (True, True, False))
+        self.call('/mode/robot', {'boot': 'b9', 'conn': 9, 'event': 'hello'})          # reboot while in talk: same
+        self.assertTrue(self.auto.enabled())
+
+    def test_entering_talk_with_billing_off(self):
+        self.call('/mode', {'input': 'backward'})
+        self.call('/switches', {'name': 'billing', 'on': False})
+        r = self.call('/mode', {'input': 'forward'})[1]
+        self.assertEqual((r['snapshot']['mode'], r['result']['code'], self.worker.enabled(), self.auto.enabled()),
+                         ('talk', 'ok', False, False))
 
     def test_say_round_only_in_talk(self):
         self.call('/mode', {'input': 'backward'})
@@ -1262,13 +1303,13 @@ Expected: 全部 OK / pass
 - [ ] **Step 2: DualKey 在真服务器上推一遍**（交接里的待办）：上、下、左、右、单击、双击、长按 1 秒各一次；页面模式条、信号列表、机器人角标都对得上；摇杆灯随模式变色，IDLE 灭。
 
 - [ ] **Step 3: 能试**：
-  - 开机后角标 `TALK`、笑面男（开着视觉也是）。说 "hello" 唤醒后：forward → 说一轮（已在脱口秀）；backward → IDLE 屏；forward → 回 `TALK`、不说话；再 forward → 说一轮；play → 猫眼、`CHAT`；直接 open → 参数页（不经 IDLE）；close → 回 `CHAT`；pause → IDLE；start → IDLE 屏、角标 `AUTO`；在事件驱动里说 play → 猫眼、`CHAT`，事件驱动已停（之后 pause → IDLE，不回 `AUTO`）；再 start、stop → IDLE。DualKey 单击在 hello 说话时停声（和 ASR 改绑无关）。
+  - 开机后角标 `TALK`、笑面男（开着视觉也是）。说 "hello" 唤醒后：forward → 说一轮（已在脱口秀）；backward → IDLE 屏（页面上提前写、连续说变关）；forward → 回 `TALK`、不说话，页面上提前写、连续说变开、家人声音不选；再 forward → 说一轮；play → 猫眼、`CHAT`；直接 open → 参数页（不经 IDLE）；close → 回 `CHAT`；pause → IDLE；start → IDLE 屏、角标 `AUTO`；在事件驱动里说 play → 猫眼、`CHAT`，事件驱动已停（之后 pause → IDLE，不回 `AUTO`）；再 start、stop → IDLE。DualKey 单击在 hello 说话时停声（和 ASR 改绑无关）。
   - next / previous 在脱口秀里开关提前写（页面台词面板跟着变）；在 IDLE 里说 next，屏幕提示 `ONLY IN TALK`。
   - 首页单击（脱口秀）说一轮；hello 正在说时单击 = 停；双击开提前写；IDLE 里单击切 badge。
   - 上滑出模式页，点 `MEET` → 机甲眼热闹表情；再点 `MEET` → IDLE。下滑出快捷设置页，音量 − / ＋ 立即生效；计费关 → 角标旁、摘要页、页面都显示计费关，台词按钮灰；说 "nine" → 总闸开、听悟、识别、情景、纪要开（在脱口秀里时提前写、连续说也开），屏幕提示 `SENSES: USE PAGE`；页面按 9 → 本体听觉和视觉上传也开；说 "zero" → 全关。
   - 左滑出状态摘要，有模式和计费两行。
   - 页面点模式按钮，机器人 2 秒内换角标，页面写"机器人已显示"。
-  - hello 断电重启后回到脱口秀，付费开关没有被动过。
+  - hello 断电重启后回到脱口秀，提前写、连续说是开的，付费感官开关没有被动过；先说 zero 再重启：提前写、连续说都是关的（总闸关着）。
 
 - [ ] **Step 4: 算失败**（任何一条成立就进 Step 5 回滚或修）：
   - 页面、机器人、DualKey 灯显示的模式或计费不一致超过 3 秒（网络正常时）。
