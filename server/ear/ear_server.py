@@ -610,6 +610,12 @@ class Ear:
 
     def open_utterance(self, onset):
         self.cur = self.new_utterance(onset)
+        # chat stage indicator: listen at the onset (robot sources, never while hello sounds; the relay debounces)
+        if self.chat is not None and self.device_profile and not self.self_flags.get("sounding"):
+            try:
+                self.chat.chat_listen()
+            except Exception as error:     # noqa: BLE001 - never costs the audio path
+                print(f"chat: listen failed: {type(error).__name__}", flush=True)
 
     # ---------- speech ----------
     async def early_speaker(self, cur):
@@ -663,6 +669,11 @@ class Ear:
                 self.chat.chat_heard(ev, self.session)
             except Exception as error:     # noqa: BLE001 - chat must never cost a sentence or the tick
                 print(f"chat: push failed: {type(error).__name__}", flush=True)
+        elif self.chat is not None and self.device_profile:
+            try:                       # stage indicator: nothing heard, the robot leaves listen
+                self.chat.chat_nothing()
+            except Exception as error:     # noqa: BLE001
+                print(f"chat: stage failed: {type(error).__name__}", flush=True)
         # The robot mic's CED voice probability runs low (office noise, hum): the user's clear
         # sentences scored 0.17-0.26 on 2026-11-10, so robot sources also accept "unclear" (>= voice_lo).
         voiced = ev["voice"]["acoustic_band"] == "voice" or (self.device_profile and ev["voice"]["acoustic_band"] == "unclear")

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item','/mode','/mode/seq','/chat/turns']);
+const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item','/mode','/mode/seq','/chat/turns','/chat/state']);
 const POST_PATHS=new Set(['/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try','/say/round','/say/play','/signal','/say/prefetch','/say/auto','/db/person','/db/person/note','/db/memory','/db/knowledge','/mode','/preset']);   // not /mode/input, /mode/robot: ear only
 const PARAMS=new Set(['from','to','t','version','days','lane','offset','limit','status','id','uid','rid','kind','person','topic','q','c']);
 const KINDS=new Set('owner regular visitor family unknown trait fact preference boundary relation event told feeling place work commitment life term self other'.split(' '));

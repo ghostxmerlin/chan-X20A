@@ -34,6 +34,11 @@ the model thinks. The reply goes in as two pieces, the first sentence first, the
 (model error, empty reply, superseded, left chat, stop, budget, tts error) cancels that line in a finally: no sound,
 nothing reaches the robot (soul-tts sends tts.start only with the first audio). A failing stream falls back to say().
 
+Stage indicator (2026-11-14): state() gives the page's live dots (off / idle / listening / thinking / speaking /
+skipped) from memory only; the ear notes speech onsets with note_stage('listen'). chat_turns.timings carries wall-clock
+marks for the page's per-turn timeline: speech_start_at, speech_end_at, ear_done_at, received_at, picked_at,
+stream_open_at, llm_start_at, llm_end_at, submit_at (first text), first_audio_at, sound_at, done_at.
+
 Leaving chat (the on_change hook) cancels the current speech and the pending turn; the speak path refuses outside chat.
 Billing gates nothing (owner); chat costs go to mind_runs (step chat) like every other model call.
 """
@@ -74,6 +79,8 @@ DEAD_STATES = ('cancelled', 'failed', 'done')
 FILLER_CHARS = set('嗯啊哦呃额唉哈嘿呀噢喔诶欸哎呢吧嘛哼呵唔')
 FILLER_WORDS = {'um', 'uh', 'umm', 'hmm', 'hm', 'mm', 'mhm', 'ah', 'oh', 'eh', 'er', 'ha', 'haha'}
 STATES = ('queued', 'thinking', 'answered', 'skipped', 'superseded')
+LISTEN_SHOW_MS = 20_000              # the page shows listening this long after an onset without a sentence
+SKIP_SHOW_MS = 1_500
 
 
 def _num(v):
@@ -104,7 +111,7 @@ def parse(body):
     for k in ('speaker', 'voice', 'self', 'debug'):
         if body.get(k) is not None and not isinstance(body[k], dict):
             raise ValueError(f'{k} must be an object')
-    for k in ('loud_db', 't', 'dur', 'sent_at'):
+    for k in ('loud_db', 't', 'dur', 'sent_at', 'speech_start_at'):
         if body.get(k) is not None and not _num(body[k]):
             raise ValueError(f'{k} must be a number')
     sp, v, me, dbg = (body.get(k) or {} for k in ('speaker', 'voice', 'self', 'debug'))
@@ -113,6 +120,7 @@ def parse(body):
             'lang': _short(body.get('lang'), 16), 'emotion': _short(body.get('emotion'), 16),
             'event': _short(body.get('event'), 16), 't': body.get('t'), 'dur': body.get('dur'),
             'sent_at': body.get('sent_at'),
+            'speech_start_at': body.get('speech_start_at') if body.get('speech_start_at') is not None else body.get('t'),
             'speaker': {'band': _short(sp.get('band'), 16), 'name': _short(sp.get('name'), 32),
                         'score': sp.get('score') if _num(sp.get('score')) else None},
             'voice': {'p': v.get('p') if _num(v.get('p')) else None, 'band': _short(v.get('band'), 16),
@@ -280,6 +288,7 @@ class Chat:
         self._history = collections.deque(maxlen=20)
         self._history_loaded = False
         self.thinking = False
+        self._listen_at = self._heard_at = self._skip_at = None     # stage indicator (wall ms, mind's clock)
 
     def ensure_indexes(self):
         self.db['chat_turns'].create_index([('at', 1)])
@@ -322,6 +331,7 @@ class Chat:
         """One sentence from the ear -> {tid, accepted, skip}. Never waits for the model."""
         item = parse(body)
         now = self.clock_ms() if now_ms is None else now_ms
+        self._heard_at = now
         key = (item['session'], item['id'])
         if item['id'] is not None and key in self._seen:
             return {'tid': None, 'accepted': False, 'skip': 'duplicate'}
@@ -344,12 +354,15 @@ class Chat:
                'state': 'skipped' if reason else 'queued', 'skip': reason, 'reply': None, 'model': cfg['model'],
                'cost_usd': None, 'scope_id': speech_settings.scope(s)['id'],
                'timings': {'ear': item['debug'], 'speech_end_at': end_at,
+                           'speech_start_at': int(item['speech_start_at']) if _num(item['speech_start_at']) else None,
+                           'ear_done_at': int(item['sent_at']) if _num(item['sent_at']) else None, 'received_at': now,
                            'push_ms': now - int(item['sent_at']) if _num(item['sent_at']) else None}}
         try:
             self.db['chat_turns'].insert_one(dict(doc))
         except Exception as e:               # noqa: BLE001 - a record failing never stops the turn
             self.log(f'mind chat: record failed: {type(e).__name__}', flush=True)
         if reason:
+            self._skip_at = now
             self.log(f'mind chat: skip {reason} ({item["session"]} {item["id"]})', flush=True)
             return {'tid': tid, 'accepted': False, 'skip': reason}
         with self._cond:
@@ -416,10 +429,12 @@ class Chat:
         return self._active and self._gen == gen and self.mode_fn() == 'chat'
 
     def _skip(self, item, reason, **fields):
+        self._skip_at = self.clock_ms()
         self.log(f'mind chat: skip {reason} ({item["session"]} {item["id"]})', flush=True)
         return self._update(item['tid'], state='superseded' if reason == 'superseded' else 'skipped', skip=reason, **fields)
 
     def _turn(self, item, gen):
+        item['picked_at'] = self.clock_ms()
         wait_ms = int((self.mono() - item['received']) * 1000)
         if item['gen'] != gen or not self._alive(gen):
             return self._skip(item, 'left_chat')
@@ -461,9 +476,11 @@ class Chat:
         hist = list(self._history)[-cfg['history_turns']:] if cfg['history_turns'] else []
         who = (ctx.get('person') or {}).get('display')
         msgs = messages(ctx, item, hist, cfg, who)
+        llm_start_at = self.clock_ms()
         reply, run = self._ask(cfg, msgs)
         timings = {'timings.wait_ms': wait_ms, 'timings.context_ms': context_ms, 'timings.llm_ms': run['llm_ms'],
-                   'timings.tries': run['tries']}
+                   'timings.tries': run['tries'], 'timings.picked_at': item.get('picked_at'),
+                   'timings.llm_start_at': llm_start_at, 'timings.llm_end_at': self.clock_ms()}
         fields = {'person_id': (ctx.get('person') or {}).get('person_id'), 'model': cfg['model'],
                   'cost_usd': run['cost_usd'], 'usage': run['usage'], 'run_id': run['run_id'], 'raw_reply': run['raw'],
                   **timings, **self._stream_fields(stream)}
@@ -666,13 +683,16 @@ class Chat:
         base = t.get('first_text') if _num(t.get('first_text')) else 0
         since_text = lambda k: int(round((t[k] - base) * 1000)) if _num(t.get(k)) else None
         sound_at = u.get('play_start_at') if _num(u.get('play_start_at')) else None
+        audio_at = sound_at - int(round((t['first_sound'] - t['first_audio']) * 1000)) \
+            if sound_at and _num(t.get('first_sound')) and _num(t.get('first_audio')) else None
         self._update(tid, **{'timings.tts_first_audio_ms': sec('first_audio'),
                              'timings.tts_first_sound_ms': sec('first_sound'),
                              'timings.tts_first_accepted_ms': sec('first_accepted'),
                              'timings.tts_done_ms': sec('done'),
                              'timings.tts_text_to_audio_ms': since_text('first_audio'),
                              'timings.tts_text_to_sound_ms': since_text('first_sound'),
-                             'timings.sound_at': sound_at,
+                             'timings.sound_at': sound_at, 'timings.first_audio_at': audio_at,
+                             'timings.done_at': u.get('play_end_at') if _num(u.get('play_end_at')) else None,
                              'timings.submit_to_sound_ms': sound_at - submit_at if sound_at and submit_at else None,
                              'timings.end_to_sound_ms': sound_at - end_at if sound_at and end_at else None,
                              'tts_state': u.get('state'), 'played': u.get('played'),
@@ -816,9 +836,35 @@ class Chat:
                 'person': self.person(s, item['speaker'])}
 
     # ---- the page ----
+    def note_stage(self, stage, at_ms=None):
+        """The ear saw a speech onset in chat (stage listen; the robot got its own frame)."""
+        if stage != 'listen':
+            raise ValueError('stage must be listen')
+        if at_ms is not None and not (_num(at_ms) and at_ms >= 0):
+            raise ValueError('at_ms must be a non-negative number')
+        self._listen_at = self.clock_ms()
+
+    def state(self):
+        """The live stage for the page's dots, from memory only."""
+        if not self._active:
+            return {'active': False, 'stage': 'off', 'since': None}
+        now = self.clock_ms()
+        if speak.speaking():
+            stage, since = 'speaking', None
+        elif self.thinking or self._pending is not None:
+            stage, since = 'thinking', self._heard_at
+        elif self._skip_at is not None and now - self._skip_at <= SKIP_SHOW_MS:
+            stage, since = 'skipped', self._skip_at
+        elif self._listen_at is not None and now - self._listen_at <= LISTEN_SHOW_MS and \
+                (self._heard_at is None or self._heard_at < self._listen_at):
+            stage, since = 'listening', self._listen_at
+        else:
+            stage, since = 'idle', None
+        return {'active': True, 'stage': stage, 'since': since}
+
     def turns(self, limit=5):
         rows = list(self.db['chat_turns'].find({}, {'_id': 0}).sort('at', -1).limit(limit))
-        keep = ('tid', 'at', 'text', 'reply', 'state', 'skip', 'model', 'cost_usd', 'timings', 'loud_db')
+        keep = ('tid', 'at', 'text', 'reply', 'state', 'skip', 'model', 'cost_usd', 'timings', 'loud_db', 'stream_error')
         out = []
         for r in rows:
             row = {k: r.get(k) for k in keep}

@@ -451,6 +451,18 @@ class StreamTest(ChatBase):
             self.assertIn(k, t)
         self.assertEqual(self.db['utterances'].docs[0]['tts_id'], sid)
 
+    def test_every_stage_mark_is_recorded_for_the_page_timeline(self):
+        tid = self.chat.heard(heard(speech_start_at=T0 + 900))['tid']
+        self.chat.process_once()
+        t = self.turn(tid)['timings']
+        self.assertEqual((t['speech_start_at'], t['speech_end_at'], t['ear_done_at'], t['received_at']),
+                         (T0 + 900, T0 + 1000 + 1200, T0 + 2500, self.now[0]))
+        for k in ('picked_at', 'llm_start_at', 'llm_end_at', 'stream_open_at', 'submit_at', 'first_audio_at',
+                  'sound_at', 'done_at'):
+            self.assertIsInstance(t.get(k), int, k)
+        self.assertEqual(t['sound_at'] - t['first_audio_at'], 300)                  # first_sound 1.6 - first_audio 1.3
+        self.assertEqual(t['done_at'] - t['sound_at'], 1400)                        # done 3.0 - first_sound 1.6
+
     def test_one_sentence_goes_in_one_piece(self):
         self.chat.heard(heard())
         self.chat.process_once()
@@ -594,6 +606,43 @@ class StreamTest(ChatBase):
         self.tts.playing.set()
         self.assertTrue(done.wait(3))
         self.assertEqual(self.kinds().count('begin'), begins + 1)
+
+
+
+class StageTest(ChatBase):
+    """The page's live dots: GET /chat/state stage = idle / listening / thinking / speaking / skipped."""
+
+    def stage(self):
+        return self.chat.state()['stage']
+
+    def test_stages(self):
+        self.assertEqual(self.stage(), 'idle')
+        self.chat.note_stage('listen', self.now[0])
+        self.assertEqual(self.stage(), 'listening')
+        self.chat.heard(heard())
+        self.assertEqual(self.stage(), 'thinking')                     # waiting counts as thinking
+        speak._PLAYING.add('x')
+        self.assertEqual(self.stage(), 'speaking')
+        speak._PLAYING.clear()
+        self.chat.process_once()                                       # answered (fake status: done at once)
+        self.assertEqual(self.stage(), 'idle')
+        self.chat.heard(heard(n=2, text='嗯'))
+        self.assertEqual(self.stage(), 'skipped')
+        self.now[0] += 2000
+        self.assertEqual(self.stage(), 'idle')                         # a skip shows ~1.5 s
+
+    def test_listening_times_out_and_chat_off_is_off(self):
+        self.chat.note_stage('listen', self.now[0])
+        self.now[0] += 21_000
+        self.assertEqual(self.stage(), 'idle')
+        self.chat.note_stage('listen', self.now[0])
+        self.chat.leave()
+        self.assertEqual(self.chat.state(), {'active': False, 'stage': 'off', 'since': None})
+
+    def test_bad_stage_notes(self):
+        for bad in ('think', None, 3):
+            with self.assertRaises(ValueError):
+                self.chat.note_stage(bad, self.now[0])
 
 
 class TtsHttpStreamTest(unittest.TestCase):
@@ -903,6 +952,13 @@ class HookAndApiTest(unittest.TestCase):
         cfg['speech']['chat']['model'] = 'bad model'
         self.assertEqual(self.call('/speech/settings', {'speech': cfg['speech'], 'memory': cfg['memory'],
                                                         'expected_version': out['version']})[0], 400)
+
+    def test_stage_note_and_state_over_http(self):
+        self.report('chat', 'play')
+        self.assertEqual(self.call('/chat/stage', {'stage': 'listen', 'at_ms': 1})[0], 200)
+        st, r = self.call('/chat/state')
+        self.assertEqual((st, r['active'], r['stage']), (200, True, 'listening'))
+        self.assertEqual(self.call('/chat/stage', {'stage': 'dance'})[0], 400)
 
     def test_heard_outside_chat_is_recorded_as_not_chat(self):
         st, r = self.call('/chat/heard', heard())

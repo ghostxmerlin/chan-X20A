@@ -71,6 +71,48 @@ export function chatTurnHtml(t){
  return `<p class="chat-turn"><span class="muted">${Number.isFinite(t.at)?hhmmss(t.at):'—'} 对话</span> `+
   `${t.who?`<b>${escapeHtml(t.who)}</b>：`:''}${escapeHtml(t.text||'')} → ${reply}${facts?` <span class="muted">${facts}</span>`:''}</p>`;
 }
+// Stage indicator (2026-11-14): the live dots from mind /chat/state (memory only; polled each second in chat), the
+// same four stages the robot shows, and per turn a timeline from the speech start to hello done (SVG attributes only:
+// the CSP allows no inline styles).
+const STAGES=[['listening','听'],['thinking','想'],['speaking','说'],['skipped','跳过']];
+const STAGE_NAMES={listening:'在听',thinking:'在想',speaking:'在说',skipped:'跳过了',idle:'等着',off:'关'};
+export function chatStageHtml(st){
+ if(!st||st.active!==true)return '';
+ const cur=typeof st.stage==='string'?st.stage:'idle';
+ return `<div class="chat-dots" role="status" aria-label="对话阶段：${escapeHtml(STAGE_NAMES[cur]||cur)}">`+
+  STAGES.map(([k,l])=>`<span class="chat-dot${k===cur?' on':''}" data-stage="${k}"><i></i>${l}</span>`).join('')+
+  `<small class="muted">${escapeHtml(STAGE_NAMES[cur]||cur)}</small></div>`;
+}
+const MARKS=[['speech_start_at','开始说'],['speech_end_at','说完'],['ear_done_at','识别完'],['received_at','mind 收到'],
+ ['picked_at','开始处理'],['stream_open_at','合成就绪'],['llm_start_at','模型开始'],['llm_end_at','模型写完'],
+ ['submit_at','送出文字'],['first_audio_at','合成首包'],['sound_at','开口'],['done_at','回答完']];
+export function chatTimelineMarks(t){
+ const tm=t?.timings&&typeof t.timings==='object'?t.timings:{};
+ const got=MARKS.map(([key,label])=>({key,label,at:tm[key]})).filter(m=>Number.isFinite(m.at));
+ if(got.length<2)return [];
+ const t0=Number.isFinite(tm.speech_start_at)?tm.speech_start_at:Math.min(...got.map(m=>m.at));
+ return got.map(m=>({...m,ms:Math.round(m.at-t0)})).sort((a,b)=>a.at-b.at);
+}
+export function chatTimelineHtml(t){
+ const m=chatTimelineMarks(t);
+ if(!m.length)return '';
+ const lo=Math.min(0,m[0].ms),span=Math.max(1,m.at(-1).ms-lo);
+ const x=ms=>(8+984*(ms-lo)/span).toFixed(1);
+ return `<svg class="chat-tl" viewBox="0 0 1000 22" preserveAspectRatio="none" aria-hidden="true">`+
+  `<line class="chat-tl-base" x1="8" y1="11" x2="992" y2="11"/>`+
+  m.map(k=>`<line class="m-${k.key}" x1="${x(k.ms)}" y1="2" x2="${x(k.ms)}" y2="20"/>`).join('')+`</svg>`+
+  `<ol class="chat-marks">${m.map(k=>`<li class="m-${k.key}">${k.label} <b>${k.ms} ms</b></li>`).join('')}</ol>`;
+}
+export function chatTurnsHtml(rows){
+ const list=Array.isArray(rows)?rows.filter(r=>r&&typeof r==='object'):[];
+ if(!list.length)return '';
+ const last=list[0],skipped=list.slice(1).filter(r=>r.state==='skipped'||r.state==='superseded').slice(0,4);
+ const why=r=>escapeHtml(r.skip?CHAT_SKIPS[r.skip]||r.skip:r.state||'—');
+ const loud=r=>Number.isFinite(r.loud_db)?` · ${r.loud_db.toFixed(1)} dB`:'';
+ return chatTurnHtml(last)+(last.state==='answered'?chatTimelineHtml(last):'')+
+  (skipped.length?`<ul class="chat-skips">${skipped.map(r=>`<li><span class="muted">${Number.isFinite(r.at)?hhmmss(r.at):'—'}</span> `+
+   `${escapeHtml(r.text||'')} <span class="muted">— ${why(r)}${loud(r)}</span></li>`).join('')}</ul>`:'');
+}
 export function sayErrorMessage(e){
  let m=String(e?.message||e),code;
  try{const body=JSON.parse(m);if(typeof body?.error==='string'){m=body.error;code=body.code;}}catch{}
@@ -175,7 +217,9 @@ export class SayPanel{
   const $=id=>doc.getElementById(id);
   if(!$('say-buttons'))return;
   this.round=null;this.voices=[];this.mode='roles';this.gate={...OPEN};
-  doc.addEventListener('modechange',ev=>this.setGate(gateOfView(ev.detail)));
+  doc.addEventListener('modechange',ev=>{this.setGate(gateOfView(ev.detail));this.chatOn=!!ev.detail?.known&&ev.detail.mode==='chat';});
+  this.chatOn=false;this.stageSeen=null;
+  setInterval(()=>this.refreshStage(),1000);       // the live dots: memory-only /chat/state, only in chat
   this.ratings=new RatingBuffer(body=>postJson('/signal',body).then(()=>this.refreshRound()).catch(e=>{this.fail(e);}));
   Promise.all([getJson('/roles'),getJson('/speech/settings').catch(()=>null),getJson('/say/stats?days=1').catch(()=>null)]).then(([r,cfg,st])=>{
    this.roles=r;this.mode=cfg?.speech?.pipeline==='round'?'round':'roles';
@@ -240,6 +284,21 @@ export class SayPanel{
   });
   setInterval(()=>this.refresh(),5000);
  }
+ async refreshChat(){
+  const chat=this.doc.getElementById('say-chat');
+  if(!chat)return;
+  try{const html=chatTurnsHtml(await getJson('/chat/turns?limit=6'));if(html!==this.chatSeen){this.chatSeen=html;chat.innerHTML=html;}}
+  catch{chat.innerHTML='';this.chatSeen='';}
+ }
+ async refreshStage(){
+  const box=this.doc.getElementById('chat-stage');
+  if(!box)return;
+  if(!this.chatOn){if(this.stageSeen!==''){box.innerHTML='';this.stageSeen='';}return;}
+  let st=null;
+  try{st=await getJson('/chat/state');}catch{}
+  const html=chatStageHtml(st);
+  if(html!==this.stageSeen){this.stageSeen=html;box.innerHTML=html;void this.refreshChat();}   // a new stage: a new mark
+ }
  // Flip disabled in place (a rebuild would reset the checkboxes and close the role list); the note text follows too.
  setGate(g){
   this.gate=g;
@@ -285,8 +344,7 @@ export class SayPanel{
   this.refreshRound();
   const sig=this.doc.getElementById('say-signals');
   if(sig){try{sig.innerHTML=signalsHtml(await getJson(`/signals?from=${Date.now()-3600000}&to=${Date.now()+60000}`));}catch{}}
-  const chat=this.doc.getElementById('say-chat');
-  if(chat){try{const rows=await getJson('/chat/turns?limit=1');chat.innerHTML=chatTurnHtml(rows?.[0]);}catch{chat.innerHTML='';}}
+  await this.refreshChat();
   const d0=new Date();d0.setHours(0,0,0,0);
   try{const list=await getJson(`/utterances?from=${d0.getTime()}&to=${Date.now()+60000}`);
    this.doc.getElementById('say-utterances').innerHTML=utterancesHtml(list,this.roles);}catch{}

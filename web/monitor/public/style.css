@@ -178,3 +178,15 @@ summary{cursor:pointer;width:fit-content}
 .voice-panel .say-round .line.played .line-text{font-size:19px}
 .voice-panel .utterances{max-height:260px}
 .say-chat .chat-turn{font-size:11px;line-height:1.45;margin:4px 0;padding-left:9px;border-left:2px solid #c98a2e;overflow-wrap:anywhere}
+.chat-stage .chat-dots{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:4px 0;font-size:11px}
+.chat-dot{display:inline-flex;align-items:center;gap:4px;color:var(--muted)}
+.chat-dot i{width:9px;height:9px;border-radius:50%;border:1px solid #557660;display:inline-block}
+.chat-dot.on{color:var(--green)}.chat-dot.on i{background:var(--green);box-shadow:0 0 6px #79ff9780}
+.chat-dot.on[data-stage=thinking] i{background:#f4bd72;border-color:#f4bd72}.chat-dot.on[data-stage=skipped] i{background:#777;border-color:#777}
+.say-chat .chat-tl{display:block;width:100%;height:22px;margin:3px 0}
+.chat-tl line{stroke:#79ff97;stroke-width:3}.chat-tl .chat-tl-base{stroke:#2a4a33;stroke-width:2}
+.chat-tl .m-speech_start_at,.chat-tl .m-speech_end_at{stroke:#7fe6f0}.chat-tl .m-llm_start_at,.chat-tl .m-llm_end_at{stroke:#f4bd72}
+.chat-tl .m-sound_at{stroke:#ff8fd0;stroke-width:5}
+.chat-marks{display:flex;flex-wrap:wrap;gap:2px 10px;list-style:none;margin:0 0 4px;padding:0;font-size:10px;color:var(--muted)}
+.chat-marks b{color:var(--green);font-weight:500}.chat-marks .m-sound_at b{color:#ff8fd0}
+.chat-skips{list-style:none;margin:2px 0 4px;padding:0;font-size:11px;overflow-wrap:anywhere}

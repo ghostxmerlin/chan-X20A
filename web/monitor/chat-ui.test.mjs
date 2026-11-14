@@ -63,7 +63,52 @@ test('the say panel has the chat card; the proxy passes /chat/turns, not /chat/h
  assert.equal(MindProxy.check('/chat/turns?limit=1'),'/chat/turns?limit=1');
  assert.equal(MindProxy.check('/chat/turns?text=x'),null);
  const server=readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
- assert.match(server,/'\/chat\/turns'\]\.includes\(sub\)/);
+ assert.match(server,/'\/chat\/turns'[,\]]/);
  assert.doesNotMatch(server,/chat\/heard/);
  assert.doesNotMatch(readFileSync(new URL('./mind.mjs',import.meta.url),'utf8'),/chat\/heard/);
+});
+
+// ---- stage indicator (2026-11-14): live dots + per-turn timeline ----
+test('live stage dots: the current one is lit, off / unknown shows nothing',()=>{
+ const h=say.chatStageHtml({active:true,stage:'thinking',since:1});
+ assert.match(h,/class="chat-dot on" data-stage="thinking"/);
+ assert.equal((h.match(/chat-dot on/g)||[]).length,1);
+ for(const k of ['listening','speaking','skipped'])assert.match(h,new RegExp(`data-stage="${k}"`));
+ assert.equal((say.chatStageHtml({active:true,stage:'idle'}).match(/chat-dot on/g)||[]).length,0);
+ assert.equal(say.chatStageHtml({active:false,stage:'off'}),'');assert.equal(say.chatStageHtml(null),'');
+ assert.doesNotMatch(say.chatStageHtml({active:true,stage:'<img src=x>'}),/<img/);
+});
+const T=1794300000000;
+const turn={tid:'t1',at:T+2600,text:'今天几号',reply:'十四号。',state:'answered',model:'gpt-6.1-terra',
+ timings:{speech_start_at:T,speech_end_at:T+1200,ear_done_at:T+2500,received_at:T+2600,picked_at:T+2605,
+  stream_open_at:T+2620,llm_start_at:T+2630,llm_end_at:T+3700,submit_at:T+3710,first_audio_at:T+4200,sound_at:T+4500,
+  done_at:T+6000,llm_ms:1070,end_to_sound_ms:3300,stream:true}};
+test('the timeline has every mark in order with ms from the speech start',()=>{
+ const m=say.chatTimelineMarks(turn);
+ assert.deepEqual(m.map(x=>x.key),['speech_start_at','speech_end_at','ear_done_at','received_at','picked_at',
+  'stream_open_at','llm_start_at','llm_end_at','submit_at','first_audio_at','sound_at','done_at']);
+ assert.deepEqual([m[0].ms,m[1].ms,m.at(-2).ms,m.at(-1).ms],[0,1200,4500,6000]);
+ const h=say.chatTimelineHtml(turn);
+ assert.match(h,/<svg class="chat-tl"/);assert.match(h,/开始说 <b>0 ms<\/b>/);assert.match(h,/开口 <b>4500 ms<\/b>/);
+ assert.equal((h.match(/<line class="m-/g)||[]).length,12);
+ assert.doesNotMatch(h,/style=/);                                       // CSP: positions are SVG attributes
+ assert.equal(say.chatTimelineHtml({timings:{sound_at:T}}),'');          // one mark is no timeline
+ assert.equal(say.chatTimelineHtml({timings:{speech_start_at:'x',sound_at:T}}),'');
+});
+test('the chat card: the latest turn with its timeline, then skipped sentences with reason and loudness',()=>{
+ const rows=[turn,{tid:'t0',at:T-5000,text:'远处<b>说话</b>',state:'skipped',skip:'far_quiet',loud_db:4.2},
+  {tid:'t9',at:T-9000,text:'嗯',state:'skipped',skip:'filler',loud_db:12}];
+ const h=say.chatTurnsHtml(rows);
+ assert.match(h,/今天几号 → 十四号。/);assert.match(h,/<svg class="chat-tl"/);
+ assert.match(h,/远处&lt;b&gt;说话&lt;\/b&gt;/);assert.match(h,/太远（声音太小）/);assert.match(h,/4\.2 dB/);
+ assert.match(h,/只有语气词/);assert.doesNotMatch(h,/<b>说话/);
+ assert.equal(say.chatTurnsHtml([]),'');assert.equal(say.chatTurnsHtml(null),'');
+});
+test('the page has the dots box; the proxy passes /chat/state but never /chat/stage',()=>{
+ const index=readFileSync(new URL('./public/index.html',import.meta.url),'utf8');
+ assert.match(index,/<div id="chat-stage" class="chat-stage"><\/div>/);
+ assert.equal(MindProxy.check('/chat/state'),'/chat/state');
+ const server=readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
+ assert.match(server,/'\/chat\/state'/);assert.doesNotMatch(server,/chat\/stage/);
+ assert.doesNotMatch(readFileSync(new URL('./mind.mjs',import.meta.url),'utf8'),/chat\/stage/);
 });

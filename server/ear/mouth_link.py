@@ -43,6 +43,13 @@ floor), self, session, id, pos, t, dur, debug, sent_at} on its own small pool (c
 mind can never take the mode pool's threads). At most chat_max_inflight posts at a time: a slot frees only when its call
 has really ended (more: dropped and logged); the ear stops waiting after chat_timeout_s; no retry (a late sentence is
 no use). The text is never logged.
+Stage indicator (2026-11-14, protocol from the coordinator; the robot draws dots): while the relayed mode is chat the
+ear sends the robot {"type":"chat_stage","stage":"listen"|"think"|"skip","at_ms":<epoch ms>} on the /mouth link that
+reported the mode: listen at a speech onset (chat_listen: at most one per STAGE_DEBOUNCE_S, the ear never calls it
+while hello sounds; mind gets a small /chat/stage note too, only when no chat post is in flight), think / skip from
+mind's /chat/heard answer (accepted / skip), skip for a sentence without text (chat_nothing). Mind slow or down:
+nothing (the robot times out). speak is not sent: the robot sees its own playback. Sends are tasks on the loop,
+at most STAGE_INFLIGHT at a time (more: dropped), never awaited by the audio path.
 mind is asked on the relay's own small thread pool (never the default executor, which tingwu and switches use).
 Writers: several tasks send() to the robot socket (the upstream loop, input results). websockets writes each whole
 message atomically, so that is safe; never use fragmented sends (async iterators) on the robot ws.
@@ -71,6 +78,8 @@ HELLO_TIMEOUT_S = 10
 REPLACED = 4000                                     # soul-tts: "replaced by new connection"
 MIND = "http://127.0.0.1:52740"
 REPORT_FIELDS = ("seq", "mode", "dir", "host", "return_to", "by", "input", "effects")
+STAGE_DEBOUNCE_S = 0.3
+STAGE_INFLIGHT = 4
 log = print                                         # tests silence it
 
 
@@ -139,6 +148,9 @@ class ModeRelay:
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="mode-mind")
         self._bg = set()
         self.robot_mode, self._mode_conn = None, None      # hello's mode as last reported, and which link said it
+        self._links = {}                                    # conn -> MouthLink (stage frames go to the reporting one)
+        self._last_listen = -1e9
+        self._stage_inflight = 0
         self.chat_inflight, self.chat_max_inflight, self.chat_timeout_s = 0, chat_max_inflight, chat_timeout_s
         self._chat_pool = concurrent.futures.ThreadPoolExecutor(max_workers=chat_max_inflight, thread_name_prefix="chat-mind")
         self.chat_sent = self.chat_dropped = 0
@@ -150,8 +162,61 @@ class ModeRelay:
             self.robot_mode, self._mode_conn = _ascii(mode, 16), conn
 
     def link_closed(self, conn):
+        self._links.pop(conn, None)
         if self._mode_conn == conn:
             self.robot_mode, self._mode_conn = None, None
+
+    def attach(self, link):
+        self._links[link.conn] = link
+
+    # ---- stage indicator ----
+    def send_stage(self, stage):
+        """Queue one chat_stage frame to the robot (non-blocking). -> True if queued."""
+        link = self._links.get(self._mode_conn)
+        if not self.in_chat() or link is None or self._stage_inflight >= STAGE_INFLIGHT:
+            return False
+        msg = json.dumps({"type": "chat_stage", "stage": stage, "at_ms": int(time.time() * 1000)})
+        self._stage_inflight += 1
+        self.spawn(self._send_stage(link, msg))
+        return True
+
+    async def _send_stage(self, link, msg):
+        try:
+            await link.client.send(msg)
+        except Exception:                            # noqa: BLE001 - the robot left: its link ends by itself
+            pass
+        finally:
+            self._stage_inflight -= 1
+
+    def chat_listen(self):
+        """A speech onset in chat (the ear never calls this while hello sounds) -> True if listen was sent."""
+        now = time.monotonic()
+        if not self.in_chat() or now - self._last_listen < STAGE_DEBOUNCE_S:
+            return False
+        if not self.send_stage("listen"):
+            return False
+        self._last_listen = now
+        if self.chat_inflight == 0:                  # the page's dots; never takes a slot a sentence may need
+            self.chat_inflight += 1
+            self.spawn(self._post_stage({"stage": "listen", "at_ms": int(time.time() * 1000)}))
+        return True
+
+    async def _post_stage(self, body):
+        loop = asyncio.get_running_loop()
+        try:
+            fut = loop.run_in_executor(self._chat_pool, self.call, "POST", "/chat/stage", body, self.chat_timeout_s + 1)
+        except RuntimeError:
+            self.chat_inflight -= 1
+            return
+        fut.add_done_callback(self._chat_done)
+        try:
+            await asyncio.wait_for(asyncio.shield(fut), self.chat_timeout_s)
+        except asyncio.TimeoutError:
+            pass
+
+    def chat_nothing(self):
+        """A speech end without text in chat: nothing to answer, the robot leaves listen."""
+        return self.send_stage("skip")
 
     def in_chat(self):
         return self.robot_mode == "chat"
@@ -182,6 +247,8 @@ class ModeRelay:
             status, reply = await asyncio.wait_for(asyncio.shield(fut), self.chat_timeout_s)
         except asyncio.TimeoutError:
             status, reply = None, {}
+        if status == 200 and isinstance(reply, dict):              # the robot's dots: think / skip
+            self.send_stage("think" if reply.get("accepted") else "skip")
         if status != 200:
             log(f"chat: sentence {_ascii(body.get('id'), 16)} not taken by mind ({status} "
                 f"{_ascii(reply.get('error'), 60)})", flush=True)
@@ -235,6 +302,7 @@ def chat_body(ev, session):
             "event": ev.get("event"), "speaker": {k: sp.get(k) for k in ("band", "name", "score")},
             "voice": {k: v.get(k) for k in ("p", "band", "acoustic_band", "loud_db")}, "loud_db": v.get("loud_db"),
             "self": {k: me.get(k) for k in ("sounding", "moving")}, "debug": dict(ev.get("debug") or {}),
+            "speech_start_at": ev.get("t"),
             "sent_at": int(time.time() * 1000)}
 
 
@@ -293,6 +361,7 @@ class MouthLink:
             log(f"mouth m{self.conn}: robot hello has no boot_id, no modes", flush=True)
         elif self.modes is not None:
             self._modes_on = True
+            self.modes.attach(self)
             aux = [asyncio.create_task(self._input_worker()), asyncio.create_task(self._report_worker())]
         try:
             await asyncio.wait({reader, upper}, return_when=asyncio.FIRST_COMPLETED)

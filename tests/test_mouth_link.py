@@ -370,7 +370,9 @@ class MouthModeTest(MouthLinkTest):
         if (method, path) == ("POST", "/chat/heard"):
             if getattr(self, "mind_chat_delay", 0):
                 self._time.sleep(self.mind_chat_delay)
-            return 200, {"tid": "t1", "accepted": True, "skip": None}
+            return getattr(self, "mind_chat_reply", (200, {"tid": "t1", "accepted": True, "skip": None}))
+        if (method, path) == ("POST", "/chat/stage"):
+            return 200, {"ok": True}
         if (method, path) == ("POST", "/mode/input"):
             if self.mind_input_delay:
                 self._time.sleep(self.mind_input_delay)
@@ -766,6 +768,90 @@ class ChatPushTest(MouthModeTest):
         self.assertFalse(self.hub.in_chat())
 
 
+@unittest.skipUnless(HAVE_WS, "needs websockets")
+class ChatStageTest(ChatPushTest):
+    """Stage indicator (2026-11-14): the ear tells the robot {"type":"chat_stage","stage":listen|think|skip,"at_ms"}
+    on /mouth, only in chat: listen at speech onset (debounced 300 ms, never while hello sounds), think / skip from
+    mind's /chat/heard answer, skip for a sentence without text; nothing when mind is slow or down."""
+
+    async def stages(self, ws, n, timeout=1.5):
+        got = []
+        for _ in range(n):
+            m = await self.recv_type(ws, "chat_stage", timeout=timeout)
+            got.append(m)
+        return got
+
+    async def test_listen_then_think(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+            t0 = int(self._time.time() * 1000)
+            self.assertTrue(self.hub.chat_listen())
+            self.hub.chat_heard(dict(SPEECH), "s")
+            got = await self.stages(ws, 2)
+        self.assertEqual([m["stage"] for m in got], ["listen", "think"])
+        self.assertTrue(all(set(m) == {"type", "stage", "at_ms"} for m in got))
+        self.assertTrue(all(t0 - 50 <= m["at_ms"] <= t0 + 3000 for m in got))
+        self.assertTrue(all(len(json.dumps(m)) <= 200 for m in got))
+        await self.wait_mind("/chat/stage")                                     # mind hears the onset too (page dots)
+        self.assertEqual(self.mind_calls_to("/chat/stage")[0]["stage"], "listen")
+
+    async def test_listen_is_debounced(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+            self.assertEqual([self.hub.chat_listen(), self.hub.chat_listen()], [True, False])
+            await self.stages(ws, 1)
+            await self.no_message(ws, "chat_stage", 0.2)
+            await asyncio.sleep(0.15)
+            self.assertTrue(self.hub.chat_listen())                             # >= 300 ms later
+            await self.stages(ws, 1)
+
+    async def test_skip_from_mind_and_for_an_empty_sentence(self):
+        self.mind_chat_reply = (200, {"tid": "t1", "accepted": False, "skip": "far_quiet"})
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+            self.hub.chat_heard(dict(SPEECH), "s")
+            self.assertEqual((await self.stages(ws, 1))[0]["stage"], "skip")
+            self.assertTrue(self.hub.chat_nothing())                            # end_speech without text
+            self.assertEqual((await self.stages(ws, 1))[0]["stage"], "skip")
+
+    async def test_mind_down_sends_nothing_extra(self):
+        self.mind_up = False
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            for _ in range(150):                                                # the mode is known before mind is
+                await ws.send(report(1, "chat", ["stop_speech"], inp="play"))
+                break
+            for _ in range(150):
+                if self.hub.robot_mode == "chat":
+                    break
+                await asyncio.sleep(0.02)
+            self.hub.chat_heard(dict(SPEECH), "s")
+            await self.wait_mind("/chat/heard")
+            await self.no_message(ws, "chat_stage", 0.4)
+
+    async def test_nothing_outside_chat(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "talk")
+            self.assertEqual((self.hub.chat_listen(), self.hub.chat_nothing()), (False, False))
+            await self.no_message(ws, "chat_stage", 0.3)
+        self.assertEqual(self.mind_calls_to("/chat/stage"), [])
+
+    async def test_the_robot_left_sends_nothing(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+        await self.wait_result()
+        self.assertFalse(self.hub.chat_listen())
+
+
+for _name in [n for n in dir(ChatPushTest) if n.startswith("test_")]:
+    setattr(ChatStageTest, _name, None)          # only the stage tests here: the inherited ones already ran above
+
+
 class EarHookTest(unittest.TestCase):
     """ear_server's end_speech hands the event to the relay (source check: ear_server needs the models to import)."""
     def test_end_speech_calls_chat_heard_for_robot_sources(self):
@@ -775,6 +861,15 @@ class EarHookTest(unittest.TestCase):
         self.assertIn("self.device_profile and text", body)
         self.assertLess(body.index("self.post(ev)"), body.index("chat_heard"))   # the robot's event first
         self.assertIn("ear.chat = mode_hub", src)
+
+    def test_onset_sends_listen_unless_hello_sounds(self):
+        src = (Path(__file__).resolve().parents[1] / "server" / "ear" / "ear_server.py").read_text()
+        body = src[src.index("    def open_utterance"):src.index("    # ---------- speech ----------")]
+        self.assertIn("self.chat.chat_listen()", body)
+        self.assertIn('self.self_flags.get("sounding")', body)
+        self.assertIn("self.device_profile", body)
+        end = src[src.index("    async def end_speech"):src.index("    # ---------- sound ----------")]
+        self.assertIn("self.chat.chat_nothing()", end)
 
 class MindClientTest(unittest.TestCase):
     def test_never_raises_when_mind_is_down(self):

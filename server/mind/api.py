@@ -8,7 +8,7 @@ POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voic
 POST /say/round /say/play /signal /say/prefetch /say/auto (talk show; 连续说 state is in GET /say/stats under auto)
 GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
 POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
-GET  /chat/turns; POST /chat/heard (ear: one sentence heard while hello is in chat; chat v0, mind/chat.py)
+GET  /chat/turns /chat/state; POST /chat/heard /chat/stage (ear: a speech onset in chat, the page's dots) (ear: one sentence heard while hello is in chat; chat v0, mind/chat.py)
 GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/robot (ear: hello's /mouth closed)
      /mode/input (ear: hello's digits 0 / 9) /mode (page: billing only) /preset (modes step 1b: hello owns the mode,
      mind mirrors it; /switches also takes {name: billing, on} = preset 9 / preset 0). With a mode store in ctx, 说话类
@@ -425,6 +425,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == '/signals':
             lo, hi = _range(q)
             return owner_signals.recent(db, lo, hi)
+        if path == '/chat/state':
+            chat = ctx.get('chat')
+            if not chat:
+                raise Conflict('chat is not configured here')
+            return chat.state()
         if path == '/chat/turns':
             chat = ctx.get('chat')
             if not chat:
@@ -625,6 +630,15 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return modes().apply("billing", body.get("value"), source="page", now_ms=now)
         if path == "/mode/input":
             return mode_input(body)
+        if path == "/chat/stage":
+            chat = ctx.get("chat")
+            if not chat:
+                raise Conflict("chat is not configured here")
+            try:
+                chat.note_stage(body.get("stage"), body.get("at_ms"))
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+            return {"ok": True}
         if path == "/chat/heard":
             chat = ctx.get("chat")
             if not chat:
@@ -751,7 +765,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             url = urlsplit(self.path)
             if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
                                 '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
-                                '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard'):
+                                '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard', '/chat/stage'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats", "/mode/seq"):
                     self._send(405, {"error": "read only"})
                 else:
