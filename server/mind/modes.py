@@ -17,7 +17,9 @@ from .mode_table import MODES, DIRECTIONS, SUBTITLE_DIRS
 INPUTS = ('forward', 'backward', 'play', 'pause', 'open', 'close', 'start', 'stop', 'next', 'previous',
           'digit', 'tap', 'double_tap', 'long', 'direction', 'select', 'billing', 'boot', 'timeout')
 SOURCES = ('asr', 'touch', 'select', 'quick', 'dualkey', 'page', 'boot', 'timeout')
-EFFECTS = ('stop_speech', 'talk_leave', 'say_round', 'prefetch_on', 'prefetch_off')
+# talk_enter (owner 14): every entry into talk, boot included = 提前写 on + 连续说 on + 家人声音 off; ModeStore drops it
+# while the master switch is off (the entry itself stays ok, toast BILLING OFF). talk_leave: both off, stock dropped.
+EFFECTS = ('stop_speech', 'talk_leave', 'talk_enter', 'say_round', 'prefetch_on', 'prefetch_off')
 
 # result code -> robot toast (ASCII, <= 32 chars; '{mode}' = the corner label of the mode named).
 # senses_on_page (gap c, 【我定】): a robot-sent preset 1 does the server half of preset 0 (master switch off) and
@@ -29,7 +31,7 @@ CODES = {
     'no_action': 'NO ACTION', 'senses_on_page': 'SENSES: USE PAGE',
 }
 _EFFECT_TOAST = {'say_round': 'SAYING', 'prefetch_on': 'PREFETCH ON', 'prefetch_off': 'PREFETCH OFF',
-                 'stop_speech': 'STOP'}
+                 'stop_speech': 'STOP', 'talk_enter': 'TALK'}
 
 _WORDS = {w: (mid, 'enter') for mid, m in MODES.items() for w in m['enter']}
 _WORDS.update({w: (mid, 'leave') for mid, m in MODES.items() for w in m['leave']})
@@ -75,6 +77,8 @@ def _done(old, new, effects=(), code='ok', toast=None):
         out.append('stop_speech')                 # any mode change stops what hello is saying
         if old['mode'] == 'talk':
             out.append('talk_leave')              # leaving talk: 提前写 / 连续说 off, prefetched stock dropped
+        if new['mode'] == 'talk':
+            out.append('talk_enter')              # entering talk (owner 14): 提前写 / 连续说 on, 家人声音 off
     out += [e for e in effects if e not in out]
     if toast is None and code == 'ok':
         if (new['mode'], new['dir']) != (old['mode'], old['dir']):
@@ -145,8 +149,9 @@ def transition(state, input, value=None, *, source, speaking=False):
 
     # 1. the same in every mode
     if input == 'boot':
-        # robot reboot (new boot id): talk, even when already there; 提前写 / 连续说 off (spec §3.6, §3.8)
-        return _done(st, {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech', 'talk_leave'])
+        # robot reboot (new boot id): talk, even when already there, and that counts as an entry into talk:
+        # 提前写 / 连续说 on, 家人声音 off (owner 14, spec §3.6, §3.8; replaces "reboot turns them off")
+        return _done(st, {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech', 'talk_enter'])
     if input == 'long':
         # DualKey long press: stop the current thing, back to talk; a manual pick, so event-driven stops too
         return _done(st, {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech'])

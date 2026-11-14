@@ -287,6 +287,21 @@ class PersistenceTest(unittest.TestCase):
             self.assertEqual(db['mode_log'].docs[-1]['code'], 'bad_state', bad)
             self.assertEqual(db['mode'].find_one({'_id': 'current'})['mode'], 'talk', bad)
 
+    def test_corrupt_stored_billing_reads_off(self):
+        # owner 15: a stored billing value that is not true / false counts as off; only a missing doc starts on
+        for bad in ('yes', 1, None, 'missing'):
+            db = FakeDB()
+            doc = {'_id': 'current', 'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None, 'seq': 7,
+                   'billing': bad, 'since': 1, 'by': 'page'}
+            if bad == 'missing':
+                doc.pop('billing')
+            db['mode'].docs.append(doc)
+            ms = ModeStore(db, clock_ms=lambda: 50)
+            self.assertEqual((ms.billing(), ms.current()['billing']), (False, False), bad)
+            self.assertGreater(ms.seq(), 7, bad)
+            self.assertIs(db['mode'].find_one({'_id': 'current'})['billing'], False, bad)
+        self.assertTrue(ModeStore(FakeDB(), clock_ms=lambda: 0).billing())
+
     def test_valid_state_rules(self):
         ok = lambda **kw: valid_state({'mode': 'talk', 'dir': None, 'host': None, 'return_to': None, **kw})
         self.assertTrue(ok())
@@ -364,12 +379,40 @@ class RobotAndTimeoutTest(unittest.TestCase):
         again.robot_event('b1', 1, 'hello', now_ms=3)              # same robot boot after a mind restart: keep chat
         self.assertEqual(again.current()['mode'], 'chat')
 
-    def test_boot_input_runs_talk_leave_even_in_talk(self):
+    def test_boot_input_runs_talk_enter_even_in_talk(self):
         seen = []
         self.ms.on_change.append(lambda o, n, e, m, t: seen.append((e, m['source'])))
         s0 = self.ms.seq()
         self.ms.robot_event('b1', 1, 'hello', now_ms=1)
-        self.assertEqual((seen, self.ms.seq()), ([(['stop_speech', 'talk_leave'], 'boot')], s0))
+        self.assertEqual((seen, self.ms.seq()), ([(['stop_speech', 'talk_enter'], 'boot')], s0))
+
+    def test_talk_enter_with_billing_off_is_dropped_but_the_entry_is_ok(self):
+        # owner 14: entering talk with the master switch off turns nothing on and is not an error
+        self.ms.apply('backward', None, source='page', now_ms=1)
+        self.ms.set_billing(False, source='page', now_ms=2)
+        r = self.ms.apply('forward', None, source='asr', now_ms=3)
+        self.assertEqual((r['snapshot']['mode'], r['result'], r['effects']),
+                         ('talk', {'code': 'ok', 'toast': 'BILLING OFF'}, ['stop_speech']))
+        self.assertEqual(self.db['mode_log'].docs[-1]['effects'], ['stop_speech'])
+
+    def test_talk_enter_is_asked_of_the_guard(self):
+        asked = []
+        ms = ModeStore(FakeDB(), guard=lambda e, m: asked.append(e) or None)
+        ms.apply('backward', None, source='page', now_ms=1)
+        self.assertEqual(ms.apply('forward', None, source='asr', now_ms=2)['effects'], ['stop_speech', 'talk_enter'])
+        self.assertEqual(asked, ['talk_enter'])
+
+    def test_talk_enter_dropped_when_billing_went_off_in_between(self):
+        self.ms.apply('backward', None, source='page', now_ms=1)
+        seen, fired = [], []
+
+        def h1(o, n, e, m, t):
+            if not fired:
+                fired.append(1); self.ms.set_billing(False, source='page', now_ms=3)
+
+        self.ms.on_change.extend([h1, lambda o, n, e, m, t: seen.append(list(e))])
+        r = self.ms.apply('forward', None, source='asr', now_ms=2)
+        self.assertEqual((seen, r['effects']), ([['stop_speech']], ['stop_speech']))
 
     def test_timeout_counts_from_the_last_input_in_settings(self):
         self.ms.apply('open', None, source='page', now_ms=1000)

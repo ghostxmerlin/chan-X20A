@@ -41,7 +41,16 @@ class TransitionTest(unittest.TestCase):
         self.assertEqual(self.go('talk', 'double_tap')[2], ['prefetch_on'])
         self.assertEqual(self.go('talk', 'previous')[2], ['prefetch_off'])
         self.assertEqual(self.go('idle', 'next')[1]['code'], 'only_talk')
-        self.assertEqual(self.go('idle', 'forward')[2], ['stop_speech'])      # outside talk, forward only enters
+        self.assertEqual(self.go('idle', 'forward')[2], ['stop_speech', 'talk_enter'])   # outside talk, forward enters (owner 14)
+
+    def test_entering_talk_emits_talk_enter(self):
+        self.assertEqual(self.go('idle', 'forward')[2], ['stop_speech', 'talk_enter'])
+        self.assertEqual(self.go('settings', 'close', return_to='talk')[2], ['stop_speech', 'talk_enter'])
+        self.assertEqual(self.go('talk', 'boot')[2], ['stop_speech', 'talk_enter'])     # robot reboot while already in talk
+        self.assertEqual(self.go('crowd', 'long')[2], ['stop_speech', 'talk_enter'])
+
+    def test_forward_inside_talk_is_not_an_entry(self):
+        self.assertEqual(self.go('talk', 'forward')[2], ['say_round'])
 
     def test_leaving_talk_adds_talk_leave(self):
         self.assertEqual(self.go('talk', 'play')[2], ['stop_speech', 'talk_leave'])
@@ -69,7 +78,7 @@ class TransitionTest(unittest.TestCase):
         for m in ('subtitle', 'event', 'settings'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'no_action')
         self.assertEqual(self.go('idle', 'tap')[1]['code'], 'no_action')            # DualKey click: no badge flip
-        self.assertEqual(self.go('talk', 'boot')[2], ['stop_speech', 'talk_leave'])  # robot reboot while already in talk
+        self.assertEqual(self.go('talk', 'boot')[2], ['stop_speech', 'talk_enter'])  # robot reboot while already in talk
         s, r, e = self.go('crowd', 'long')
         self.assertEqual((s['mode'], e[0]), ('talk', 'stop_speech'))
         self.assertEqual(self.go('idle', 'boot')[0]['mode'], 'talk')
@@ -196,15 +205,15 @@ class EdgeCaseTest(unittest.TestCase):
 
     def test_long_clears_host_and_dir(self):
         s, _, e = self.go('crowd', 'long', host='event')
-        self.assertEqual((s['mode'], s['host'], e), ('talk', None, ['stop_speech']))
+        self.assertEqual((s['mode'], s['host'], e), ('talk', None, ['stop_speech', 'talk_enter']))
         s, _, _ = self.go('subtitle', 'long', dir='zh_en')
         self.assertEqual((s['mode'], s['dir']), ('talk', None))
 
     def test_boot_from_elsewhere(self):
         s, r, e = self.go('settings', 'boot', return_to='chat', source='boot')
-        self.assertEqual((s, e), ({'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech', 'talk_leave']))
+        self.assertEqual((s, e), ({'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech', 'talk_enter']))
         s, r, e = self.go('crowd', 'boot', host='event', source='boot')
-        self.assertEqual((s['host'], e), (None, ['stop_speech', 'talk_leave']))
+        self.assertEqual((s['host'], e), (None, ['stop_speech', 'talk_enter']))
 
     # --- event-driven host ----------------------------------------------------------------
     def test_hosted_guest_leave_returns_to_event_waiting(self):
@@ -296,7 +305,11 @@ class EdgeCaseTest(unittest.TestCase):
                         self.assertTrue(set(e) <= set(modes.EFFECTS))
                         if s['mode'] != mid:
                             self.assertEqual(e[0], 'stop_speech', (mid, inp))
-                            self.assertEqual('talk_leave' in e, mid == 'talk' or inp == 'boot', (mid, inp))
+                            self.assertEqual('talk_leave' in e, mid == 'talk', (mid, inp))
+                        # owner 14: every entry into talk (and boot, even when already there) = talk_enter
+                        self.assertEqual('talk_enter' in e, s['mode'] == 'talk' and (mid != 'talk' or inp == 'boot'),
+                                         (mid, host, inp, val, speaking))
+                        self.assertFalse('talk_enter' in e and 'talk_leave' in e, (mid, inp))
                         if s['mode'] != 'settings':
                             self.assertIsNone(s['return_to'])
                         if s['mode'] != 'subtitle' and not (s['mode'] == 'settings' and s['return_to'] == 'subtitle'):

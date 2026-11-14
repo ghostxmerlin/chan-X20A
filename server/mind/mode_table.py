@@ -2,7 +2,7 @@
 
 A Python module (not JSON) because server/mind/deploy.sh only ships server/mind/*.py. The robot does not know
 which mode wears which eyes: it only reads the `look` / `touch` words from the snapshot (modes.snapshot).
-PRESETS (0-9) are added here by task A3.
+PRESETS (0-9, spec §7) are the second table here; billing.apply_preset runs their server half.
 
 Per mode:
   name     Chinese name for people
@@ -140,3 +140,46 @@ def _validate(modes):
 
 
 _validate(MODES)
+
+
+# ---- presets 0-9 (spec §7, owner 2026-11-14 "字面意思") ----------------------------------------------------------
+# server: action names run in order by billing.apply_preset:
+#   billing_off      master switch off: 听悟 / 识别 / 纪要 / 情景 off, 提前写 / 连续说 off, stop speaking
+#   billing_on       master switch on (restores nothing)
+#   paid_senses_on   听悟 / 识别 / 纪要 / 情景 on
+#   mouth_tts        嘴 -> TTS
+#   talk_on          提前写 + 连续说 on; outside talk skipped (said in the toast; entering talk turns them on anyway)
+#   toggle_tingwu    听悟 flips (turning it on needs the master switch: billing_off)
+#   toggle_prefetch  提前写 flips, only in talk (only_talk); turning it on needs the master switch
+#   mode_idle        go to IDLE
+# robot: the robot half (local hearing, vision upload). Step 1: only the page carries it out (same requests as the
+#   switch bar); a robot-sent 1 / 9 does the server half and answers senses_on_page.
+PRESET_ACTIONS = ('billing_off', 'billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on', 'toggle_tingwu',
+                  'toggle_prefetch', 'mode_idle')
+ROBOT_HALF = {'hearing': ('local',), 'vision': ('upload',)}
+_SENSES = {'hearing': 'local', 'vision': 'upload'}
+
+PRESETS = {
+    0: {'name': '花费全关', 'server': ('billing_off',), 'robot': {}},
+    1: {'name': '数据收集', 'server': ('billing_off',), 'robot': dict(_SENSES)},
+    2: {'name': '听悟反转', 'server': ('toggle_tingwu',), 'robot': {}},
+    3: {'name': '提前写反转', 'server': ('toggle_prefetch',), 'robot': {}},
+    4: {'name': 'IDLE', 'server': ('mode_idle',), 'robot': {}},
+    5: {'name': '空', 'server': (), 'robot': {}},          # 听觉先手动 (owner 2026-11-14): kept empty
+    6: {'name': '空', 'server': (), 'robot': {}},
+    7: {'name': '空', 'server': (), 'robot': {}},
+    8: {'name': '空', 'server': (), 'robot': {}},
+    9: {'name': '花费全开', 'server': ('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), 'robot': dict(_SENSES)},
+}
+
+
+def _validate_presets(presets):
+    _need(set(presets) == set(range(10)), 'preset keys')
+    for n, p in presets.items():
+        _need(set(p) == {'name', 'server', 'robot'} and isinstance(p['name'], str) and p['name'], n)
+        _need(isinstance(p['server'], tuple) and all(a in PRESET_ACTIONS for a in p['server']), n)
+        _need(isinstance(p['robot'], dict) and all(k in ROBOT_HALF and v in ROBOT_HALF[k] for k, v in p['robot'].items()), n)
+    return presets
+
+
+_validate_presets(PRESETS)

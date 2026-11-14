@@ -11,8 +11,9 @@ apply() for every input, in this order:
   2. age_ms > 3000 -> stale, nothing done.
   3. routing: digit -> preset_fn (A3 apply_preset), billing -> billing_fn (A3 Billing on/off), both outside the
      lock (they may call apply / set_billing themselves); everything else -> modes.transition under the lock.
-  4. paid effects (say_round, prefetch_on) pass the pre-check: billing off -> billing_off, then guard(effect, meta);
-     a returned code drops the effect and becomes result.code. Mode changes are never blocked.
+  4. paid effects (PAID: say_round, prefetch_on, talk_enter) pass the pre-check: billing off -> billing_off, then
+     guard(effect, meta); a returned code drops the effect and becomes result.code, except for talk_enter (SOFT_PAID),
+     where the code stays ok and only the toast says why (BILLING OFF). Mode changes are never blocked.
   5. seq += 1 and hello.mode written only when the state changed; one mode_log row for every input.
 Then, outside the lock, the on_change hooks run in order with the effects: they only carry them out (effects are
 data from modes.transition, executed by name; ModeStore interprets none of them beyond the pre-check).
@@ -43,7 +44,10 @@ from .modes import SOURCES, result, snapshot as _snapshot, transition
 
 STALE_MS = 3000                  # device inputs older than this are dropped (DualKey resends after a reconnect)
 SETTINGS_TIMEOUT_MS = 300_000    # settings closes itself after 5 minutes without input
-PAID = ('say_round', 'prefetch_on')
+PAID = ('say_round', 'prefetch_on', 'talk_enter')
+# Paid effects that ride on a mode change (owner 14): refusing one drops it but keeps the result ok (the entry into
+# talk happened); only the toast says why, e.g. BILLING OFF.
+SOFT_PAID = ('talk_enter',)
 FIELDS = ('mode', 'dir', 'host', 'return_to')
 BOOT_STATE = {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}
 DOC_ID = 'current'
@@ -145,9 +149,10 @@ class ModeStore:
             self._rebuild()
             return
         # An impossible stored state: back to the boot default (keeping a valid billing, seq still grows) and say so.
+        # A stored billing that is not true / false reads OFF (owner 15: fail-safe); only a missing doc starts on.
         _log(f'bad stored mode state {st!r} seq={seq!r} billing={billing!r}: back to talk')
         prev = seq if _is_int(seq) and seq >= 1 else 0
-        self._reset(now, seq=prev + 1, billing=billing if isinstance(billing, bool) else True)
+        self._reset(now, seq=prev + 1, billing=billing if isinstance(billing, bool) else False)
         self._append({'at': now, 'source': 'boot', 'device': None, 'boot': None, 'dev_seq': None, 'sid': None,
                       'input': 'load', 'value': st, 'from': st['mode'] if isinstance(st['mode'], str) else None,
                       'to': 'talk', 'code': 'bad_state', 'result': None, 'seq': self._seq, 'effects': []})
@@ -267,16 +272,21 @@ class ModeStore:
             if not valid_state(new):
                 raise ValueError(f'transition produced an impossible state {new!r} from {old!r} on {input!r}')
             meta['mode'] = new['mode']
-            kept, code = [], None
+            kept, code, soft = [], None, None
             for e in effects:
                 if e in PAID:
                     c = 'billing_off' if not self._billing else (self.guard(e, dict(meta)) if self.guard else None)
                     if c:
-                        code = code or c
+                        if e in SOFT_PAID:
+                            soft = soft or c
+                        else:
+                            code = code or c
                         continue
                 kept.append(e)
             if code:
                 res = result(code)
+            elif soft and res['code'] == 'ok':
+                res = result('ok', result(soft)['toast'])     # entered talk, nothing paid turned on: say why
             changed = new != old
             if changed:
                 self._state, self._seq, self._since, self._by = new, self._seq + 1, now, source
