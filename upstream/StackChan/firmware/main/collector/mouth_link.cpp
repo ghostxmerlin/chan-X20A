@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 #include "mouth_link.h"
+#include "mouth_assets.h"
 #include "mouth_liveness.h"
+#include "eyes/http.h"
+#include "ui_font.h"
+#include "voice_library.h"
+#include "hal/board/shared_storage.h"
 #include "hearing.h"
 #include "hearing_socket.h"
 #include "psram_task.h"
@@ -48,6 +53,101 @@ ModeSession* modes_session = nullptr;
 std::atomic<uint32_t> mode_ver{0};
 void mode_publish_locked() { mode_ver.store(modes_session->version(), std::memory_order_release); }
 
+// 0.4.96 SD assets over /mouth (mouth_assets.h): one Transfer in PSRAM behind its own lock, never held together with
+// the audio or the mode lock. The /mouth task feeds it and sends its lines; the SD work runs on the asset install
+// worker (eyes/http.cpp), never on this task.
+std::mutex asset_mutex;
+assets::Transfer* transfer = nullptr;
+assets::JobView job_view;                    // the job on the worker (one at a time: written before the submit)
+char eyes_path[48];                          // an eyes part's path, stable while its transfer runs (begin refuses busy)
+
+void* psram_alloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+void psram_free(void* p) { heap_caps_free(p); }
+
+// The firmware catalogs, as POST /v1/assets: font ids ("license", "cjk16.0"), "voice.<n>", "eyes.<style>.<state>".
+bool resolve_part(const char* part, assets::Spec& out)
+{
+    shared_storage::FileSpec f{};
+    if (ui_font::part(part, f)) { out = {f.path, f.bytes, f.sha256, true}; return true; }
+    if (!std::strncmp(part, "voice.", 6)) {
+        const char* d = part + 6;
+        if (d[0] < '0' || d[0] > '9' || (d[1] && (d[1] < '0' || d[1] > '9' || d[2]))) return false;
+        const VoiceClip* clip = voice_clip(d[1] ? (d[0] - '0') * 10 + (d[1] - '0') : d[0] - '0');
+        if (!clip) return false;
+        out = {clip->path, clip->bytes, clip->sha256, false};
+        return true;
+    }
+    if (!std::strncmp(part, "eyes.", 5)) {
+        const char* s = part + 5;
+        const char* dot = std::strchr(s, '.');
+        char style[8];
+        if (!dot || size_t(dot - s) >= sizeof style) return false;
+        std::memcpy(style, s, size_t(dot - s)); style[dot - s] = 0;
+        const eyes::Asset* a = eyes::asset(eyes::parse_style(style), eyes::parse_state(dot + 1));
+        if (!a) return false;
+        shared_storage::asset_path(*a, eyes_path, sizeof eyes_path);
+        out = {eyes_path, a->bytes, a->sha256, false};
+        return true;
+    }
+    return false;
+}
+
+// On the asset install worker (PSRAM stack, prio 1): the SD check or write, then the outcome back to the Transfer.
+void run_asset_job(void*)
+{
+    const assets::JobView v = job_view;
+    const shared_storage::FileSpec f{v.spec.path, v.spec.bytes, v.spec.sha256};
+    bool flag = false;
+    const char* error = v.job == assets::Job::Check ? shared_storage::match_file(f, flag)
+                                                    : shared_storage::install_file(f, v.bytes, v.length, flag);
+    bool font = false;
+    {
+        std::lock_guard<std::mutex> lock(asset_mutex);
+        font = transfer->job_done(error, flag, esp_timer_get_time());
+    }
+    if (font) ui_font::reload();             // retries the variants not loaded yet; only complete ones load
+    if (error) ESP_LOGW(kTag, "asset %s: %s", v.job == assets::Job::Check ? "check" : "install", error);
+}
+
+// Each pass of the /mouth loop: the timeout, a job for the worker, then up to 4 lines (acks, results). false = the
+// link is gone.
+bool assets_service(hearing::HearingSocket& socket, bool speaking)
+{
+    if (!transfer) return true;
+    assets::JobView v;
+    assets::Job job;
+    {
+        std::lock_guard<std::mutex> lock(asset_mutex);
+        transfer->tick(esp_timer_get_time(), speaking);
+        job = transfer->take_job(v);
+        if (job != assets::Job::None) job_view = v;
+    }
+    if (job != assets::Job::None && !eyes::run_storage_job(run_asset_job, nullptr)) {
+        std::lock_guard<std::mutex> lock(asset_mutex);
+        transfer->job_refused();
+    }
+    for (int i = 0; i < 4; ++i) {
+        assets::Line line;
+        {
+            std::lock_guard<std::mutex> lock(asset_mutex);
+            if (!transfer->next(line)) return true;
+        }
+        if (!socket.Send(line.c_str(), line.size(), false)) return false;
+    }
+    return true;
+}
+
+void on_asset_text(Text kind, ArduinoJson::JsonObjectConst o)
+{
+    const bool storage = kind == Text::AssetBegin && shared_storage::available();
+    std::lock_guard<std::mutex> lock(asset_mutex);
+    if (!transfer) return;
+    const int64_t now = esp_timer_get_time();
+    if (kind == Text::AssetBegin) transfer->begin(o, now, storage);
+    else if (kind == Text::AssetEnd) transfer->end(o, now);
+    else transfer->abort(o);
+}
+
 void set_state(const char* s, const std::string& err = {})
 {
     std::lock_guard<std::mutex> lock(mutex);
@@ -80,6 +180,11 @@ void on_mode_result(ArduinoJson::JsonObjectConst o)
 
 void on_message(const char* data, size_t n, bool binary)
 {
+    if (binary && assets::is_chunk(reinterpret_cast<const uint8_t*>(data), n)) {   // "AST1", never "SPK1"
+        std::lock_guard<std::mutex> lock(asset_mutex);
+        if (transfer) transfer->chunk(reinterpret_cast<const uint8_t*>(data), n, esp_timer_get_time());
+        return;
+    }
     if (binary) {
         std::lock_guard<std::mutex> lock(mutex);
         stream.push(reinterpret_cast<const uint8_t*>(data), n, *ring);
@@ -92,6 +197,10 @@ void on_message(const char* data, size_t n, bool binary)
     if (kind == Text::Other) return;
     if (kind == Text::TooLong || kind == Text::Bad) { std::lock_guard<std::mutex> lock(mutex); ++bad_messages; return; }
     if (kind == Text::ModeResult) { on_mode_result(doc.as<ArduinoJson::JsonObjectConst>()); return; }
+    if (kind == Text::AssetBegin || kind == Text::AssetEnd || kind == Text::AssetAbort) {
+        on_asset_text(kind, doc.as<ArduinoJson::JsonObjectConst>());
+        return;
+    }
     if (kind == Text::ChatStage) {          // 0.4.93 chat dots: state only; the screen task draws them
         std::lock_guard<std::mutex> lock(mode_mutex);
         if (modes_session && modes_session->on_chat_stage(doc.as<ArduinoJson::JsonObjectConst>(), n, esp_timer_get_time())) mode_publish_locked();
@@ -180,6 +289,8 @@ bool send_modes(hearing::HearingSocket& socket)
     return true;
 }
 
+bool speaking_now();                         // below: a /mouth stream is playing (takes the audio lock briefly)
+
 void run(void*)
 {
     int backoff_ms = 2000;
@@ -201,6 +312,7 @@ void run(void*)
             hello["type"] = "hello"; hello["device_id"] = device; hello["boot_id"] = boot;
             auto codecs = hello["codecs"].to<ArduinoJson::JsonArray>(); codecs.add("opus");
             hello["sample_rate"] = 24000; hello["buffer_ms"] = int(kSlots) * kFrameMs; hello["fw"] = FIRMWARE_VERSION;
+            if (transfer) hello["assets"] = 1;      // 0.4.96: takes asset.begin (mouth_assets.h)
             std::string text; ArduinoJson::serializeJson(hello, text);
             ok = socket.Send(text);
         }
@@ -238,6 +350,7 @@ void run(void*)
                 if (ok) { std::lock_guard<std::mutex> lock(mutex); ++reports_sent; }
             }
             if (ok) ok = send_modes(socket);
+            if (ok) ok = assets_service(socket, speaking_now());
             const int64_t now = esp_timer_get_time();
             if (now - checked_us > 2000000) {    // backend changed or removed: reconnect
                 checked_us = now;
@@ -250,6 +363,7 @@ void run(void*)
         socket.Abort();
         { std::lock_guard<std::mutex> lock(mutex); drop_stream_locked(); }
         drop_modes();
+        { std::lock_guard<std::mutex> lock(asset_mutex); if (transfer) transfer->link_down(); }
         if (!ok || !err.empty()) {
             { std::lock_guard<std::mutex> lock(mutex); ++failures; }
             set_state("retry", silent ? "silent" : err.empty() ? (ok ? "closed" : "hello") : err);
@@ -306,6 +420,12 @@ void init(const std::string& device_id, const std::string& boot_id)
         mode_publish_locked();
     } else {
         ESP_LOGE(kTag, "no memory for the mode session: modes off");
+    }
+    if (void* mem = heap_caps_calloc(1, sizeof(assets::Transfer), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) {
+        std::lock_guard<std::mutex> lock(asset_mutex);
+        transfer = new (mem) assets::Transfer(assets::Hooks{resolve_part, psram_alloc, psram_free});   // never freed
+    } else {
+        ESP_LOGE(kTag, "no memory for the asset transfer: SD assets over /mouth off");
     }
     // Socket and JSON work only: no flash access, so the stack can live in PSRAM.
     if (create_psram_task(run, "mouth_link", 8192, nullptr, 4) != pdPASS) {
@@ -372,6 +492,10 @@ uint32_t mode_version() { return mode_ver.load(std::memory_order_acquire); }
 
 void json(ArduinoJson::JsonObject out)
 {
+    {
+        std::lock_guard<std::mutex> lock(asset_mutex);      // released before the audio lock (never both)
+        if (transfer) transfer->json(out["assets"].to<ArduinoJson::JsonObject>());
+    }
     std::lock_guard<std::mutex> lock(mutex);
     out["state"] = state; out["connected"] = connected;
     out["connects"] = connects; out["failures"] = failures; out["silent_drops"] = silent_drops; out["streams"] = streams;

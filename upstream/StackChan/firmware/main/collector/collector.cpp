@@ -1990,9 +1990,8 @@ void run()
     m12_init();
     temperature_init();
     eyes::start();
-#ifdef CONFIG_COLLECTOR_NETWORK_MONITOR
+    // 0.4.96: always started (PSRAM stack): /mouth asset transfers use it too, not only POST /v1/assets.
     eyes::start_asset_installer();
-#endif
     playback_init();
     hearing::init(device_id,boot_id);
     vision_uplink_init(device_id, boot_id);

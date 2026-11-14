@@ -23,6 +23,11 @@ const char* read_file(const FileSpec& file, uint8_t* destination, size_t capacit
 // ("asset_missing", "asset_invalid", ...). Same lock and display lease as a read, held for one stat.
 const char* check_file(const FileSpec& file);
 const char* install_file(const FileSpec& file, const uint8_t* bytes, size_t length, bool& unchanged);
+// 0.4.96 (/mouth assets): matches = the file is there with its catalog size and SHA-256 (read and hashed, as
+// install_file's own unchanged check). nullptr or a storage error. Same lock and display lease as a read.
+const char* match_file(const FileSpec& file, bool& matches);
+// "/sdcard/soul/<style>/<state>.soul": the eyes asset's firmware path (the one read() and install() use).
+void asset_path(const collector::eyes::Asset& asset, char* path, size_t size);
 const char* read(const collector::eyes::Asset& asset, uint8_t* destination, size_t capacity);
 const char* install(const collector::eyes::Asset& asset, const uint8_t* bytes, size_t length, bool& unchanged);
 }

@@ -28,6 +28,7 @@ import argparse
 import asyncio
 import bisect
 import collections
+import contextlib
 import json
 import math
 import os
@@ -47,6 +48,7 @@ import vision_link
 import signal_link
 import tingwu as tingwu_rt
 import tingwu_switch
+import asset_push
 import mouth_link
 import mouth_mode
 import realtime_link
@@ -936,6 +938,8 @@ def main():
     ap.add_argument("--realtime-silence-ms", type=int, default=realtime_link.Config.silence_ms,
                     help="server VAD silence that ends a turn (crowd: longer than DashScope's 800 ms)")
     ap.add_argument("--realtime-vad-threshold", type=float, default=realtime_link.Config.vad_threshold)
+    ap.add_argument("--assets-port", type=int, default=asset_push.CONTROL_PORT,
+                    help="loopback port of the SD asset push control (asset_push.py); 0 = off")
     ap.add_argument("--recordings", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings"),
                     help="where every connection is recorded (default: recordings/ next to this file); never pruned")
     a = ap.parse_args()
@@ -968,6 +972,7 @@ def main():
     vision_active = set()
     mouth_active = set()
     mouth_no = [0]                                   # /mouth connection number (conn)
+    mouth_links = []                                 # live MouthLinks, newest last (asset pushes use the newest)
     tw_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("tingwu")) if database else (lambda: None))
     mouth = mouth_mode.ModeReader((lambda: database.read_switch("mouth")) if database else (lambda: None))
 
@@ -1025,10 +1030,12 @@ def main():
             print(f"+ {peer} mouth m{mouth_no[0]}", flush=True)
             link = mouth_link.MouthLink(ws, upstream_url=mouth_link.UPSTREAM, token=token_value, conn=mouth_no[0],
                                         modes=mode_hub, realtime=rt_hub)
+            mouth_links.append(link)
             try:
                 why = await link.run()
             finally:
                 mouth_active.discard(ws)
+                mouth_links.remove(link)
             print(f"- {peer} mouth m{link.conn} boot={link.boot}: {why}, {link.upstream_drops} soul-tts drops", flush=True)
             return
         if urlsplit(path).path == "/signal":           # DualKey owner signals, relayed to mind (2026-11-13)
@@ -1091,8 +1098,22 @@ def main():
             ears.discard(ear)
             print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
 
+    def newest_link():
+        return next((lk for lk in reversed(mouth_links) if lk.assets is not None), mouth_links[-1] if mouth_links else None)
+
+    async def asset_control(ws):
+        await asset_push.serve_control(ws, newest_link, token_value)
+
     async def serve_forever():
-        async with serve(handler, a.host, a.port, max_size=65536):
+        async with contextlib.AsyncExitStack() as stack:
+            await stack.enter_async_context(serve(handler, a.host, a.port, max_size=65536))
+            if a.assets_port and token_value:            # loopback only, the ear's token as Bearer
+                try:                                     # never costs the ear itself (port taken: logged, off)
+                    await stack.enter_async_context(serve(asset_control, "127.0.0.1", a.assets_port,
+                                                          max_size=asset_push.MAX_BYTES + 4096))
+                    print(f"asset push control on 127.0.0.1:{a.assets_port}", flush=True)
+                except OSError as e:
+                    print(f"asset push control off: {e}", flush=True)
             print(f"listening on {a.host}:{a.port}", flush=True)
             watcher = asyncio.create_task(watch_tingwu_switch())
             if rt_hub is not None:

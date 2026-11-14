@@ -4,6 +4,7 @@
 #include "protocol.h"
 #include "collector/voice_library.h"
 #include "collector/ui_font.h"
+#include "collector/psram_task.h"
 #include "hal/board/shared_storage.h"
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -34,12 +35,13 @@ esp_err_t reject(ControlReply* r,const char* status,const char* error) {
 // font: an SD font part (0.4.95, X-Font-Part "cjk16.0"); its spec is the firmware catalog's, never the request's.
 struct Upload {httpd_req_t* request=nullptr;const Asset* asset=nullptr;const VoiceClip* voice=nullptr;uint8_t* bytes=nullptr;
     bool font=false;shared_storage::FileSpec font_spec{};char font_id[12]{};};
+// One worker for every SD install: an HTTP upload, or (0.4.96) a /mouth asset job (run(ctx)). `installing` is held
+// from submit until the item returns, so the two never overlap.
+struct Item {Upload* upload=nullptr;void (*run)(void*)=nullptr;void* ctx=nullptr;};
 QueueHandle_t upload_queue=nullptr;
 StaticQueue_t upload_queue_control;
-StaticTask_t upload_worker_control;
-Upload* upload_slot[1];
+Item upload_slot[1];
 constexpr size_t kUploadStackBytes=16384;
-StackType_t* upload_stack=nullptr;
 void process_upload(Upload* u) {
     auto* r=u->request;
     const size_t length=u->font?u->font_spec.bytes:u->voice?u->voice->bytes:u->asset->bytes;
@@ -70,9 +72,10 @@ void process_upload(Upload* u) {
 }
 void upload_task(void*) {
     for (;;) {
-        Upload* u=nullptr;
-        if(xQueueReceive(upload_queue,&u,portMAX_DELAY)==pdTRUE) {
-            process_upload(u);
+        Item item;
+        if(xQueueReceive(upload_queue,&item,portMAX_DELAY)==pdTRUE) {
+            if(item.upload)process_upload(item.upload);
+            else if(item.run)item.run(item.ctx);
             installing=false;
         }
     }
@@ -80,12 +83,18 @@ void upload_task(void*) {
 }
 void start_asset_installer() {
     if(upload_queue)return;
-    upload_stack=static_cast<StackType_t*>(heap_caps_malloc(kUploadStackBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
-    if(!upload_stack)return;
-    upload_queue=xQueueCreateStatic(1,sizeof(Upload*),reinterpret_cast<uint8_t*>(upload_slot),&upload_queue_control);
-    if(upload_queue&&xTaskCreateStatic(upload_task,"asset_install",kUploadStackBytes,nullptr,1,upload_stack,&upload_worker_control))return;
+    // 0.4.96: started in every build (the /mouth asset path uses it); stack and TCB in PSRAM (create_psram_task),
+    // the queue stays static in internal RAM (its spinlock needs S32C1I). The worker never ends.
+    upload_queue=xQueueCreateStatic(1,sizeof(Item),reinterpret_cast<uint8_t*>(upload_slot),&upload_queue_control);
+    if(upload_queue&&create_psram_task(upload_task,"asset_install",kUploadStackBytes,nullptr,1)==pdPASS)return;
     if(upload_queue)vQueueDelete(upload_queue);
-    upload_queue=nullptr;heap_caps_free(upload_stack);upload_stack=nullptr;
+    upload_queue=nullptr;
+}
+bool run_storage_job(void (*run)(void*),void* ctx) {
+    if(!upload_queue || !run || installing.exchange(true))return false;
+    const Item item{nullptr,run,ctx};
+    if(xQueueSend(upload_queue,&item,0)==pdTRUE)return true;
+    installing=false;return false;
 }
 void catalog_json(JsonObject out) {
     out["supported"]=true;out["version"]=1;
@@ -163,7 +172,8 @@ esp_err_t install_handler(httpd_req_t* r) {
     }
     // The persistent PSRAM worker avoids per-file task allocation/deletion and
     // the extra internal cleanup task required by self-deleting WithCaps tasks.
-    if(xQueueSend(upload_queue,&u,0)!=pdTRUE) {
+    const Item item{u,nullptr,nullptr};
+    if(xQueueSend(upload_queue,&item,0)!=pdTRUE) {
         reject(u->request,"503 Service Unavailable","queue_unavailable");shutdown(httpd_req_to_sockfd(u->request),SHUT_RDWR);
         httpd_req_async_handler_complete(u->request);heap_caps_free(u->bytes);delete u;installing=false;
     }

@@ -58,6 +58,9 @@ stop); a soul-tts tts.start first calls realtime.yield_to_tts(link) (realtime yi
 A mode_report with mode crowd and input tap is also handed to realtime.tap() (crowd: a tap = look and greet).
 Writers: several tasks send() to the robot socket (the upstream loop, input results). websockets writes each whole
 message atomically, so that is safe; never use fragmented sends (async iterators) on the robot ws.
+SD assets (collector-0.4.96, asset_push.py): a robot whose hello has "assets": 1 gets an AssetPusher (link.assets);
+the robot's asset.ack / asset.result go to it, never to soul-tts. It sends only while no soul-tts or realtime stream
+is active on this link (audio_busy()).
 An unexpected error is logged with its traceback: in the mode path it is caught there and /mouth goes on; a task
 that dies anyway is logged before run() ends.
 """
@@ -69,6 +72,8 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+
+import asset_push
 
 try:
     from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidURI
@@ -352,6 +357,7 @@ class MouthLink:
         self.upstream_drops = 0
         self._up = None
         self._lock = asyncio.Lock()         # robot reports wait while a fresh upstream is being greeted
+        self.assets = None                  # AssetPusher when the robot's hello says "assets": 1 (0.4.96)
 
     @property
     def upstream_up(self):
@@ -375,6 +381,8 @@ class MouthLink:
             await asyncio.wait({reader, upper}, return_when=asyncio.FIRST_COMPLETED)
         finally:                                        # also when the ear cancels this handler
             first_upper = upper.done() and not reader.done()
+            if self.assets is not None:
+                self.assets.link_closed()
             for task in (reader, upper, *aux):
                 task.cancel()
             await asyncio.gather(reader, upper, *aux, return_exceptions=True)   # a dropped link ends one with ConnectionClosed
@@ -421,6 +429,8 @@ class MouthLink:
             await self.client.close(code=4400, reason="first message must be hello")
             return "bad_hello"
         self.hello_text, self.boot, self.device = first, m.get("boot_id"), m.get("device_id")
+        if m.get("assets") == 1:
+            self.assets = asset_push.AssetPusher(self._send_asset, self.audio_busy)
         try:
             await self.client.send(EAR_HELLO)
         except ConnectionClosed:                        # robot left right after its hello
@@ -430,9 +440,26 @@ class MouthLink:
             return "device_closed"
         return None
 
+    def audio_busy(self):
+        """hello speaks on this link: a soul-tts stream not finished, or realtime's stream."""
+        if self.tts_active:
+            return True
+        rt = self.realtime
+        return rt is not None and hasattr(rt, "streaming") and rt.streaming(self)
+
+    async def _send_asset(self, message):
+        try:
+            await self.client.send(message)
+        except Exception as e:                          # noqa: BLE001 - robot gone: the pusher stops
+            raise ConnectionError("robot_gone") from e
+
     async def _from_robot(self):
         async for message in self.client:
             m = _parse(message)
+            if m is not None and m.get("type") in ("asset.ack", "asset.result"):
+                if self.assets is not None:             # the pusher's, never soul-tts's
+                    self.assets.on_message(m)
+                continue
             if m is not None and m.get("type") in ("mode_input", "mode_report", "mode_applied"):
                 if self._modes_on:                      # for mind, never for soul-tts
                     try:

@@ -1,5 +1,23 @@
 # Collector 局域网协议 v1
 
+## 0.4.96：经 `/mouth` 安装 SD 资源（2026-11-14）
+
+主人选了“b吧”：不拔卡也能把 SD 资源（先是中文字库的 6 片 + 许可证）装上。机器人的 HTTP 服务在这一版不启动（`start_server` 没有调用），所以 `POST /v1/assets` 到不了；改走机器人一直连着的 `/mouth` websocket，由服务器上的 ear 推下去。
+
+- **白名单不变**：part id 只能是固件目录里有的条目，路径、字节数、SHA-256 全按固件自己的目录（和 `/v1/assets` 同一份：`ui_font::part`、`voice_clip`、`eyes::asset`）；服务器给的 `bytes`、`sha256` 必须等于目录里的值，否则拒绝。服务器永远不能指定路径或大小。part id：字库 `license`、`cjk16.0`…`cjk24.2`；台词 `voice.<编号>`；眼睛 `eyes.<款式>.<表情>`（如 `eyes.v05.happy`）。只收 `[a-z0-9._-]`、≤ 31 字符，别的不查也不回显。
+- **消息**（ear ↔ hello，`/mouth` 上；纯逻辑 `collector/mouth_assets.h`，主机测试 `tests/mouth_assets_test.cpp`）：
+  - ear → hello：`{"type":"asset.begin","id":N,"part":"cjk16.0","bytes":262144,"sha256":"<64 位十六进制>"}`，`id` 为非零 u32。
+  - hello 先在 SD 上查这个文件是不是已经一样（读出来算 SHA-256）：一样就直接回 `asset.result`（`ok:true, unchanged:true`），不要数据；不一样回 `{"type":"asset.ack","id":N,"bytes":0,"window":32768}`。
+  - ear → hello：二进制 `"AST1" | u32 id | u32 offset | 数据`（小端，整条 ≤ 1600 B，即数据 ≤ 1588 B；ear 用 1536），按顺序、不重叠；和 TTS 包的 `"SPK1"` 不会混淆。没确认的字节不超过 `window`（32 KiB）。
+  - hello → ear：`{"type":"asset.ack","id":N,"bytes":<已收>,"window":32768}`，每收 8 KiB 和收完时各一条（同一轮里只发最新一条）。
+  - ear → hello：`{"type":"asset.end","id":N}`；中途放弃发 `{"type":"asset.abort","id":N}`。
+  - hello → ear：`{"type":"asset.result","id":N,"part":"..","ok":true|false,"unchanged":bool,"bytes":N[,"reason":".."]}`。reason：`busy`（已有一个在传）、`unknown_part`、`size_mismatch`、`sha256_mismatch`、`too_large`、`bad_message`、`storage_unavailable`、`no_memory`、`installer_busy`（HTTP 安装占着）、`out_of_order`、`too_long`、`incomplete`、`timeout`、`aborted`，以及 SD 层的 `asset_invalid`、`io_error`、`display_bus_unavailable`、`asset_backup_exists`。
+- **一次一个**；新的 `asset.begin` 在忙时回 `busy`，不影响正在传的。超时：20 秒没收到数据或 end（hello 在说话时这个钟暂停），整次最多 300 秒。断线：正在收的直接丢弃；已经交给 worker 的写盘做完再释放缓冲区，结果不再发。已经在写盘时收到 abort 不打断（写完照常回结果）。写盘仍是原来的 `.part` → 读回校验 → 改名。字库片装好（或本来就一样）后调 `ui_font::reload()`，只有齐全的变体才载入（d053bb5 的规则）。
+- **内存与任务**：整份文件收在一块 PSRAM 缓冲区里（就是目录里的大小，≤ 256 KiB），传输状态也在 PSRAM，有自己的锁，不和声音锁、模式锁同时拿。`/mouth` 任务只拷贝数据、发 ack；SD 读写（要拿 LVGL 锁、排空 LCD DMA）全部在原来的资源安装 worker（`eyes/http.cpp`，PSRAM 栈，优先级 1）上做，和 HTTP 上传共用同一个“一次一个”标志。worker 现在每个版本都启动（以前只在网络监控版里），它的栈和 TCB 改到 PSRAM。
+- **声音优先**：ear 只在这条连接上没有 soul-tts / 围观 realtime 的流时才发 `asset.begin`；传到一半有流开始，ear 停发数据，等说完再继续（最多等 180 秒，超过就 abort）。最多有一个窗口（32 KiB）排在 TTS 包前面。
+- **能力**：hello 的 `/mouth` hello 里带 `"assets":1`；没有这一项的旧固件（0.4.95 及以前），ear 不会发这些消息。遥测 `mouth.assets`：`phase`（idle / checking / receiving / installing）、当前 `id`/`part`/`received`/`bytes`，计数 `begun installed unchanged failed refused aborted dropped stray`，`last_reason`、`last_part`。
+- **ear 一侧**（`server/ear/asset_push.py`）：只在本机回环 `127.0.0.1:52753/assets` 开一个控制口（`--assets-port`，0 = 关；用 ear 的 token 作 Bearer；ear 没设 token 时不开）。客户端发 `{"type":"push","part":..,"bytes":N,"sha256":..}` 再发一条二进制（整个文件），收到 `progress` 和一条 `result`。服务器上的命令行：`.venv/bin/python asset_push.py --token-file token --folder assets-push/font license=LICENSE-OFL.txt cjk16.0=cjk16.0.bin ...`，按顺序推，失败就停（许可证先装）。Mac 上：`scripts/push-assets-via-server.sh [--from <目录>] [--dry-run]`，先按 `assets/ui-font/manifest.json` 校验本地文件，rsync 到服务器 `<SOUL_SERVER_DIR>/assets-push/font/`，再在服务器上跑上面的命令；不打印 token 或 ssh 地址。
+
 ## 0.4.94：任何模式都有的三个滑动（2026-11-14）
 
 主人："我们要求有几个无论什么模式都存在的操作，下滑 快捷设置页 音量 网络状态/修改入口 计费开关等；上滑 模式选择；左滑 状态摘要。"

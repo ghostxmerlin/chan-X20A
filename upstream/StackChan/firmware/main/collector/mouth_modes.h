@@ -32,7 +32,8 @@ namespace collector::mouth {
 // One text message from the ear. TooLong (over the 1600 B /mouth limit) and Bad (not complete JSON, or not an
 // object) leave doc cleared: a partly filled document is never read. Other = a type the robot ignores (an old
 // ear's {"type":"mode"} snapshot is one of them now).
-enum class Text : uint8_t { TooLong, Bad, Hello, TtsStart, TtsEnd, TtsStop, ModeResult, ChatStage, Other };
+// 0.4.96: asset.begin / asset.end / asset.abort (SD assets over /mouth, mouth_assets.h).
+enum class Text : uint8_t { TooLong, Bad, Hello, TtsStart, TtsEnd, TtsStop, ModeResult, ChatStage, AssetBegin, AssetEnd, AssetAbort, Other };
 inline Text read_text(const char* data, size_t n, ArduinoJson::JsonDocument& doc)
 {
     doc.clear();
@@ -44,7 +45,8 @@ inline Text read_text(const char* data, size_t n, ArduinoJson::JsonDocument& doc
     const char* type = doc["type"] | "";
     static constexpr struct { const char* name; Text kind; } kTypes[] = {
         {"hello", Text::Hello}, {"tts.start", Text::TtsStart}, {"tts.end", Text::TtsEnd}, {"tts.stop", Text::TtsStop},
-        {"mode_result", Text::ModeResult}, {"chat_stage", Text::ChatStage}};
+        {"mode_result", Text::ModeResult}, {"chat_stage", Text::ChatStage},
+        {"asset.begin", Text::AssetBegin}, {"asset.end", Text::AssetEnd}, {"asset.abort", Text::AssetAbort}};
     for (const auto& t : kTypes) if (!std::strcmp(type, t.name)) return t.kind;
     return Text::Other;
 }

@@ -145,6 +145,17 @@ const char* check_file(const FileSpec& a)
     if (stat(a.path,&st)) return errno==ENOENT?"asset_missing":io_error();
     return size_t(st.st_size)==a.bytes?nullptr:"asset_invalid";
 }
+const char* match_file(const FileSpec& a,bool& matches)
+{
+    matches=false;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!stats.mounted) return "storage_unavailable";
+    DisplayLease display;
+    if (display.error!=ESP_OK) return "display_bus_unavailable";
+    matches=file_matches(a.path,a);
+    return nullptr;
+}
+void asset_path(const collector::eyes::Asset& a,char* path,size_t size) { path_for(a,path,size); }
 const char* install(const collector::eyes::Asset& a,const uint8_t* bytes,size_t length,bool& unchanged)
 {
     if (!known(a)) return "invalid_argument";

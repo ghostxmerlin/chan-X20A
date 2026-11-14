@@ -615,6 +615,11 @@ class RealtimeHub:
             self._dropped.add(self._resp)
             self._send_soon({"type": "response.cancel"})
 
+    def streaming(self, link):
+        """Our stream is on `link` and the robot has not finished it (asset pushes wait for it)."""
+        st = self._stream
+        return st is not None and st["link"] is link and not st["reported"] and not st["closed"]
+
     def on_report(self, link, m):
         """The robot's tts.playing / progress / done / stopped / error for one of our streams."""
         st = self._stream
