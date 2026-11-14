@@ -1,5 +1,18 @@
 # 会话交接记录
 
+## 2026-11-14 傍晚：模式第一步上线（以 hello 为准，collector-0.4.92）
+
+- 主人改了方向：模式以 hello 为准，服务器只按模式开关自己的功能；DualKey 只打分。计划在 `docs/superpowers/plans/2026-11-14-hello-modes-step1b-robot-owned.md`。数字口令改成新表：0 花费全关、9 花费全开（由 mind 执行），4–8 进 IDLE、围观、陪伴、中音英字、英音中字（hello 自己切，只进不出），1–3 空着。
+- 17:11 上线 mind 和 ear（mind 只记录 hello 报上来的模式，按"效果"开关功能，计费总开关照样拦；ear 把 `mode_report` 转给 mind；不再推送模式快照和 DualKey 摇杆灯）。备份在服务器 `~/backup-pre-modes1b-20261114.tgz`。
+- 17:13 刷入 collector-0.4.92（sha256 `5cfb5df1…`，基于 `45df717`）。刷前核对了身份，当前固件与 0.4.91 存档一致；整个程序槽和 NVS 都备份并校验过（`backups/ota_1-collector-0.4.91-before-modes-20261114.bin`、`backups/nvs-before-modes-20261114.bin`）；只写 ota_1，独立校验通过。刷机脚本在 `.private/modes-v0492/`。
+- 实机验收：
+  - 遥测显示 `mode` 为 talk，嘴连着，mind 收到了开机后的上报；内部最大连续块 43 KB，DMA 可用 73 KB，没有分配失败。
+  - 从网页那条路发数字 4：hello 进 IDLE，mind 同步成 IDLE，提前写和连续说跟着关掉。
+  - 选回 talk：两边都回到 talk，提前写和连续说重新打开。
+  - 口令和触摸切换还没让主人实际试过。
+- 这一版没有：上滑选模式页、下滑快捷设置页、各模式的占位页、IDLE 的徽章页、切换时的闪屏；脱口秀里随手点一下脸就会说一轮；屏幕角标会挡住 Wi-Fi 页面的提示文字。
+- 统一审查 `.superpowers/sdd/2026-11-14-hello-modes-step1b-robot-owned/combined-review.md`。审出的两处 Important（I1、I2）已经在刷机前改好，其余 Minor 记在审查报告里。
+
 ## 2026-11-14 下午：模式第一步，服务器端提前上线（Claude）
 
 - 主人催进度（"你忙活一下午了，连个模式切换都不能动吗？"），选了"服务器先上线，固件加快"。16:05 上线 mind（模式表、状态机、存储、计费总开关、0–9 预设、`/mode*` 接口）和 ear（在 `/mouth` 上推模式、DualKey 摇杆灯），并重启了观察台。备份在服务器 `~/backup-pre-modes-20261114.tgz`。
