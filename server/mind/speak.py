@@ -32,6 +32,7 @@ _SAY_LOCK = threading.Lock()
 _ENQUEUE_LOCK = threading.RLock()
 _EPOCH = 0
 _ROUNDS = 0                                      # 说一轮 presses since start: 连续说 stops when one lands mid-sequence
+_PLAYING = set()                                 # soul-tts ids handed over and not yet ended (speaking(), modes)
 
 
 class NotConnected(Exception):
@@ -42,7 +43,16 @@ def cancel_pending(tts=None):
     global _EPOCH
     with _ENQUEUE_LOCK:
         _EPOCH += 1
-        return tts.stop() if tts else []
+        if not tts:
+            return []
+        _PLAYING.clear()                         # the stop ends every line soul-tts still had
+        return tts.stop()
+
+
+def speaking():
+    """Is hello saying something, for the modes (a tap then means stop): a line is being written / handed over
+    (_SAY_LOCK), or a handed-over line has not ended yet (its _finish is still waiting). Memory only, no lock taken."""
+    return _SAY_LOCK.locked() or bool(_PLAYING)
 
 
 def _check_pending(epoch, is_current):
@@ -133,11 +143,14 @@ def tts_cost(status):
 
 
 def _finish(db, tts, uid, tts_id):
+    _PLAYING.add(tts_id)
     try:
         st = tts.status(tts_id, wait=60)
     except Exception as e:                       # noqa: BLE001 - recorded
         db["utterances"].update_one({"uid": uid}, {"$set": {"state": "unknown", "error": f"{type(e).__name__}"}})
         return
+    finally:
+        _PLAYING.discard(tts_id)
     cost, tin, tout = tts_cost(st)
     timings = st.get("timings_s") or {}
     fields = {"state": st.get("state"), "tts_cost_cny": cost, "tts_tokens": [tin, tout],

@@ -8,6 +8,10 @@ POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voic
 POST /say/round /say/play /signal /say/prefetch /say/auto (talk show; 连续说 state is in GET /say/stats under auto)
 GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
 POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
+GET  /mode /mode/seq; POST /mode (page) /mode/input (ear, robot inputs) /mode/robot (ear, /mouth events) /preset
+     (modes step 1; /switches also takes {name: billing, on}, the master switch). With a mode store in ctx, 说话类
+     接口 answer 409 {code: only_talk} outside talk, and paid things refuse to turn on while billing is off
+     (409 {code: billing_off}); turning things off and /say/stop always work.
 """
 import base64
 import copy
@@ -28,6 +32,7 @@ from .model_calls import BudgetExceeded
 from .store import LANE
 from . import owner_signals
 from .library import Library, LibraryConflict, COLLECTIONS, ID_RE
+from .modes import INPUTS as MODE_INPUTS
 
 MAX_RANGE_MS = 24 * 3600_000
 MAX_BODY = 16 * 1024
@@ -52,6 +57,19 @@ class NotFound(Exception):
 
 class Conflict(Exception):
     pass
+
+
+class ModeConflict(Conflict):
+    """409 with a mode result code (only_talk / billing_off) next to the message, for the page."""
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+PAGE_INPUTS = tuple(i for i in MODE_INPUTS if i not in ('boot', 'timeout'))      # boot / timeout: mind only
+DEVICE_SOURCES = ('asr', 'touch', 'select', 'quick', 'dualkey')                   # what ear forwards for the robot
+ROBOT_EVENTS = ('hello', 'applied', 'closed')
+CLICK_INPUT = {'single': 'tap', 'double': 'double_tap', 'long': 'long'}           # DualKey clicks -> mode inputs
 
 
 def _int(q, name, required=True):
@@ -156,7 +174,64 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             out[name + "_status"] = {"running": st.get("running") or [], "available": st.get("available"), "at": st.get("at"),
                                      "stale": not isinstance(st.get("at"), int) or now - st["at"] > 90_000}
         out["mouth"] = {"mode": mouth_mode(), "at": (db["switches"].find_one({"_id": "mouth"}) or {}).get("at")}
+        if ctx.get("mode_store"):
+            last = db["mode_log"].find_one({"input": "billing", "device": None, "code": "ok"}, sort=[("at", -1)]) or {}
+            out["billing"] = {"on": ctx["mode_store"].billing(), "at": last.get("at")}
         return out
+
+    # ---- modes (step 1) ----
+    def modes():
+        ms = ctx.get("mode_store")
+        if not ms:
+            raise Conflict("modes are not configured here")
+        return ms
+
+    def billing_allowed():
+        b, ms = ctx.get("billing"), ctx.get("mode_store")
+        return b.allowed() if b else (ms.billing() if ms else True)
+
+    def need_billing():
+        if not billing_allowed():
+            raise ModeConflict("计费关着", "billing_off")
+
+    def need_talk():
+        """说话类: only in the talk show, and only while the master switch is on. No mode store: as before."""
+        ms = ctx.get("mode_store")
+        if ms and ms.current()["mode"] != "talk":
+            raise ModeConflict("只在脱口秀模式", "only_talk")
+        need_billing()
+
+    def _is_int(v):
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    def mode_input(body):
+        """ear forwards a robot input: device + boot + seq is the dedup key, so all three are required (A2 M7)."""
+        if not (isinstance(body.get("device"), str) and body["device"] and isinstance(body.get("boot"), str) and body["boot"]
+                and _is_int(body.get("seq")) and _is_int(body.get("age_ms")) and body["age_ms"] >= 0):
+            raise BadRequest("device, boot (text), seq and age_ms (integers) required")
+        if body.get("source") not in DEVICE_SOURCES:
+            raise BadRequest(f"source must be one of {'/'.join(DEVICE_SOURCES)}")
+        if body.get("input") not in PAGE_INPUTS:
+            raise BadRequest("unknown input")
+        return modes().apply(body["input"], body.get("value"), source=body["source"], device=body["device"],
+                             boot=body["boot"], dev_seq=body["seq"], age_ms=body["age_ms"], sid=None)
+
+    def mode_signal(doc, body, now):
+        """DualKey direction / click from /signal -> a mode input (dedup on device + boot + seq, 3 s stale rule);
+        its result is added to the signal row. Ratings never come here (no 3 s rule for them)."""
+        ms = ctx.get("mode_store")
+        if not ms or doc.get("kind") not in ("mode", "click") or doc.get("result") is not None:
+            return doc
+        if doc["kind"] == "mode":
+            inp, value = "direction", doc["value"]["direction"]
+        else:
+            inp, value = CLICK_INPUT[doc["value"]["type"]], None
+        src = doc.get("source") or {}
+        age = body.get("age_ms") if _is_int(body.get("age_ms")) else 0
+        r = ms.apply(inp, value, source="dualkey", device=src.get("device"), boot=src.get("boot"),
+                     dev_seq=src.get("seq") if _is_int(src.get("seq")) else None, age_ms=age, sid=doc.get("sid"), now_ms=now)
+        db["owner_signals"].update_one({"sid": doc["sid"]}, {"$set": {"result": r["result"]}})
+        return {**doc, "result": r["result"], "effects": r["effects"], "snapshot": r["snapshot"]}
 
     def latest_frame():
         """Newest body-camera frame the ear stored (hello.frames + the file under recordings/)."""
@@ -319,6 +394,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return list(db["mind_labels"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("at", 1))
         if path == "/switches":
             return switches()
+        if path == "/mode":
+            ms = modes()
+            return {"snapshot": ms.current(), "robot": ms.robot(), "log": ms.log(10)}
+        if path == "/mode/seq":
+            return {"seq": modes().seq()}
         if path == "/frames/latest":
             return latest_frame()
         if path == "/eye/latest":
@@ -409,6 +489,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             except KeyError as e:
                 raise NotFound(str(e)) from None
         if path == '/role/try':
+            need_billing()
             tts = ctx.get('tts')
             roles = speak.load_roles(ctx.get('roles_dir') or '')
             if not isinstance(body.get('role'),str) or body['role'] not in roles:
@@ -428,6 +509,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             except ValueError as e:
                 raise BadRequest(str(e)) from None
         if path == "/say":
+            need_talk()
             tts = ctx.get("tts")
             if not tts or not ctx.get("env"):
                 raise Conflict("soul-tts or model access not configured")
@@ -444,6 +526,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise Conflict(str(e)) from None
             return compact_utterance(rec)
         if path == '/say/round':
+            need_talk()
             tts, worker = ctx.get('tts'), ctx.get('say_worker')
             if not tts or not ctx.get('env') or not worker:
                 raise Conflict('soul-tts or model access not configured')
@@ -451,6 +534,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise Conflict('嘴没切到 TTS 模式')
             s, version = current_settings()
             roles = speak.load_roles(ctx.get('roles_dir') or '')
+            if ctx.get('round_gate'):
+                ctx['round_gate'].note(now)          # a robot forward right after this one answers too_soon
             try:
                 return speak.say_round(ctx['env'], store, s, roles, tts, now, worker=worker, force_new=bool(body.get('force_new')),
                                        trigger={'source': 'page'}, settings_version=version,
@@ -460,6 +545,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             except RuntimeError as e:
                 raise Conflict(str(e)) from None
         if path == '/say/play':
+            need_talk()
             tts = ctx.get('tts')
             if not tts:
                 raise Conflict('soul-tts not configured')
@@ -481,15 +567,18 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise Conflict(str(e)) from None
         if path == '/signal':
             try:
-                return owner_signals.put_signal(db, body, now)
+                doc = owner_signals.put_signal(db, body, now)
             except ValueError as e:
                 raise BadRequest(str(e)) from None
+            return mode_signal(doc, body, now)
         if path == '/say/prefetch':
             worker = ctx.get('say_worker')
             if not worker:
                 raise Conflict('pre-writing is not configured here')
             if not isinstance(body.get('enabled'), bool):
                 raise BadRequest('enabled must be true or false')
+            if body['enabled']:
+                need_talk()
             worker.set_enabled(body['enabled'], now)
             return {'enabled': worker.enabled()}
         if path == '/say/auto':
@@ -498,9 +587,12 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise Conflict('连续说 is not configured here')
             if not isinstance(body.get('enabled'), bool):
                 raise BadRequest('enabled must be true or false')
+            if body['enabled']:
+                need_talk()
             auto.set_enabled(body['enabled'], now)             # on also turns 提前写 on
             return {'enabled': auto.enabled(), 'prefetch': auto.prefetch.enabled()}
         if path == "/voice/try":
+            need_billing()
             tts = ctx.get("tts")
             if not tts:
                 raise Conflict("soul-tts not configured")
@@ -527,16 +619,47 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 except Exception:                        # noqa: BLE001 - the switch itself is saved
                     pass
             return switches()
+        if path == "/switches" and body.get("name") == "billing":
+            ms = modes()
+            if not isinstance(body.get("on"), bool):
+                raise BadRequest("on (true/false) required")
+            r = ms.apply("billing", body["on"], source="page", now_ms=now)
+            return {**switches(), "result": r["result"], **({"failed": r["failed"]} if r.get("failed") else {})}
         if path == "/switches":
             if body.get("name") not in SWITCHES or not isinstance(body.get("on"), bool):
                 raise BadRequest(f"name ({'/'.join(SWITCHES)}) and on (true/false) required")
+            if body["on"]:
+                need_billing()                   # off always works (preset 1's page half sends tingwu/eye false)
             db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page"}}, upsert=True)
             return switches()
         if path == "/switch":
             if not isinstance(body.get("enabled"), bool):
                 raise BadRequest("enabled (true/false) required")
+            if body["enabled"]:
+                need_billing()
             store.set_state(enabled=body["enabled"], switched_at=now)
             return {"enabled": store.enabled(), "at": now}
+        if path == "/mode":
+            if body.get("input") not in PAGE_INPUTS:
+                raise BadRequest("unknown input")
+            return modes().apply(body["input"], body.get("value"), source="page", now_ms=now)
+        if path == "/mode/input":
+            return mode_input(body)
+        if path == "/mode/robot":
+            if not (isinstance(body.get("boot"), str) and body["boot"] and _is_int(body.get("conn"))
+                    and body.get("event") in ROBOT_EVENTS):
+                raise BadRequest(f"boot (text), conn (integer) and event ({'/'.join(ROBOT_EVENTS)}) required")
+            if body["event"] == "applied" and not _is_int(body.get("applied_seq")):
+                raise BadRequest("applied needs applied_seq (integer)")
+            return {"snapshot": modes().robot_event(body["boot"], body["conn"], body["event"], body.get("applied_seq"),
+                                                    now_ms=now)}
+        if path == "/preset":
+            n, source = body.get("n"), body.get("source", "page")
+            if not _is_int(n) or not 0 <= n <= 9:
+                raise BadRequest("n must be 0-9")
+            if source not in DEVICE_SOURCES + ("page",):
+                raise BadRequest("unknown source")
+            return modes().apply("digit", n, source=source, now_ms=now)
         if path == "/mark":
             if body.get("kind") not in MARKS:
                 raise BadRequest(f"kind must be one of {', '.join(MARKS)}")
@@ -612,6 +735,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(404, {"error": str(e)})
             except NoSituation as e:
                 self._send(409, {"error": str(e), "code": "no_situation"})
+            except ModeConflict as e:
+                self._send(409, {"error": str(e), "code": e.code})
             except (Conflict, SettingsConflict, MemoryConflict, LibraryConflict, speak.NotConnected, BudgetExceeded) as e:
                 self._send(409, {"error": str(e)})
             except Exception as e:               # noqa: BLE001 - database trouble shows as 503
@@ -630,8 +755,9 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 return
             url = urlsplit(self.path)
             if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
-                                '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge'):
-                if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
+                                '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
+                                '/mode', '/mode/input', '/mode/robot', '/preset'):
+                if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats", "/mode/seq"):
                     self._send(405, {"error": "read only"})
                 else:
                     self._send(404, {"error": "not found"})

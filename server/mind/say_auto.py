@@ -3,7 +3,9 @@
 Off by default and after every restart, like 提前写. Turning it on turns 提前写 on (the lines come from
 its stock); turning 提前写 off turns it off. While on (and the mouth is on TTS and speech.pipeline is
 "round") it wakes every 120–180 s, counted from the end of the last wake, and hands over to
-speak.auto_play, which plays only existing stock (one check call at most, never a new write).
+speak.auto_play, which plays only existing stock (one check call at most, never a new write). Outside the talk
+show (modes, step 1) a wake plays nothing (mode_fn; last reason not_talk), a second line of defence behind
+leaving talk turning it off.
 """
 import random
 import time
@@ -12,8 +14,10 @@ WAKE_S = (120, 180)
 
 
 class Worker:
-    def __init__(self, store, *, prefetch, settings_fn, mouth_fn, play_fn, clock=time.time, sleep=time.sleep, rng=None):
+    def __init__(self, store, *, prefetch, settings_fn, mouth_fn, play_fn, clock=time.time, sleep=time.sleep, rng=None,
+                 mode_fn=lambda: 'talk'):
         self.store, self.prefetch, self.settings_fn, self.mouth_fn = store, prefetch, settings_fn, mouth_fn
+        self.mode_fn = mode_fn
         self.play_fn, self.clock, self.sleep, self.rng = play_fn, clock, sleep, rng or random.Random()
         self._on = False
         self.next_at = None
@@ -60,10 +64,12 @@ class Worker:
         return res['reason']
 
     def _step(self, now_ms):
+        if self.mode_fn() != 'talk':
+            return {'reason': 'not_talk', 'played': []}
         s = self.settings_fn()
         if (s.get('speech') or {}).get('pipeline') != 'round' or self.mouth_fn() != 'tts':
             return {'reason': 'off', 'played': []}
-        return self.play_fn(s, now_ms, lambda: self._on and self.mouth_fn() == 'tts')
+        return self.play_fn(s, now_ms, lambda: self._on and self.mouth_fn() == 'tts' and self.mode_fn() == 'talk')
 
     def run(self, log=print):
         while True:

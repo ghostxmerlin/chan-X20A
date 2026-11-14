@@ -118,6 +118,176 @@ def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000, env=None, sett
     return count
 
 
+# ---- modes (step 1, plan task A4): the guard and the hooks around ModeStore / Billing -----------------------------
+ROUND_GAP_MS = 10_000          # a robot / DualKey 说一轮 at least 10 s after the last round started (too_soon)
+
+
+class RoundGate:
+    """Rounds started from a mode input (forward, a tap in talk) run on a background thread. `running` covers that
+    thread; `last` is when the last round started (the page's 说一轮 notes its start too)."""
+    def __init__(self):
+        self.running = False
+        self.last = None
+
+    def claim(self, now_ms):
+        """Guard part for say_round (called under ModeStore's lock: memory only). None = go, the start is reserved."""
+        if self.running or speak._SAY_LOCK.locked():
+            return 'busy'
+        if self.last is not None and now_ms - self.last < ROUND_GAP_MS:
+            return 'too_soon'
+        self.last = now_ms
+        return None
+
+    def note(self, now_ms):
+        self.last = now_ms
+
+
+class _BillingCtx:
+    """What billing.Billing needs (see its docstring), on the live database: the same writes the page's switches do."""
+    def __init__(self, db, store, settings_store, tts, say_worker, say_auto, mode_store, clock_ms):
+        self.db, self.store, self.settings_store, self.tts = db, store, settings_store, tts
+        self.say_worker, self.say_auto, self.mode_store, self.clock_ms = say_worker, say_auto, mode_store, clock_ms
+
+    def set_switch(self, name, on):
+        self.db['switches'].update_one({'_id': name}, {'$set': {'on': bool(on), 'at': self.clock_ms(), 'by': 'mode'}},
+                                       upsert=True)
+
+    def switch_on(self, name):
+        return (self.db['switches'].find_one({'_id': name}) or {}).get('on') is True
+
+    def set_mind(self, on):
+        self.store.set_state(enabled=bool(on), switched_at=self.clock_ms())
+
+    def set_mouth(self, mode):
+        was = (self.db['switches'].find_one({'_id': 'mouth'}) or {}).get('mode')
+        self.db['switches'].update_one({'_id': 'mouth'}, {'$set': {'mode': mode, 'at': self.clock_ms(), 'by': 'mode'}},
+                                       upsert=True)
+        if was == 'tts' and mode != 'tts' and self.tts:
+            speak.cancel_pending(self.tts)
+
+    def family_on(self):
+        from . import say_round
+        return bool(self.settings_store) and say_round.family_on(self.settings_store.current()[0])
+
+    def set_family(self, on):
+        """One settings version with speech.round.family changed, like the page's familySettingsBody."""
+        import copy
+        from .settings_store import SettingsConflict
+        if not self.settings_store:
+            return
+        note = '家人声音 开' if on else '家人声音 关（进脱口秀）'
+        for attempt in range(3):
+            s, version = self.settings_store.current()
+            s = copy.deepcopy(s)
+            s['speech']['round'] = {**(s['speech'].get('round') or {}), 'family': bool(on)}
+            try:
+                self.settings_store.save(s, note, expected_version=version)
+                break
+            except SettingsConflict:
+                if attempt == 2:
+                    raise
+        speak.cancel_pending()                   # as the page's settings save: a round in writing was for the other voice
+
+    def cancel(self):
+        speak.cancel_pending(self.tts)
+
+    def mode(self):
+        return self.mode_store.current()['mode']
+
+
+def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_round_fn, speaking_fn=None,
+               clock_ms=lambda: int(time.time() * 1000), log=print):
+    """Build ModeStore + Billing with the guard and the hook -> (mode_store, billing, round_gate).
+
+    say_round_fn(trigger, is_current) runs one 说一轮 (live: speak.say_round, today's pipeline); None = not here.
+    Startup: a master switch that reads off (also a corrupt stored value) runs billing.off again, so a partly failed
+    off before the restart really ends with the paid switches off. A mind restart is not an entry into talk:
+    提前写 / 连续说 stay as they start (off).
+    """
+    from .billing import Billing
+    from .mode_store import ModeStore
+    gate = RoundGate()
+    mouth = lambda: (db['switches'].find_one({'_id': 'mouth'}) or {}).get('mode', 'clips')
+    holder = {}
+
+    def guard(effect, meta):
+        """Called under ModeStore's lock (talk_enter included: None, Billing.talk_enter decides itself)."""
+        ms = holder['ms']
+        if effect == 'say_round':
+            if not ms.billing():
+                return 'billing_off'
+            if say_round_fn is None:
+                return 'not_implemented'
+            if mouth() != 'tts':
+                return 'mouth_not_tts'
+            return gate.claim(clock_ms())
+        if effect == 'prefetch_on':
+            if not ms.billing():
+                return 'billing_off'
+            if say_worker is None:
+                return 'not_implemented'
+        return None
+
+    if speaking_fn is None:
+        speaking_fn = lambda: gate.running or speak.speaking()
+    ms = ModeStore(db, guard=guard, speaking_fn=speaking_fn, clock_ms=clock_ms)
+    holder['ms'] = ms
+    billing = Billing(_BillingCtx(db, store, settings_store, tts, say_worker, say_auto, ms, clock_ms))
+
+    def start_round(meta, is_current):
+        trigger = {'source': meta.get('source'), 'input': meta.get('input'), 'sid': meta.get('sid')}
+        gate.running = True
+
+        def run():
+            try:
+                say_round_fn(trigger, is_current)
+            except Exception as e:                # noqa: BLE001 - the input was answered already; say why here
+                log(f'mind mode: say_round ({trigger["source"]}): {type(e).__name__}: {str(e)[:160]}', flush=True)
+            finally:
+                gate.running = False
+        threading.Thread(target=run, daemon=True).start()
+
+    def talk_off(now):
+        if say_auto is not None:
+            say_auto.set_enabled(False, now)
+        if say_worker is not None:
+            say_worker.set_enabled(False, now)            # drops the stock
+
+    def prefetch_on(now, is_current):
+        if say_worker is None or not is_current():
+            return
+        say_worker.set_enabled(True, now)
+        if not (is_current() and ms.billing()):           # replaced meanwhile: the later input / billing off wins
+            say_worker.set_enabled(False, now)
+
+    def on_change(old, new, effects, meta, now):
+        """Only carries the effects out, each on its own (one failing must not keep the rest, e.g. talk_leave)."""
+        is_current = lambda: ms.seq() == new['seq']
+        for e in effects:
+            try:
+                if e == 'stop_speech':
+                    speak.cancel_pending(tts)
+                elif e == 'talk_leave':
+                    talk_off(now)
+                elif e == 'talk_enter':
+                    billing.talk_enter(now, is_current=is_current)
+                elif e == 'say_round':
+                    start_round(meta, is_current)
+                elif e == 'prefetch_on':
+                    prefetch_on(now, is_current)
+                elif e == 'prefetch_off' and say_worker is not None:
+                    say_worker.set_enabled(False, now)
+            except Exception as ex:               # noqa: BLE001 - logged, the next effect still runs
+                log(f'mind mode: effect {e} failed: {type(ex).__name__}: {str(ex)[:160]}', flush=True)
+    ms.on_change.append(on_change)
+
+    if not billing.allowed():
+        failed = billing.off('boot', clock_ms())
+        log(f'mind mode: master switch is off at start, paid switches turned off again'
+            f'{" (FAILED: " + ", ".join(failed) + ")" if failed else ""}', flush=True)
+    return ms, billing, gate
+
+
 def _parse_local(text, tz):
     return int(datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M").replace(tzinfo=ZoneInfo(tz)).timestamp() * 1000)
 
@@ -178,6 +348,18 @@ def main():
     auto_worker = say_auto.Worker(
         store, prefetch=say_worker, settings_fn=lambda: settings_store.current()[0], mouth_fn=mouth_fn,
         play_fn=lambda s, now_ms, is_current: speak.auto_play(env, store, s, tts, now_ms, worker=say_worker, is_current=is_current))
+    say_auto_live = auto_worker if env and tts else None
+
+    def say_round_live(trigger, is_current):
+        """说一轮 from a mode input (forward / a tap in talk): today's pipeline, as the page's /say/round runs it."""
+        s, version = settings_store.current()
+        return speak.say_round(env, store, s, speak.load_roles(a.roles), tts, int(time.time() * 1000), worker=say_worker,
+                               trigger=trigger, settings_version=version,
+                               is_current=lambda: is_current() and settings_store.current()[1] == version and mouth_fn() == 'tts')
+    # Modes (step 1): mind is the only place that changes the mode; the guard / hooks are in wire_modes.
+    mode_store, billing, round_gate = wire_modes(db, store, settings_store=settings_store, tts=tts, say_worker=say_worker,
+                                                 say_auto=say_auto_live, say_round_fn=say_round_live if env and tts else None)
+    say_worker.mode_fn = auto_worker.mode_fn = lambda: mode_store.current()["mode"]
     if env:
         threading.Thread(target=say_worker.run, daemon=True).start()
         if tts:
@@ -186,10 +368,16 @@ def main():
                                              {"env": env, "settings_store": settings_store,
                                                                          "recordings_root": a.recordings, "roles_dir": a.roles,
                                                                          "tts": tts, "say_worker": say_worker,
-                                                                         "say_auto": auto_worker if env and tts else None}), daemon=True).start()
+                                                                         "say_auto": say_auto_live, "mode_store": mode_store,
+                                                                         "billing": billing, "round_gate": round_gate}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
-    print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}", flush=True)
+    print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}, mode {mode_store.current()['mode']} "
+          f"seq {mode_store.seq()} billing {'on' if billing.allowed() else 'OFF'}", flush=True)
     while True:
+        try:
+            mode_store.tick(int(time.time() * 1000))          # settings closes itself after 5 minutes without input
+        except Exception as e:                   # noqa: BLE001 - the minute loop must keep running
+            print(f"mind mode tick error: {type(e).__name__}: {str(e)[:200]}", flush=True)
         try:
             good, version = settings_store.current()      # settings are versioned in the database (phase 1)
             selfvoice.refresh_spoken(db, int(time.time() * 1000))   # hello's own lines count as her voice

@@ -4,7 +4,9 @@ Not always on: the owner turns it on when a discussion gets heated ("next") and 
 now the page has the switch. While on (and the mouth is on TTS and speech.pipeline is "round"), a
 round is written when a stretch of clear speech has ended (quiet_s), at least spacing_s after the
 last one, not inside the same moment, and only while this hour's say_* spending is under the cap.
-A restart, turning it off, or a scene/profile switch drops the stock.
+A restart, turning it off, or a scene/profile switch drops the stock. Outside the talk show (modes, step 1)
+it writes nothing even when on (mode_fn; last reason not_talk): leaving talk turns it off anyway, this is the
+second line of defence.
 """
 import contextlib
 import threading
@@ -22,8 +24,8 @@ def _cfg(s):
 
 
 class Worker:
-    def __init__(self, store, *, settings_fn, mouth_fn, ctx_fn, write_fn, clock=time.time):
-        self.store, self.settings_fn, self.mouth_fn = store, settings_fn, mouth_fn
+    def __init__(self, store, *, settings_fn, mouth_fn, ctx_fn, write_fn, clock=time.time, mode_fn=lambda: 'talk'):
+        self.store, self.settings_fn, self.mouth_fn, self.mode_fn = store, settings_fn, mouth_fn, mode_fn
         self.ctx_fn, self.write_fn, self.clock = ctx_fn, write_fn, clock
         self._lock = threading.Lock()
         self._busy = False
@@ -85,6 +87,8 @@ class Worker:
     def _step(self, now_ms):
         if not self._on:
             return 'off'
+        if self.mode_fn() != 'talk':
+            return 'not_talk'
         s = self.settings_fn()
         if (s.get('speech') or {}).get('pipeline') != 'round' or self.mouth_fn() != 'tts':
             return 'off'
