@@ -364,6 +364,8 @@ export function mount(root,model=new LibraryModel(),win=globalThis){
   if(ch)st.choices=ch;
   st.data=data;paint();
  }
+ // An abandoned edit must not come back with a fresh expected_version; create / bulk drafts stay.
+ const dropEditDrafts=()=>{for(const k of Object.keys(st.drafts))if(k.startsWith('edit:'))delete st.drafts[k];};
  function findDoc(c,id){
   const d=st.data||{};
   const pool=[d.card,...(d.notes||[]),...(d.memories||[]),...(d.knowledge||[]),...(d.items||[]),...(d.versions||[]).slice(0,1),...(d.children||[])];
@@ -384,7 +386,7 @@ export function mount(root,model=new LibraryModel(),win=globalThis){
   const name=b.dataset.act,art=b.closest('[data-c]'),box=b.closest('[data-form]');
   const c=art?.dataset.c||st.route.c,id=art?.dataset.id||st.route.id,values=box?readValues(box):{};
   const doc=c&&id?findDoc(c,id):null;
-  if(name==='edit'&&doc){st.editing=`${c}:${id}`;paint();}
+  if(name==='edit'&&doc){dropEditDrafts();st.editing=`${c}:${id}`;paint();}
   else if(name==='cancel'){delete st.drafts['edit:'+st.editing];st.editing=null;paint();}
   else if(name==='history')win.location.hash=`item=${c}:${id}`;
   else if(name==='reload'){load();loadOverview();}
@@ -416,7 +418,7 @@ export function mount(root,model=new LibraryModel(),win=globalThis){
   if(e.key!=='Enter'||e.target.name!=='q')return;
   const b=e.target.closest('[data-form]')?.querySelector('[data-act="search"]');if(b){e.preventDefault();act(b);}
  });
- win.addEventListener?.('hashchange',()=>{st.route=parseHash(win.location.hash);st.editing=null;st.bulk=null;load();});
+ win.addEventListener?.('hashchange',()=>{st.route=parseHash(win.location.hash);dropEditDrafts();st.editing=null;st.bulk=null;load();});
  return Promise.all([loadOverview(),load()]);
 }
 // The page (db.html) has <main id="db-root">; tests have no document and mount by hand.

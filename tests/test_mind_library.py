@@ -182,6 +182,13 @@ class LibraryReadTest(unittest.TestCase):
         self.assertEqual(o['voice_labels']['total'], 0)
         self.assertEqual(set(o['existing']), {'owner_voice_names', 'owner_face_names', 'settings_people', 'mind_memories'})
 
+    def test_overview_counts_only_live_rows_of_current_scope(self):
+        add = lambda lane, scope, mid, ver: self.db.add('mind_memories', {'lane': lane, 'scope_id': scope, 'memory_id': mid, 'version': ver})
+        add('live', 'office', 'ma', 1); add('live', 'office', 'ma', 2); add('live', 'office', 'mb', 1)
+        add('live', 'home', 'mc', 1); add('replay', 'office', 'md', 1)
+        o = self.lib.overview(settings.load(None))
+        self.assertEqual(o['existing']['mind_memories'], 2)
+
     def test_people_owner_first_with_note_counts(self):
         rows = self.lib.people()
         self.assertEqual(rows[0]['person_id'], 'owner')

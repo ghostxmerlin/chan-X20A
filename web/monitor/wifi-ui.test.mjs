@@ -19,7 +19,11 @@ test('renders profiles and scan results, sends only explicit actions, validates 
  el('wifi-password').value='placeholder-9';await el('wifi-add').listeners.click();
  assert.deepEqual(calls,[{action:'wifi_add',boot:'a',ssid:'office-example',password:'placeholder-9',preferred:true}]);assert.equal(el('wifi-password').value,'');
  await el('wifi-scan').listeners.click();assert.deepEqual(calls.at(-1),{action:'wifi_scan',boot:'a'});
- await el('wifi-profiles').listeners.click({target:{closest:()=>({dataset:{op:'remove',ssid:'home-example'}})}});assert.deepEqual(calls.at(-1),{action:'wifi_remove',boot:'a',ssid:'home-example'});
+ const rm=ssid=>{const b={dataset:{op:'remove',ssid},textContent:'删除'};return {b,click:()=>el('wifi-profiles').listeners.click({target:{closest:()=>b}})};};
+ const n0=calls.length,r1=rm('home-example');await r1.click();assert.equal(calls.length,n0,'first click sends nothing');assert.equal(r1.b.textContent,'再点一次删除');
+ await r1.click();assert.deepEqual(calls.at(-1),{action:'wifi_remove',boot:'a',ssid:'home-example'});
+ const n1=calls.length;await rm('cafe-example').click();assert.equal(calls.length,n1,'factory entry also needs two clicks');
+ await rm('home-example').click();assert.equal(calls.length,n1,'confirmation is per SSID');
  await el('wifi-profiles').listeners.click({target:{closest:()=>({dataset:{op:'prefer',ssid:'home-example'}})}});assert.deepEqual(calls.at(-1),{action:'wifi_prefer',boot:'a',ssid:'home-example'});
  await el('wifi-scan-list').listeners.click({target:{closest:()=>({dataset:{ssid:'office-example'}})}});assert.equal(el('wifi-ssid').value,'office-example');
  ui.render(s,false);await el('wifi-reconnect').listeners.click();assert.equal(calls.length,4);

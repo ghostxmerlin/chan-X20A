@@ -8,6 +8,8 @@ import re
 import threading
 import uuid
 
+from . import speech_settings
+
 COLLECTIONS = {'people_cards': 'person_id', 'people_notes': 'note_id', 'memory_items': 'memory_id', 'knowledge_items': 'kid'}
 PREFIX = {'people_cards': 'p', 'people_notes': 'n', 'memory_items': 'e', 'knowledge_items': 'k'}
 ID_RE = r'^(owner|[pnek]_[a-f0-9]{12})$'
@@ -269,8 +271,8 @@ class Library:
                 if 'origin' in r:
                     by_origin[r['origin']] = by_origin.get(r['origin'], 0) + 1
             cols[c] = {'total': len(heads), 'by_status': by_status, 'by_origin': by_origin}
-        mem = list(self.db['mind_memories'].aggregate([{'$group': {'_id': '$memory_id', 'doc': {'$first': '$$ROOT'}}},
-                                                       {'$count': 'total'}]))
+        mem = list(self.db['mind_memories'].aggregate([{'$match': {'lane': 'live', 'scope_id': speech_settings.scope(s)['id']}},
+                                                       {'$group': {'_id': '$memory_id'}}, {'$count': 'total'}]))
         owner = s.get('owner') or {}
         return {'collections': cols, 'voice_labels': {'total': self.db['voice_labels'].count_documents({})},
                 'existing': {'owner_voice_names': len(owner.get('voice_names') or []),

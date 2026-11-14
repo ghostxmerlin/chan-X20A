@@ -5,7 +5,7 @@ export class WifiPanel {
   const response=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(7000)});
   if(!response.ok)throw new Error(await response.text());return response.json();
  }){
-  this.doc=doc;this.send=send;this.pending=false;this.rendered='';
+  this.doc=doc;this.send=send;this.pending=false;this.rendered='';this.armed=null;this.armTimer=null;
   this.el('wifi-scan').addEventListener('click',()=>this.act('wifi_scan',{}));
   this.el('wifi-reconnect').addEventListener('click',()=>this.act('wifi_reconnect',{}));
   this.el('wifi-add').addEventListener('click',()=>{
@@ -16,7 +16,16 @@ export class WifiPanel {
   });
   this.el('wifi-profiles').addEventListener('click',event=>{
    const button=event.target?.closest?.('button[data-op]');if(!button)return;
-   this.act(button.dataset.op==='prefer'?'wifi_prefer':'wifi_remove',{ssid:button.dataset.ssid});
+   if(button.dataset.op==='prefer'){this.act('wifi_prefer',{ssid:button.dataset.ssid});return;}
+   // Removing needs a second click on the same SSID within 5 s (no browser dialog).
+   const ssid=button.dataset.ssid;
+   if(this.armed!==ssid){
+    clearTimeout(this.armTimer);this.armed=ssid;button.textContent='再点一次删除';
+    this.armTimer=setTimeout(()=>{this.armed=null;this.rendered='';if(this.state)this.render(this.state,this.fresh);},5000);
+    this.armTimer.unref?.();this.rendered='';return;
+   }
+   clearTimeout(this.armTimer);this.armed=null;this.rendered='';
+   this.act('wifi_remove',{ssid});
   });
   this.el('wifi-scan-list').addEventListener('click',event=>{
    const button=event.target?.closest?.('button[data-ssid]');if(!button)return;
@@ -40,20 +49,20 @@ export class WifiPanel {
   for(const id of ['wifi-scan','wifi-reconnect','wifi-add','wifi-ssid','wifi-password','wifi-preferred'])this.el(id).disabled=blocked;
   this.el('wifi-scan').disabled=blocked||!!w.scanning;
   this.el('wifi-status').textContent=!fresh?'状态已过期':!supported?'当前固件不支持网络管理':`${w.connected?`已连接 ${w.ssid||'—'} · ${w.rssi_dbm??'—'} dBm · ${w.ip||'—'}`:'未连接'}${w.status?` · ${w.status}`:''}`;
-  const key=`${state?.boot}|${JSON.stringify(w.profiles)}|${JSON.stringify(w.factory)}|${JSON.stringify(w.scan)}|${w.scanning}|${blocked}`;
+  const key=`${state?.boot}|${JSON.stringify(w.profiles)}|${JSON.stringify(w.factory)}|${JSON.stringify(w.scan)}|${w.scanning}|${blocked}|${this.armed}`;
   if(key===this.rendered)return;this.rendered=key;
   const profiles=this.el('wifi-profiles');profiles.replaceChildren();
   for(const p of w.profiles||[]){
    const li=this.doc.createElement('li');
    const name=this.doc.createElement('span');name.textContent=`${p.preferred?'★ ':''}${p.ssid}`;li.append(name);
    if(!p.preferred){const prefer=this.doc.createElement('button');prefer.textContent='设为首选';prefer.dataset.op='prefer';prefer.dataset.ssid=p.ssid;prefer.disabled=blocked;li.append(prefer);}
-   const remove=this.doc.createElement('button');remove.textContent='删除';remove.className='stop-button';remove.dataset.op='remove';remove.dataset.ssid=p.ssid;remove.disabled=blocked;li.append(remove);
+   const remove=this.doc.createElement('button');remove.textContent=this.armed===p.ssid?'再点一次删除':'删除';remove.className='stop-button';remove.dataset.op='remove';remove.dataset.ssid=p.ssid;remove.disabled=blocked;li.append(remove);
    profiles.append(li);
   }
   for(const ssid of w.factory||[]){
    const li=this.doc.createElement('li');
    const name=this.doc.createElement('span');name.textContent=`出厂 · ${ssid}`;li.append(name);
-   const remove=this.doc.createElement('button');remove.textContent='删除';remove.className='stop-button';remove.dataset.op='remove';remove.dataset.ssid=ssid;remove.disabled=blocked;li.append(remove);
+   const remove=this.doc.createElement('button');remove.textContent=this.armed===ssid?'再点一次删除':'删除';remove.className='stop-button';remove.dataset.op='remove';remove.dataset.ssid=ssid;remove.disabled=blocked;li.append(remove);
    profiles.append(li);
   }
   this.el('wifi-profiles-note').textContent=supported?`已保存 ${w.profiles?.length??0}/${w.profile_limit??6} 个；首选最先尝试，之后依次尝试，最后回落到出厂配置（${w.factory_count??0} 个）。`:'—';

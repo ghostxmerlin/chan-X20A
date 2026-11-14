@@ -168,6 +168,26 @@ test('existing daily memories tab lists the first 10 read-only',async()=>{
  assert.ok(paths.includes('/memories?offset=0&limit=10'));assert.match(root.innerHTML,/下午喝咖啡/);assert.match(root.innerHTML,/说话风格 \/ 场景 \/ 长期记忆/);
 });
 
+test('abandoned edit drafts are dropped on navigation and when another edit opens; create drafts stay',async()=>{
+ const tick=()=>new Promise(r=>setTimeout(r,5));const id='n_0123456789ab',L={};const win={location:{hash:'#person=owner'},addEventListener(e,f){L[e]=f;}};
+ const rootL={};const root={innerHTML:'',addEventListener(e,f){rootL[e]=f;}};
+ const note={note_id:id,person_id:'owner',kind:'trait',text:'旧文字',status:'active',version:1,origin:'owner',changed_at:1};
+ const req=async p=>{if(p==='/db/overview')return {collections:{},voice_labels:{total:0},existing:{}};
+  if(p.startsWith('/db/person?'))return {card:{person_id:'owner',kind:'owner',display:'主人',version:1,status:'active',aliases:[]},notes:[note],memories:[],knowledge:[],versions:[]};
+  if(p.startsWith('/db/choices'))return {people:[],knowledge:[]};return {};};
+ await ui.mount(root,new ui.LibraryModel(req),win);
+ const art={dataset:{c:'people_notes',id}};
+ const click=act=>rootL.click({target:{closest:s=>s==='button[data-act]'?{dataset:{act},disabled:false,closest:q=>q==='[data-c]'?art:null}:null}});
+ const type=(form,text)=>rootL.input({target:{closest:()=>({dataset:{form},querySelectorAll:()=>[{name:'text',value:text}]})}});
+ click('edit');type('edit:people_notes:'+id,'没保存的草稿');
+ win.location.hash='#people';L.hashchange();win.location.hash='#person=owner';L.hashchange();await tick();
+ click('edit');
+ assert.doesNotMatch(root.innerHTML,/没保存的草稿/);assert.match(root.innerHTML,/旧文字/);
+ type('edit:people_notes:'+id,'又一份草稿');type('bulk:owner','批量里的字');
+ L.hashchange();await tick();click('edit');
+ assert.doesNotMatch(root.innerHTML,/又一份草稿/);
+});
+
 // ---- the page itself ----
 test('db.html loads only /db.css and /db-ui.js, no inline script or style, and links back',()=>{
  const h=page('db.html');
