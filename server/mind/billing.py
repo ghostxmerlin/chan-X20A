@@ -2,8 +2,8 @@
 
 Owner 2026-11-14 evening (verbatim): "计费开关是这样，启动默认全开，我就使用网页单点开关，或asr9 asr0来整体开关。其他奇怪的设定都
 取消。" So billing is NOT a gate any more. It is only the last whole action:
-  on   = preset 9's server half: 听悟 / 识别 / 纪要 / 情景 on, 嘴 -> TTS, 提前写 + 连续说 on when the mirrored mode is talk.
-  off  = preset 0's server half: 听悟 / 识别 / 纪要 / 情景 off, 连续说 / 提前写 off, stop what hello is saying.
+  on   = preset 9's server half: 听悟 / 识别 / 纪要 / 情景 on (+ 围观 realtime, except at mind start), 嘴 -> TTS, 提前写 + 连续说 on when the mirrored mode is talk.
+  off  = preset 0's server half: 听悟 / 识别 / 纪要 / 情景 / 围观 realtime off, 连续说 / 提前写 off, stop what hello is saying.
 Every mind start is on (runner.wire_modes runs on('boot')); nothing is kept across a restart. Single switches always
 work whatever billing shows; speech is held only by the mode (only_talk), never by billing. Turning things off tries
 every step and returns the failed step names (logged) instead of raising.
@@ -26,6 +26,10 @@ from .mode_table import PRESETS
 from .modes import SOURCES, result
 
 PAID_SWITCHES = ('tingwu', 'eye', 'notes')     # 听悟, 识别, 纪要; 情景 is set_mind
+# 围观 realtime voice session (spike 2026-11-14, ear/realtime_link.py; runs only while hello reports crowd). Default OFF:
+# 0 turns it off, 9 turns it on, but mind's own start (preset 9 with source 'boot') turns it OFF instead, so a restart
+# never leaves the per-minute paid voice session armed.
+REALTIME = 'realtime'
 
 
 def _log(msg):
@@ -49,6 +53,7 @@ class Billing:
         self.ms.set_billing(False, source=source, now_ms=now_ms)
         return self._run_all('billing off', [
             *((n, lambda n=n: self.ctx.set_switch(n, False)) for n in PAID_SWITCHES),
+            (REALTIME, lambda: self.ctx.set_switch(REALTIME, False)),
             ('mind', lambda: self.ctx.set_mind(False)),
             ('talk', lambda: self._talk_off(now_ms)),
             ('cancel', self.ctx.cancel)])
@@ -127,6 +132,7 @@ def _billing_on(b, source, now_ms, out):
 
 def _paid_senses_on(b, source, now_ms, out):
     out['failed'] += b._run_all('senses on', [*((n, lambda n=n: b.ctx.set_switch(n, True)) for n in PAID_SWITCHES),
+                                              (REALTIME, lambda: b.ctx.set_switch(REALTIME, source != 'boot')),
                                               ('mind', lambda: b.ctx.set_mind(True))])
     return None, None
 

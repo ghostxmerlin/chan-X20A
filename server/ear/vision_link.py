@@ -8,7 +8,8 @@ is online or vision events are waiting. Messages:
   binary "SVF1" + u16le header length + JSON {"type":"frame","seq","t_us","now_us","w","h","diff","bytes"}
          + JPEG: one body-camera frame (collector-0.4.75+), saved under <recordings>/frames/<session>/
 Each connection is one row in hello.sessions (kind "vision", key "YYYYMMDD/HHMMSS-source-vN") and
-its events go to hello.vision. Nothing is answered except errors. A link silent for 60 s is closed.
+its events go to hello.vision (and, when given, to on_event: the 围观 realtime hub's face view, 2026-11-14).
+Nothing is answered except errors. A link silent for 60 s is closed.
 """
 import asyncio
 import json
@@ -34,8 +35,9 @@ def session_key(source, number, epoch=None):
 
 
 class VisionLink:
-    def __init__(self, db, number, peer, recordings_root=None):
+    def __init__(self, db, number, peer, recordings_root=None, on_event=None):
         self.db, self.number, self.peer = db, number, peer
+        self.on_event = on_event
         self.recordings_root = recordings_root
         self.session = None
         self.events = 0
@@ -67,6 +69,11 @@ class VisionLink:
             self.events += 1
             if self.db is not None:
                 self.db.vision(self.session, msg, int(time.time() * 1000))
+            if self.on_event is not None:
+                try:
+                    self.on_event(msg)
+                except Exception as e:            # noqa: BLE001 - the hook never costs the link
+                    print(f"vision hook failed: {type(e).__name__}", flush=True)
             return None
         if kind == "ping":
             return None
@@ -125,8 +132,8 @@ class VisionLink:
                                                   "frames": self.frames})
 
 
-async def serve_link(ws, db, number, peer, recordings_root=None):
-    link = VisionLink(db, number, peer, recordings_root)
+async def serve_link(ws, db, number, peer, recordings_root=None, on_event=None):
+    link = VisionLink(db, number, peer, recordings_root, on_event)
     try:
         while True:
             try:

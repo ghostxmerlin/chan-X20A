@@ -51,6 +51,11 @@ mind's /chat/heard answer (accepted / skip), skip for a sentence without text (c
 nothing (the robot times out). speak is not sent: the robot sees its own playback. Sends are tasks on the loop,
 at most STAGE_INFLIGHT at a time (more: dropped), never awaited by the audio path.
 mind is asked on the relay's own small thread pool (never the default executor, which tingwu and switches use).
+围观 realtime (spike 2026-11-14, realtime=RealtimeHub, realtime_link.py): its streams use ids from RT_STREAM_BASE up and go
+to the robot with send_from_realtime(); the robot's tts.* reports for those ids go to the hub, never to soul-tts.
+tts_active holds the soul-tts streams the robot has not finished (start .. robot done / stopped / error, or soul-tts's
+stop); a soul-tts tts.start first calls realtime.yield_to_tts(link) (realtime yields), so the two never interleave.
+A mode_report with mode crowd and input tap is also handed to realtime.tap() (crowd: a tap = look and greet).
 Writers: several tasks send() to the robot socket (the upstream loop, input results). websockets writes each whole
 message atomically, so that is safe; never use fragmented sends (async iterators) on the robot ws.
 An unexpected error is logged with its traceback: in the mode path it is caught there and /mouth goes on; a task
@@ -80,6 +85,7 @@ MIND = "http://127.0.0.1:52740"
 REPORT_FIELDS = ("seq", "mode", "dir", "host", "return_to", "by", "input", "effects")
 STAGE_DEBOUNCE_S = 0.3
 STAGE_INFLIGHT = 4
+RT_STREAM_BASE = 0x40000000                         # realtime's /mouth stream ids (soul-tts counts from 1)
 log = print                                         # tests silence it
 
 
@@ -327,11 +333,13 @@ class _RobotGone(Exception):
 
 
 class MouthLink:
-    def __init__(self, client, *, upstream_url, token, connect=None, retry_s=5, conn=0, modes=None):
+    def __init__(self, client, *, upstream_url, token, connect=None, retry_s=5, conn=0, modes=None, realtime=None):
         if connect is None:
             from websockets.asyncio.client import connect
         self.client, self.upstream_url, self.token, self.connect = client, upstream_url, token, connect
         self.retry_s, self.conn, self.modes = retry_s, conn, modes
+        self.realtime = realtime
+        self.tts_active = set()             # soul-tts streams the robot has not reported finished
         self._modes_on = False              # mode messages are relayed (needs a boot_id)
         self._inputs = asyncio.Queue(maxsize=modes.input_queue) if modes is not None else None
         self._reports = collections.deque()  # (message, queued at), oldest first
@@ -372,6 +380,11 @@ class MouthLink:
             await asyncio.gather(reader, upper, *aux, return_exceptions=True)   # a dropped link ends one with ConnectionClosed
             if self._modes_on:
                 self.modes.link_closed(self.conn)       # chat: this link's mode is no longer hello's word
+            if self.realtime is not None:
+                try:
+                    self.realtime.link_closed(self)
+                except Exception:                       # noqa: BLE001
+                    _trace(f"mouth m{self.conn} realtime close")
             if self._modes_on and self.reported:        # outlives run(): mind marks this link closed
                 self.modes.spawn(self.modes.ask("POST", "/mode/robot",
                                                 {"boot": self.boot, "conn": self.conn, "event": "closed"}))
@@ -429,8 +442,17 @@ class MouthLink:
                     except Exception:               # noqa: BLE001 - a mode bug never ends /mouth
                         _trace(f"mouth m{self.conn} {m.get('type')}")
                 continue
+            sid = _stream(m) if m is not None else None
+            if sid is not None and sid >= RT_STREAM_BASE and str(m.get("type", "")).startswith("tts."):
+                if self.realtime is not None:           # realtime's own stream: its report, not soul-tts's
+                    try:
+                        self.realtime.on_report(self, m)
+                    except Exception:                   # noqa: BLE001
+                        _trace(f"mouth m{self.conn} realtime report")
+                continue
             if m is not None and m.get("type") in ("tts.done", "tts.stopped", "tts.error"):
                 self.playing.discard(_stream(m))
+                self.tts_active.discard(_stream(m))
             async with self._lock:
                 up = self._up
                 if up is None:
@@ -441,6 +463,14 @@ class MouthLink:
                     pass
                 except Exception:                       # noqa: BLE001
                     _trace(f"mouth m{self.conn} report to soul-tts")
+
+    async def send_from_realtime(self, message):
+        """One whole message from the realtime hub to the robot -> False when the robot is gone."""
+        try:
+            await self.client.send(message)
+            return True
+        except Exception:                               # noqa: BLE001 - robot gone: run() ends via the reader
+            return False
 
     async def _to_robot(self, message):
         try:
@@ -461,6 +491,7 @@ class MouthLink:
                 except _RobotGone:
                     return "device_closed"
             self.playing.clear()
+            self.tts_active.clear()
             if code == REPLACED:
                 return "upstream_replaced"
             await asyncio.sleep(self.retry_s)
@@ -488,8 +519,16 @@ class MouthLink:
                         continue                        # the robot already has the ear's hello
                     if kind == "tts.start" and sid is not None:
                         self.playing.add(sid)
+                        self.tts_active.add(sid)
+                        if self.realtime is not None:   # realtime yields before the robot hears this start
+                            try:
+                                self.realtime.yield_to_tts(self)
+                            except Exception:           # noqa: BLE001
+                                _trace(f"mouth m{self.conn} realtime yield")
                     elif kind in ("tts.end", "tts.stop"):
                         self.playing.discard(sid)
+                        if kind == "tts.stop":
+                            self.tts_active.discard(sid)
                 await self._to_robot(message)
         except _RobotGone:
             raise
@@ -522,6 +561,11 @@ class MouthLink:
             return
         if m["type"] == "mode_report":
             self.modes.note_report(m, self.conn)
+            if self.realtime is not None and m.get("mode") == "crowd" and m.get("input") == "tap":
+                try:
+                    self.realtime.tap()
+                except Exception:                       # noqa: BLE001 - a greeting never costs /mouth
+                    _trace(f"mouth m{self.conn} realtime tap")
             if len(self._reports) >= self.modes.report_queue:
                 old, _ = self._reports.popleft()
                 log(f"mouth m{self.conn}: report queue full, report {old.get('seq')} dropped", flush=True)

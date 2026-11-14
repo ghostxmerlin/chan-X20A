@@ -49,6 +49,7 @@ import tingwu as tingwu_rt
 import tingwu_switch
 import mouth_link
 import mouth_mode
+import realtime_link
 import sound_kinds
 import hearing_protocol as hp
 
@@ -294,6 +295,7 @@ class Ear:
         self.tingwu_switch = tingwu_switch.SwitchReader(lambda: None)   # the server switch; off unless main injects one
         self.mouth_mode = mouth_mode.ModeReader(lambda: None)          # 嘴 mode; clips unless main injects one
         self.chat = None               # mouth_link.ModeRelay (main): sentences go to mind while hello is in chat
+        self.realtime = None           # realtime_link.RealtimeHub (main): 围观 voice session, fed from on_audio
         self.on_tingwu_change = None   # main: called when a stream starts or stops (status document)
         self.audio_declared = False
         self._tw_box = None
@@ -548,6 +550,17 @@ class Ear:
                 if not len(x):
                     self.schedule_tags()
                     return
+        if self.realtime is not None and self.device_profile:
+            try:                      # 围观 realtime: the (denoised) 16 kHz mic; the hub never blocks and gates itself
+                if self.realtime.armed():
+                    heard = y if self.denoiser is not None else x
+                    if len(heard):
+                        pcm = (np.clip(heard, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+                        self.realtime.feed(pcm, self.speaking, bool(self.self_flags.get("sounding")))
+                else:
+                    self.realtime.feed(b"", False, bool(self.self_flags.get("sounding")))
+            except Exception as error:     # noqa: BLE001 - never costs the audio path
+                print(f"realtime: feed failed: {type(error).__name__}", flush=True)
         self.self_history.add(self.ring.end, self.ring.end + len(x), self.self_flags)
         self.heard_sq += float(np.sum(x ** 2))
         self.heard_n += len(x)
@@ -660,7 +673,8 @@ class Ear:
               "tags": {"speech_p": round(speech_p, 2),
                        "kinds": sorted(([k, round(p, 2), sound_kinds.LABEL_ZH.get(k, k)]
                                         for k, (p, _) in kinds.items()), key=lambda t: -t[1])[:3]},
-              "self": cur["self"], "respond": self.mouth_mode.respond,
+              "self": cur["self"],
+              "respond": self.mouth_mode.respond and not (self.realtime is not None and self.realtime.active()),
               "debug": {"vad_wait_ms": ms(t_pop - arr_mono), "queue_ms": ms(t0 - t_q), "spk_ms": ms(t1 - t0),
                         "asr_ms": ms(t2 - t1), "tag_ms": ms(t3 - t2), "server_ms": ms(time.monotonic() - t_pop)}}
         self.post(ev)
@@ -913,6 +927,15 @@ def main():
     ap.add_argument("--denoise-mode", choices=["stream", "asr", "off"], default="stream",
                     help="robot sources only: denoise what VAD+ASR hear, only ASR segments, or nothing")
     ap.add_argument("--token-file", default=os.environ.get("SOUL_TOKEN_FILE", ""))
+    ap.add_argument("--realtime", choices=["on", "off"], default="on",
+                    help="围观 realtime voice session (qwen-audio-3.1-realtime-flash); runs only while the hello.switches "
+                         "realtime switch is on (default off) and hello is in crowd")
+    ap.add_argument("--realtime-voices", default=os.environ.get("SOUL_RT_VOICES", os.path.expanduser("~/soul-tts/soul_tts/voices.json")),
+                    help="soul-tts voices.json that holds the cloned voice (private; the id is never logged)")
+    ap.add_argument("--realtime-voice", default=os.environ.get("SOUL_RT_VOICE", "yy01"), help="soul-tts voice key")
+    ap.add_argument("--realtime-silence-ms", type=int, default=realtime_link.Config.silence_ms,
+                    help="server VAD silence that ends a turn (crowd: longer than DashScope's 800 ms)")
+    ap.add_argument("--realtime-vad-threshold", type=float, default=realtime_link.Config.vad_threshold)
     ap.add_argument("--recordings", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings"),
                     help="where every connection is recorded (default: recordings/ next to this file); never pruned")
     a = ap.parse_args()
@@ -959,6 +982,7 @@ def main():
         last, n = None, 0
         while True:
             await asyncio.to_thread(tw_switch.update)
+            await asyncio.to_thread(rt_switch.update)
             before = mouth.mode
             await asyncio.to_thread(mouth.update)
             if mouth.mode != before:
@@ -973,6 +997,17 @@ def main():
     signal_active = set()
     signal_post = signal_link.mind_poster(token_value)
     mode_hub = mouth_link.ModeRelay(mouth_link.mind_client(token_value))   # hello's mode reports -> mind (step 1b)
+    rt_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("realtime")) if database else (lambda: None))
+    rt_hub = None
+    if a.realtime == "on":
+        rt_voice = os.environ.get("SOUL_RT_VOICE_ID") or realtime_link.load_voice(a.realtime_voices, a.realtime_voice)
+        if secrets.get("DASHSCOPE_API_KEY") and rt_voice:
+            cfg = realtime_link.Config()
+            cfg.silence_ms, cfg.vad_threshold = a.realtime_silence_ms, a.realtime_vad_threshold
+            rt_hub = realtime_link.RealtimeHub(key=secrets["DASHSCOPE_API_KEY"], voice=rt_voice, modes=mode_hub,
+                                               call=mouth_link.mind_client(token_value), switch=rt_switch, db=database,
+                                               cfg=cfg)
+    print(f"realtime (围观): {'ready, follows the switch' if rt_hub else 'off (no key, no voice or --realtime off)'}", flush=True)
 
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
@@ -989,7 +1024,7 @@ def main():
             peer = ws.remote_address
             print(f"+ {peer} mouth m{mouth_no[0]}", flush=True)
             link = mouth_link.MouthLink(ws, upstream_url=mouth_link.UPSTREAM, token=token_value, conn=mouth_no[0],
-                                        modes=mode_hub)
+                                        modes=mode_hub, realtime=rt_hub)
             try:
                 why = await link.run()
             finally:
@@ -1018,7 +1053,8 @@ def main():
             peer = ws.remote_address
             print(f"+ {peer} vision v{vision_no[0]}", flush=True)
             try:
-                link = await vision_link.serve_link(ws, database, vision_no[0], f"{peer[0]}:{peer[1]}", rec_root)
+                link = await vision_link.serve_link(ws, database, vision_no[0], f"{peer[0]}:{peer[1]}", rec_root,
+                                                    on_event=rt_hub.on_vision if rt_hub else None)
             finally:
                 vision_active.discard(ws)
             print(f"- {peer} vision v{vision_no[0]}: {link.events} events, {link.frames} frames ({link.session})", flush=True)
@@ -1037,6 +1073,7 @@ def main():
         ear.tingwu_switch, ear.on_tingwu_change = tw_switch, write_tingwu_status
         ear.mouth_mode = mouth
         ear.chat = mode_hub
+        ear.realtime = rt_hub
         ears.add(ear)
         ticker = asyncio.create_task(ear.ticker())
         try:
@@ -1058,10 +1095,14 @@ def main():
         async with serve(handler, a.host, a.port, max_size=65536):
             print(f"listening on {a.host}:{a.port}", flush=True)
             watcher = asyncio.create_task(watch_tingwu_switch())
+            if rt_hub is not None:
+                rt_hub.start()
             try:
                 await asyncio.Future()
             finally:
                 watcher.cancel()
+                if rt_hub is not None:
+                    await rt_hub.shutdown()
                 mode_hub.close()
 
     asyncio.run(serve_forever())

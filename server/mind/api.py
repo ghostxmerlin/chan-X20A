@@ -8,6 +8,7 @@ POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voic
 POST /say/round /say/play /signal /say/prefetch /say/auto (talk show; 连续说 state is in GET /say/stats under auto)
 GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
 POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
+GET  /realtime/context (ear: 围观 realtime voice session's context block + owner face names; mind/realtime.py)
 GET  /chat/turns /chat/state; POST /chat/heard /chat/stage (ear: a speech onset in chat, the page's dots) (ear: one sentence heard while hello is in chat; chat v0, mind/chat.py)
 GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/robot (ear: hello's /mouth closed)
      /mode/input (ear: hello's digits 0 / 9) /mode (page: billing only) /preset (modes step 1b: hello owns the mode,
@@ -160,7 +161,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 "today_cost_usd": round(sum(r["cost_usd"] for r in out if r["day"] == today), 6),
                 "today_calls": sum(r["calls"] for r in out if r["day"] == today)}
 
-    SWITCHES = ("tingwu", "eye", "notes")    # spec 2026-11-11 §3
+    SWITCHES = ("tingwu", "eye", "notes", "realtime")    # spec 2026-11-11 §3; realtime: 围观 voice session (2026-11-14)
     MOUTH_MODES = ("off", "clips", "tts")    # 嘴: emotion clips (default) or soul-tts, never both (user 2026-11-11)
 
     def mouth_mode():
@@ -425,6 +426,12 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == '/signals':
             lo, hi = _range(q)
             return owner_signals.recent(db, lo, hi)
+        if path == '/realtime/context':
+            rc = ctx.get('realtime_ctx')
+            if rc is None:
+                from .realtime import RealtimeContext
+                rc = ctx['realtime_ctx'] = RealtimeContext(db, ctx.get('chat'), lambda: current_settings()[0])
+            return rc.block()
         if path == '/chat/state':
             chat = ctx.get('chat')
             if not chat:

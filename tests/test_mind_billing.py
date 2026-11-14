@@ -39,12 +39,13 @@ class FakeCtx:
             self.say_auto.set_enabled(True, 0)
         self.tingwu, self.eye, self.notes, self.mind = tingwu, eye, notes, mind
         self.mouth, self.family, self.mode_value, self.cancelled = mouth, family, mode, False
+        self.realtime = False                     # 围观 realtime switch (spike 2026-11-14)
         self.calls = []
         self.say_worker.on_change.append(lambda on, t: self.calls.append(('prefetch', on)))
 
     # what Billing calls
     def set_switch(self, name, on):
-        assert name in ('tingwu', 'eye', 'notes'), name
+        assert name in ('tingwu', 'eye', 'notes', 'realtime'), name
         self.calls.append((name, on))
         setattr(self, name, on)
 
