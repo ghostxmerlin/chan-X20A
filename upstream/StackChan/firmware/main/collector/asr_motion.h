@@ -7,7 +7,7 @@
 namespace collector {
 // Spoken yaw words (user, 2026-11-13). Factory ids from M5Stack unit_asr (commandList):
 // 0x01 up, 0x02 down, 0x03 left, 0x04 turn left, 0x05 right, 0x06 turn right, 0x08 front, 0x0A back.
-// 0x07 forward / 0x09 backward keep the heart / X reaction and do not move.
+// 0x07 forward / 0x09 backward do not move the head: they are mode words since 0.4.92 (asr_mode_words.h).
 enum class AsrMotionWord : uint8_t { None, TrackingOn, TrackingOff, Front, Back, Left, TurnLeft, Right, TurnRight };
 inline AsrMotionWord asr_motion_word(uint8_t id, bool has_value)
 {

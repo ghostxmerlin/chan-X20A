@@ -100,8 +100,8 @@ inline const char* asr_word(uint8_t id)
     }
 }
 
-// "forward" / "backward" showed the heart / reject X from 2026-11-07 until 2026-11-13, when the
-// user freed both words for another use (not decided yet). They are logged only; no reaction.
+// "forward" / "backward" showed the heart / reject X from 2026-11-07 until 2026-11-13. Since 0.4.92 they
+// are mode words (enter / leave the talk show, asr_mode_words.h); the screen shows no reaction for them.
 enum class AsrReaction : uint8_t { none, heart, reject };
 inline AsrReaction asr_reaction(uint8_t)
 {

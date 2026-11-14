@@ -1,5 +1,62 @@
 # Collector 局域网协议 v1
 
+## 0.4.92：hello 的模式（以 hello 为准，2026-11-14）
+
+主人 2026-11-14 定：模式由 hello 自己决定，服务器只记录、只按"效果"开关自己的功能。开机默认脱口秀（`talk`），模式只在内存里，不写 NVS。切换规则和 `server/mind/modes.py` 是同一套：固件 `collector/mode_rules.h` 逐条重放 `tests/data/mode_vectors.json`（由 `tests/gen_mode_vectors.py` 从 `modes.py`、`mode_table.py` 和下面的数字表生成，共 2100 条，新状态、结果码、提示和效果都要一样）。
+
+**八个模式**（`mode_table.py`）：`talk` 脱口秀 TALK、`chat` 对话 CHAT、`settings` 设置 SET（临时层，记 `return_to`）、`event` 事件驱动 AUTO（外层）、`subtitle` 字幕 SUB ZH>EN / SUB EN>ZH、`crowd` 围观 MEET、`companion` 陪伴 PAL、`idle` IDLE。
+
+**ASR 口令的新含义**（先说 "Hi M Five"、"hello" 或 "hi A S R" 唤醒）。旧的本机用途都去掉了：
+
+| 编号 | 词 | 以前 | 0.4.92 起 |
+| --- | --- | --- | --- |
+| `0x07` | forward | 无（0.4.88 起解绑） | 进脱口秀；已在脱口秀 = 说一轮 |
+| `0x09` | backward | 无 | 离开脱口秀（回 IDLE） |
+| `0x16` / `0x17` | play / pause | 无 | 进 / 离开对话 |
+| `0x10` / `0x11` | open / close | 开 / 关水平追踪（也取消开机自动追踪） | 进 / 离开设置；不再开关追踪，也不再取消开机自动追踪 |
+| `0x12` / `0x13` | start / stop | 连续听开始 / 停止 | 进 / 离开事件驱动 |
+| `0x1B` | next | 800 ms 后随机播一段本机语音 | 脱口秀里 = 开提前写；别的模式 `only_talk` |
+| `0x1A` | previous | 无 | 脱口秀里 = 关提前写；别的模式 `only_talk` |
+| `0x20`–`0x29` | zero..nine | 无 | 数字，见下表 |
+
+不变、仍在本机：`up`/`down`（开 / 关追踪）、`left`/`right`、`turn left`/`turn right`、`front`/`back`（0.4.85 转头），`turn on`/`turn off`（M12 人脸视图），音量词，`hello`。
+
+**数字**（主人 2026-11-14 新表，取代旧预设表）：
+
+| 数字 | 做什么 | 谁执行 |
+| --- | --- | --- |
+| 0 | 花费全关 | mind（hello 发 `mode_input` `digit` 0，屏幕显示 mind 回的提示） |
+| 9 | 花费全开 | mind（同上） |
+| 4 / 5 / 6 | 进 IDLE / 围观 / 陪伴 | hello 自己 |
+| 7 / 8 | 进字幕 中→英 / 英→中 | hello 自己 |
+| 1 / 2 / 3 | 空（`no_action`） | — |
+
+4–8 是"进入"：已经在那个模式（字幕要方向也相同）时回 `already`，什么都不变，不会像 `select` 那样"再点 = 离开"；字幕换方向照常切换。
+
+**首页手势**（`collector/touch_gesture.h`，只在首页）：单击、双击按当前模式（脱口秀：单击 = 说一轮，hello 正在说话时 = 停；双击 = 开提前写；其他模式见 `mode_table.py` 的 `inputs`）。单击要等 300 ms 看有没有第二下。**左滑打开状态摘要页**（以前是轻点）。上滑、下滑、右滑这一版不接。其他页面的触摸照旧。
+
+**屏幕**：右上角角标，所有页面可见：模式的 ASCII 名字加颜色底；`/mouth` 没连上时变灰并加 ` OFF`。每次输入的结果在底部显示 2 秒（例如 `CHAT`、`SAYING`、`NO ACTION`、`OFFLINE`）。眼睛：脱口秀一律笑面男（开着视觉也是）；对话 v05 金色猫眼；围观 v14 绿色机甲眼，热闹表情池（迎接、开心、好奇、搞怪、惊讶）；陪伴 v18 奶油白眼睛；字幕、设置、事件驱动、IDLE 这一版先是笑面男（专用页在 0.4.93）。
+
+**设置**：5 分钟没有任何输入就回原来的模式（hello 自己计时，结果 `by: "timeout"`）。
+
+**`POST /v1/control {"target":"mode","input":<输入词>,"value":<值，可省>}`**（网页模式条用）：照 ASR 口令同样执行，来源记 `page`。`input` 取 `forward`、`backward`、`play`、`pause`、`open`、`close`、`start`、`stop`、`next`、`previous`、`tap`、`double_tap`、`long`、`direction`（`up`/`down`/`left`/`right`）、`select`（`{"mode":..., "dir":"zh_en|en_zh"}`，再选当前模式 = 离开）、`digit`（0–9）。不认识的词回 200、`code: "unknown_input"`；`billing` 或多余字段回 400（计费总闸在 mind）。返回：
+
+```json
+{"accepted":true,"code":"ok","toast":"CHAT","changed":true,"reported":true,
+ "mode":{"mode":"chat","dir":null,"host":null,"return_to":null,"seq":7,"label":"CHAT","by":"page","since_ms":0,"online":true, ...}}
+```
+
+`code` 是规则结果码（`ok`、`already`、`not_in_mode`、`only_talk`、`not_implemented`、`no_action`、`unknown_input`）；数字 0 / 9 是 `sent_to_mind`（已排队发给 mind，`input_seq` 是它的编号）或 `offline`。
+
+**`/mouth` 上的模式消息**（hello ↔ ear；ear 原样转给 mind）：
+- 上行 `{"type":"mode_report","seq":N,"mode":"talk","dir":null,"host":null,"return_to":null,"by":"asr|touch|page|timeout|boot","input":"forward","effects":["stop_speech","talk_enter"]}`：每次切换、或者有效果的输入（说一轮、开关提前写、停说）发一条。`seq` 是 hello 本次开机的递增编号。`effects` 取 `stop_speech`、`talk_leave`、`talk_enter`、`say_round`、`prefetch_on`、`prefetch_off`，由 mind 执行（计费总闸照样拦）。
+- 每次连上 `/mouth`（收到 ear 的 hello）先发一条当前状态：开机后第一次是 `by:"boot"`、`input:"boot"`；以后 `input:null`、`by` 是最近一次切换的来源。它的 `effects` 是从 mind 上一次收到的状态到现在要做的切换效果，所以离线时切的模式也会让 mind 关掉 / 打开提前写和连续说。断线时没发出去的报告丢掉，由这一条代替。报告按顺序发，socket 收下才算发出；一下子积了 8 条没发出去，就合成一条（当前状态 + 从上次发出的状态起的切换效果 + 最新输入自己的效果）。
+- 上行 `{"type":"mode_input","seq":N,"age_ms":A,"source":"asr","input":"digit","value":0}`：只有数字 0 和 9。
+- 下行 `{"type":"mode_result","seq":N,"code":"ok","toast":"..."}`：只回给 `mode_input`；`toast` 显示 2 秒（空的不显示）。旧版 ear 推的 `{"type":"mode"}` 快照 0.4.92 忽略。
+- 收到的文本消息先查长度（≤ 1600 B）再完整解析，解析失败的不看；JSON 池在 PSRAM；模式处理有自己的锁，不碰音频锁。
+
+**遥测 `telemetry.mode` / `info.mode`**：`mode`、`dir`、`host`、`return_to`、`seq`、`label`、`by`、`since_ms`、`online`、`toast`、`reports_sent`、`reports_pending`、`reports_offline`、`reports_collapsed`、`inputs_sent`、`inputs_queued`、`inputs_dropped`、`inputs_offline`、`results`、`bad_results`、`ignored`、`last_result{seq,code,toast}`。`capabilities.modes="robot"`；`info.asr.mode_words` 列出口令的新含义。telemetry `hearing` 不再有 `asr_starts` / `asr_stops`（口令不再开关连续听）。
+
 ## 0.4.46：单一配置端 `POST /v1/control`
 
 - 主端口 8080 只剩 7 条路由：`GET /v1/discovery`、`GET /v1/info`、`GET /v1/telemetry`、`GET /v1/frame`、`POST /v1/control`、`POST /v1/assets`、`POST /v1/playback`；8081 仍只有 `GET /v1/audio`。HTTP 处理器上限由路由表长度决定（`kMainRoutes`），新增路由不会再像首个 0.4.45 镜像那样溢出而重启循环。
@@ -19,6 +76,7 @@
 | `interaction` | `POST /v1/interaction` | `mode`、`enabled` |
 | `hearing` | `POST /v1/hearing` | `op` 及各操作字段 |
 | `eyes` | `POST /v1/eyes` | `op`、`request_id` 及各操作字段 |
+| `mode` | （0.4.92 新增，无旧接口） | `input`、可选 `value`，见 0.4.92 一节 |
 
 - 删除的 GET：`/v1/wifi`（遥测 `wifi` 为同一对象）、`/v1/eyes`（目录在 `/v1/info` 的 `eyes`）、`/v1/eyes/status`（状态在遥测 `eyes`，含 `storage.installing` 与 `last_request`；`?request_id=` 单条查询随之取消）。
 - `POST /v1/assets` 合并原 `/v1/eyes/assets` 与 `/v1/voice/assets`：带 `X-Voice-Id` 头为语音片段，否则需 `X-Eyes-Style` + `X-Eyes-State`；长度校验、SD 安装与单任务门控不变。`POST /v1/playback`（PCM 上传，服务端使用）不变。
@@ -125,9 +183,9 @@ M12 仍使用已有 `results/last_result_us/requested_us/faces` 等字段；网�
 
 用户要求：开机后 M12 在，就打开视觉检测和追踪；M12 不在也没关系。`down` 关追踪。`forward`/`backward` 另作他用，不再显示爱心和叉号。
 
-- **开机自动追踪**（`collector/boot_tracking.h`，由 ASR 任务每 100 ms 推进）：开机 30 秒内收到 M12 心跳，就启用舵机（`remote_arm(true)`），舵机就绪后（最多再等 10 秒）打开追踪，追踪会把 M12 切到检测。只做一次。30 秒内没有 M12，就什么都不做。在它生效前说了任何转头词或开关追踪的词（含 `down`/`close`），它就取消，之后也不会再自动打开。结果在 `info.asr.boot_tracking`：`waiting_m12`、`tracking_on`、`no_m12`、`servos_not_ready`、`arm_refused`、`cancelled_by_user`；日志行 `AsrUnit: boot tracking: …`。
+- **开机自动追踪**（`collector/boot_tracking.h`，由 ASR 任务每 100 ms 推进）：开机 30 秒内收到 M12 心跳，就启用舵机（`remote_arm(true)`），舵机就绪后（最多再等 10 秒）打开追踪，追踪会把 M12 切到检测。只做一次。30 秒内没有 M12，就什么都不做。在它生效前说了任何转头词或开关追踪的词（含 `down`；0.4.92 起 `open`/`close` 是模式口令，不再取消它），它就取消，之后也不会再自动打开。结果在 `info.asr.boot_tracking`：`waiting_m12`、`tracking_on`、`no_m12`、`servos_not_ready`、`arm_refused`、`cancelled_by_user`；日志行 `AsrUnit: boot tracking: …`。
 - **`down`** 仍是关追踪（0.4.85 起），随时可用；关掉后开机自动追踪不会再打开它。
-- **`forward`(0x07) / `backward`(0x09)**：不再显示爱心和叉号，只记日志，用途待定。`info.asr.screen_reactions` 标为 reserved。遥控器上下推原本也有爱心和叉号；2026-11-13 的审计发现它从提交 `7700e7d` 起就已不再触发（`remote.cpp` 的 `reaction` 没有地方赋值），与这次改动无关，待修。
+- **`forward`(0x07) / `backward`(0x09)**：不再显示爱心和叉号，只记日志（0.4.92 起是模式口令：进 / 离开脱口秀，见最上面一节）。`info.asr.screen_reactions` 标为 reserved。遥控器上下推原本也有爱心和叉号；2026-11-13 的审计发现它从提交 `7700e7d` 起就已不再触发（`remote.cpp` 的 `reaction` 没有地方赋值），与这次改动无关，待修。
 - 0.4.86 的白屏修复（舵机开机等待回话、读舵机让出 CPU）包含在内。主机测试 500 项通过（4 项跳过），新增 `tests/boot_tracking_test.cpp`。
 
 ## 0.4.85：说话转头（Unit ASR 方向词）
@@ -162,7 +220,7 @@ M12 仍使用已有 `results/last_result_us/requested_us/faces` 等字段；网�
 
 `result` 取值：`accepted`、`busy`、`motor_off`（舵机未启用）、`no_feedback`（没有 1 秒内的有效读数）、`at_limit`、`facing_back`、`already_back`、`facing_unknown`、`rejected`（舵机侧拒绝，例如仰角在动、正在调参）、`unavailable`（up 时 M12 不在线）。`plan_result`：`pending`、`turn_started`、`front`（转回来已在中间）、`centring`、`centre_missed`、`stopped`、`superseded`、`timeout`。
 
-**其他词不变：** `forward`/`backward` 仍是爱心/叉号（0.4.88 起解绑，见上），`open`/`close` 仍开关追踪，`turn on`/`turn off`、`start`/`stop`、`next`、音量词都不变。`info.asr.yaw_words` 列出上表，`capabilities.asr_yaw_words="supported"`。
+**其他词不变：** `turn on`/`turn off`、音量词不变。（当时 `forward`/`backward` 已在 0.4.88 解绑，`open`/`close` 开关追踪，`start`/`stop` 开关连续听，`next` 随机播语音；0.4.92 起这些都是模式口令，见最上面一节。）`info.asr.yaw_words` 列出上表，`capabilities.asr_yaw_words="supported"`。
 
 ## 0.4.10 Unit ASR（顶部黑色口）
 
@@ -187,7 +245,7 @@ M5Stack Unit ASR（CI-03T）接在顶部黑色口（Port B），使用出厂英�
 
 出厂固件的唤醒词是一串乱码，等于没有设。实际要先说 “Hi M Five”、“hello” 或 “hi A S R” 中的一个（这三个是免唤醒词），之后约 20 秒内的其他命令才会被识别。
 
-**屏幕反应：** 首页上，`0x07 forward` 显示爱心，`0x09 backward` 显示实心叉号。复用遥控上推、下推的同一套表情：同样的图、1000 ms、首页限定、新事件替换旧事件。
+**屏幕反应（0.4.88 起取消，0.4.92 起这两个词是模式口令）：** 当时首页上 `0x07 forward` 显示爱心，`0x09 backward` 显示实心叉号。复用遥控上推、下推的同一套表情：同样的图、1000 ms、首页限定、新事件替换旧事件。
 - **不播提示音：** 模块自己会说出回复语，再加一声会叠在一起，也会被麦克风收进去。
 - **日志：** 每一帧都以 `AsrUnit` 标签写日志，在机器人左滑的日志页上能直接看到。
 

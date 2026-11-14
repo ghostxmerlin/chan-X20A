@@ -47,7 +47,7 @@ std::atomic<int64_t> quiet_until{0};
 std::string url,secret,device,boot;
 bool ready=false,connected=false,audio_ack=false,enroll_ack=false;
 ListeningControl control;
-uint32_t packets=0,reconnects=0,responses=0,asr_starts=0,asr_stops=0;
+uint32_t packets=0,reconnects=0,responses=0;
 uint32_t responses_muted=0;   // speech events with respond=false (嘴 in TTS or off mode)
 int64_t last_tick=0,last_speech=0;
 std::string state="idle",error,enroll_name,enroll_id,enroll_phase="idle",speaker,band="none",text,emotion;
@@ -433,10 +433,9 @@ void stop_for_owner(uint32_t owner_revision) {
     std::lock_guard<std::mutex> lock(mutex);
     if(control.stop_for_owner(owner_revision))apply_listening_locked(false);
 }
+// No ASR word switches hearing since 0.4.92 (start / stop are mode words; hearing_policy.h asr_action is 0).
 void asr_command(uint8_t id,bool has_value) {
-    const int action=asr_action(id,has_value);if(!action)return;
-    {std::lock_guard<std::mutex> lock(mutex);if(action>0)++asr_starts;else ++asr_stops;}
-    set_listening(action>0);
+    if(const int action=asr_action(id,has_value))set_listening(action>0);
 }
 void json(JsonObject out,bool with_events,uint32_t events_after) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -482,7 +481,7 @@ void json(JsonObject out,bool with_events,uint32_t events_after) {
     out["worker_stack_free_bytes"]=worker_stack_free.load();
     out["last_encode_us"]=encode_us.load();out["last_send_us"]=send_us.load();out["last_poll_us"]=poll_us.load();
     out["session"]=control.generation();out["packets"]=packets;out["dropped_blocks"]=dropped.load();out["reconnects"]=reconnects;out["responses"]=responses;
-    out["asr_starts"]=asr_starts;out["asr_stops"]=asr_stops;out["speaker"]=speaker;out["speaker_band"]=band;
+    out["speaker"]=speaker;out["speaker_band"]=band;
     out["text"]=text;out["emotion"]=emotion;out["emotion_reliable"]=false;out["respond_to"]="everyone";out["responses_muted"]=responses_muted;
     out["last_speech_age_ms"]=last_speech?(esp_timer_get_time()-last_speech)/1000:-1;
     auto list=out["speakers"].to<JsonArray>();for(const auto& name:speakers)list.add(name);
