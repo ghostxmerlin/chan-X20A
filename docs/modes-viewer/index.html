@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hello 模式查看器</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>hello 模式查看器</h1>
+    <p id="meta" class="meta"></p>
+    <nav class="nav" aria-label="章节">
+      <a href="#modes">1 模式</a><a href="#sim">2 模拟器</a><a href="#graph">3 状态图</a><a href="#mx">4 触发表</a>
+      <a href="#swipes">5 滑动页</a><a href="#presets-sec">6 预设</a><a href="#tasks-sec">7 第一步</a><a href="#answers">8 定了什么 / 差异</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="modes">
+    <h2>1. 八个模式</h2>
+    <div class="layers" id="layers"></div>
+    <div id="mode-grid" class="mode-grid"></div>
+  </section>
+
+  <section id="sim">
+    <h2>2. 模拟器</h2>
+    <p class="muted">按第一步的规则推演：点一个输入，看模式、眼睛、角标、花钱状态怎么变，日志写出依据哪条规则。按钮下面的小字是“现在按它会怎样”；灰的 = 现在按了不变。</p>
+    <div class="sim">
+      <div class="sim-left">
+        <div class="screen-frame big" id="sim-screen"></div>
+        <div class="screen-cap"><span id="sim-overlay-name"></span></div>
+        <div class="env">
+          <label><input type="checkbox" id="env-online"> 机器人在线（/mouth 连着）</label>
+          <label><input type="checkbox" id="env-tts"> 嘴在 TTS 档</label>
+          <button id="sim-reset" type="button">重来（开机状态）</button>
+        </div>
+        <div id="sim-state" class="sim-state"></div>
+      </div>
+      <div class="sim-right" id="sim-inputs"></div>
+    </div>
+    <h3>日志（最新在上）</h3>
+    <ol id="sim-log" class="log"></ol>
+    <h3>时间规则（设计 §5.6；模拟器不计时，以这里为准）</h3>
+    <div class="table-wrap"><table id="timing" class="tbl"></table></div>
+  </section>
+
+  <section id="graph">
+    <h2>3. 状态图</h2>
+    <p class="muted">点一个模式方块 = 在模拟器里进入它。</p>
+    <div class="diagram-wrap" id="diagram"></div>
+    <div id="diagram-legend" class="legend"></div>
+  </section>
+
+  <section id="mx">
+    <h2>4. 触发表</h2>
+    <p class="muted">每一格都是用模拟器同一套规则算出来的：在这个模式里按这个输入会怎样。点一格看规则原文。字幕一列按“中→英”；设置一列假设是从脱口秀进来的。</p>
+    <div class="mx-ctl"><div id="mx-cond" class="chips"></div><div id="mx-groups" class="chips"></div></div>
+    <div id="mx-detail" class="mx-detail"></div>
+    <div class="table-wrap"><table id="matrix" class="matrix"></table></div>
+  </section>
+
+  <section id="swipes">
+    <h2>5. 首页滑动页（320×240，机器人屏幕大小）</h2>
+    <p class="muted">模拟器里点“上滑 / 下滑 / 左滑”也会在机器人屏幕上打开这些页，而且可以直接点里面的格子和键。</p>
+    <div id="swipe-grid" class="swipe-grid"></div>
+  </section>
+
+  <section id="presets-sec">
+    <h2>6. 0–9 快捷预设</h2>
+    <p class="muted">入口：ASR 数字词、下滑快捷设置页、网页，三处走同一个服务器接口。预设是“一次改一组开关”，不改当前模式（4 除外）。</p>
+    <div class="table-wrap"><table id="presets" class="tbl"></table></div>
+  </section>
+
+  <section id="tasks-sec">
+    <h2>7. 第一步做什么（计划共 <span id="task-count"></span> 个任务）</h2>
+    <p class="muted">全部还没开始写代码。带 ⏸ 的步骤要停下来问主人。</p>
+    <div id="tasks" class="tasks"></div>
+    <h3>推迟到以后（不在第一步）</h3>
+    <ul id="deferred" class="deferred"></ul>
+  </section>
+
+  <section id="answers">
+    <h2>8. 主人定了什么、和补充 / 第一版的差异、没写明的地方</h2>
+    <div id="decisions" class="q decisions"></div>
+    <h3>第 12 节：最后两处默认</h3>
+    <div id="questions" class="questions"></div>
+    <h3>与 v1 / 主人补充的差异</h3>
+    <div class="table-wrap"><table id="diffs" class="tbl"></table></div>
+    <h3>修订后仍没写明的地方</h3>
+    <ol id="ambig" class="ambig"></ol>
+  </section>
+</main>
+<footer class="wrap muted foot">本页只读本地文件，不联网。改内容只改 design-data.js。</footer>
+
+<script src="design-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
