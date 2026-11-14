@@ -152,3 +152,48 @@ test('连续说 state line: on/off, next wake, last result with its time',()=>{
  assert.match(pf,/连续说开着/);assert.match(ui.prefetchRoundsHtml([],{on:false},now),/提前写关着/);
  assert.doesNotMatch(html,/style="/);
 });
+
+// ---- the panel follows the mode (Task B2) ----
+test('round controls follow the mode and billing',()=>{
+ const off=ui.roundControlsHtml(false,false,false,{talk:false,billing:true});
+ assert.match(off,/data-say-round="1"[^>]*disabled/);
+ assert.match(off,/data-prefetch="1"[^>]*disabled/);
+ assert.match(off,/data-auto="1"[^>]*disabled/);
+ assert.match(off,/只在脱口秀模式/);
+ assert.match(ui.roundControlsHtml(false,false,false,{talk:true,billing:false}),/计费关着/);
+ assert.doesNotMatch(ui.roundControlsHtml(false,false,false,{talk:false,billing:false}),/data-say-stop="1"[^>]*disabled/);
+ assert.doesNotMatch(off,/data-family="1"[^>]*disabled/);
+ const open=ui.roundControlsHtml(true,false,true);   // no gate = today's panel
+ assert.doesNotMatch(open,/disabled|只在脱口秀|计费关着/);
+ assert.equal(open,ui.roundControlsHtml(true,false,true,{talk:true,billing:true}));
+});
+test('gate comes from the mode view; unknown or absent mode never disables',()=>{
+ assert.deepEqual(ui.gateOfView({known:true,mode:'idle',billing:true}),{talk:false,billing:true});
+ assert.deepEqual(ui.gateOfView({known:true,mode:'talk',billing:false}),{talk:true,billing:false});
+ assert.deepEqual(ui.gateOfView({known:true,mode:'talk',billing:null}),{talk:true,billing:true});
+ for(const v of [null,undefined,{},{known:false,why:'absent',mode:null},{known:false,why:'down',billing:false}])
+  assert.deepEqual(ui.gateOfView(v),{talk:true,billing:true});
+});
+test('gate note text: billing wins, then not-talk, else nothing',()=>{
+ assert.match(ui.gateNote({talk:false,billing:false}),/计费关着/);
+ assert.match(ui.gateNote({talk:false,billing:true}),/只在脱口秀模式/);
+ assert.equal(ui.gateNote({talk:true,billing:true}),'');assert.equal(ui.gateNote(undefined),'');
+});
+test('role and voice buttons follow the gate; stop stays; 试听 only needs billing',()=>{
+ const r=ui.roleButtonsHtml(roles,{talk:false,billing:true});
+ assert.match(r,/data-role="roast"[^>]*disabled/);assert.doesNotMatch(r,/data-say-stop="1"[^>]*disabled/);
+ assert.doesNotMatch(ui.roleButtonsHtml(roles),/disabled/);
+ const vs=[{id:'tang',label:'汤'}];
+ assert.doesNotMatch(ui.voiceButtonsHtml(vs,{talk:false,billing:true}),/disabled/);
+ assert.match(ui.voiceButtonsHtml(vs,{talk:true,billing:false}),/data-voice="tang"[^>]*disabled/);
+ assert.doesNotMatch(ui.voiceButtonsHtml(vs),/disabled/);
+});
+test('409 mode codes show mind\'s reason',()=>{
+ assert.equal(ui.sayErrorMessage(new Error('{"error":"只在脱口秀模式","code":"only_talk"}')),'只在脱口秀模式');
+ assert.equal(ui.sayErrorMessage(new Error('{"error":"计费关着","code":"billing_off"}')),'计费关着');
+ assert.equal(ui.conflictCode(new Error('{"error":"计费关着","code":"billing_off"}')),'billing_off');
+ assert.equal(ui.conflictCode(new Error('{"error":"x","code":"no_situation"}')),null);
+ assert.equal(ui.conflictCode(new Error('Bad Gateway')),null);
+ assert.deepEqual(ui.gateAfterConflict('only_talk',{talk:true,billing:true}),{talk:false,billing:true});
+ assert.deepEqual(ui.gateAfterConflict('billing_off',{talk:true,billing:true}),{talk:true,billing:false});
+});
