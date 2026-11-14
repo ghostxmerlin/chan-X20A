@@ -1,4 +1,5 @@
-"""hello modes step 1: the billing master switch and the 0-9 presets, server half (server/mind/billing.py), task A3.
+"""hello modes: the billing switch and the 0-9 presets, server half (server/mind/billing.py). Owner 2026-11-14 evening:
+billing is the last whole action (on = preset 9, off = preset 0), never a gate.
 
 FakeCtx records every switch; it holds a real ModeStore (on FakeDB) and the real 提前写 / 连续说 workers
 (say_prefetch.Worker, say_auto.Worker), so "连续说 on turns 提前写 on" and "提前写 off turns 连续说 off" behave
@@ -98,9 +99,15 @@ class BillingTest(unittest.TestCase):
                                                 prefetch=False, auto=False, cancelled=True))
         self.assertEqual((self.ctx.mode_store.seq(), self.b.allowed()), (s0 + 1, False))
 
-    def test_on_restores_nothing(self):
-        self.b.off('page', 1); self.b.on('page', 2)
-        self.assertEqual((self.b.allowed(), self.ctx.tingwu), (True, False))
+    def test_on_is_preset_nine(self):
+        self.b.off('page', 1); failed = self.b.on('page', 2)
+        self.assertEqual((failed, self.b.allowed(), self.ctx.tingwu, self.ctx.eye, self.ctx.notes, self.ctx.mind,
+                          self.ctx.mouth, self.ctx.prefetch, self.ctx.auto), ([], True, True, True, True, True, 'tts', True, True))
+
+    def test_on_outside_talk_leaves_the_talk_show_off(self):
+        self.b.off('page', 1); self.ctx.mode_value = 'crowd'
+        self.b.on('boot', 2)
+        self.assertEqual((self.ctx.tingwu, self.ctx.mind, self.ctx.prefetch, self.ctx.auto), (True, True, False, False))
 
     def test_one_to_eight_are_undefined_on_mind(self):
         # owner 2026-11-14 (step 1b): 4-8 are mode selects hello does itself, 1-3 are empty
@@ -125,9 +132,12 @@ class BillingTest(unittest.TestCase):
     def test_undefined(self):
         self.assertEqual(apply_preset(6, self.b, source='page', now_ms=1)['result']['code'], 'undefined_preset')
 
-    def test_zero_in_talk_stays_off_until_next_entry(self):
-        apply_preset(0, self.b, source='asr', now_ms=1); self.b.on('page', 2)
-        self.assertEqual((self.ctx.prefetch, self.ctx.auto), (False, False))      # billing on restores nothing
+    def test_switch_is_nine_or_zero(self):
+        r = self.b.switch(False, source='page', now_ms=1)
+        self.assertEqual((r['result'], self.ctx.tingwu, self.ctx.prefetch), ({'code': 'ok', 'toast': 'PRESET 0'}, False, False))
+        r = self.b.switch(True, source='page', now_ms=2)
+        self.assertEqual((r['result']['code'], r['robot'], self.ctx.tingwu, self.ctx.prefetch, self.ctx.auto),
+                         ('ok', {'hearing': 'tingwu', 'vision': 'recognize'}, True, True, True))
 
 
 class PresetDetailTest(unittest.TestCase):
@@ -215,15 +225,17 @@ class StoreWiringTest(unittest.TestCase):
                          ('ok', {'hearing': 'tingwu', 'vision': 'recognize'}, True))
         self.assertEqual(self.ms.apply('digit', 4, source='asr', now_ms=2)['result']['code'], 'undefined_preset')
 
-    def test_billing_input_runs_the_off_actions(self):
+    def test_billing_input_is_preset_zero_or_nine(self):
         s0 = self.ms.seq()
         r = self.ms.apply('billing', False, source='quick', device='robot', boot='b1', dev_seq=1, now_ms=2)
         self.assertEqual((r['result']['code'], r['snapshot']['billing'], r['snapshot']['seq']), ('ok', False, s0 + 1))
         self.assertEqual(self.ctx.state(), dict(tingwu=False, eye=False, notes=False, mind=False,
                                                 prefetch=False, auto=False, cancelled=True))
-        self.assertEqual(self.ms.apply('billing', False, source='page', now_ms=3)['result']['code'], 'already')
+        self.assertEqual(self.ms.apply('billing', False, source='page', now_ms=3)['result'],
+                         {'code': 'ok', 'toast': 'PRESET 0'})                     # a whole action runs every time
         r = self.ms.apply('billing', True, source='page', now_ms=4)
-        self.assertEqual((r['result']['code'], r['snapshot']['billing'], self.ctx.tingwu), ('ok', True, False))
+        self.assertEqual((r['result']['code'], r['snapshot']['billing'], self.ctx.tingwu, self.ctx.prefetch),
+                         ('ok', True, True, True))
 
     def _break_eye(self):
         real = self.ctx.set_switch
@@ -246,13 +258,11 @@ class StoreWiringTest(unittest.TestCase):
         kw = dict(source='quick', device='robot', boot='b1', dev_seq=4, now_ms=2)
         r = self.ms.apply('billing', False, **kw)
         self.assertEqual((r['result'], r['failed'], r['snapshot']['billing']),
-                         ({'code': 'ok', 'toast': 'BILLING OFF, 1 FAILED'}, ['eye'], False))
+                         ({'code': 'ok', 'toast': 'PRESET 0: 1 FAILED'}, ['eye'], False))
         row = self.ms.db['mode_log'].docs[-1]
         self.assertEqual((row['input'], row['dev_seq'], row['result']), ('billing', 4, r['result']))
         again = self.ms.apply('billing', False, **kw)
         self.assertEqual((again.get('duplicate'), again['result']), (True, r['result']))
-        r = self.ms.apply('billing', False, source='page', now_ms=3)       # already off, still names the failure
-        self.assertEqual((r['result'], r['failed']), ({'code': 'already', 'toast': 'BILLING OFF, 1 FAILED'}, ['eye']))
 
     def test_partly_failed_preset_zero_keeps_its_log_row(self):
         self._break_eye()
@@ -293,12 +303,12 @@ class TalkEnterTest(unittest.TestCase):
         self.b.talk_enter(1, is_current=lambda: True)
         self.assertNotIn(('family', False), self.ctx.calls)
 
-    def test_talk_enter_with_billing_off_only_deselects_family(self):
-        # owner 14: billing off exempts only the two paid behaviours; 家人声音 off is free
+    def test_talk_enter_after_zero_is_a_whole_entry(self):
+        # owner 2026-11-14 evening: billing gates nothing; owner 14 holds (entering talk turns writing on)
         self.b.off('page', 1)
         self.ctx.calls.clear()
-        self.assertFalse(self.b.talk_enter(2, is_current=lambda: True))
-        self.assertEqual((self.ctx.prefetch, self.ctx.auto, self.ctx.calls), (False, False, [('family', False)]))
+        self.assertTrue(self.b.talk_enter(2, is_current=lambda: True))
+        self.assertEqual((self.ctx.prefetch, self.ctx.auto, self.ctx.calls[0]), (True, True, ('family', False)))
 
     def test_talk_enter_superseded_before_it_starts_does_nothing(self):
         self.assertFalse(self.b.talk_enter(1, is_current=lambda: False))

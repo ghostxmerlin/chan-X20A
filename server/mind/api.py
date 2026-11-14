@@ -10,9 +10,9 @@ GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (lib
 POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
 GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/robot (ear: hello's /mouth closed)
      /mode/input (ear: hello's digits 0 / 9) /mode (page: billing only) /preset (modes step 1b: hello owns the mode,
-     mind mirrors it; /switches also takes {name: billing, on}, the master switch). With a mode store in ctx, 说话类
-     接口 answer 409 {code: only_talk} outside talk (the mirrored mode), and paid things refuse to turn on while
-     billing is off (409 {code: billing_off}); turning things off and /say/stop always work.
+     mind mirrors it; /switches also takes {name: billing, on} = preset 9 / preset 0). With a mode store in ctx, 说话类
+     接口 answer 409 {code: only_talk} outside talk (the mirrored mode); /say/stop always works. Billing gates nothing
+     (owner 2026-11-14 evening): single switches always work.
 """
 import base64
 import copy
@@ -61,14 +61,14 @@ class Conflict(Exception):
 
 
 class ModeConflict(Conflict):
-    """409 with a mode result code (only_talk / billing_off) next to the message, for the page."""
+    """409 with a mode result code (only_talk / on_hello) next to the message, for the page."""
     def __init__(self, message, code):
         super().__init__(message)
         self.code = code
 
 
 # Step 1b (owner 2026-11-14): hello switches the mode itself and reports it (/mode/report). mind only takes the inputs
-# that are its own: the master switch (billing) and the presets (digit; only 0 and 9 do something).
+# that are its own: the billing switch (= preset 9 / 0) and the presets (digit; only 0 and 9 do something).
 MIND_INPUTS = ('digit', 'billing')
 DEVICE_SOURCES = ('asr', 'touch', 'select', 'quick')                               # what ear forwards for hello
 ON_HELLO = 'mode is switched on hello'
@@ -188,20 +188,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             raise Conflict("modes are not configured here")
         return ms
 
-    def billing_allowed():
-        b, ms = ctx.get("billing"), ctx.get("mode_store")
-        return b.allowed() if b else (ms.billing() if ms else True)
-
-    def need_billing():
-        if not billing_allowed():
-            raise ModeConflict("计费关着", "billing_off")
-
     def need_talk():
-        """说话类: only in the talk show, and only while the master switch is on. No mode store: as before."""
+        """说话类: only in the talk show (the mirrored mode). No mode store: as before."""
         ms = ctx.get("mode_store")
         if ms and ms.current()["mode"] != "talk":
             raise ModeConflict("只在脱口秀模式", "only_talk")
-        need_billing()
 
     def _is_int(v):
         return isinstance(v, int) and not isinstance(v, bool)
@@ -476,7 +467,6 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             except KeyError as e:
                 raise NotFound(str(e)) from None
         if path == '/role/try':
-            need_billing()
             tts = ctx.get('tts')
             roles = speak.load_roles(ctx.get('roles_dir') or '')
             if not isinstance(body.get('role'),str) or body['role'] not in roles:
@@ -578,7 +568,6 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             auto.set_enabled(body['enabled'], now)             # on also turns 提前写 on
             return {'enabled': auto.enabled(), 'prefetch': auto.prefetch.enabled()}
         if path == "/voice/try":
-            need_billing()
             tts = ctx.get("tts")
             if not tts:
                 raise Conflict("soul-tts not configured")
@@ -609,20 +598,17 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             ms = modes()
             if not isinstance(body.get("on"), bool):
                 raise BadRequest("on (true/false) required")
-            r = ms.apply("billing", body["on"], source="page", now_ms=now)
-            return {**switches(), "result": r["result"], **({"failed": r["failed"]} if r.get("failed") else {})}
+            r = ms.apply("billing", body["on"], source="page", now_ms=now)      # = preset 9 / preset 0
+            return {**switches(), "result": r["result"], "robot": r.get("robot", {}),
+                    **({"failed": r["failed"]} if r.get("failed") else {})}
         if path == "/switches":
             if body.get("name") not in SWITCHES or not isinstance(body.get("on"), bool):
                 raise BadRequest(f"name ({'/'.join(SWITCHES)}) and on (true/false) required")
-            if body["on"]:
-                need_billing()                   # off always works (preset 1's page half sends tingwu/eye false)
             db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page"}}, upsert=True)
             return switches()
         if path == "/switch":
             if not isinstance(body.get("enabled"), bool):
                 raise BadRequest("enabled (true/false) required")
-            if body["enabled"]:
-                need_billing()
             store.set_state(enabled=body["enabled"], switched_at=now)
             return {"enabled": store.enabled(), "at": now}
         if path == "/mode":

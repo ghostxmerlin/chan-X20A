@@ -89,14 +89,14 @@ test('quick panel: 0 / 9 go to mind, 4-8 are hello selects, 1-3 are empty',()=>{
 });
 test('quick panel: billing switch and the talk-show switches',()=>{
  const on=ui.quickHtml(hv('talk'));
- assert.match(on,/data-billing[^>]*aria-pressed="true"/);assert.doesNotMatch(on,/现在不花钱/);
+ assert.match(on,/data-billing[^>]*aria-pressed="true"[^>]*title="点一下 = 预设 0 花费全关[^"]*"[^>]*>计费 全开</);assert.match(on,/上次整体：全开/);
  const off=ui.quickHtml(hv('talk',{},false));
- assert.match(off,/data-billing[^>]*aria-pressed="false"/);assert.match(off,/现在不花钱/);
+ assert.match(off,/data-billing[^>]*aria-pressed="false"[^>]*title="点一下 = 预设 9 花费全开/);assert.match(off,/上次整体：全关（单个开关照样能开）/);
  const h=ui.quickHtml(hv('talk'),{prefetch:true,auto:false,family:false});
  assert.match(h,/提前写 开/);assert.match(h,/连续说 关/);assert.match(h,/家人声音 关/);
  assert.match(h,/<details class="mode-presets-box"><summary>预设 0–9<\/summary>/);
  assert.doesNotMatch(ui.quickHtml(hv('talk')),/mode-talk/);
- assert.match(ui.quickHtml(ui.modeView(null,robotOf('talk'))),/计费总闸 未知/);   // hello known, mind down
+ assert.match(ui.quickHtml(ui.modeView(null,robotOf('talk'))),/计费 未知/);   // hello known, mind down
 });
 test('event-driven and settings',()=>{
  assert.equal(hv('event').event,'waiting');assert.match(ui.modeBarHtml(hv('event'),[]),/class="mode-auto"[^>]*>AUTO</);
@@ -114,7 +114,7 @@ test('log rows: newest ten, readable, everything escaped',()=>{
  const h=ui.modeBarHtml(hv('talk'),rows);
  assert.equal((h.match(/<li/g)||[]).length,10);
  assert.match(h,/触摸 · 脱口秀 → 围观/);assert.doesNotMatch(h,/<b>|"><x/);
- assert.match(ui.logLine({at:1,source:'page',input:'billing',value:false,from:'talk',to:'talk',code:'ok'}),/计费总闸 关/);
+ assert.match(ui.logLine({at:1,source:'page',input:'billing',value:false,from:'talk',to:'talk',code:'ok'}),/计费 全关/);
  assert.match(ui.logLine({at:1,source:'asr',input:'digit',value:9,from:'talk',to:'talk',code:'ok'}),/预设 9/);
  assert.match(ui.logLine({at:1,source:'timeout',input:'timeout',from:'settings',to:'talk',code:'ok'}),/超时/);
  assert.match(ui.logLine({at:1,source:'asr',input:'forward',from:'talk',to:'talk',code:'too_soon'}),/太快了/);
@@ -123,9 +123,9 @@ test('result and effect text',()=>{
  assert.equal(ui.resultText({code:'ok'}),'');
  assert.match(ui.resultText({code:'on_hello'}),/hello 上切/);
  assert.equal(ui.resultText({code:'<x>'}),'<x>');          // plain text: the bar uses textContent
- assert.match(ui.effectsText(['stop_speech','talk_enter'],true),/提前写、连续说打开/);
- assert.match(ui.effectsText(['stop_speech','talk_enter'],false),/计费关着.*没开/);
- assert.equal(ui.errorText(new Error('{"error":"计费关着","code":"billing_off"}')),'计费关着');
+ assert.match(ui.effectsText(['stop_speech','talk_enter']),/提前写、连续说打开/);
+ assert.doesNotMatch(ui.effectsText(['stop_speech','talk_enter'],false),/计费/);      // billing gates nothing
+ assert.equal(ui.errorText(new Error('{"error":"只在脱口秀模式","code":"only_talk"}')),'只在脱口秀模式');
  assert.equal(ui.errorText(new Error('hello 固件还不支持模式（等 0.4.92）')),'hello 固件还不支持模式（等 0.4.92）');
  assert.match(ui.errorText(Object.assign(new Error('x'),{name:'TimeoutError'})),/结果未确认/);
 });
@@ -168,23 +168,20 @@ test('preset with no robot: the server half counts, each failed robot step is na
 test('preset reply with failed steps from billing off names them',async()=>{
  const post=async path=>path==='/api/mind/preset'?{snapshot:snap({billing:false}),result:{code:'ok',toast:'BILLING OFF, 1 FAILED'},effects:[],robot:{},failed:['notes','<x>']}:{};
  const out=await ui.runPreset(0,{post,robotState});
- assert.match(out.message,/没关成：纪要、<x>/);
+ assert.match(out.message,/这几步没成：纪要、<x>/);
 });
 test('preset refused by mind (409) shows mind\'s words and skips the robot half',async()=>{
  const sent=[];
- const post=async path=>{sent.push(path);throw new Error('{"error":"计费关着","code":"billing_off"}');};
+ const post=async path=>{sent.push(path);throw new Error('{"error":"情景服务连接中"}');};
  const out=await ui.runPreset(9,{post,robotState});
- assert.deepEqual(sent,['/api/mind/preset']);assert.match(out.message,/预设 9.*计费关着/);
+ assert.deepEqual(sent,['/api/mind/preset']);assert.match(out.message,/预设 9.*情景服务连接中/);
 });
 test('an undefined preset answers in words',async()=>{
  const post=async()=>({snapshot:snap(),result:{code:'undefined_preset',toast:'PRESET UNDEFINED'},effects:[],robot:{}});
  assert.match((await ui.runPreset(1,{post,robotState})).message,/还没定义/);
 });
-test('billing request and message from the /switches reply',()=>{
- assert.deepEqual(ui.billingRequest(true),{name:'billing',on:false});
- assert.deepEqual(ui.billingRequest(false),{name:'billing',on:true});
- assert.match(ui.billingMessage({billing:{on:false},result:{code:'ok'},failed:['tingwu']}),/计费总闸已关.*没关成：听悟/);
- assert.match(ui.billingMessage({billing:{on:true},result:{code:'ok'}}),/计费总闸已开/);
+test('the billing switch is preset 0 when it shows on, preset 9 otherwise',()=>{
+ assert.equal(ui.billingPreset(true),0);assert.equal(ui.billingPreset(false),9);
 });
 test('page files: modebar under the switch bar on both pages, no inline script or style',()=>{
  for(const f of ['index.html','mind.html']){
@@ -292,7 +289,7 @@ test('one action at a time; the buttons are locked while it runs',async()=>{
  release({accepted:true});await a;
  assert.equal(m.pending,false);assert.ok(painted.includes(true));
 });
-test('preset 0 / 9 and billing go to mind with the page post',async()=>{
+test('preset 0 / 9 and the billing switch (= preset 0 / 9) go to mind with the page post',async()=>{
  const sent=[];
  const post=async(path,body)=>{sent.push([path,body]);
   if(path==='/api/mind/preset')return {snapshot:snap({billing:false}),result:{code:'ok'},effects:[],robot:{}};
@@ -300,7 +297,10 @@ test('preset 0 / 9 and billing go to mind with the page post',async()=>{
  const m=model(fakeFetch([res(200,modeReply())]),{post});
  await m.poll();
  await m.preset(0);assert.deepEqual(sent[0],['/api/mind/preset',{n:0,source:'page'}]);assert.match(m.msg,/预设 0 花费全关/);
- await m.billing();assert.deepEqual(sent[1],['/api/mind/switches',{name:'billing',on:false}]);assert.match(m.msg,/计费总闸已开/);
+ await m.billing();assert.deepEqual(sent[1],['/api/mind/preset',{n:0,source:'page'}]);   // billing showed on: one click = 0
+ assert.match(m.msg,/预设 0 花费全关/);
+ m.view={...m.view,billing:false};await m.billing();
+ assert.deepEqual(sent[2],['/api/mind/preset',{n:9,source:'page'}]);assert.match(m.msg,/预设 9 花费全开/);
 });
 test('the message line can be closed by hand (not while an action runs)',async()=>{
  const m=model(fakeFetch([res(200,modeReply())]),{post:async()=>({accepted:true})});

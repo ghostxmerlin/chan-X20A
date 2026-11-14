@@ -17,8 +17,9 @@ from .mode_table import MODES, DIRECTIONS, SUBTITLE_DIRS
 INPUTS = ('forward', 'backward', 'play', 'pause', 'open', 'close', 'start', 'stop', 'next', 'previous',
           'digit', 'tap', 'double_tap', 'long', 'direction', 'select', 'billing', 'boot', 'timeout')
 SOURCES = ('asr', 'touch', 'select', 'quick', 'dualkey', 'page', 'boot', 'timeout')
-# talk_enter (owner 14): every entry into talk, boot included = 提前写 on + 连续说 on + 家人声音 off; ModeStore drops it
-# while the master switch is off (the entry itself stays ok, toast BILLING OFF). talk_leave: both off, stock dropped.
+# talk_enter (owner 14): every entry into talk, boot included = 提前写 on + 连续说 on + 家人声音 off (billing gates
+# nothing since the owner's 2026-11-14 evening ruling; 'billing_off' stays in CODES only as a known word, never produced).
+# talk_leave: both off, stock dropped.
 EFFECTS = ('stop_speech', 'talk_leave', 'talk_enter', 'say_round', 'prefetch_on', 'prefetch_off')
 
 # result code -> robot toast (ASCII, <= 32 chars; '{mode}' = the corner label of the mode named).

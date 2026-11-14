@@ -18,10 +18,9 @@ apply() for every input, in this order:
   2. age_ms > 3000 -> stale, nothing done.
   3. routing: digit -> preset_fn (A3 apply_preset), billing -> billing_fn (A3 Billing on/off), both outside the
      lock (they may call apply / set_billing themselves); everything else -> modes.transition under the lock.
-  4. paid effects (PAID: say_round, prefetch_on, talk_enter) pass the pre-check: billing off -> billing_off, then
-     guard(effect, meta); a returned code drops the effect and becomes result.code, except for talk_enter (SOFT_PAID),
-     where the code stays ok and only the toast says why: billing off keeps it (Billing.talk_enter does only the free
-     part), a guard code drops it. Mode changes are never blocked.
+  4. paid effects (PAID: say_round, prefetch_on, talk_enter) ask guard(effect, meta); a returned code drops the effect
+     and becomes result.code, except for talk_enter (SOFT_PAID), where the code stays ok and only the toast says why.
+     Mode changes are never blocked. Billing gates nothing (owner 2026-11-14 evening).
   5. seq += 1 and hello.mode written only when the state changed; one mode_log row for every input.
 Then, outside the lock, the on_change hooks run in order with the effects: they only carry them out (effects are
 data from modes.transition, executed by name; ModeStore interprets none of them beyond the pre-check).
@@ -53,8 +52,7 @@ from .modes import EFFECTS, SOURCES, result, snapshot as _snapshot, transition
 STALE_MS = 3000                  # device inputs older than this are dropped (DualKey resends after a reconnect)
 PAID = ('say_round', 'prefetch_on', 'talk_enter')
 # Paid effects that ride on a mode change (owner 14): refusing one keeps the result ok (the entry into talk happened)
-# and only the toast says why. With billing off the effect is KEPT (toast BILLING OFF), because it also has a free
-# part (家人声音 off) and Billing.talk_enter itself turns nothing paid on while billing is off; a guard code drops it.
+# and only the toast says why.
 SOFT_PAID = ('talk_enter',)
 FIELDS = ('mode', 'dir', 'host', 'return_to')
 REPORT_DEVICE = 'robot.report'   # dedup / log key of hello's reports: its own seq, not the mode_input seq
@@ -151,19 +149,19 @@ class ModeStore:
             self._reset(now, seq=1, billing=True)
             return
         st = {k: doc.get(k) for k in FIELDS}
-        seq, billing = doc.get('seq'), doc.get('billing')
-        if valid_state(st) and _is_int(seq) and seq >= 1 and isinstance(billing, bool):
-            self._state, self._seq, self._billing = st, seq, billing
+        seq = doc.get('seq')
+        if valid_state(st) and _is_int(seq) and seq >= 1:
+            # billing is never read back (owner 2026-11-14 evening: every mind start is 全开; the start runs preset 9)
+            self._state, self._seq, self._billing = st, seq, True
             self._since = doc.get('since') if _is_int(doc.get('since')) else now
             self._by = doc.get('by') if doc.get('by') in SOURCES else 'boot'
             self._last_input = doc.get('last_input') if _is_int(doc.get('last_input')) else self._since
             self._rebuild()
             return
-        # An impossible stored state: back to the boot default (keeping a valid billing, seq still grows) and say so.
-        # A stored billing that is not true / false reads OFF (owner 15: fail-safe); only a missing doc starts on.
-        _log(f'bad stored mode state {st!r} seq={seq!r} billing={billing!r}: back to talk')
+        # An impossible stored state: back to the boot default (seq still grows) and say so.
+        _log(f'bad stored mode state {st!r} seq={seq!r}: back to talk')
         prev = seq if _is_int(seq) and seq >= 1 else 0
-        self._reset(now, seq=prev + 1, billing=billing if isinstance(billing, bool) else False)
+        self._reset(now, seq=prev + 1, billing=True)
         self._append({'at': now, 'source': 'boot', 'device': None, 'boot': None, 'dev_seq': None, 'sid': None,
                       'input': 'load', 'value': st, 'from': st['mode'] if isinstance(st['mode'], str) else None,
                       'to': 'talk', 'code': 'bad_state', 'result': None, 'seq': self._seq, 'effects': []})
@@ -180,7 +178,7 @@ class ModeStore:
     def _write(self):
         if not valid_state(self._state):
             raise ValueError(f'refusing to store impossible mode state {self._state!r}')
-        doc = dict(self._state, seq=self._seq, billing=self._billing, since=self._since, by=self._by,
+        doc = dict(self._state, seq=self._seq, since=self._since, by=self._by,
                    last_input=self._last_input, robot_boot=self._robot_boot)
         try:
             self.coll.update_one({'_id': DOC_ID}, {'$set': doc}, upsert=True)
@@ -280,12 +278,8 @@ class ModeStore:
         """The pre-check for paid effects (under the lock) -> (kept, hard code or None, soft code or None)."""
         kept, code, soft = [], None, None
         for e in effects:
-            if e in SOFT_PAID and not self._billing:
-                soft = soft or 'billing_off'
-                kept.append(e)
-                continue
             if e in PAID:
-                c = 'billing_off' if not self._billing else (self.guard(e, dict(meta)) if self.guard else None)
+                c = self.guard(e, dict(meta)) if self.guard else None
                 if c:
                     if e in SOFT_PAID:
                         soft = soft or c
@@ -363,7 +357,8 @@ class ModeStore:
             return {'snapshot': self.current(), 'result': res, 'effects': [], **extra}
 
     def set_billing(self, on, *, source, now_ms=None):
-        """The master switch's only writer: a change bumps seq, is stored and logged (input = 'billing')."""
+        """The billing value's only writer (the last whole action, memory only): a change bumps seq and is logged
+        (input = 'billing'); hello.mode keeps no billing."""
         if not isinstance(on, bool):
             raise ValueError(f'billing must be True / False, not {on!r}')
         if source not in SOURCES:

@@ -4,19 +4,20 @@
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const hhmmss=ms=>new Date(ms).toLocaleTimeString('zh-CN',{hour12:false});
 
-// 台词 follows the mode (2026-11-14, hello modes step 1): say actions only work in the talk show and with billing on.
-// gate = {talk, billing}; unknown / absent mode info (a mind without /mode yet) is the open gate, so today's panel is unchanged.
-const OPEN={talk:true,billing:true};
-export function gateOfView(v){return v&&v.known&&typeof v.mode==='string'?{talk:v.mode==='talk',billing:v.billing!==false}:{...OPEN};}
-export function gateNote(g){return !g||g.billing===false?(g?'计费关着':''):g.talk===false?'只在脱口秀模式，台词按钮暂停':'';}
+// 台词 follows the mode (2026-11-14, hello modes step 1): say actions only work in the talk show. Billing gates nothing
+// (owner 2026-11-14 evening: it is only the last whole on / off). gate = {talk}; unknown / absent mode info (a mind
+// without /mode yet) is the open gate, so today's panel is unchanged.
+const OPEN={talk:true};
+export function gateOfView(v){return v&&v.known&&typeof v.mode==='string'?{talk:v.mode==='talk'}:{...OPEN};}
+export function gateNote(g){return g?.talk===false?'只在脱口秀模式，台词按钮暂停':'';}
 export function conflictCode(e){
- try{const c=JSON.parse(String(e?.message||e))?.code;return c==='only_talk'||c==='billing_off'?c:null;}catch{return null;}
+ try{const c=JSON.parse(String(e?.message||e))?.code;return c==='only_talk'?c:null;}catch{return null;}
 }
-export function gateAfterConflict(code,g){return code==='only_talk'?{...g,talk:false}:code==='billing_off'?{...g,billing:false}:g;}
+export function gateAfterConflict(code,g){return code==='only_talk'?{...g,talk:false}:g;}
 const noteHtml=g=>`<span class="say-gate-note muted" data-gate-note="1">${escapeHtml(gateNote(g))}</span>`;
 const dis=off=>off?' disabled':'';
 export function roundControlsHtml(prefetchOn,familyOn,autoOn,gate=OPEN){
- const g={...OPEN,...gate},off=!g.talk||!g.billing;
+ const g={...OPEN,...gate},off=!g.talk;
  return `<button data-say-round="1" class="say-round-button"${dis(off)}>说一轮</button><button data-say-stop="1" class="stop-button">别说了</button>`+noteHtml(g)+
   `<label class="prefetch-switch"><input type="checkbox" data-prefetch="1"${prefetchOn?' checked':''}${dis(off)}> 提前写（讨论激烈时开）</label>`+
   `<label class="prefetch-switch"><input type="checkbox" data-auto="1"${autoOn?' checked':''}${dis(off)}> 连续说（每 2–3 分钟，播高分的提前写）</label>`+
@@ -30,13 +31,13 @@ export function familySettingsBody(cfg,on){
  return {speech,memory:cfg.memory,expected_version:cfg.version,note:on?'家人声音 开':'家人声音 关'};
 }
 export function roleButtonsHtml(roles,gate=OPEN){
- const off=gate.talk===false||gate.billing===false;
+ const off=gate.talk===false;
  return (roles||[]).map(r=>`<button data-role="${escapeHtml(r.id)}" title="${escapeHtml(r.name)}"${dis(off)}>${escapeHtml(r.button)}</button>`).join('')+
   '<button data-say-stop="1" class="stop-button">别说了</button>';
 }
-export function voiceButtonsHtml(voices,gate=OPEN){
+export function voiceButtonsHtml(voices){
  if(!voices||!voices.length)return '<span class="muted">没有音色</span>';
- return voices.map(v=>`<button data-voice="${escapeHtml(v.id)}"${dis(gate.billing===false)}>${escapeHtml(v.label)}${v.rate&&v.rate!==1?` · ${escapeHtml(String(v.rate))}×`:''}</button>`).join('');
+ return voices.map(v=>`<button data-voice="${escapeHtml(v.id)}">${escapeHtml(v.label)}${v.rate&&v.rate!==1?` · ${escapeHtml(String(v.rate))}×`:''}</button>`).join('');
 }
 const SAY_STATE={sent:'合成中',synthesizing:'合成中',playing:'正在说',done:'说完了',failed:'失败',cancelled:'被打断',unknown:'状态未知'};
 export function utterancesHtml(list,roles){
@@ -51,7 +52,7 @@ export function utterancesHtml(list,roles){
 export function sayErrorMessage(e){
  let m=String(e?.message||e),code;
  try{const body=JSON.parse(m);if(typeof body?.error==='string'){m=body.error;code=body.code;}}catch{}
- if(code==='only_talk'||code==='billing_off'||code==='no_situation'||/^暂时没有(可靠|值得说)的新情况/.test(m))return m;
+ if(code==='only_talk'||code==='no_situation'||/^暂时没有(可靠|值得说)的新情况/.test(m))return m;
  return m.includes('TTS 模式')?'先把顶上的「嘴」切到 TTS':m.includes('嘴没连上')?'hello 的嘴还没连上（本体 /mouth 未连接）':`没说成：${m}`;
 }
 async function getJson(path){const r=await fetch('/api/mind'+path,{signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error(await r.text());return r.json();}
@@ -160,7 +161,7 @@ export class SayPanel{
    $('say-buttons').innerHTML=this.mode==='round'?roundControlsHtml(st?.prefetch?.on,cfg?.speech?.round?.family,st?.auto?.on,this.gate)+`<details class="say-roles"><summary>单个角色</summary>${roleButtonsHtml(r,this.gate)}</details>`:roleButtonsHtml(r,this.gate)+noteHtml(this.gate);
    this.refresh();
   },()=>{$('say-buttons').innerHTML='<span class="muted">角色读不到（情景服务未连接）</span>';});
-  getJson('/voices').then(v=>{this.voices=v;$('say-voices').innerHTML=voiceButtonsHtml(v,this.gate);},()=>{$('say-voices').innerHTML='<span class="muted">音色读不到</span>';});
+  getJson('/voices').then(v=>{this.voices=v;$('say-voices').innerHTML=voiceButtonsHtml(v);},()=>{$('say-voices').innerHTML='<span class="muted">音色读不到</span>';});
   $('say-buttons').addEventListener('change',async ev=>{
    if(ev.target.dataset.family){
     const on=ev.target.checked;
@@ -220,19 +221,18 @@ export class SayPanel{
  // Flip disabled in place (a rebuild would reset the checkboxes and close the role list); the note text follows too.
  setGate(g){
   this.gate=g;
-  const root=this.doc.getElementById('say-buttons'),voices=this.doc.getElementById('say-voices');
+  const root=this.doc.getElementById('say-buttons');
   if(!root)return;
-  const off=!g.talk||!g.billing;
+  const off=!g.talk;
   for(const el of root.querySelectorAll('[data-say-round],[data-role],[data-prefetch],[data-auto]'))el.disabled=off;
   for(const el of root.querySelectorAll('[data-gate-note]'))el.textContent=gateNote(g);
-  if(voices)for(const el of voices.querySelectorAll('[data-voice]'))el.disabled=!g.billing;
  }
  // mind's 409 on a say action: show its reason, take the gate it names at once, then read the real mode.
  fail(e){
   this.doc.getElementById('say-msg').textContent=sayErrorMessage(e);
   const code=conflictCode(e);if(!code)return;
   this.setGate(gateAfterConflict(code,this.gate));
-  getJson('/mode').then(st=>{const s=st?.snapshot;if(s&&typeof s.mode==='string')this.setGate(gateOfView({known:true,mode:s.mode,billing:s.billing}));},()=>{});
+  getJson('/mode').then(st=>{const s=st?.snapshot;if(s&&typeof s.mode==='string')this.setGate(gateOfView({known:true,mode:s.mode}));},()=>{});
  }
  async sayRound(forceNew){
   const $=id=>this.doc.getElementById(id);

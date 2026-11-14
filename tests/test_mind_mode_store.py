@@ -192,11 +192,12 @@ class GuardAndHooksTest(unittest.TestCase):
         r = ms.apply('forward', None, source='page', now_ms=1)
         self.assertEqual((r['result']['code'], r['effects']), ('ok', ['say_round']))
 
-    def test_billing_off_blocks_paid_effects_without_a_guard(self):
+    def test_billing_off_blocks_nothing(self):
+        # owner 2026-11-14 evening: billing is the last whole action, not a gate
         ms = ModeStore(self.db)
         ms.set_billing(False, source='page', now_ms=1)
         r = ms.apply('tap', None, source='touch', now_ms=2)
-        self.assertEqual((r['result']['code'], r['effects']), ('billing_off', []))
+        self.assertEqual((r['result']['code'], r['effects']), ('ok', ['say_round']))
 
     def test_speaking_fn_turns_tap_into_stop(self):
         ms = ModeStore(self.db, speaking_fn=lambda: True)
@@ -239,9 +240,10 @@ class PersistenceTest(unittest.TestCase):
     def test_boot_document(self):
         db = FakeDB(); ModeStore(db, clock_ms=lambda: 42)
         doc = db['mode'].find_one({'_id': 'current'})
-        self.assertEqual({k: doc[k] for k in ('mode', 'dir', 'host', 'return_to', 'seq', 'billing', 'by', 'since')},
-                         {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None, 'seq': 1, 'billing': True,
+        self.assertEqual({k: doc[k] for k in ('mode', 'dir', 'host', 'return_to', 'seq', 'by', 'since')},
+                         {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None, 'seq': 1,
                           'by': 'boot', 'since': 42})
+        self.assertNotIn('billing', doc)                       # owner 2026-11-14 evening: billing is never stored
 
     def test_all_four_state_fields_persist(self):
         db = FakeDB(); ms = ModeStore(db, clock_ms=lambda: 0)
@@ -251,16 +253,19 @@ class PersistenceTest(unittest.TestCase):
         self.assertEqual((again['mode'], again['dir'], again['return_to'], again['seq']), ('settings', 'en_zh', 'subtitle', 3))
         self.assertEqual(ModeStore(db).apply('close', None, source='page', now_ms=3)['snapshot']['dir'], 'en_zh')
 
-    def test_billing_persists(self):
+    def test_billing_is_not_kept_across_a_restart(self):
         db = FakeDB(); ModeStore(db).set_billing(False, source='page', now_ms=1)
-        self.assertEqual(ModeStore(db).billing(), False)
+        self.assertEqual(ModeStore(db).billing(), True)
+        db['mode'].update_one({'_id': 'current'}, {'$set': {'billing': 'yes'}})     # an old document: ignored
+        again = ModeStore(db)
+        self.assertEqual((again.billing(), again.current()['mode']), (True, 'talk'))
 
     def test_bad_stored_state_falls_back_to_boot_default(self):
         for bad in ({'mode': 'event', 'host': 'event'}, {'mode': 'settings', 'host': 'event', 'return_to': 'talk'},
                     {'mode': 'idle', 'host': 'event'}, {'mode': 'talk', 'return_to': 'chat'},
                     {'mode': 'settings', 'return_to': None}, {'mode': 'settings', 'return_to': 'settings'},
                     {'mode': 'subtitle', 'dir': None}, {'mode': 'chat', 'dir': 'zh_en'}, {'mode': 'nope'},
-                    {'mode': 'talk', 'seq': 'x'}, {'mode': 'talk', 'billing': 'yes'}):
+                    {'mode': 'talk', 'seq': 'x'}):
             db = FakeDB()
             doc = {'_id': 'current', 'mode': 'talk', 'dir': None, 'host': None, 'return_to': None, 'seq': 7,
                    'billing': False, 'since': 1, 'by': 'page', **bad}
@@ -271,21 +276,6 @@ class PersistenceTest(unittest.TestCase):
             self.assertGreater(snap['seq'], 7 if isinstance(doc['seq'], int) else 0, bad)
             self.assertEqual(db['mode_log'].docs[-1]['code'], 'bad_state', bad)
             self.assertEqual(db['mode'].find_one({'_id': 'current'})['mode'], 'talk', bad)
-
-    def test_corrupt_stored_billing_reads_off(self):
-        # owner 15: a stored billing value that is not true / false counts as off; only a missing doc starts on
-        for bad in ('yes', 1, None, 'missing'):
-            db = FakeDB()
-            doc = {'_id': 'current', 'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None, 'seq': 7,
-                   'billing': bad, 'since': 1, 'by': 'page'}
-            if bad == 'missing':
-                doc.pop('billing')
-            db['mode'].docs.append(doc)
-            ms = ModeStore(db, clock_ms=lambda: 50)
-            self.assertEqual((ms.billing(), ms.current()['billing']), (False, False), bad)
-            self.assertGreater(ms.seq(), 7, bad)
-            self.assertIs(db['mode'].find_one({'_id': 'current'})['billing'], False, bad)
-        self.assertTrue(ModeStore(FakeDB(), clock_ms=lambda: 0).billing())
 
     def test_valid_state_rules(self):
         ok = lambda **kw: valid_state({'mode': 'talk', 'dir': None, 'host': None, 'return_to': None, **kw})
@@ -356,14 +346,12 @@ class RobotAndTimeoutTest(unittest.TestCase):
         self.ms.apply('boot', None, source='boot', now_ms=1)
         self.assertEqual((seen, self.ms.seq()), ([(['stop_speech', 'talk_enter'], 'boot')], s0))
 
-    def test_talk_enter_with_billing_off_is_kept_for_the_free_part_and_the_entry_is_ok(self):
-        # owner 14: entering talk with the master switch off is not an error; the effect still reaches the hook so
-        # Billing.talk_enter can deselect 家人声音 (free) while it turns nothing paid on (review minor 1)
+    def test_talk_enter_with_billing_off_is_an_ordinary_entry(self):
         self.ms.apply('backward', None, source='page', now_ms=1)
         self.ms.set_billing(False, source='page', now_ms=2)
         r = self.ms.apply('forward', None, source='asr', now_ms=3)
         self.assertEqual((r['snapshot']['mode'], r['result'], r['effects']),
-                         ('talk', {'code': 'ok', 'toast': 'BILLING OFF'}, ['stop_speech', 'talk_enter']))
+                         ('talk', {'code': 'ok', 'toast': 'TALK'}, ['stop_speech', 'talk_enter']))
 
     def test_talk_enter_refused_by_the_guard_is_dropped_but_the_entry_is_ok(self):
         ms = ModeStore(FakeDB(), guard=lambda e, m: 'busy' if e == 'talk_enter' else None)
@@ -521,21 +509,19 @@ class ReportTest(unittest.TestCase):
         r = self.rep(4, 'idle', ['stop_speech'], inp='backward')
         self.assertEqual((r['result']['code'], self.ms.current()['mode'], len(self.seen)), ('stale', 'crowd', 1))
 
-    def test_paid_effects_pass_the_billing_and_the_guard(self):
+    def test_paid_effects_pass_the_guard_not_billing(self):
         self.ms.set_billing(False, source='page', now_ms=1)
         r = self.rep(1, 'talk', ['say_round'])
-        self.assertEqual((r['result']['code'], r['effects'], self.seen), ('billing_off', [], []))
-        self.ms.set_billing(True, source='page', now_ms=2)
+        self.assertEqual((r['result']['code'], r['effects']), ('ok', ['say_round']))
         self.guard = lambda e, m: 'too_soon' if e == 'say_round' else None
         r = self.rep(2, 'talk', ['say_round'])
         self.assertEqual((r['result']['code'], r['effects']), ('too_soon', []))
 
-    def test_talk_entry_with_billing_off_keeps_talk_enter_for_the_free_part(self):
+    def test_talk_entry_with_billing_off_is_ok(self):
         self.rep(1, 'idle', ['stop_speech', 'talk_leave'], inp='backward')
         self.ms.set_billing(False, source='page', now_ms=2)
         r = self.rep(2, 'talk', ['stop_speech', 'talk_enter'])
-        self.assertEqual((r['result'], r['effects']), ({'code': 'ok', 'toast': 'BILLING OFF'},
-                                                       ['stop_speech', 'talk_enter']))
+        self.assertEqual((r['result'], r['effects']), ({'code': 'ok', 'toast': 'OK'}, ['stop_speech', 'talk_enter']))
 
     def test_a_late_report_keeps_only_the_turn_offs(self):
         r = self.rep(1, 'crowd', ['stop_speech', 'talk_leave'], inp='select', age_ms=STALE_MS + 1)

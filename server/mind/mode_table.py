@@ -146,8 +146,8 @@ _validate(MODES)
 # Only 0 and 9 are mind's: hello sends those digits as mode_input (the paid services live on the server). 4-8 are
 # mode selects hello does itself (IDLE, 围观, 陪伴, 字幕 中→英, 字幕 英→中) and 1-3 are empty there; on mind 1-8 are
 # undefined_preset. server: action names run in order by billing.apply_preset:
-#   billing_off      master switch off: 听悟 / 识别 / 纪要 / 情景 off, 提前写 / 连续说 off, stop speaking
-#   billing_on       master switch on (restores nothing)
+#   billing_off      billing shows off; 听悟 / 识别 / 纪要 / 情景 off, 提前写 / 连续说 off, stop speaking
+#   billing_on       billing shows on (owner 2026-11-14 evening: billing is the last whole action, never a gate)
 #   paid_senses_on   听悟 / 识别 / 纪要 / 情景 on
 #   mouth_tts        嘴 -> TTS
 #   talk_on          提前写 + 连续说 on; outside talk skipped (said in the toast; entering talk turns them on anyway)

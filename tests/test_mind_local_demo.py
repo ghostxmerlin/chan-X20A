@@ -88,14 +88,16 @@ class LocalDemoTest(unittest.TestCase):
         row = self.ctx['mode_store'].db['mode_log'].docs[-1]
         self.assertEqual((row['input'], row['code']), ('forward', 'not_implemented'))  # no say_round_fn: no model, no tts
 
-    def test_preset_zero_then_paid_switches_refuse(self):
+    def test_preset_zero_then_single_switches_still_work(self):
         _, r = self.call('/preset', {'n': 0, 'source': 'page'})
         self.assertFalse(r['snapshot']['billing'])
-        st, r = self.call('/switches', {'name': 'tingwu', 'on': True})
-        self.assertEqual((st, r['code']), (409, 'billing_off'))
+        self.assertEqual(self.workers(), (False, False))
+        st, r = self.call('/switches', {'name': 'tingwu', 'on': True})          # billing gates nothing
+        self.assertEqual((st, r['tingwu']['on'], r['billing']['on']), (200, True, False))
         _, r = self.call('/preset', {'n': 9, 'source': 'page'})
         self.assertEqual(r['robot'], {'hearing': 'tingwu', 'vision': 'recognize'})
         self.assertTrue(r['snapshot']['billing'])
+        self.assertEqual(self.workers(), (True, True))
 
     def test_settings_returns_after_the_short_timeout_on_hello(self):
         self.select('settings')

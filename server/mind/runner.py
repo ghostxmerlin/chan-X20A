@@ -201,9 +201,8 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
     mode (ModeStore.report); the hook carries out the reported effects.
 
     say_round_fn(trigger, is_current) runs one 说一轮 (live: speak.say_round, today's pipeline); None = not here.
-    Startup: a master switch that reads off (also a corrupt stored value) runs billing.off again, so a partly failed
-    off before the restart really ends with the paid switches off. A mind restart is not an entry into talk:
-    提前写 / 连续说 stay as they start (off).
+    Startup (owner 2026-11-14 evening, "启动默认全开"): billing on and preset 9's server half: 听悟 / 识别 / 纪要 / 情景 on,
+    嘴 TTS, 提前写 + 连续说 on when the mirrored mode is talk. Billing gates nothing; only the mode holds paid work.
     """
     from .billing import Billing
     from .mode_store import ModeStore
@@ -218,18 +217,13 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
         if effect in ('say_round', 'prefetch_on') and meta.get('mode') != 'talk':
             return 'only_talk'               # review I2: paid talk-show work never starts outside talk, whatever came in
         if effect == 'say_round':
-            if not ms.billing():
-                return 'billing_off'
             if say_round_fn is None:
                 return 'not_implemented'
             if mouth() != 'tts':
                 return 'mouth_not_tts'
             return gate.claim(clock_ms())
-        if effect == 'prefetch_on':
-            if not ms.billing():
-                return 'billing_off'
-            if say_worker is None:
-                return 'not_implemented'
+        if effect == 'prefetch_on' and say_worker is None:
+            return 'not_implemented'
         return None
 
     if speaking_fn is None:
@@ -261,7 +255,7 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
         if say_worker is None or not is_current():
             return
         say_worker.set_enabled(True, now)
-        if not (is_current() and ms.billing()):           # replaced meanwhile: the later input / billing off wins
+        if not is_current():                              # replaced meanwhile: the later input / a 0 wins
             say_worker.set_enabled(False, now)
 
     def on_change(old, new, effects, meta, now):
@@ -291,10 +285,10 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
             talk_off(now)
     ms.on_change.append(on_change)
 
-    if not billing.allowed():
-        failed = billing.off('boot', clock_ms())
-        log(f'mind mode: master switch is off at start, paid switches turned off again'
-            f'{" (FAILED: " + ", ".join(failed) + ")" if failed else ""}', flush=True)
+    # Owner 2026-11-14 evening: "启动默认全开" = every mind start runs preset 9's server half (提前写 / 连续说 only when
+    # the mirrored mode is talk). Billing is never read back from the database.
+    failed = billing.on('boot', clock_ms())
+    log(f'mind mode: start = 全开 (preset 9){" FAILED: " + ", ".join(failed) if failed else ""}', flush=True)
     return ms, billing, gate
 
 
@@ -383,7 +377,7 @@ def main():
                                                                          "billing": billing, "round_gate": round_gate}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}, mode {mode_store.current()['mode']} "
-          f"seq {mode_store.seq()} billing {'on' if billing.allowed() else 'OFF'}", flush=True)
+          f"seq {mode_store.seq()}, billing {'on' if billing.allowed() else 'off'} (start = 全开)", flush=True)
     while True:                                  # step 1b: hello owns the mode and its settings timer, no tick here
         try:
             good, version = settings_store.current()      # settings are versioned in the database (phase 1)

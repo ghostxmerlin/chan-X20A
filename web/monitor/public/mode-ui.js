@@ -3,7 +3,8 @@
 // or 0.4.91 firmware that has no modes) it shows what mind last recorded (GET /api/mind/mode mirrors hello's reports)
 // and switching is off. A click goes to hello through the monitor's control path (/api/control {action:'mode',
 // input:'select', value}); hello switches and reports to mind. Picking the current mode leaves it (hello decides).
-// The master switch and presets 0 / 9 stay on mind; 4-8 are selects on hello; 1-3 are empty. A preset sends its server
+// The billing switch and presets 0 / 9 stay on mind: the switch = preset 9 (on) / preset 0 (off), the last whole action,
+// gating nothing (owner 2026-11-14 evening); single switches always work. 4-8 go to hello; 1-3 are empty. A preset sends its server
 // half first, then runs the robot half mind names with the switch bar's own tier requests (runLevel / runVision): no
 // queue, no retry, each failed step is written out. <nav id="modebar"> starts it; modechange events go to the say panel.
 import { runLevel, runVision } from '/switches-ui.js';
@@ -24,11 +25,11 @@ const SOURCES={asr:'口令',touch:'触摸',select:'上滑页',quick:'快捷设�
 export const PRESETS={0:'花费全关',1:'空',2:'空',3:'空',4:'IDLE',5:'围观',6:'陪伴',7:'字幕 中→英',8:'字幕 英→中',9:'花费全开'};
 export const HELLO_PRESETS={4:['idle'],5:['crowd'],6:['companion'],7:['subtitle','zh_en'],8:['subtitle','en_zh']};
 const MIND_PRESETS=new Set([0,9]);
-const CODES={ok:'',already:'已经是这个模式了',not_in_mode:'不在这个模式里',only_talk:'只在脱口秀里有用',billing_off:'计费关着',
+const CODES={ok:'',already:'已经是这个模式了',not_in_mode:'不在这个模式里',only_talk:'只在脱口秀里有用',
  busy:'正在忙，没执行',too_soon:'太快了，等一会儿再按',mouth_not_tts:'嘴没切到 TTS',not_implemented:'这个模式里还没做',
  undefined_preset:'这个键还没定义',stale:'太旧，丢掉了',unknown_input:'没有这个输入',no_action:'这个模式里这个输入没有动作',
  senses_on_page:'机器人那一半要在网页上按',on_hello:'模式在 hello 上切'};
-const SWITCH_NAMES={tingwu:'听悟',eye:'识别',notes:'纪要',mind:'情景',scene:'情景',prefetch:'提前写',auto:'连续说',speech:'说话',family:'家人声音'};
+const SWITCH_NAMES={tingwu:'听悟',eye:'识别',notes:'纪要',mind:'情景',scene:'情景',prefetch:'提前写',auto:'连续说',speech:'说话',family:'家人声音',talk:'提前写 / 连续说',cancel:'停说',mouth:'嘴'};
 const modeName=(mode,dir)=>NAMES[mode]?(mode==='subtitle'&&DIRS[dir]?`字幕 ${DIRS[dir]}`:NAMES[mode]):String(mode??'—');
 export const NO_MODES='hello 固件还不支持模式（等 0.4.92）';
 
@@ -66,7 +67,7 @@ export function selectRequest(mode,dir,boot){return {action:'mode',boot,input:'s
 export function digitRequest(n,boot){return {action:'mode',boot,input:'digit',value:n};}
 
 export function logLine(r){
- const what=r?.input==='billing'?`计费总闸 ${r.value?'开':'关'}`:r?.input==='digit'?`预设 ${esc(r.value)}`:
+ const what=r?.input==='billing'?`计费 ${r.value?'全开':'全关'}`:r?.input==='digit'?`预设 ${esc(r.value)}`:
   r?.from===r?.to?`${esc(modeName(r?.to))}（${esc(r?.input)}）`:`${esc(modeName(r?.from))} → ${esc(modeName(r?.to))}`;
  const code=r?.code&&r.code!=='ok'?` · ${esc(CODES[r.code]||r.code)}`:'';
  return `${esc(hhmmss(r?.at))} ${esc(SOURCES[r?.source]||r?.source)} · ${what}${code}`;
@@ -104,8 +105,8 @@ export function modeBarHtml(view,log){
 // talk: optional {prefetch, auto, family} booleans (null = unknown) from the say stats / speech settings.
 export function quickHtml(view,talk=null){
  const v=view||{},known=typeof v.billing==='boolean',on=v.billing===true,locked=lockedWhy(v);
- const sw=`<button class="mode-billing" data-billing aria-pressed="${on}"${known?'':' disabled'} title="关 = 付费开关全关，关着时不能再打开">计费总闸 ${!known?'未知':on?'开':'关'}</button>`;
- const note=`<span class="mode-note">${!known?'状态未知':on?'付费开关可以打开':'现在不花钱'}</span>`;
+ const sw=`<button class="mode-billing" data-billing aria-pressed="${on}"${known?'':' disabled'} title="点一下 = ${on?'预设 0 花费全关':'预设 9 花费全开'}；单个开关随时可以单独点">计费 ${!known?'未知':on?'全开':'全关'}</button>`;
+ const note=`<span class="mode-note">${!known?'状态未知':on?'上次整体：全开':'上次整体：全关（单个开关照样能开）'}</span>`;
  const keys=Object.entries(PRESETS).map(([k,name])=>{
   const n=Number(k);
   if(MIND_PRESETS.has(n))return `<button data-preset="${n}" title="${esc(name)}"${known?'':' disabled'}>${n}</button>`;
@@ -133,15 +134,15 @@ export function errorText(e){
 }
 // Messages below are plain text: the bar writes them with textContent.
 export function resultText(result){const c=result?.code;return c==null||c==='ok'?'':String(CODES[c]||c);}
-export function effectsText(effects,billing){
+export function effectsText(effects){
  const e=Array.isArray(effects)?effects:[],out=[];
- if(e.includes('talk_enter'))out.push(billing===false?'计费关着：提前写、连续说没开':'提前写、连续说打开，家人声音关');
+ if(e.includes('talk_enter'))out.push('提前写、连续说打开，家人声音关');
  if(e.includes('talk_leave'))out.push('提前写、连续说关');
  if(e.includes('prefetch_on'))out.push('提前写开');
  if(e.includes('prefetch_off'))out.push('提前写关');
  return out.join('；');
 }
-const failedText=f=>Array.isArray(f)&&f.length?`没关成：${f.map(n=>String(SWITCH_NAMES[n]||n)).join('、')}`:'';
+const failedText=f=>Array.isArray(f)&&f.length?`这几步没成：${f.map(n=>String(SWITCH_NAMES[n]||n)).join('、')}`:'';
 const ROBOT_STEP={hearing:{switch:'听悟档位',control:'本体听觉'},vision:{switch:'识别开关',camera:'摄像头',m12:'M12'}};
 
 // One preset from the page. post(path, body) -> parsed JSON or throws. robotState: /api/state (for boot), may be null.
@@ -152,7 +153,7 @@ export async function runPreset(n,{post,robotState}){
  catch(e){return {reply:null,failed:[],message:`${title}：${errorText(e)}`};}
  const parts=[],code=resultText(reply?.result);
  parts.push(code||'服务器那一半已做');
- const fx=effectsText(reply?.effects,reply?.snapshot?.billing);if(fx)parts.push(fx);
+ const fx=effectsText(reply?.effects);if(fx)parts.push(fx);
  const fl=failedText(reply?.failed);if(fl)parts.push(fl);
  const steps=presetRobotSteps(reply?.robot),failed=[];
  for(const [k,tier] of steps){
@@ -168,11 +169,8 @@ export async function runPreset(n,{post,robotState}){
  return {reply,failed,message:`${title}：${parts.join('；')}`};
 }
 
-export function billingRequest(on){return {name:'billing',on:!on};}
-export function billingMessage(r){
- const on=r?.billing?.on;
- return [on===true?'计费总闸已开':on===false?'计费总闸已关':'计费总闸状态未知',resultText(r?.result),failedText(r?.failed)].filter(Boolean).join('；');
-}
+// The billing switch: on -> preset 0, off (or after a 0) -> preset 9; the same as pressing 0 / 9.
+export function billingPreset(on){return on?0:9;}
 
 async function fetchJson(fetchFn,path,ms=4000){
  try{const r=await fetchFn(path,{signal:AbortSignal.timeout(ms)});return {status:r.status,body:r.ok?await r.json():null};}
@@ -259,9 +257,7 @@ export class ModeModel{
    return (await runPreset(n,{post:this.post,robotState})).message;
   });
  }
- billing(){
-  return this.act(async()=>billingMessage(await this.post('/api/mind/switches',billingRequest(this.view.billing))));
- }
+ billing(){return this.preset(billingPreset(this.view.billing===true));}
 }
 
 export class ModeBar{

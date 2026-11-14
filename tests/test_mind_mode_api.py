@@ -143,13 +143,6 @@ class ReportTest(ModeApiBase):
         self.report('talk', self.ENTER, by='boot', inp=None, boot='b9', seq=0)          # hello rebooted: same
         self.assertTrue(self.auto.enabled())
 
-    def test_entering_talk_with_billing_off(self):
-        self.report('idle', self.LEAVE, inp='backward')
-        self.call('/switches', {'name': 'billing', 'on': False})
-        r = self.report('talk', self.ENTER)[1]
-        self.assertEqual((r['snapshot']['mode'], r['result']['code'], self.worker.enabled(), self.auto.enabled()),
-                         ('talk', 'ok', False, False))
-
     def test_forward_in_talk_starts_one_round_then_too_soon(self):
         self.assertEqual(self.report('talk', ['say_round'])[1]['result']['code'], 'ok')
         self.wait_rounds(1)
@@ -258,6 +251,83 @@ class NotFromHereTest(ModeApiBase):
         self.assertEqual(self.call('/preset', {'n': 10})[0], 400)
 
 
+class OwnerBillingTest(ModeApiBase):
+    """Owner 2026-11-14 evening: "计费开关是这样，启动默认全开，我就使用网页单点开关，或asr9 asr0来整体开关。其他奇怪的设定都取消。"
+    billing is the last whole action (on = preset 9, off = preset 0), never a gate, never kept across a restart."""
+
+    def sw(self):
+        return self.call('/switches')[1]
+
+    def test_start_turns_everything_on(self):
+        sw = self.sw()
+        self.assertEqual((sw['billing']['on'], sw['tingwu']['on'], sw['eye']['on'], sw['notes']['on'], sw['mouth']['mode'],
+                          self.store.enabled(), self.worker.enabled(), self.auto.enabled()),
+                         (True, True, True, True, 'tts', True, True, True))
+
+    def test_start_outside_talk_leaves_the_talk_show_off(self):
+        self.report('crowd', self.LEAVE, inp='select')
+        self.build()                                                       # restart while hello is in crowd
+        sw = self.sw()
+        self.assertEqual((sw['tingwu']['on'], self.store.enabled(), self.worker.enabled(), self.auto.enabled()),
+                         (True, True, False, False))
+
+    def test_billing_is_not_kept_across_a_restart(self):
+        self.call('/preset', {'n': 0, 'source': 'page'})
+        self.assertFalse(self.sw()['billing']['on'])
+        self.build()
+        self.assertEqual((self.sw()['billing']['on'], self.sw()['tingwu']['on']), (True, True))
+        self.db['mode'].update_one({'_id': 'current'}, {'$set': {'billing': 'yes'}})     # old docs: ignored
+        self.build()
+        self.assertTrue(self.sw()['billing']['on'])
+
+    def test_zero_turns_everything_off_nine_back_on(self):
+        r = self.call('/preset', {'n': 0, 'source': 'page'})[1]
+        sw = self.sw()
+        self.assertEqual((r['snapshot']['billing'], sw['tingwu']['on'], sw['eye']['on'], sw['notes']['on'],
+                          self.store.enabled(), self.worker.enabled(), self.auto.enabled(), self.tts.stops >= 1),
+                         (False, False, False, False, False, False, False, True))
+        r = self.call('/preset', {'n': 9, 'source': 'page'})[1]
+        self.assertEqual((r['snapshot']['billing'], self.sw()['tingwu']['on'], self.worker.enabled()), (True, True, True))
+
+    def test_switch_on_and_off_are_presets_nine_and_zero(self):
+        self.call('/switches', {'name': 'billing', 'on': False})
+        self.assertEqual((self.sw()['tingwu']['on'], self.worker.enabled()), (False, False))
+        r = self.call('/switches', {'name': 'billing', 'on': True})[1]
+        self.assertEqual((r['billing']['on'], r['tingwu']['on'], r['robot'], self.worker.enabled()),
+                         (True, True, {'hearing': 'tingwu', 'vision': 'recognize'}, True))
+
+    def test_single_switches_work_whatever_billing_shows(self):
+        self.call('/preset', {'n': 0, 'source': 'page'})
+        self.assertEqual(self.call('/switches', {'name': 'tingwu', 'on': True})[0], 200)
+        self.assertEqual(self.call('/switch', {'enabled': True})[0], 200)
+        sw = self.sw()
+        self.assertEqual((sw['billing']['on'], sw['tingwu']['on'], self.store.enabled()), (False, True, True))
+
+    def test_speech_works_after_zero_when_the_owner_presses_it(self):
+        self.call('/preset', {'n': 0, 'source': 'page'})
+        self.assertEqual(self.call('/say/prefetch', {'enabled': True})[1], {'enabled': True})
+        self.assertEqual(self.call('/say/auto', {'enabled': True})[1]['enabled'], True)
+        s, r = self.call('/say/round', {})                       # reaches today's pipeline (no model in this ctx)
+        self.assertEqual((s, r.get('code')), (409, None))
+        self.assertNotEqual(self.call('/voice/try', {'voice': 'tang'})[1].get('code'), 'billing_off')
+        r = self.report('talk', ['say_round'])[1]                # hello's forward after 0 still says a round
+        self.assertEqual(r['result']['code'], 'ok')
+        self.wait_rounds(1)
+
+    def test_entering_talk_after_zero_still_turns_writing_on(self):
+        self.call('/preset', {'n': 0, 'source': 'page'})
+        self.report('idle', self.LEAVE, inp='backward')
+        r = self.report('talk', self.ENTER)[1]
+        self.assertEqual((r['result'], self.worker.enabled(), self.auto.enabled()),
+                         ({'code': 'ok', 'toast': 'OK'}, True, True))
+
+    def test_only_talk_still_holds(self):
+        self.call('/preset', {'n': 9, 'source': 'page'})
+        self.report('idle', self.LEAVE, inp='backward')
+        self.assertEqual(self.call('/say/round', {})[1]['code'], 'only_talk')
+        self.assertEqual(self.report('idle', ['say_round'])[1]['result']['code'], 'only_talk')
+
+
 class CarriedTest(ModeApiBase):
     """A4 review items, kept through step 1b."""
 
@@ -288,6 +358,7 @@ class CarriedTest(ModeApiBase):
         self.assertFalse(self.say_calls[0]['is_current']())
 
     def test_prefetch_on_needs_the_commit_to_be_current(self):
+        self.worker.set_enabled(False, 0)                                  # the start turned it on (全开)
         hook = self.ms.on_change[0]
         snap = self.ms.current()
         meta = {'source': 'touch', 'input': 'double_tap', 'value': None, 'device': 'robot.report', 'sid': None, 'mode': 'talk'}
@@ -300,44 +371,11 @@ class CarriedTest(ModeApiBase):
         r = self.report('talk', ['prefetch_on'], by='touch', inp='double_tap')[1]
         self.assertEqual((r['result']['code'], r['effects'], self.worker.enabled()), ('ok', ['prefetch_on'], True))
 
-    def test_restart_with_billing_off_turns_paid_switches_off_again(self):
-        self.db['mode'].update_one({'_id': 'current'}, {'$set': {'billing': 'yes'}})     # corrupt: reads off
-        for n in ('tingwu', 'eye', 'notes'):
-            self.db['switches'].update_one({'_id': n}, {'$set': {'on': True}}, upsert=True)
-        self.store.set_state(enabled=True)
-        self.build()                                                           # a mind restart
-        sw = self.call('/switches')[1]
-        self.assertEqual((sw['billing']['on'], sw['tingwu']['on'], sw['eye']['on'], sw['notes']['on'],
-                          self.store.enabled()), (False, False, False, False, False))
-
-    def test_restart_with_billing_on_touches_nothing(self):
-        self.db['switches'].update_one({'_id': 'tingwu'}, {'$set': {'on': True}}, upsert=True)
-        self.build()
-        self.assertTrue(self.call('/switches')[1]['tingwu']['on'])
-        self.assertFalse(self.worker.enabled())          # a mind restart is not an entry into talk
-
-    def test_billing_off_blocks_paid_switches_and_speech(self):
-        self.call('/switches', {'name': 'tingwu', 'on': True})
-        self.call('/switches', {'name': 'billing', 'on': False})
-        sw = self.call('/switches')[1]
-        self.assertEqual((sw['billing']['on'], sw['tingwu']['on']), (False, False))
-        self.assertEqual(self.call('/switches', {'name': 'eye', 'on': True})[0], 409)
-        self.assertEqual(self.call('/switch', {'enabled': True})[0], 409)
-        self.assertEqual(self.call('/voice/try', {'voice': 'v1'})[0], 409)
-
     def test_billing_change_bumps_seq(self):
         s0 = self.call('/mode/seq')[1]['seq']
         self.call('/switches', {'name': 'billing', 'on': False})
         self.assertEqual(self.call('/mode/seq')[1]['seq'], s0 + 1)
         self.assertFalse(self.call('/mode')[1]['snapshot']['billing'])
-
-    def test_billing_off_still_lets_paid_switches_go_off(self):
-        self.call('/switches', {'name': 'billing', 'on': False})
-        self.assertEqual(self.call('/switches', {'name': 'tingwu', 'on': False})[0], 200)
-        self.assertEqual(self.call('/switches', {'name': 'eye', 'on': False})[0], 200)
-        self.assertEqual(self.call('/switch', {'enabled': False})[0], 200)
-        s, r = self.call('/switches', {'name': 'tingwu', 'on': True})
-        self.assertEqual((s, r['error'], r['code']), (409, '计费关着', 'billing_off'))
 
     def test_billing_back_on(self):
         self.call('/switches', {'name': 'billing', 'on': False})
@@ -358,7 +396,7 @@ class CarriedTest(ModeApiBase):
             real(name, on)
         self.billing.ctx.set_switch = broken
         s, r = self.call('/switches', {'name': 'billing', 'on': False})
-        self.assertEqual((s, r['failed'], r['billing']['on'], r['result']['toast']), (200, ['notes'], False, 'BILLING OFF, 1 FAILED'))
+        self.assertEqual((s, r['failed'], r['billing']['on'], r['result']['toast']), (200, ['notes'], False, 'PRESET 0: 1 FAILED'))
 
     def test_mode_input_needs_boot_and_seq(self):
         base = {'device': 'robot', 'boot': 'b1', 'seq': 1, 'age_ms': 0, 'source': 'asr', 'input': 'digit', 'value': 0}
@@ -389,14 +427,6 @@ class CarriedTest(ModeApiBase):
             self.assertEqual((s, r['error'], r['code']), (409, '只在脱口秀模式', 'only_talk'), path)
         self.assertEqual(self.call('/say/prefetch', {'enabled': False})[0], 200)       # turning off always works
         self.assertEqual(self.call('/say/auto', {'enabled': False})[0], 200)
-        self.assertEqual(self.call('/say/stop', {})[0], 200)
-
-    def test_say_endpoints_with_billing_off(self):
-        self.call('/switches', {'name': 'billing', 'on': False})
-        for path, body in (('/say', {'role': 'roast'}), ('/say/round', {}), ('/say/prefetch', {'enabled': True}),
-                           ('/role/try', {'role': 'roast'}), ('/voice/try', {'voice': 'tang'})):
-            s, r = self.call(path, body)
-            self.assertEqual((s, r['code']), (409, 'billing_off'), path)
         self.assertEqual(self.call('/say/stop', {})[0], 200)
 
     def test_in_talk_the_say_pipeline_is_todays(self):
