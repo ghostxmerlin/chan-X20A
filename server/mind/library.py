@@ -368,11 +368,12 @@ class Library:
 
     # ---- long-term memory phase A: machine writes, owner review, recall copy ----
 
-    def _sync_recall(self, rec):
-        """Write the recall row unless a newer version is already there (two processes write: mind and memory)."""
+    def _sync_recall(self, rec, force=False):
+        """Write the recall row unless a newer version is already there (two processes write: mind and memory).
+        force (rebuild): also rewrite a row of the same version."""
         r = self.db['memory_recall']
         cur = r.find_one({'memory_id': rec['memory_id']}, {'_id': 0, 'version': 1})
-        if cur and cur.get('version', 0) >= rec['version']:
+        if cur and (cur.get('version', 0) > rec['version'] or (cur.get('version', 0) == rec['version'] and not force)):
             return False
         flt = {'memory_id': rec['memory_id'], **({'version': cur['version']} if cur else {})}
         try:
@@ -389,17 +390,18 @@ class Library:
         if head:
             self._sync_recall(head)
 
-    def rebuild_recall(self, lane=None):
-        """Recompute memory_recall from memory_items (streams every version; no cut). -> rows written."""
+    def rebuild_recall(self, lane=None, force=False):
+        """Recompute memory_recall from memory_items (streams every version; no cut). force: rewrite rows of the
+        same version too (a damaged copy). -> heads seen."""
         flt = {'lane': lane} if lane else {}
         last, n = None, 0
         for d in self.db['memory_items'].find(flt, {'_id': 0}).sort([('memory_id', 1), ('version', 1)]):
             if last is not None and d['memory_id'] != last['memory_id']:
-                self._sync_recall(last)
+                self._sync_recall(last, force)
                 n += 1
             last = d
         if last is not None:
-            self._sync_recall(last)
+            self._sync_recall(last, force)
             n += 1
         return n
 
@@ -424,31 +426,45 @@ class Library:
         self._sync_recall(rec)
         return rec
 
-    def _overlapping(self, lane, f):
-        """An existing memory that shares the new one's sources: >= half of its cited sentences / turns (or, citing
-        only notes / segments, half of those plus a similar title). A locked one (owner-touched, disabled, merged)
-        of any kind wins, so an item the owner rejected never comes back under a new wording; otherwise the same kind."""
+    def _overlapping(self, lane, f, run_id=None):
+        """An existing memory that shares at least half of the new one's cited sentences / turns (citing only notes /
+        segments: half of those). -> {row, block} or None. Three cases, strongest first:
+          rejected (status disabled / merged / retired: 错, 停用, 合并) -> block, whatever kind or title, so an item
+            the owner rejected never comes back under a new wording;
+          owner-touched active (对 / 改) -> block only the same kind, and for notes / segment-only citations only
+            with a similar title too (so 对 on one memory does not silence the rest of that conversation);
+          active, written by the job -> the same event only with the same kind AND a similar title AND not written
+            by this same run (two items of one answer that share a sentence stay two)."""
         specific = [r for r in f['derived_from'] if r['c'] in SPECIFIC_REFS]
         keys = {source_key(r) for r in (specific or f['derived_from'])}
         if not keys:
             return None
         rows = list(self.db['memory_recall'].find({'lane': lane, 'source_keys': {'$in': sorted(keys)}}, {'_id': 0}).limit(50))
         words = _title_words(f['title'])
+
+        def similar(row):
+            other = _title_words(row.get('title'))
+            return bool(words and other and len(words & other) / len(words | other) >= 0.5)
+
         best = None
         for row in rows:
             share = len(keys & set(row.get('source_keys') or [])) / len(keys)
             if share < OVERLAP_MIN:
                 continue
-            if not specific:
-                other = _title_words(row.get('title'))
-                if not (words and other and len(words & other) / len(words | other) >= 0.5) and not self.locked(row):
+            same_kind = row.get('kind') == f['kind']
+            if row.get('status') != 'active':
+                rank, block = 3, True
+            elif row.get('actor') == 'owner':
+                if not same_kind or (not specific and not similar(row)):
                     continue
-            locked = self.locked(row)
-            if not locked and row.get('kind') != f['kind']:
-                continue
-            cand = (locked, share, row.get('changed_at') or 0)
+                rank, block = 2, True
+            else:
+                if not same_kind or not similar(row) or (run_id and (row.get('run') or {}).get('run_id') == run_id):
+                    continue
+                rank, block = 1, False
+            cand = (rank, share, row.get('changed_at') or 0)
             if best is None or cand > best[0]:
-                best = (cand, {'row': row, 'locked': locked})
+                best = (cand, {'row': row, 'block': block})
         return best[1] if best else None
 
     @staticmethod
@@ -475,8 +491,8 @@ class Library:
             if head is None:
                 head = self.find_by_key(lane, key) or self.head('memory_items', derived_id(lane, key))
             if head is None:
-                hit = self._overlapping(lane, f)
-                if hit and hit.get('locked'):
+                hit = self._overlapping(lane, f, (run or {}).get('run_id'))
+                if hit and hit['block']:
                     return 'blocked', hit['row']
                 if hit:
                     head = self.head('memory_items', hit['row']['memory_id'])

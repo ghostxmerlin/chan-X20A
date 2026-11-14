@@ -715,6 +715,8 @@ def tick(db, store, settings_store, env, now_ms, chat=None, now_fn=None):
     else:
         day = None
         for d in days_between(max(cfg['daily_since'], shift_day(today, -DAILY_LOOKBACK_DAYS)), shift_day(today, -1)):
+            if now_ms < day_range(d, s['tz'])[1] + WHOLE_AFTER_MS:
+                continue                   # the day may still get material: run it once it is whole
             job = jobs.find_one({'_id': f'extract:live:{d}'}) or {}
             if job.get('state') == 'done' and job.get('whole_day'):
                 continue                   # an on-demand run during that day leaves it for the daily run
@@ -864,7 +866,7 @@ def main(argv=None):
         return 0
     lib.ensure_indexes()
     if a.command == 'rebuild-recall':
-        print(f'memory extract: recall rows rebuilt: {lib.rebuild_recall()}')
+        print(f'memory extract: recall rows rebuilt: {lib.rebuild_recall(force=True)}')
         return 0
     if a.hi > local_day(now_fn(), s['tz']):
         raise SystemExit('--to is in the future')

@@ -30,10 +30,10 @@ def fields(**kw):
     return f
 
 
-def put(lib, lane='live', key='k1', **kw):
+def put(lib, lane='live', key='k1', run_id='r', **kw):
     if 'derived_from' not in kw:          # each key its own sentence: distinct memories do not share sources
         kw['derived_from'] = [REFS[0], {'c': 'speech', 'key': {'session': 'S', 'id': key}, 'pos': [16000, 32000]}]
-    return lib.put_derived(fields(**kw), lane=lane, key=key, run={'job_id': 'j', 'run_id': 'r', 'model': 'm',
+    return lib.put_derived(fields(**kw), lane=lane, key=key, run={'job_id': 'j', 'run_id': run_id, 'model': 'm',
                                                                   'prompt_version': 'p', 'at': T0},
                            now_ms=T0, scope_id='office', day=DAY)
 
@@ -133,10 +133,51 @@ class LibraryWritePathTest(unittest.TestCase):
         for kind in ('event', 'told'):
             self.assertEqual(put(self.lib, key='kz' + kind, kind=kind, title='全新的标题', derived_from=refs[:1])[0], 'blocked')
         _, b = put(self.lib, key='kb', derived_from=[{'c': 'speech', 'key': {'session': 'S', 'id': 'y1'}}])
-        action, rec = put(self.lib, key='kc', title='又一个标题', statement='更完整的说法',
+        action, rec = put(self.lib, key='kc', run_id='r2', title='标题甲乙', statement='更完整的说法',
                           derived_from=[{'c': 'speech', 'key': {'session': 'S', 'id': 'y1'}}, {'c': 'chat_turns', 'key': {'tid': 't9'}}])
-        self.assertEqual((action, rec['memory_id']), ('updated', b['memory_id']))      # half its sentences: the same
+        self.assertEqual((action, rec['memory_id']), ('updated', b['memory_id']))      # half its sentences + similar title
         self.assertEqual(self.db.count('memory_recall'), 2)
+
+    def test_two_items_of_one_answer_sharing_a_sentence_stay_two(self):
+        s3, s4 = ({'c': 'speech', 'key': {'session': 'S', 'id': i}} for i in ('s3', 's4'))
+        run = {'job_id': 'j', 'run_id': 'r1', 'model': 'm', 'prompt_version': 'p', 'at': T0}
+        a = self.lib.put_derived(fields(title='周末爬山', derived_from=[s3, s4]), lane='live', key='ka', run=run, now_ms=T0,
+                                 scope_id='office', day=DAY)[1]
+        action, b = self.lib.put_derived(fields(title='周末爬山的装备', derived_from=[s4]), lane='live', key='kb', run=run,
+                                         now_ms=T0, scope_id='office', day=DAY)
+        self.assertEqual(action, 'created')                                     # same run: never merged
+        action, c = put(self.lib, key='kc', run_id='r2', title='下周的预算', derived_from=[s4])
+        self.assertEqual(action, 'created')                                     # another run, but a different title
+        self.assertEqual(self.lib.head('memory_items', a['memory_id'])['title'], '周末爬山')
+        action, d = put(self.lib, key='kd', run_id='r3', title='周末爬山计划', derived_from=[s3, s4])
+        self.assertEqual((action, d['memory_id']), ('updated', a['memory_id']))  # another run, similar title: the same
+
+    def test_confirm_blocks_only_same_kind_and_similar_notes_only(self):
+        conv = [{'c': 'conversations', 'key': {'cid': 'cX'}}]
+        _, a = put(self.lib, key='ka', title='周末爬山', derived_from=conv)
+        self.lib.review(a['memory_id'], 1, 'confirm', now_ms=T0)
+        self.assertEqual(put(self.lib, key='kb', title='下周的预算', derived_from=conv)[0], 'created')
+        self.assertEqual(put(self.lib, key='kc', kind='told', title='周末爬山', derived_from=conv)[0], 'created')
+        self.assertEqual(put(self.lib, key='kd', title='周末爬山了', derived_from=conv)[0], 'blocked')
+        sent = [{'c': 'speech', 'key': {'session': 'S', 'id': 'q1'}}]
+        _, e = put(self.lib, key='ke', title='一件事', derived_from=sent)
+        self.lib.review(e['memory_id'], 1, 'confirm', now_ms=T0)
+        self.assertEqual(put(self.lib, key='kf', kind='told', title='别的', derived_from=sent)[0], 'created')
+        self.assertEqual(put(self.lib, key='kg', title='别的', derived_from=sent)[0], 'blocked')
+
+    def test_disabled_or_merged_blocks_notes_only_items_whatever_the_title(self):
+        conv = [{'c': 'conversations', 'key': {'cid': 'cY'}}]
+        _, a = put(self.lib, key='ka', title='周末爬山', derived_from=conv)
+        self.lib.review(a['memory_id'], 1, 'wrong', now_ms=T0)
+        self.assertEqual(put(self.lib, key='kb', kind='feeling', title='完全不同', derived_from=conv)[0], 'blocked')
+
+    def test_rebuild_recall_force_rewrites_same_version_rows(self):
+        _, rec = put(self.lib)
+        self.db['memory_recall'].docs[0]['statement'] = '坏了的副本'
+        self.lib.rebuild_recall()
+        self.assertEqual(self.db['memory_recall'].docs[0]['statement'], '坏了的副本')
+        self.lib.rebuild_recall(force=True)
+        self.assertEqual(self.db['memory_recall'].docs[0]['statement'], rec['statement'])
 
     def test_recall_sync_never_goes_back_a_version(self):
         _, rec = put(self.lib)
@@ -529,6 +570,13 @@ class DailyTickTest(_JobBase):
         self.assertEqual(self.tick(nxt + 1)['state'], 'idle')
         with self.assertRaises(ValueError):
             mx.request_run(self.db, self.s, T0, '2099-01-01')
+
+    def test_a_day_is_not_scanned_before_its_whole_hour(self):
+        self.tick(T0)
+        lo, hi = mx.day_range(DAY, self.s['tz'])
+        self.assertEqual(self.tick(hi + 10 * 60_000)['state'], 'idle')
+        self.assertEqual(self.model.calls, [])
+        self.assertEqual(self.tick(hi + mx.WHOLE_AFTER_MS + 1)['state'], 'done')
 
     def test_a_day_in_backoff_does_not_stall_the_next(self):
         self.tick(T0)
