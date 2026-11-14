@@ -42,6 +42,8 @@ REF_KEYS = {'conversations': ('cid',), 'conversation_versions': ('cid',), 'speec
             'owner_signals': ('sid',), 'utterances': ('uid',), 'say_rounds': ('rid',), 'sessions': ('session',),
             'recording': ('session',), 'frames': ('session', 'seq')}
 MAX_REFS = 60
+SPECIFIC_REFS = ('speech', 'chat_turns', 'tingwu', 'recording')   # a sentence / a turn: what "the same source" means
+OVERLAP_MIN = 0.5
 # Carried from version to version of a memory (server-side fields; the page never sends them).
 MEMORY_CARRY = ('lane', 'day', 'extract_key', 'extract_keys', 'derived_from', 'run', 'people', 'confidence', 'basis',
                 'salience', 'sensitivity', 'emotion', 'merged_into', 'scope_id', 'source', 'owner_confirmed')
@@ -159,9 +161,19 @@ def _people_from_subjects(old_people, subjects):
     return [*({'id': s, 'role': 'about'} for s in subjects), *kept]
 
 
+def source_key(r):
+    return _fp([r.get('c'), r.get('key')])[:16]
+
+
+def _title_words(t):
+    n = re.sub(r'[\W_]', '', str(t or '')).lower()
+    return {n[i:i + 2] for i in range(len(n) - 1)}
+
+
 def recall_row(rec):
     """The memory_recall row of one memory head (derived; rebuildable from memory_items)."""
     row = {k: copy.deepcopy(v) for k, v in rec.items() if k != '_id'}
+    row['source_keys'] = sorted({source_key(r) for r in rec.get('derived_from') or []})
     row['lane'] = rec.get('lane') or 'live'
     row['start_ms'] = (rec.get('when') or {}).get('start_ms')
     row['person_ids'] = sorted({*(rec.get('subjects') or []), *(p['id'] for p in rec.get('people') or [])})
@@ -196,7 +208,7 @@ class Library:
         r.create_index([('lane', 1), ('auto', 1), ('changed_at', -1)])
         r.create_index([('lane', 1), ('start_ms', -1)])
         r.create_index([('lane', 1), ('day', 1)])
-        for k in ('person_ids', 'topics'):
+        for k in ('person_ids', 'topics', 'source_keys'):
             r.create_index([('lane', 1), (k, 1)])
         d['memory_uses'].create_index([('memory_id', 1), ('at', -1)])
         d['memory_uses'].create_index([('purpose', 1), ('at', -1)])
@@ -347,6 +359,8 @@ class Library:
             except Exception as e:
                 if getattr(e, 'code', None) != 11000:
                     raise
+                if c == 'memory_items':
+                    self._resync(item_id)
                 raise LibraryConflict(CONFLICT) from None
             if c == 'memory_items':
                 self._sync_recall(rec)
@@ -355,7 +369,25 @@ class Library:
     # ---- long-term memory phase A: machine writes, owner review, recall copy ----
 
     def _sync_recall(self, rec):
-        self.db['memory_recall'].replace_one({'memory_id': rec['memory_id']}, recall_row(rec), upsert=True)
+        """Write the recall row unless a newer version is already there (two processes write: mind and memory)."""
+        r = self.db['memory_recall']
+        cur = r.find_one({'memory_id': rec['memory_id']}, {'_id': 0, 'version': 1})
+        if cur and cur.get('version', 0) >= rec['version']:
+            return False
+        flt = {'memory_id': rec['memory_id'], **({'version': cur['version']} if cur else {})}
+        try:
+            r.replace_one(flt, recall_row(rec), upsert=True)
+        except Exception as e:
+            if getattr(e, 'code', None) != 11000:     # the other process wrote first (newer or the same version)
+                raise
+            return False
+        return True
+
+    def _resync(self, memory_id):
+        """After a lost write race: make the recall row follow the real head."""
+        head = self.head('memory_items', memory_id) if memory_id else None
+        if head:
+            self._sync_recall(head)
 
     def rebuild_recall(self, lane=None):
         """Recompute memory_recall from memory_items (streams every version; no cut). -> rows written."""
@@ -387,9 +419,37 @@ class Library:
         except Exception as e:
             if getattr(e, 'code', None) != 11000:
                 raise
+            self._resync(old['memory_id'])
             raise LibraryConflict(CONFLICT) from None
         self._sync_recall(rec)
         return rec
+
+    def _overlapping(self, lane, f):
+        """An existing memory that shares the new one's sources: >= half of its cited sentences / turns (or, citing
+        only notes / segments, half of those plus a similar title). A locked one (owner-touched, disabled, merged)
+        of any kind wins, so an item the owner rejected never comes back under a new wording; otherwise the same kind."""
+        specific = [r for r in f['derived_from'] if r['c'] in SPECIFIC_REFS]
+        keys = {source_key(r) for r in (specific or f['derived_from'])}
+        if not keys:
+            return None
+        rows = list(self.db['memory_recall'].find({'lane': lane, 'source_keys': {'$in': sorted(keys)}}, {'_id': 0}).limit(50))
+        words = _title_words(f['title'])
+        best = None
+        for row in rows:
+            share = len(keys & set(row.get('source_keys') or [])) / len(keys)
+            if share < OVERLAP_MIN:
+                continue
+            if not specific:
+                other = _title_words(row.get('title'))
+                if not (words and other and len(words & other) / len(words | other) >= 0.5) and not self.locked(row):
+                    continue
+            locked = self.locked(row)
+            if not locked and row.get('kind') != f['kind']:
+                continue
+            cand = (locked, share, row.get('changed_at') or 0)
+            if best is None or cand > best[0]:
+                best = (cand, {'row': row, 'locked': locked})
+        return best[1] if best else None
 
     @staticmethod
     def locked(head):
@@ -414,6 +474,12 @@ class Library:
                     head = None
             if head is None:
                 head = self.find_by_key(lane, key) or self.head('memory_items', derived_id(lane, key))
+            if head is None:
+                hit = self._overlapping(lane, f)
+                if hit and hit.get('locked'):
+                    return 'blocked', hit['row']
+                if hit:
+                    head = self.head('memory_items', hit['row']['memory_id'])
             hops = 0
             while head and head.get('status') == 'merged' and head.get('merged_into') and hops < 4:
                 nxt = self.head('memory_items', head['merged_into'])
@@ -433,6 +499,7 @@ class Library:
                 except Exception as e:
                     if getattr(e, 'code', None) != 11000:
                         raise
+                    self._resync(mid)
                     raise LibraryConflict(CONFLICT) from None
                 self._sync_recall(rec)
                 return 'created', rec

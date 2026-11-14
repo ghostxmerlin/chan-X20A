@@ -223,7 +223,9 @@ def messages(ctx, item, history, cfg, who):
             bg.append(f'声音：{sc["sound"]}')
     if ctx.get('notes'):
         bg.append(f'对话纪要：{ctx["notes"]}')
-    mem = related_memories(ctx.get('memories') or [], item['text'], person_id=(ctx.get('person') or {}).get('person_id'))
+    pid = (ctx.get('person') or {}).get('person_id')
+    pool = [m for m in ctx.get('memories') or [] if recall.chat_ok(m, pid)]     # private: the owner only (fail closed)
+    mem = related_memories(pool, item['text'], person_id=pid)
     if mem:
         bg.append('你记得（只在相关时提）：' + '；'.join(recall.prompt_text(m) for m in mem))
     person = ctx.get('person')

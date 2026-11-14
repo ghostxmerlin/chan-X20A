@@ -13,8 +13,10 @@ Picking (no embeddings in phase A; relevance = two-character word overlap, the s
   talk show pick_for_talk(): at most 1 library memory per round that shares a word with the recent speech, never a
             child / private memory, never one whose person card says tease never or quote no, and not one offered to
             the talk show in the last 3 days (memory_uses, purpose talk; written when a round is written).
-  realtime  plain(crowd=True): habit memories and plain library memories only (no child / private / others_said).
-Prompt annotations (prompt_text): child -> do not joke, do not repeat verbatim; others_said / quote gist -> gist only.
+  realtime  plain(crowd=True): habit memories only (strangers may hear it).
+  private   chat_ok(): a private memory reaches chat only when the speaker is recognised as the owner.
+Prompt annotations (prompt_text, chat and talk show): child -> do not joke, do not repeat verbatim; others_said / card
+quote gist or no -> gist only; card tease never -> do not tease; words_only -> only answer what he said.
 """
 import re
 
@@ -70,7 +72,7 @@ def _strictest(row, cards):
 def library_rows(db, lane='live', limit=POOL_MAX):
     cards = _treatments(db)
     rows = db['memory_recall'].find({'lane': lane, 'recallable': True}, FIELDS) \
-        .sort([('salience', -1), ('start_ms', -1)]).limit(limit)
+        .sort([('salience', -1), ('start_ms', -1)]).limit(limit).batch_size(limit)
     out = []
     for r in rows:
         if not r.get('statement'):
@@ -129,21 +131,29 @@ def prompt_text(m):
         notes.append('孩子的事：别开玩笑，别照原话说')
     if 'others_said' in sens:
         notes.append('别人说的：只提意思')
-    elif m.get('quote') == 'no':
+    elif m.get('quote') in ('gist', 'no'):          # the person card's treatment (no card: the card defaults)
         notes.append('只提意思')
     if m.get('tease') == 'never':
         notes.append('别调侃这个人')
+    elif m.get('tease') == 'words_only':
+        notes.append('只接他说的话，不评价他本人')
     return m['text'] + (f'（{"；".join(notes)}）' if notes else '')
 
 
 def plain(pool, crowd=False):
-    """Prompt texts for a context that cannot pick per sentence (realtime); crowd: visitors may hear it."""
+    """Prompt texts for a context that cannot pick per sentence (realtime). crowd (strangers may hear it): habit
+    memories only; library memories are for chat and the talk show (phase A scope)."""
     out = []
     for m in pool:
-        if isinstance(m, dict) and crowd and set(m.get('sensitivity') or []) & {'child', 'private', 'others_said'}:
+        if isinstance(m, dict) and crowd and m.get('source') != 'habit':
             continue
         out.append(prompt_text(m))
     return out
+
+
+def chat_ok(m, person_id):
+    """Private memories go into chat only when the speaker is recognised as the owner (fail closed)."""
+    return not (isinstance(m, dict) and 'private' in (m.get('sensitivity') or []) and person_id != 'owner')
 
 
 def talk_ok(m):
@@ -159,7 +169,7 @@ def pick_for_talk(db, pool, texts, now_ms, limit=1):
     used = {u.get('memory_id') for u in db['memory_uses'].find({'purpose': 'talk', 'at': {'$gte': now_ms - TALK_COOLDOWN_MS}},
                                                                 {'_id': 0, 'memory_id': 1})}
     best = related([m for m in cands if m['id'] not in used], ' '.join(t for t in texts if t), limit=limit)
-    return [{'memory_id': m['id'], 'statement': m['text'], 'kind': 'library', 'source': 'library',
+    return [{'memory_id': m['id'], 'statement': prompt_text(m), 'kind': 'library', 'source': 'library',
              'sensitivity': m.get('sensitivity') or []} for m in best]
 
 

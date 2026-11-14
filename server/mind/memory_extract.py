@@ -19,9 +19,12 @@ salience, sensitivity (child / others_said / private; others_said also when ever
 non-owner voice), emotion. Effective at once; low confidence is stored and shown, never put into prompts. A memory the
 owner touched (对 / 错 / 改 / 合并 / 停用) or disabled is never written again (blocked, counted in the job).
 
-Jobs (library_jobs): extract:<lane>:<day> holds a fingerprint per chunk; an unchanged chunk that is done costs nothing;
-a chunk whose model answer came back but could not be written yet keeps the answer and is written next time without a
-new call. Interrupted runs resume at the next chunk. spend:daily:<day> and spend:backfill are the cost ledgers.
+Jobs (library_jobs): extract:<lane>:<day> holds a fingerprint per block (block ids are codes of what anchors the block,
+so adding a conversation earlier in the day changes no other block); a done block is never sent again. A chunk whose
+model answer came back but could not be written yet keeps the answer and is written next time without a new call; a
+chunk failing MAX_ATTEMPTS times is given up and recorded. Interrupted runs resume at the next chunk.
+spend:daily:<day> and spend:backfill are the cost ledgers. A memory sharing at least half of its cited sentences / turns
+with an owner-locked one is blocked, whatever its title (library.Library._overlapping).
 
 Gates, checked before every call and again before writing a paid answer:
   daily / on-demand (lane live): model access, 情景 on (mind_state.enabled), the 记忆整理 switch (hello.switches
@@ -73,6 +76,8 @@ RETRY_MS = 300_000
 LEASE_MS = 900_000
 DAILY_LOOKBACK_DAYS = 7
 MAX_CHUNKS_PER_TICK = 4
+MAX_ATTEMPTS = 3                  # a chunk whose call / answer fails this often is given up (recorded) and skipped
+WHOLE_AFTER_MS = 3600_000         # a day counts as whole (nothing more can come) one hour after it ended
 SWITCH = 'memory_extract'
 STEP = {'daily': 'memory_extract', 'backfill': 'memory_backfill'}
 SKIP_TURNS = ('self', 'hello_voice', 'empty', 'filler', 'duplicate')
@@ -170,13 +175,21 @@ def _speaker(doc, voice):
     return 'unknown', None
 
 
-class _Tokens:
-    def __init__(self):
-        self.n = {}
+class _Codes:
+    """A short code per block from what anchors it (a conversation id, a first sentence, a segment start, ...), so a
+    block's text and fingerprint do not change when another block is added earlier in the day."""
 
-    def __call__(self, prefix):
-        self.n[prefix] = self.n.get(prefix, 0) + 1
-        return f'{prefix}{self.n[prefix]}'
+    def __init__(self):
+        self.used = {}
+
+    def __call__(self, anchor):
+        h = _fp(anchor)
+        for n in range(4, len(h) + 1):
+            code = h[:n]
+            if self.used.get(code, anchor) == anchor:
+                self.used[code] = anchor
+                return code
+        raise ValueError('no free block code')
 
 
 def _hello_texts(db, lo, hi):
@@ -207,7 +220,7 @@ def gather(db, s, day):
     lo, hi = day_range(day, tz)
     table, voice = people_table(db, s, lo)
     spoken = _hello_texts(db, lo, hi)
-    tok = _Tokens()
+    code = _Codes()
     blocks, held = [], set()
     convs = sorted(db['conversations'].find({'start_ms': {'$gte': lo, '$lt': hi}}, {'_id': 0}), key=lambda c: c['start_ms'])
     for conv in convs:
@@ -223,14 +236,14 @@ def gather(db, s, day):
                       key=lambda d: d.get('t', d.get('at', 0)))
         if not docs and not (conv.get('title') or conv.get('notes')):
             continue
-        ct = tok('c')
+        ct = 'c' + code(['conv', conv['cid']])
         end = conv.get('end_ms') or conv.get('last_ms') or conv['start_ms']
         block = {'kind': 'conv', 'start': conv['start_ms'], 'lines': [], 'refs': {
             ct: {'ref': {'c': 'conversations', 'key': {'cid': conv['cid']}, 'version': int(conv.get('version') or 0)},
                  'at': conv['start_ms'], 'end': end, 'speaker': None}}}
         notes = f"{conv.get('title') or ''}：{conv.get('notes') or ''}" if (conv.get('title') or conv.get('notes')) else '（没有纪要）'
         block['lines'].append(f"{ct} 对话 {_hm(conv['start_ms'], tz)}–{_hm(end, tz)} 纪要（{conv.get('confidence') or '?'}）{notes}")
-        _sentences(block, docs, ct, tok, voice, table, tz)
+        _sentences(block, docs, ct, ct[1:], voice, table, tz)
         blocks.append(block)
     # sentences no conversation holds (11-07..09 had no notes; notes may have been off): cut by the 60 s rule
     raw = sorted((d for d in db['speech'].find({'t': {'$gte': lo, '$lt': hi}}, {'_id': 0})
@@ -247,7 +260,7 @@ def gather(db, s, day):
             continue
         block = {'kind': 'raw', 'start': g[0]['t'], 'lines': [f"（没有纪要的一段话 {_hm(g[0]['t'], tz)}–{_hm(g[-1]['t'], tz)}）"],
                  'refs': {}}
-        _sentences(block, g, None, tok, voice, table, tz)
+        _sentences(block, g, None, code(['raw', g[0]['session'], g[0]['id']]), voice, table, tz)
         blocks.append(block)
     latest = {}
     for g in db['mind_segments'].find({'lane': 'live', 'start': {'$gte': lo, '$lt': hi}}, {'_id': 0}):
@@ -258,7 +271,7 @@ def gather(db, s, day):
         sm = g.get('summary') or {}
         if not (sm.get('title') or sm.get('text')):
             continue
-        gt = tok('g')
+        gt = 'g' + code(['segment', start])
         blocks.append({'kind': 'segment', 'start': start, 'lines': [
             f"{gt} 情景段 {_hm(start, tz)}–{_hm(g.get('end') or start, tz)}：{sm.get('title') or ''}：{(sm.get('text') or '')[:300]}"],
             'refs': {gt: {'ref': {'c': 'mind_segments', 'key': {'lane': 'live', 'start': start}, 'version': int(g.get('version') or 0)},
@@ -268,11 +281,13 @@ def gather(db, s, day):
     group, last = None, None
     for t in turns:
         if group is None or t['at'] - last > CHAT_GAP_MS:
-            group = {'kind': 'chat', 'start': t['at'], 'lines': [f"（和 hello 的对话 {_hm(t['at'], tz)} 起）"], 'refs': {}}
+            group = {'kind': 'chat', 'start': t['at'], 'lines': [f"（和 hello 的对话 {_hm(t['at'], tz)} 起）"], 'refs': {},
+                     'code': code(['chat', t['tid']]), 'n': 0}
             blocks.append(group)
         last = t['at']
         pid, name = _speaker(t, voice)
-        tt = tok('t')
+        group['n'] += 1
+        tt = f"t{group['code']}.{group['n']}"
         line = f"{tt} {_hms(t['at'], tz)} {_label(pid, name, table)}对 hello 说：{t['text'][:SENTENCE_CHARS]}"
         if t.get('reply') and t.get('state') == 'answered':
             line += f" / hello 答：{t['reply'][:SENTENCE_CHARS]}"
@@ -283,28 +298,33 @@ def gather(db, s, day):
         v = g.get('value') or {}
         if not text or v.get('polarity') not in (1, -1):
             continue
-        ot = tok('o')
+        ot = 'o' + code(['signal', g['sid']])
         blocks.append({'kind': 'signal', 'start': g['at'], 'lines': [
             f"{ot} {_hms(g['at'], tz)} 主人给 hello 的一句话打了{'好评' if v['polarity'] == 1 else '差评'}（{v.get('count', 1)}下）：{text[:SENTENCE_CHARS]}"],
             'refs': {ot: {'ref': {'c': 'owner_signals', 'key': {'sid': g['sid']}}, 'at': g['at'], 'end': g['at'], 'speaker': None,
                           'signal': True}}})
     blocks.sort(key=lambda b: b['start'])
+    for b in blocks:
+        b.pop('code', None), b.pop('n', None)
+        b['fp'] = _fp([PROMPT_VERSION, MODEL, table, b['lines'], {k: v['ref'] for k, v in b['refs'].items()}])[:32]
     return {'day': day, 'blocks': blocks, 'people': table}
 
 
-def _sentences(block, docs, parent, tok, voice, table, tz):
+def _sentences(block, docs, parent, bcode, voice, table, tz):
     if len(docs) > CONV_SENTENCES:
         half = CONV_SENTENCES // 2
         skipped = len(docs) - CONV_SENTENCES
         docs = docs[:half] + [None] + docs[-half:]
     else:
         skipped = 0
+    n = 0
     for d in docs:
         if d is None:
             block['lines'].append(f'  （中间省略 {skipped} 句）')
             continue
         pid, name = _speaker(d, voice)
-        st = tok('s')
+        n += 1
+        st = f's{bcode}.{n}'
         at = d.get('t', d.get('at'))
         block['lines'].append(f"  {st} {_hms(at, tz)} {_label(pid, name, table)}：{d['text'].strip()[:SENTENCE_CHARS]}")
         ref = {'c': 'speech', 'key': {'session': d['session'], 'id': d['id']}}
@@ -324,10 +344,10 @@ def _rated_line(db, ref):
     return None
 
 
-def chunks(material):
-    """Pack the blocks (time order) into chunks of at most MAX_CHUNK_CHARS; each with its fingerprint."""
+def pack(blocks):
+    """Pack blocks (time order) into chunks of at most MAX_CHUNK_CHARS; a chunk's fingerprint is its blocks'."""
     out, cur, size = [], [], 0
-    for b in material['blocks']:
+    for b in blocks:
         n = sum(len(x) + 1 for x in b['lines'])
         if cur and size + n > MAX_CHUNK_CHARS:
             out.append(cur)
@@ -336,13 +356,17 @@ def chunks(material):
         size += n
     if cur:
         out.append(cur)
-    result = []
-    for blocks in out:
-        lines = [x for b in blocks for x in b['lines']]
-        refs = {k: v for b in blocks for k, v in b['refs'].items()}
-        fp = _fp([PROMPT_VERSION, MODEL, material['people'], lines, {k: v['ref'] for k, v in refs.items()}])[:32]
-        result.append({'fp': fp, 'lines': lines, 'refs': refs, 'chars': sum(len(x) + 1 for x in lines)})
-    return result
+    return [_chunk(bs) for bs in out]
+
+
+def _chunk(blocks):
+    lines = [x for b in blocks for x in b['lines']]
+    return {'fp': _fp([PROMPT_VERSION, sorted(b['fp'] for b in blocks)])[:32], 'blocks': [b['fp'] for b in blocks],
+            'lines': lines, 'refs': {k: v for b in blocks for k, v in b['refs'].items()}, 'chars': sum(len(x) + 1 for x in lines)}
+
+
+def chunks(material):
+    return pack(material['blocks'])
 
 
 # ---------------------------------------------------------------- the call ----
@@ -351,7 +375,7 @@ def existing(db, lane, day, tz):
     rows = {r['memory_id']: r for r in db['memory_recall'].find({'lane': lane, 'day': day}, {'_id': 0})}
     lo, _ = day_range(day, tz)
     recent = db['memory_recall'].find({'lane': lane, 'start_ms': {'$gte': lo - RECENT_DAYS * 86_400_000}}, {'_id': 0}) \
-        .sort([('start_ms', -1)]).limit(RECENT_MAX * 2)
+        .sort([('start_ms', -1)]).limit(RECENT_MAX * 2).batch_size(RECENT_MAX * 2)
     for r in recent:
         if len(rows) >= RECENT_MAX:
             break
@@ -375,21 +399,6 @@ def messages(s, material, chunk, known):
     L.append('【材料】')
     L += chunk['lines']
     return [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': '\n'.join(L)}]
-
-
-def _similar(kind, refs, title, known):
-    """An existing memory of the same kind sharing a source and with a similar title (fallback for a missed same_as)."""
-    mine = {_fp([r['c'], r['key']]) for r in refs}
-    words = {_norm(title)[i:i + 2] for i in range(len(_norm(title)) - 1)}
-    for r in known:
-        if r.get('kind') != kind:
-            continue
-        theirs = {_fp([x['c'], x['key']]) for x in r.get('derived_from') or []}
-        t = _norm(r.get('title'))
-        other = {t[i:i + 2] for i in range(len(t) - 1)}
-        if mine & theirs and words and other and len(words & other) / len(words | other) >= 0.5:
-            return r['memory_id']
-    return None
 
 
 def validate(out, chunk, material, known):
@@ -458,9 +467,7 @@ def _item(row, chunk, allowed_people, known_ids, known):
               'salience': sal, 'sensitivity': sorted(sens),
               'emotion': {'label': emo, 'basis': 'said'} if emo in EMOTIONS else None}
     key = extract_key(kind, [c['ref'] for c in cited if not c.get('signal')], title)
-    target = row.get('same_as') if row.get('same_as') in known_ids else None
-    if target is None:
-        target = _similar(kind, refs, title, known)
+    target = row.get('same_as') if row.get('same_as') in known_ids else None   # else: key, then shared sources (library)
     return fields, key, target
 
 
@@ -521,11 +528,16 @@ def _release(db, owner):
 
 # ---------------------------------------------------------------- one day ----
 def _counter():
-    return {'created': 0, 'updated': 0, 'unchanged': 0, 'blocked': 0, 'dropped': 0, 'conflict': 0, 'low': 0}
+    return {'created': 0, 'updated': 0, 'unchanged': 0, 'blocked': 0, 'dropped': 0, 'conflict': 0, 'low': 0, 'gave_up': 0}
 
 
-def run_day(db, store, s, env, day, *, lane, mode, now_fn, chat=None, max_chunks=None, material=None, log=None):
-    """Extract one local day into `lane`. -> summary (counts and cost only, never text)."""
+def run_day(db, store, s, env, day, *, lane, mode, now_fn, chat=None, max_chunks=None, material=None, renew=None):
+    """Extract one local day into `lane`. -> summary (counts and cost only, never text).
+
+    Work is tracked per block (one conversation, one group of sentences, one segment, one chat stretch, one rating):
+    a block whose fingerprint is done is never sent again, so a block added earlier in the day costs one call for the
+    new material only. A paid answer not yet written is written first, without a new call, while its blocks are
+    unchanged. A chunk failing MAX_ATTEMPTS times is given up (its blocks are recorded as gave_up)."""
     if lane not in ('live', 'replay') or mode not in STEP:
         raise ValueError('lane / mode')
     if mode == 'daily' and lane != 'live':
@@ -534,26 +546,37 @@ def run_day(db, store, s, env, day, *, lane, mode, now_fn, chat=None, max_chunks
     jobs = db['library_jobs']
     jid = f'extract:{lane}:{day}'
     material = material or gather(db, s, day)
-    parts = chunks(material)
+    by_fp = {b['fp']: b for b in material['blocks']}
     job = jobs.find_one({'_id': jid}) or {}
-    done = dict(job.get('chunks') or {})
-    fingerprint = _fp([c['fp'] for c in parts])[:32]
-    summary = {'day': day, 'lane': lane, 'mode': mode, 'state': 'done', 'chunks': len(parts), 'skipped': 0, 'calls': 0,
-               'cost_usd': 0.0, 'counts': _counter(), 'kinds': {}, 'flags': {}, 'reason': None}
+    bstate = {k: v for k, v in (job.get('blocks') or {}).items() if k in by_fp}
+    cstate = {k: v for k, v in (job.get('chunks') or {}).items() if v.get('state') in ('answered', 'error')
+              and all(b in by_fp for b in v.get('blocks') or [])}
+    undone = [b for b in material['blocks'] if b['fp'] not in bstate]
+    parts, taken = [], set()
+    for cfp, c in cstate.items():           # paid answers first, while their blocks are unchanged and still undone
+        if c['state'] == 'answered' and not set(c['blocks']) & taken and all(b not in bstate for b in c['blocks']):
+            parts.append({**_chunk([by_fp[b] for b in c['blocks']]), 'fp': cfp})
+            taken.update(c['blocks'])
+    parts += pack([b for b in undone if b['fp'] not in taken])
+    summary = {'day': day, 'lane': lane, 'mode': mode, 'state': 'done', 'chunks': len(parts), 'blocks': len(by_fp),
+               'skipped': len(by_fp) - len(undone), 'calls': 0, 'cost_usd': 0.0, 'counts': _counter(), 'kinds': {},
+               'flags': {}, 'reason': None}
     base = {'step': 'extract', 'lane': lane, 'day': day, 'mode': mode, 'prompt_version': PROMPT_VERSION, 'model': MODEL,
-            'fingerprint': fingerprint, 'chunk_fps': [c['fp'] for c in parts]}
-    jobs.update_one({'_id': jid}, {'$set': {**base, 'state': 'running', 'updated_at': now_fn()}}, upsert=True)
+            'fingerprint': _fp(sorted(by_fp))[:32], 'block_fps': list(by_fp)}
+
+    def save(**extra):
+        jobs.update_one({'_id': jid}, {'$set': {**base, 'blocks': bstate, 'chunks': cstate, 'updated_at': now_fn(), **extra}},
+                        upsert=True)
+
+    save(state='running')
     scope_id = speech_settings.scope(s)['id']
     processed = 0
     try:
         for chunk in parts:
-            entry = done.get(chunk['fp']) or {}
-            if entry.get('state') == 'done':
-                summary['skipped'] += 1
-                continue
             if max_chunks is not None and processed >= max_chunks:
                 summary['state'] = 'partial'
                 break
+            entry = cstate.get(chunk['fp']) or {}
             result = entry.get('result') if entry.get('state') == 'answered' else None
             run_id = entry.get('run_id')
             if result is None:
@@ -576,19 +599,34 @@ def run_day(db, store, s, env, day, *, lane, mode, now_fn, chat=None, max_chunks
                 _add_spend(db, mode, local_day(now, s['tz']), cost, now)
                 summary['calls'] += 1
                 summary['cost_usd'] += cost
-                if err:
-                    raise RuntimeError('extraction call failed')
-                items, dropped = validate(out, chunk, material, known)
+                try:
+                    if err:
+                        raise RuntimeError('extraction call failed')
+                    items, dropped = validate(out, chunk, material, known)
+                except (RuntimeError, ValueError) as e:
+                    attempts = int(entry.get('attempts') or 0) + 1
+                    if attempts >= MAX_ATTEMPTS:      # give up on this chunk, record it, go on with the rest
+                        for b in chunk['blocks']:
+                            bstate[b] = {'state': 'gave_up', 'at': now}
+                        cstate.pop(chunk['fp'], None)
+                        summary['counts']['gave_up'] += 1
+                        save()
+                        continue
+                    cstate[chunk['fp']] = {'state': 'error', 'blocks': chunk['blocks'], 'attempts': attempts,
+                                           'error': type(e).__name__, 'at': now}
+                    save()
+                    summary.update(state='error', reason='call_failed')
+                    break
                 result = {'items': items, 'dropped': dropped}
-                done[chunk['fp']] = {'state': 'answered', 'run_id': run_id, 'cost_usd': cost, 'result': result, 'at': now}
-                jobs.update_one({'_id': jid}, {'$set': {'chunks': done, 'updated_at': now}})
+                cstate[chunk['fp']] = {'state': 'answered', 'blocks': chunk['blocks'], 'run_id': run_id, 'cost_usd': cost,
+                                       'result': result, 'at': now}
+                save()
                 reason = gate(db, store, s, env, mode, now_fn()) if mode == 'daily' else (None if switch_on(db) else 'switch_off')
                 if reason in ('switch_off', 'mind_off', 'learning_off', 'no_model'):   # paid, but switched off meanwhile
                     summary.update(state='stopped', reason=reason)
                     break
             counts = _counter()
             counts['dropped'] = result.get('dropped', 0)
-            ids = []
             for fields, key, target in result['items']:
                 try:
                     action, rec = lib.put_derived(fields, lane=lane, key=key, target_id=target, now_ms=now_fn(),
@@ -602,7 +640,6 @@ def run_day(db, store, s, env, day, *, lane, mode, now_fn, chat=None, max_chunks
                     counts['dropped'] += 1
                     continue
                 counts[action] += 1
-                ids.append(rec['memory_id'])
                 if action in ('created', 'updated'):
                     summary['kinds'][fields['kind']] = summary['kinds'].get(fields['kind'], 0) + 1
                     for f in fields['sensitivity']:
@@ -611,25 +648,26 @@ def run_day(db, store, s, env, day, *, lane, mode, now_fn, chat=None, max_chunks
                         counts['low'] += 1
             for k, v in counts.items():
                 summary['counts'][k] += v
-            done[chunk['fp']] = {**done.get(chunk['fp'], {}), 'state': 'done', 'result': None, 'counts': counts,
-                                 'memory_ids': ids[:40], 'at': now_fn()}
-            jobs.update_one({'_id': jid}, {'$set': {'chunks': done, 'updated_at': now_fn()}})
+            for b in chunk['blocks']:
+                bstate[b] = {'state': 'done', 'at': now_fn()}
+            cstate.pop(chunk['fp'], None)           # written: no memory text stays in the job
+            save()
             processed += 1
+            if renew:
+                renew()
     except Exception as e:                 # noqa: BLE001 - recorded on the job; retried later
         summary.update(state='error', reason=type(e).__name__)
     summary['cost_usd'] = round(summary['cost_usd'], 6)
     final = summary['state']
     totals = _counter()
-    for c in parts:
-        for k, v in ((done.get(c['fp']) or {}).get('counts') or {}).items():
-            totals[k] = totals.get(k, 0) + v
-    whole = now_fn() >= day_range(day, s['tz'])[1]     # run after the day ended: nothing of it can come later
-    jobs.update_one({'_id': jid}, {'$set': {**base, 'state': final, 'reason': summary['reason'], 'counts': totals,
-                                            'whole_day': whole,
-                                            'cost_usd': round(float(job.get('cost_usd') or 0) + summary['cost_usd'], 6),
-                                            'next_retry': now_fn() + RETRY_MS if final == 'error' else 0,
-                                            'updated_at': now_fn(), **({'finished_at': now_fn()} if final == 'done' else {})}})
-    summary['state'] = final
+    for k, v in (job.get('counts') or {}).items():
+        totals[k] = totals.get(k, 0) + v
+    for k, v in summary['counts'].items():
+        totals[k] = totals.get(k, 0) + v
+    whole = now_fn() >= day_range(day, s['tz'])[1] + WHOLE_AFTER_MS   # nothing of the day can still arrive
+    save(state=final, reason=summary['reason'], counts=totals, whole_day=whole,
+         cost_usd=round(float(job.get('cost_usd') or 0) + summary['cost_usd'], 6),
+         next_retry=now_fn() + RETRY_MS if final == 'error' else 0, **({'finished_at': now_fn()} if final == 'done' else {}))
     return summary
 
 
@@ -646,8 +684,12 @@ def request_run(db, s, now_ms, day=None):
     if not isinstance(day, str) or not DAY_RE.match(day):
         raise ValueError('日期形如 2026-11-14')
     datetime.date.fromisoformat(day)
-    if day > local_day(now_ms, s['tz']):
+    today = local_day(now_ms, s['tz'])
+    since = (db['library_jobs'].find_one({'_id': 'config:extract'}) or {}).get('daily_since') or today
+    if day > today:
         raise ValueError('不能整理以后的日子')
+    if day != today and day < since:
+        raise ValueError(f'{since} 以前的日子用回填整理')
     db['library_jobs'].update_one({'_id': 'request:live'}, {'$set': {'state': 'pending', 'day': day, 'at': now_ms}}, upsert=True)
     return {'day': day, 'state': 'pending'}
 
@@ -667,6 +709,7 @@ def tick(db, store, settings_store, env, now_ms, chat=None, now_fn=None):
     reason = gate(db, store, s, env, 'daily', now_ms)
     if reason:
         return {'state': reason}
+    waiting = False
     if pending:
         day = req['day']
     else:
@@ -676,11 +719,12 @@ def tick(db, store, settings_store, env, now_ms, chat=None, now_fn=None):
             if job.get('state') == 'done' and job.get('whole_day'):
                 continue                   # an on-demand run during that day leaves it for the daily run
             if job.get('next_retry', 0) > now_ms:
-                return {'state': 'backoff'}
+                waiting = True             # a failing day waits; the other days go on
+                continue
             day = d
             break
         if day is None:
-            return {'state': 'idle'}
+            return {'state': 'backoff' if waiting else 'idle'}
         if not room_idle(db, now_ms):
             return {'state': 'room_busy'}
     owner = uuid.uuid4().hex
@@ -688,7 +732,7 @@ def tick(db, store, settings_store, env, now_ms, chat=None, now_fn=None):
         return {'state': 'busy'}
     try:
         summary = run_day(db, store, s, env, day, lane='live', mode='daily', now_fn=now_fn, chat=chat,
-                          max_chunks=MAX_CHUNKS_PER_TICK)
+                          max_chunks=MAX_CHUNKS_PER_TICK, renew=lambda: _lease(db, owner, now_fn()))
     finally:
         _release(db, owner)
     if pending and summary['state'] in ('done', 'error', 'stopped'):
@@ -699,8 +743,8 @@ def tick(db, store, settings_store, env, now_ms, chat=None, now_fn=None):
 
 def _job_row(j):
     return {k: j.get(k) for k in ('lane', 'day', 'mode', 'state', 'reason', 'counts', 'cost_usd', 'updated_at', 'finished_at')} | \
-        {'chunks': len(j.get('chunk_fps') or []),
-         'chunks_done': sum(1 for fp in j.get('chunk_fps') or [] if ((j.get('chunks') or {}).get(fp) or {}).get('state') == 'done')}
+        {'chunks': len(j.get('block_fps') or []),
+         'chunks_done': sum(1 for fp in j.get('block_fps') or [] if fp in (j.get('blocks') or {}))}
 
 
 def status(db, store, s, now_ms):
@@ -741,9 +785,9 @@ def format_summary(x):
     kinds = ' '.join(f'{k}={v}' for k, v in sorted(x['kinds'].items())) or '-'
     flags = ' '.join(f'{k}={v}' for k, v in sorted(x['flags'].items())) or '-'
     return (f"{x['day']} {x['lane']}: {x['state']}{' (' + x['reason'] + ')' if x.get('reason') else ''}, "
-            f"chunks {x['chunks']} (skipped {x['skipped']}), calls {x['calls']}, ${x['cost_usd']:.4f}; "
+            f"blocks {x['blocks']} (already done {x['skipped']}), chunks {x['chunks']}, calls {x['calls']}, ${x['cost_usd']:.4f}; "
             f"created {c['created']} updated {c['updated']} unchanged {c['unchanged']} blocked {c['blocked']} "
-            f"dropped {c['dropped']} conflict {c['conflict']} low {c['low']}; kinds {kinds}; flags {flags}")
+            f"dropped {c['dropped']} conflict {c['conflict']} low {c['low']} gave_up {c['gave_up']}; kinds {kinds}; flags {flags}")
 
 
 def backfill(db, store, s, env, days, *, lane, now_fn, chat=None, log=print, dry_run=False):
@@ -764,7 +808,8 @@ def backfill(db, store, s, env, days, *, lane, now_fn, chat=None, log=print, dry
                 totals['cost_usd'] += e['est_usd']
                 totals['days'] += 1
                 continue
-            x = run_day(db, store, s, env, day, lane=lane, mode='backfill', now_fn=now_fn, chat=chat, material=material)
+            x = run_day(db, store, s, env, day, lane=lane, mode='backfill', now_fn=now_fn, chat=chat, material=material,
+                        renew=lambda: _lease(db, owner, now_fn()))
             log(format_summary(x))
             totals['days'] += 1
             totals['calls'] += x['calls']
@@ -777,7 +822,6 @@ def backfill(db, store, s, env, days, *, lane, now_fn, chat=None, log=print, dry
             if x['state'] != 'done':
                 totals['state'] = x['state']
                 break
-            _lease(db, owner, now_fn())   # renew between days
     finally:
         if not dry_run:
             _release(db, owner)

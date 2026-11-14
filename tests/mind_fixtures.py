@@ -74,6 +74,9 @@ class FakeCursor:
         self.docs = self.docs[n:]
         return self
 
+    def batch_size(self, n):
+        return self
+
     def __iter__(self):
         return iter(copy.deepcopy(self.docs))
 

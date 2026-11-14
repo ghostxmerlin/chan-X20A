@@ -31,6 +31,8 @@ def fields(**kw):
 
 
 def put(lib, lane='live', key='k1', **kw):
+    if 'derived_from' not in kw:          # each key its own sentence: distinct memories do not share sources
+        kw['derived_from'] = [REFS[0], {'c': 'speech', 'key': {'session': 'S', 'id': key}, 'pos': [16000, 32000]}]
     return lib.put_derived(fields(**kw), lane=lane, key=key, run={'job_id': 'j', 'run_id': 'r', 'model': 'm',
                                                                   'prompt_version': 'p', 'at': T0},
                            now_ms=T0, scope_id='office', day=DAY)
@@ -124,6 +126,27 @@ class LibraryWritePathTest(unittest.TestCase):
         self.assertEqual(put(self.lib, derived_from=ok)[0], 'created')
         self.assertEqual(self.db.count('memory_items'), 1)
 
+    def test_shared_sentences_block_a_reworded_copy_of_a_disabled_memory(self):
+        refs = [{'c': 'speech', 'key': {'session': 'S', 'id': i}} for i in ('x1', 'x2')]
+        _, a = put(self.lib, key='ka', derived_from=refs)
+        self.lib.review(a['memory_id'], 1, 'wrong', now_ms=T0)
+        for kind in ('event', 'told'):
+            self.assertEqual(put(self.lib, key='kz' + kind, kind=kind, title='全新的标题', derived_from=refs[:1])[0], 'blocked')
+        _, b = put(self.lib, key='kb', derived_from=[{'c': 'speech', 'key': {'session': 'S', 'id': 'y1'}}])
+        action, rec = put(self.lib, key='kc', title='又一个标题', statement='更完整的说法',
+                          derived_from=[{'c': 'speech', 'key': {'session': 'S', 'id': 'y1'}}, {'c': 'chat_turns', 'key': {'tid': 't9'}}])
+        self.assertEqual((action, rec['memory_id']), ('updated', b['memory_id']))      # half its sentences: the same
+        self.assertEqual(self.db.count('memory_recall'), 2)
+
+    def test_recall_sync_never_goes_back_a_version(self):
+        _, rec = put(self.lib)
+        _, rec2 = put(self.lib, statement='第二版')
+        self.assertFalse(self.lib._sync_recall(rec))
+        self.assertEqual(self.db['memory_recall'].docs[0]['version'], 2)
+        self.db['memory_recall'].docs[0].update(version=1, statement='旧的')
+        self.lib._resync(rec['memory_id'])
+        self.assertEqual(self.db['memory_recall'].docs[0]['statement'], '第二版')
+
     def test_low_confidence_is_stored_but_not_recallable(self):
         _, rec = put(self.lib, confidence='low')
         self.assertFalse(recall_row(rec)['recallable'])
@@ -162,7 +185,7 @@ class LibraryReadPathTest(unittest.TestCase):
     def test_changes_and_sources(self):
         self.db.add('conversations', {'cid': 'c1', 'start_ms': T0, 'end_ms': T0 + 60_000, 'title': '纪要标题', 'notes': '纪要内容', 'version': 2})
         self.db.add('speech', speech('S', 'a', T0 + 1000, '原话甲', pos=[16000, 32000]))
-        _, rec = put(self.lib)
+        _, rec = put(self.lib, derived_from=copy.deepcopy(REFS))
         self.lib.put('memory_items', {'kind': 'event', 'title': '手写', 'statement': '手写的', 'when': {'type': 'point', 'start_ms': T0}},
                      item_id=None, expected_version=None, scope_id='office', now_ms=T0)
         ch = self.lib.changes()
@@ -187,11 +210,14 @@ class ExtractModel:
         if self.items is not None:
             items = self.items(text) if callable(self.items) else self.items
         else:
-            c = re.search(r'\b(c\d+) 对话', text).group(1)
-            s = re.search(r'\b(s\d+) ', text).group(1)
-            items = [item(evidence=[c, s])]
+            items = [item(evidence=[tok(text, 'c'), tok(text, 's')])]
         return {'choices': [{'message': {'content': json.dumps({'items': items}, ensure_ascii=False)}}],
                 'usage': {'prompt_tokens': 10000, 'completion_tokens': 1000}}, 900, None
+
+
+def tok(text, prefix, n=0):
+    """The n-th material id with this prefix in a prompt (block codes: c3fa9, s3fa9.2, g81bc, t0d2e.1, o77aa)."""
+    return re.findall(rf'(?<![\w.])({prefix}[0-9a-f]{{4,}}(?:\.\d+)?)(?= )', text)[n]
 
 
 def item(**kw):
@@ -261,7 +287,7 @@ class ExtractJobTest(_JobBase):
         self.assertIn({'id': 'owner', 'role': 'speaker'}, rec['people'])          # from the voiceprint
         self.assertEqual((rec['lane'], rec['day'], rec['run']['model']), ('live', DAY, 'gpt-6-luna'))
         again = self.run_day()
-        self.assertEqual((again['calls'], again['skipped']), (0, 1))
+        self.assertEqual((again['calls'], again['skipped'], again['blocks']), (0, 4, 4))
         self.assertEqual(len(self.model.calls), 1)
         self.assertEqual(self.db.count('memory_items'), 1)
 
@@ -278,7 +304,7 @@ class ExtractJobTest(_JobBase):
         rec = self.db['memory_items'].docs[0]
         Library(self.db).review(rec['memory_id'], 1, 'wrong', now_ms=self.now[0])
         self.db['conversations'].docs[0]['title'] = '周末安排二'
-        self.model.items = lambda text: [item(evidence=[re.search(r'\b(c\d+) 对话', text).group(1), 's1'], statement='又说了一遍')]
+        self.model.items = lambda text: [item(evidence=[tok(text, 'c'), tok(text, 's')], statement='又说了一遍', title='换了说法的标题')]
         x = self.run_day()
         self.assertEqual(x['counts']['blocked'], 1)
         self.assertIn('主人否定过', self.model.calls[-1]['messages'][-1]['content'])
@@ -298,15 +324,15 @@ class ExtractJobTest(_JobBase):
 
     def test_ungrounded_items_are_dropped_one_by_one(self):
         self.model.items = lambda text: [item(evidence=['c99']), item(evidence=['o1']), item(evidence=[]),
-                                         item(evidence=['s1'], people=[{'id': 'p_000000000000', 'role': 'about', 'name_text': ''}]),
-                                         item(evidence=['g1'], kind='weird')]
+                                         item(evidence=[tok(text, 's')], people=[{'id': 'p_000000000000', 'role': 'about', 'name_text': ''}]),
+                                         item(evidence=[tok(text, 'g')], kind='weird')]
         x = self.run_day()
         self.assertEqual((x['counts']['created'], x['counts']['dropped']), (1, 4))
         self.assertEqual(self.db['memory_items'].docs[0]['people'], [{'id': 'owner', 'role': 'speaker'}])
 
     def test_child_and_others_flags_and_low_confidence(self):
-        self.model.items = lambda text: [item(evidence=['s1'], sensitivity=['child'], title='孩子的事'),
-                                         item(evidence=['g1'], confidence='low', title='听不清的事')]
+        self.model.items = lambda text: [item(evidence=[tok(text, 's')], sensitivity=['child'], title='孩子的事'),
+                                         item(evidence=[tok(text, 'g')], confidence='low', title='听不清的事')]
         x = self.run_day()
         self.assertEqual((x['flags'], x['counts']['low']), ({'child': 1}, 1))
         rows = {r['title']: r for r in self.db['memory_recall'].docs}
@@ -342,7 +368,7 @@ class ExtractJobTest(_JobBase):
     def test_a_paid_answer_switched_off_meanwhile_is_kept_and_written_later_without_a_new_call(self):
         def answer(text):
             self.db['switches'].update_one({'_id': 'memory_extract'}, {'$set': {'on': False}}, upsert=True)
-            return [item(evidence=['s1'])]
+            return [item(evidence=[tok(text, 's')])]
         self.model.items = answer
         x = self.run_day()
         self.assertEqual((x['state'], x['reason'], self.db.count('memory_items')), ('stopped', 'switch_off', 0))
@@ -362,7 +388,7 @@ class ExtractJobTest(_JobBase):
         self.run_day()
         mid = self.db['memory_items'].docs[0]['memory_id']
         self.db['conversations'].docs[0]['notes'] = '变了'
-        self.model.items = lambda text: [item(evidence=['g1'], same_as=mid, title='完全不同的标题', statement='合并说法')]
+        self.model.items = lambda text: [item(evidence=[tok(text, 'c')], same_as=mid, title='完全不同的标题', statement='合并说法')]
         x = self.run_day()
         self.assertEqual(x['counts']['updated'], 1)
         self.assertEqual(self.db.count('memory_recall'), 1)
@@ -396,6 +422,85 @@ class ExtractJobTest(_JobBase):
             self.assertIn(why, str(e.exception))
 
 
+class ReviewFixesJobTest(_JobBase):
+    """Review of f7a59ac: stable block fingerprints, never revive, attempts, whole day, leases."""
+
+    def test_an_earlier_conversation_costs_one_call_and_revives_nothing(self):
+        self.run_day()
+        mid = self.db['memory_items'].docs[0]['memory_id']
+        Library(self.db).review(mid, 1, 'wrong', now_ms=self.now[0])
+        calls = len(self.model.calls)
+        self.db.add('speech', speech('S', 'x0', T0 - 600_000, '更早的一段话里说起别的事'))
+        self.db.add('conversations', {'cid': 'c0', 'start_ms': T0 - 600_000, 'end_ms': T0 - 540_000, 'last_ms': T0 - 600_000,
+                                      'version': 1, 'title': '更早的事', 'notes': '说起别的', 'confidence': 'mid',
+                                      'refs': [['speech', 'S', 'x0']]})
+        # the model, seeing the old sentences again, would re-extract the disabled memory under a new wording
+        self.model.items = lambda text: [item(evidence=[tok(text, 'c'), tok(text, 's')], title='另一种说法完全不同')]
+        x = self.run_day()
+        self.assertEqual(len(self.model.calls) - calls, 1)                     # only the new conversation's block
+        sent = self.model.calls[-1]['messages'][-1]['content']
+        self.assertIn('更早的一段话', sent)
+        self.assertNotIn('我们周末去爬山吧', sent)
+        self.assertEqual(x['counts']['created'], 1)
+        self.assertEqual(Library(self.db).head('memory_items', mid)['status'], 'disabled')
+        # and the old block, sent again after its notes change, cannot bring the disabled memory back
+        self.db['conversations'].docs[0]['notes'] = '两人约周末爬山，改了时间'
+        self.model.items = lambda text: [item(evidence=[tok(text, 'c'), tok(text, 's')], kind='told', title='完全换了的标题')]
+        x = self.run_day()
+        self.assertEqual((x['counts']['blocked'], x['counts']['created']), (1, 0))
+        self.assertEqual(sum(1 for r in self.db['memory_recall'].docs if r['status'] == 'active'), 1)
+
+    def test_block_text_does_not_depend_on_other_blocks(self):
+        before = {b['fp'] for b in mx.gather(self.db, self.s, DAY)['blocks']}
+        self.db.add('mind_segments', {'lane': 'live', 'start': T0 - 3600_000, 'end': T0 - 3000_000, 'version': 1,
+                                      'summary': {'title': '更早的段', 'text': '更早', 'confidence': 'mid'}})
+        after = {b['fp'] for b in mx.gather(self.db, self.s, DAY)['blocks']}
+        self.assertEqual(len(after - before), 1)
+        self.assertTrue(before <= after)
+
+    def test_a_failing_chunk_is_given_up_after_three_attempts(self):
+        self.model.fail = True
+        for i in range(mx.MAX_ATTEMPTS - 1):
+            self.assertEqual(self.run_day()['state'], 'error')
+        x = self.run_day()
+        self.assertEqual((x['state'], x['counts']['gave_up']), ('done', 1))
+        job = self.db['library_jobs'].find_one({'_id': f'extract:live:{DAY}'})
+        self.assertTrue(all(v['state'] == 'gave_up' for v in job['blocks'].values()))
+        self.assertEqual(self.run_day()['calls'], 0)
+
+    def test_whole_day_only_an_hour_after_midnight(self):
+        lo, hi = mx.day_range(DAY, self.s['tz'])
+        self.model.items = []
+        self.now[0] = hi + 30 * 60_000
+        self.run_day()
+        self.assertFalse(self.db['library_jobs'].find_one({'_id': f'extract:live:{DAY}'})['whole_day'])
+        self.now[0] = hi + 2 * 3600_000
+        self.db['conversations'].docs[0]['notes'] = '改了'
+        self.run_day()
+        self.assertTrue(self.db['library_jobs'].find_one({'_id': f'extract:live:{DAY}'})['whole_day'])
+
+    def test_backfill_renews_the_lease_per_chunk(self):
+        old = mx.MAX_CHUNK_CHARS
+        mx.MAX_CHUNK_CHARS = 60
+        self.addCleanup(setattr, mx, 'MAX_CHUNK_CHARS', old)
+        self.model.items = []
+        seen = []
+        real = mx._lease
+        self.addCleanup(setattr, mx, '_lease', real)
+        mx._lease = lambda db, owner, now: seen.append(now) or real(db, owner, now)
+        mx.backfill(self.db, self.store, self.s, ENV, [DAY], lane='replay', now_fn=lambda: self.now[0], chat=self.model,
+                    log=lambda m: None)
+        self.assertEqual(len(seen), 1 + 4)                                      # take + once per chunk (4 blocks)
+
+    def test_on_demand_only_today_or_from_the_daily_start(self):
+        self.db['library_jobs'].docs.append({'_id': 'config:extract', 'daily_since': '2026-11-12'})
+        now = T0 + 3 * 86_400_000                                               # 2026-11-13
+        with self.assertRaises(ValueError):
+            mx.request_run(self.db, self.s, now, '2026-11-11')
+        self.assertEqual(mx.request_run(self.db, self.s, now, '2026-11-12')['state'], 'pending')
+        self.assertEqual(mx.request_run(self.db, self.s, now)['day'], '2026-11-13')
+
+
 class DailyTickTest(_JobBase):
     def tick(self, now):
         return mx.tick(self.db, self.store, self.ss, ENV, now, chat=self.model, now_fn=lambda: now)
@@ -424,6 +529,14 @@ class DailyTickTest(_JobBase):
         self.assertEqual(self.tick(nxt + 1)['state'], 'idle')
         with self.assertRaises(ValueError):
             mx.request_run(self.db, self.s, T0, '2099-01-01')
+
+    def test_a_day_in_backoff_does_not_stall_the_next(self):
+        self.tick(T0)
+        self.db['library_jobs'].update_one({'_id': 'config:extract'}, {'$set': {'daily_since': '2026-11-09'}})
+        now = T0 + 86_400_000 + mx.IDLE_MS + 10
+        self.db['library_jobs'].docs.append({'_id': 'extract:live:2026-11-09', 'state': 'error', 'next_retry': now + 1000})
+        r = self.tick(now)
+        self.assertEqual((r['state'], r['day']), ('done', DAY))
 
     def test_learning_off_means_no_daily_run(self):
         self.s['memory']['learning'] = False
@@ -486,6 +599,34 @@ class RecallPoolTest(unittest.TestCase):
         recall.note_uses(self.db, recall.pick_for_talk(self.db, rows, ['明天考试'], T0 + 1), 'talk', T0 + 1)
         self.assertEqual(recall.pick_for_talk(self.db, rows, ['明天考试'], T0 + 2), [])
         self.assertEqual(len(recall.pick_for_talk(self.db, rows, ['明天考试'], T0 + recall.TALK_COOLDOWN_MS + 2)), 1)
+
+    def test_talk_show_lines_carry_the_usage_note(self):
+        self.add('u', '考试的安排变了', people=[{'id': 'unknown', 'role': 'speaker'}])
+        got = recall.pick_for_talk(self.db, recall.library_rows(self.db), ['考试'], T0)
+        self.assertEqual(len(got), 1)
+        self.assertIn('只接他说的话，不评价他本人', got[0]['statement'])
+        self.assertIn('只提意思', got[0]['statement'])
+
+    def test_realtime_crowd_gets_habit_memories_only(self):
+        self.db.add('mind_memories', {'lane': 'live', 'scope_id': 'office', 'memory_id': 'm1', 'version': 1, 'status': 'known',
+                                      'statement': '习惯甲', 'kind': 'habit', 'manual': True, 'last_seen': T0})
+        self.add('w', '下周的工作计划')
+        pool = recall.load_pool(self.db, self.s, T0)
+        self.assertEqual(recall.plain(pool, crowd=True), ['习惯甲'])
+        self.assertEqual(len(recall.plain(pool)), 2)
+
+    def test_private_memories_reach_chat_only_for_the_owner(self):
+        self.add('h', '主人最近身体不太舒服', sensitivity=['private'])
+        self.add('k', '孩子最近身体很好', sensitivity=['child'])
+        pool = recall.load_pool(self.db, self.s, T0)
+        ask = {'text': '你主人最近身体怎么样'}
+        for person in (None, {'person_id': 'p_0123456789ab', 'display': '访客甲'}):
+            system = chat_mod.messages({'memories': pool, 'person': person}, ask, [], {'max_chars': 40}, None)[0]['content']
+            self.assertNotIn('不太舒服', system)
+            self.assertIn('孩子最近身体很好', system)                      # child stays (annotated)
+        system = chat_mod.messages({'memories': pool, 'person': {'person_id': 'owner', 'display': '主人'}}, ask, [],
+                                   {'max_chars': 40}, None)[0]['content']
+        self.assertIn('不太舒服', system)
 
     def test_talk_show_respects_the_person_card(self):
         card = self.lib.put('people_cards', {'kind': 'regular', 'display': '人物甲', 'treatment': {'tease': 'never', 'quote': 'gist'}},
