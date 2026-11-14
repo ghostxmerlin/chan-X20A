@@ -23,9 +23,10 @@ const SWITCH_NAMES={tingwu:'听悟',eye:'识别',notes:'纪要',mind:'情景',sc
 const modeName=(mode,dir)=>NAMES[mode]?(mode==='subtitle'&&DIRS[dir]?`字幕 ${DIRS[dir]}`:NAMES[mode]):String(mode??'—');
 
 // GET /mode reply -> what the bar shows. Unknown (mind not reached, bad reply) is never shown as a mode.
-export function modeView(state){
+// why (unknown only): 'absent' = mind answers but has no /mode yet (404, before the modes deploy); else not reached.
+export function modeView(state,why=null){
  const s=state?.snapshot;
- if(!s||typeof s.mode!=='string')return {known:false,mode:null,name:'模式未知',label:'',color:null,since:null,by:null,
+ if(!s||typeof s.mode!=='string')return {known:false,why:why==='absent'?'absent':'down',mode:null,name:'模式未知',label:'',color:null,since:null,by:null,
   synced:'offline',billing:null,event:null,dir:null,returnTo:null,seq:null};
  const robot=state.robot||{};
  const synced=!robot.connected?'offline':robot.applied_seq===s.seq?'yes':'waiting';
@@ -47,7 +48,8 @@ export function logLine(r){
 const SYNC={yes:'机器人已显示',waiting:'等机器人',offline:'机器人离线（连上后照这个显示）'};
 export function modeBarHtml(view,log){
  const v=view||modeView(null),dis=v.known?'':' disabled';
- const head=!v.known?'<span class="mode-name">模式未知</span><span class="mode-note">情景服务没连上，按钮先不能用</span>':
+ const head=!v.known?(v.why==='absent'?'<span class="mode-name">mind 还没有模式功能（等上线）</span><span class="mode-note">情景服务连着，只是还没有模式；按钮先不能用</span>':
+   '<span class="mode-name">模式未知（情景服务没连上）</span><span class="mode-note">按钮先不能用</span>'):
   `<span class="mode-chip"${v.color?` data-color="${v.color}"`:''}>${esc(v.label)}</span>`+
   `<span class="mode-name">${esc(v.name)}</span>`+
   (v.event?`<span class="mode-auto" title="${v.event==='hosting'?'事件驱动托管中':'事件驱动等待中'}">${v.event==='hosting'?'A':'AUTO'}</span>`:'')+
@@ -61,7 +63,7 @@ export function modeBarHtml(view,log){
  const rows=(Array.isArray(log)?log:[]).slice(0,10);
  const list=rows.length?`<ol>${rows.map(r=>`<li>${logLine(r)}</li>`).join('')}</ol>`:'<p class="mode-note">还没有切换记录</p>';
  return `<div class="mode-now">${head}</div><div class="mode-buttons" role="group" aria-label="切换模式">${buttons}</div>`+
-  `<details class="mode-log"><summary>最近 ${rows.length} 次</summary>${list}</details>`;
+  `<details class="mode-log"><summary>最近 ${rows.length} 次</summary><div class="mode-pop">${list}</div></details>`;
 }
 
 // talk: optional {prefetch, auto, family} booleans (null = unknown) from the say stats / speech settings.
@@ -72,8 +74,10 @@ export function quickHtml(view,talk=null){
  const keys=Object.entries(PRESETS).map(([n,name])=>
   `<button data-preset="${n}" title="${esc(name)}"${!known||UNDEFINED_PRESETS.has(Number(n))?' disabled':''}>${n}</button>`).join('');
  const word=b=>b===true?'开':b===false?'关':'未知';
- const t=talk?`<span class="mode-note mode-talk">提前写 ${word(talk.prefetch)} · 连续说 ${word(talk.auto)} · 家人声音 ${word(talk.family)}</span>`:'';
- return `<div class="mode-quick-row">${sw}${note}</div><div class="mode-presets" role="group" aria-label="预设 0–9">${keys}</div>${t}`;
+ const t=talk?`<p class="mode-note mode-talk">提前写 ${word(talk.prefetch)} · 连续说 ${word(talk.auto)} · 家人声音 ${word(talk.family)}</p>`:'';
+ // the keys fold into a small box so the bar stays one compact row on wide screens (review I2)
+ return `${sw}${note}<details class="mode-presets-box"><summary>预设 0–9</summary><div class="mode-pop">`+
+  `<div class="mode-presets" role="group" aria-label="预设 0–9">${keys}</div>${t}</div></details>`;
 }
 
 // The robot half mind names for a preset, in the switch bar's tier names. Anything else is dropped.
@@ -131,73 +135,123 @@ export function billingMessage(r){
  return [on===true?'计费总闸已开':on===false?'计费总闸已关':'计费总闸状态未知',resultText(r?.result),failedText(r?.failed)].filter(Boolean).join('；');
 }
 
-async function postJson(path,body){
- const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
- if(!r.ok)throw new Error(await r.text());
- return r.json();
+async function fetchJson(fetchFn,path,ms=4000){
+ try{const r=await fetchFn(path,{signal:AbortSignal.timeout(ms)});return {status:r.status,body:r.ok?await r.json():null};}
+ catch{return {status:0,body:null};}
 }
-async function getJson(path,ms=4000){
- try{const r=await fetch(path,{signal:AbortSignal.timeout(ms)});return r.ok?await r.json():null;}catch{return null;}
+function poster(fetchFn){
+ return async(path,body)=>{
+  const r=await fetchFn(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
+  if(!r.ok)throw new Error(await r.text());
+  return r.json();
+ };
+}
+const lookOf=v=>v?.known?`${v.mode}|${v.dir}|${v.billing}`:null;
+
+// The bar's logic without the DOM (tests drive it with a fake fetch). paint() after every change; emit(view) once per
+// mode / dir / billing / seq change (modechange for the say panel). Each read carries a number and only the newest
+// answer counts, so a slow old reply can't repaint an old mode or fire modechange twice (review M1).
+export class ModeModel{
+ constructor({fetchFn=globalThis.fetch,post=null,paint=()=>{},emit=()=>{}}={}){
+  Object.assign(this,{fetchFn,paint,emit});this.post=post||poster(fetchFn);
+  this.state=null;this.why='down';this.view=modeView(null);this.talk=null;this.msg='';this.pending=false;
+  this.key=undefined;this.ownLook=null;this.pollSeq=0;this.talkSeq=0;
+ }
+ // 404 = this mind has no /mode yet: ask again in a minute instead of every 2 s (review I1)
+ delay(){return this.why==='absent'?60000:2000;}
+ async poll(){
+  const my=++this.pollSeq;
+  const r=await fetchJson(this.fetchFn,'/api/mind/mode');
+  if(my!==this.pollSeq)return false;
+  this.why=r.body?null:r.status===404?'absent':'down';
+  this.state=r.body;this.view=modeView(r.body,this.why);
+  const key=this.view.known?`${this.view.seq}|${lookOf(this.view)}`:`unknown|${this.view.why}`;
+  if(key!==this.key){
+   const first=this.key===undefined;this.key=key;
+   // changed from elsewhere (DualKey, robot, timeout): the line about the page's last click is old now (review M2)
+   if(!first&&!this.pending&&lookOf(this.view)!==this.ownLook)this.msg='';
+   this.emit(this.view);
+   if(this.view.known)void this.readTalk();
+  }
+  this.paint();return true;
+ }
+ async readTalk(){
+  const my=++this.talkSeq;
+  const [st,cfg]=await Promise.all([fetchJson(this.fetchFn,'/api/mind/say/stats?days=1'),fetchJson(this.fetchFn,'/api/mind/speech/settings')]);
+  if(my!==this.talkSeq)return;
+  const b=x=>typeof x==='boolean'?x:null;
+  this.talk=st.body||cfg.body?{prefetch:b(st.body?.prefetch?.on),auto:b(st.body?.auto?.on),family:b(cfg.body?.speech?.round?.family)}:null;
+  this.paint();
+ }
+ // work() -> [message, look the page itself produced (or null)]
+ async act(work){
+  if(this.pending)return;
+  this.pending=true;this.msg='发送中…';this.paint();
+  try{[this.msg,this.ownLook]=await work();}catch(e){this.msg=errorText(e);this.ownLook=null;}
+  this.pending=false;this.paint();
+  await this.poll();
+  void this.readTalk();          // a preset may flip 提前写 / 连续说 without changing the mode or the master switch
+ }
+ dismiss(){if(!this.pending){this.msg='';this.paint();}}
+ select(mode,dir){
+  return this.act(async()=>{
+   const r=await this.post('/api/mind/mode',selectRequest(mode,dir));
+   const v=modeView({snapshot:r.snapshot,robot:this.state?.robot});
+   return [[resultText(r.result)||`现在是 ${v.name}`,effectsText(r.effects,r.snapshot?.billing)].filter(Boolean).join('；'),lookOf(v)];
+  });
+ }
+ preset(n){
+  return this.act(async()=>{
+   const robotState=(await fetchJson(this.fetchFn,'/api/state')).body;
+   const out=await runPreset(n,{post:this.post,robotState});
+   return [out.message,out.reply?.snapshot?lookOf(modeView({snapshot:out.reply.snapshot})):null];
+  });
+ }
+ billing(){
+  return this.act(async()=>{
+   const r=await this.post('/api/mind/switches',billingRequest(this.view.billing));
+   const v=this.view.known&&typeof r?.billing?.on==='boolean'?{...this.view,billing:r.billing.on}:null;
+   return [billingMessage(r),lookOf(v)];
+  });
+ }
 }
 
 export class ModeBar{
  constructor(doc){
   this.doc=doc;this.root=doc.getElementById('modebar');if(!this.root)return;
-  this.state=null;this.view=modeView(null);this.talk=null;this.pending=false;this.msg='';this.seen={main:null,quick:null};this.lastKey=null;
-  this.root.innerHTML='<div class="mode-main"></div><div class="mode-quick" aria-label="快捷设置"></div><p class="mode-msg" role="status"></p>';
+  this.seen={main:null,quick:null};
+  this.root.innerHTML='<div class="mode-main"></div><div class="mode-quick" aria-label="快捷设置"></div><p class="mode-msg" role="status"><span class="mode-msg-text"></span><button class="mode-msg-close" aria-label="关掉这行" title="关掉这行">×</button></p>';
+  this.model=new ModeModel({paint:()=>this.paint(),emit:view=>doc.dispatchEvent(new CustomEvent('modechange',{detail:view}))});
   this.root.addEventListener('click',ev=>this.click(ev));
-  this.poll();setInterval(()=>this.poll(),2000);
- }
- async poll(){
-  this.state=await getJson('/api/mind/mode');
-  this.view=modeView(this.state);
-  const key=this.view.known?`${this.view.seq}|${this.view.mode}|${this.view.dir}|${this.view.billing}`:null;
-  if(key!==this.lastKey){
-   this.lastKey=key;
-   this.doc.dispatchEvent(new CustomEvent('modechange',{detail:this.view}));
-   if(this.view.known)void this.readTalk();
-  }
-  this.paint();
- }
- async readTalk(){
-  const [st,cfg]=await Promise.all([getJson('/api/mind/say/stats?days=1'),getJson('/api/mind/speech/settings')]);
-  const b=x=>typeof x==='boolean'?x:null;
-  this.talk=st||cfg?{prefetch:b(st?.prefetch?.on),auto:b(st?.auto?.on),family:b(cfg?.speech?.round?.family)}:null;
-  this.paint();
- }
- async act(work){
-  if(this.pending)return;
-  this.pending=true;this.msg='发送中…';this.paint();
-  try{this.msg=await work();}catch(e){this.msg=errorText(e);}
-  this.pending=false;this.seen={main:null,quick:null};this.paint();await this.poll();
-  void this.readTalk();          // a preset may flip 提前写 / 连续说 without changing the mode or the master switch
+  // a click outside closes an open 预设 / 最近 box
+  doc.addEventListener('click',ev=>{if(!this.root.contains(ev.target))for(const d of this.root.querySelectorAll('details[open]'))d.open=false;});
+  const loop=async()=>{await this.model.poll();setTimeout(loop,this.model.delay());};
+  void loop();
  }
  click(ev){
   const b=ev.target.closest('button');if(!b||b.disabled||!this.root.contains(b))return;
-  if(b.dataset.mode)this.act(async()=>{
-   const r=await postJson('/api/mind/mode',selectRequest(b.dataset.mode,b.dataset.dir));
-   const v=modeView({snapshot:r.snapshot,robot:this.state?.robot});
-   return [resultText(r.result)||`现在是 ${v.name}`,effectsText(r.effects,r.snapshot?.billing)].filter(Boolean).join('；');
-  });
-  else if(b.dataset.preset!==undefined)this.act(async()=>{
-   const robotState=await getJson('/api/state');
-   return (await runPreset(Number(b.dataset.preset),{post:postJson,robotState})).message;
-  });
-  else if(b.hasAttribute('data-billing'))this.act(async()=>billingMessage(await postJson('/api/mind/switches',billingRequest(this.view.billing))));
+  if(b.classList.contains('mode-msg-close')){this.model.dismiss();return;}
+  const m=this.model,done=()=>{this.seen={main:null,quick:null};this.paint();};   // rebuild: unlock the buttons
+  if(b.dataset.mode)m.select(b.dataset.mode,b.dataset.dir).then(done);
+  else if(b.dataset.preset!==undefined)m.preset(Number(b.dataset.preset)).then(done);
+  else if(b.hasAttribute('data-billing'))m.billing().then(done);
  }
  paint(){
-  const main=this.root.querySelector('.mode-main'),quick=this.root.querySelector('.mode-quick');
-  const mh=modeBarHtml(this.view,this.state?.log),qh=quickHtml(this.view,this.talk);
-  if(mh!==this.seen.main){
-   const open=main.querySelector('details')?.open;main.innerHTML=mh;this.seen.main=mh;
-   if(open)main.querySelector('details').open=true;
-   const chip=main.querySelector('.mode-chip[data-color]');
-   if(chip)chip.style.setProperty('--mode-color','#'+chip.dataset.color);    // CSSOM, allowed by the CSP
-  }
-  if(qh!==this.seen.quick){quick.innerHTML=qh;this.seen.quick=qh;}
-  if(this.pending)for(const b of this.root.querySelectorAll('button'))b.disabled=true;   // act() rebuilds them after
-  this.root.querySelector('.mode-msg').textContent=this.msg;
-  this.root.classList.toggle('unknown',!this.view.known);
+  const m=this.model,main=this.root.querySelector('.mode-main'),quick=this.root.querySelector('.mode-quick');
+  const keepOpen=(el,html,key)=>{
+   if(html===this.seen[key])return;
+   const open=[...el.querySelectorAll('details')].filter(d=>d.open).map(d=>d.className);
+   el.innerHTML=html;this.seen[key]=html;
+   for(const d of el.querySelectorAll('details'))if(open.includes(d.className))d.open=true;
+  };
+  keepOpen(main,modeBarHtml(m.view,m.state?.log),'main');
+  const chip=main.querySelector('.mode-chip[data-color]');
+  if(chip)chip.style.setProperty('--mode-color','#'+chip.dataset.color);    // CSSOM, allowed by the CSP
+  keepOpen(quick,quickHtml(m.view,m.talk),'quick');
+  if(m.pending)for(const b of this.root.querySelectorAll('.mode-main button,.mode-quick button'))b.disabled=true;   // click() rebuilds them after
+  const msg=this.root.querySelector('.mode-msg');msg.querySelector('.mode-msg-text').textContent=m.msg;msg.title=m.msg;
+  msg.classList.toggle('empty',!m.msg);
+  this.root.classList.toggle('unknown',!m.view.known);
  }
 }
 

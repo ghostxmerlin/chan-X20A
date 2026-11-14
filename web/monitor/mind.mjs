@@ -38,7 +38,7 @@ export function loopbackTarget(text){
  let u;try{u=new URL(text);}catch{u=null;}
  if(!u||u.protocol!=='http:'||!LOOPBACK.has(u.hostname)||!u.port||u.username||u.password||u.pathname!=='/'||u.search||u.hash)
   throw new Error('SOUL_MIND_LOCAL 只能是本机回环地址，例如 http://127.0.0.1:52790');
- return {host:u.hostname==='[::1]'?'::1':u.hostname,port:Number(u.port)};
+ return {host:u.hostname==='[::1]'?'::1':'127.0.0.1',port:Number(u.port)};   // localhost: no name lookup
 }
 export class MindProxy {
  constructor({ssh,token,local=null,socketPath=DEFAULT_SOCKET,remotePort=52740,spawnFn=spawn,requestFn=socketRequest,prepareFn=prepareSocketDir,now=Date.now}={}){

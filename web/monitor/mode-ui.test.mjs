@@ -182,5 +182,102 @@ test('page files: modebar under the switch bar on both pages, no inline script o
  }
  const js=readFileSync(new URL('./public/mode-ui.js',import.meta.url),'utf8');
  assert.doesNotMatch(js,/\balert\(|\bconfirm\(|\bprompt\(|style="/);
- assert.match(js,/querySelector\('\.mode-msg'\)\.textContent=/);assert.doesNotMatch(js,/mode-msg'\)\.innerHTML/);
+ assert.match(js,/querySelector\('\.mode-msg-text'\)\.textContent=m\.msg/);assert.doesNotMatch(js,/msg[\w.()'-]*\.innerHTML/);
+});
+
+// ---- review fixes: I1 (no /mode yet), M1 (out-of-order replies), M2 (stale message), M7 (the bar's logic) ----
+const res=(status,body)=>({ok:status>=200&&status<300,status,json:async()=>body,text:async()=>JSON.stringify(body)});
+const modeReply=(over={},robot={connected:false,applied_seq:null})=>({snapshot:snap(over),robot,log:[]});
+// fetch double: routes by path; /api/mind/mode answers from a queue of (status, body) or deferred promises
+function fakeFetch(modeQueue,{talk=res(200,{prefetch:{on:false},auto:{on:false}}),cfg=res(200,{speech:{round:{family:false}}})}={}){
+ const calls=[];
+ const f=async(path,opts={})=>{calls.push([path,opts.method||'GET',opts.body]);
+  if(path==='/api/mind/mode'){const next=modeQueue.shift();if(next instanceof Error)throw next;return typeof next==='function'?next():next;}
+  if(path.startsWith('/api/mind/say/stats'))return talk;
+  if(path==='/api/mind/speech/settings')return cfg;
+  if(path==='/api/state')return res(200,{boot:'b1'});
+  return res(200,{});};
+ f.calls=calls;return f;
+}
+const model=(fetchFn,extra={})=>{const seen=[];const m=new ui.ModeModel({fetchFn,emit:v=>seen.push(v),...extra});m.seen=seen;return m;};
+
+test('mind without /mode yet (404): says so, not "not connected", and polls slowly',async()=>{
+ const m=model(fakeFetch([res(404,{error:'not found'}),res(200,modeReply())]));
+ await m.poll();
+ assert.equal(m.view.known,false);assert.equal(m.why,'absent');
+ assert.ok(m.delay()>=30000&&m.delay()<=60000);
+ const h=ui.modeBarHtml(m.view,[]);
+ assert.match(h,/mind 还没有模式功能（等上线）/);assert.doesNotMatch(h,/没连上/);
+ await m.poll();
+ assert.equal(m.view.known,true);assert.equal(m.delay(),2000);
+});
+test('mind not reached (502/503/network): "没连上", normal pace',async()=>{
+ for(const r of [res(503,'情景服务连接中'),res(502,'x'),new Error('net')]){
+  const m=model(fakeFetch([r]));await m.poll();
+  assert.equal(m.why,'down');assert.equal(m.delay(),2000);
+  assert.match(ui.modeBarHtml(m.view,[]),/模式未知（情景服务没连上/);
+ }
+});
+test('an older reply landing after a newer one is dropped (no old repaint, one modechange)',async()=>{
+ let releaseOld;const old=new Promise(r=>releaseOld=r);
+ const m=model(fakeFetch([()=>old,res(200,modeReply({seq:6,mode:'crowd'}))]));
+ const a=m.poll(),b=m.poll();
+ await b;assert.equal(m.view.mode,'crowd');
+ releaseOld(res(200,modeReply({seq:5,mode:'talk'})));await a;
+ assert.equal(m.view.mode,'crowd');assert.equal(m.view.seq,6);
+ assert.deepEqual(m.seen.map(v=>v.seq),[6]);
+});
+test('talk readout: a slow older answer cannot overwrite a newer one',async()=>{
+ let slow;const f=fakeFetch([]);const base=f;
+ let n=0;const fetchFn=async(path,o)=>{if(path.startsWith('/api/mind/say/stats')&&n++===0)return new Promise(r=>slow=r);return base(path,o);};
+ const m=model(fetchFn);
+ const a=m.readTalk();
+ await m.readTalk();assert.equal(m.talk.prefetch,false);
+ slow(res(200,{prefetch:{on:true},auto:{on:true}}));await a;
+ assert.equal(m.talk.prefetch,false);
+});
+test('modechange fires once per change, not on every poll',async()=>{
+ const m=model(fakeFetch([res(200,modeReply()),res(200,modeReply()),res(200,modeReply({seq:2,mode:'idle'}))]));
+ await m.poll();await m.poll();await m.poll();
+ assert.deepEqual(m.seen.map(v=>v.mode),['talk','idle']);
+});
+test('the line under the bar: kept after the page\'s own click, cleared when the mode changes from elsewhere',async()=>{
+ const f=fakeFetch([res(200,modeReply()),res(200,modeReply({seq:2,mode:'crowd'})),res(200,modeReply({seq:2,mode:'crowd'})),res(200,modeReply({seq:3,mode:'idle',by:'dualkey'}))]);
+ const post=async(path,body)=>({snapshot:snap({seq:2,mode:'crowd'}),result:{code:'ok',toast:'MEET'},effects:['stop_speech','talk_leave']});
+ const m=model(f,{post});
+ await m.poll();
+ await m.select('crowd');
+ assert.match(m.msg,/现在是 围观/);
+ await m.poll();assert.match(m.msg,/现在是 围观/);          // same mode, nothing new
+ await m.poll();assert.equal(m.msg,'');                     // DualKey went to IDLE: the old line goes
+});
+test('one action at a time; the buttons are locked while it runs',async()=>{
+ let release;const post=()=>new Promise(r=>release=r);const painted=[];
+ const m=model(fakeFetch([res(200,modeReply()),res(200,modeReply())]),{post,paint:()=>painted.push(m.pending)});
+ await m.poll();
+ const a=m.select('crowd');assert.equal(m.pending,true);assert.equal(m.msg,'发送中…');
+ await m.select('idle');                                   // ignored while pending
+ release({snapshot:snap({seq:2,mode:'crowd'}),result:{code:'ok'},effects:[]});await a;
+ assert.equal(m.pending,false);assert.ok(painted.includes(true));
+});
+test('preset and billing go through the model with the page post',async()=>{
+ const sent=[];
+ const post=async(path,body)=>{sent.push([path,body]);
+  if(path==='/api/mind/preset')return {snapshot:snap({billing:false}),result:{code:'ok'},effects:[],robot:{}};
+  return {billing:{on:true},result:{code:'ok'}};};
+ const m=model(fakeFetch([res(200,modeReply()),res(200,modeReply({billing:false})),res(200,modeReply({billing:false}))]),{post});
+ await m.poll();
+ await m.preset(0);assert.deepEqual(sent[0],['/api/mind/preset',{n:0,source:'page'}]);assert.match(m.msg,/预设 0 花费全关/);
+ await m.billing();assert.deepEqual(sent[1],['/api/mind/switches',{name:'billing',on:true}]);assert.match(m.msg,/计费总闸已开/);   // preset 0 left it off
+});
+test('quick panel folds the ten keys into a small "预设" box (one compact row on wide screens)',()=>{
+ const h=ui.quickHtml(ui.modeView(state()),{prefetch:true,auto:true,family:false});
+ assert.match(h,/<details class="mode-presets-box"><summary>预设 0–9<\/summary>/);
+ assert.match(h,/<details class="mode-presets-box">[\s\S]*data-preset="9"[\s\S]*提前写 开[\s\S]*<\/details>/);
+ assert.match(h,/data-billing/);
+});
+test('the message line can be closed by hand (not while an action runs)',async()=>{
+ const m=model(fakeFetch([res(200,modeReply()),res(200,modeReply({seq:2,mode:'crowd'}))]),{post:async()=>({snapshot:snap({seq:2,mode:'crowd'}),result:{code:'ok'},effects:[]})});
+ await m.poll();await m.select('crowd');assert.notEqual(m.msg,'');
+ m.dismiss();assert.equal(m.msg,'');
 });

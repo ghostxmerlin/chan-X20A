@@ -333,3 +333,7 @@ test('local demo monitor: own port, no robot connection, no private config', asy
  assert.equal(localDemo({SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo',SOUL_MONITOR_PORT:'8811'}).port,8811);
  assert.throws(()=>localDemo({SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo',SOUL_MONITOR_PORT:'80'}),/端口/);
 });
+test('local mind: localhost never goes through name lookup; the demo never takes the live port 8787', ()=>{
+ assert.deepEqual(new MindProxy({local:'http://localhost:52790',token:'t'}).local,{host:'127.0.0.1',port:52790});
+ assert.throws(()=>localDemo({SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo',SOUL_MONITOR_PORT:'8787'}),/8787/);
+});

@@ -138,7 +138,7 @@ export function localDemo(env) {
   if (!env.SOUL_MIND_LOCAL) return null;
   const mind = mindFromEnv(env, {});
   const port = env.SOUL_MONITOR_PORT === undefined ? 8807 : Number(env.SOUL_MONITOR_PORT);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('SOUL_MONITOR_PORT 端口无效（1024–65535）');
+  if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === 8787) throw new Error('SOUL_MONITOR_PORT 端口无效（1024–65535，不能用正式观察台的 8787）');
   const monitor = new Monitor(new NoRobotClient(), new M12System(null));
   const controls = new Controls(monitor, { loadHearingConfig: () => { throw new Error('本机演示不读 .env'); } });
   return { port, monitor, mind, controls };
