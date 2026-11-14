@@ -11,8 +11,9 @@ namespace collector::modes::rules {
 // is tests/data/mode_vectors.json (tests/gen_mode_vectors.py): tests/mode_rules_test.cpp replays every vector and
 // requires the same new state, code, toast and effects in order. Change modes.py, regenerate, and this must follow.
 //
-// digit (owner table 2026-11-14): 4-8 run as select (idle, crowd, companion, subtitle zh_en, subtitle en_zh), 1-3 =
-// no_action. 0 and 9 (all paid off / on) are mind's: the caller sends them as mode_input and never asks here
+// digit (owner table 2026-11-14): 4-8 enter idle, crowd, companion, subtitle zh_en, subtitle en_zh; 1-3 =
+// no_action. Enter never leaves (controller ruling): already in that mode (subtitle: that direction) = already,
+// else it runs as select (from the other subtitle direction that switches the direction). 0 and 9 (all paid off / on) are mind's: the caller sends them as mode_input and never asks here
 // (here they answer unknown_input). billing is mind's too.
 
 enum class Mode : uint8_t { Talk, Chat, Settings, Event, Subtitle, Crowd, Companion, Idle, None = 255 };
@@ -247,7 +248,7 @@ inline Outcome transition(const State& st, Input in, const Value& v, bool speaki
         const Effect fx[] = {Effect::StopSpeech};
         return done(st, plain(Mode::Talk), fx, 1);
     }
-    // digit (owner 2026-11-14): 1-3 empty, 4-8 = select; 0 / 9 belong to mind.
+    // digit (owner 2026-11-14): 1-3 empty, 4-8 = enter (select, but never a leave); 0 / 9 belong to mind.
     if (in == Input::Digit) {
         if (v.digit >= 1 && v.digit <= 3) return same(st, Code::NoAction);
         if (v.digit < 4 || v.digit > 8) return same(st, Code::UnknownInput);
@@ -255,6 +256,7 @@ inline Outcome transition(const State& st, Input in, const Value& v, bool speaki
         static constexpr Dir kDirs[] = {Dir::None, Dir::None, Dir::None, Dir::ZhEn, Dir::EnZh};
         Value sel;
         sel.target = kTargets[v.digit - 4]; sel.dir = kDirs[v.digit - 4];
+        if (st.mode == sel.target && st.dir == sel.dir) return same(st, Code::Already);
         return transition(st, Input::Select, sel, speaking);
     }
     // 2. what this mode gives the input

@@ -12,9 +12,10 @@ guest mode hosted by event) x every input (the voice words, tap, double_tap, lon
 each value, select with each mode / direction and bad values, digit 1-8, an unknown word) x speaking / not.
 
 digit is not in modes.py (mind's ModeStore routes it to the presets). The owner's table of 2026-11-14 replaces
-the old presets on the robot: 4 = select idle, 5 = crowd, 6 = companion, 7 = subtitle zh_en, 8 = subtitle en_zh
-(hello runs them as `select`), 1-3 = no_action. 0 and 9 (all paid off / on) stay with mind and are not here;
-neither is billing.
+the old presets on the robot: 4 = enter idle, 5 = crowd, 6 = companion, 7 = subtitle zh_en, 8 = subtitle en_zh,
+1-3 = no_action. "Enter" (controller ruling 2026-11-14): a digit never leaves its mode. Already there (subtitle: in
+that direction) -> already, nothing changes; otherwise it runs as `select` (from the other subtitle direction that
+switches the direction). 0 and 9 (all paid off / on) stay with mind and are not here; neither is billing.
 """
 import json
 import sys
@@ -64,7 +65,10 @@ def run(st, inp, value, speaking):
     if inp == 'digit':
         if value in DIGIT_EMPTY:
             return dict(st), modes.result('no_action'), []
-        return modes.transition(st, 'select', DIGIT_SELECT[value], source='asr', speaking=speaking)
+        target = DIGIT_SELECT[value]
+        if st['mode'] == target['mode'] and st['dir'] == target.get('dir'):
+            return dict(st), modes.result('already'), []       # enter, never leave
+        return modes.transition(st, 'select', target, source='asr', speaking=speaking)
     return modes.transition(st, inp, value, source='asr', speaking=speaking)
 
 
