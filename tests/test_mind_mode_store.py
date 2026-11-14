@@ -386,14 +386,20 @@ class RobotAndTimeoutTest(unittest.TestCase):
         self.ms.robot_event('b1', 1, 'hello', now_ms=1)
         self.assertEqual((seen, self.ms.seq()), ([(['stop_speech', 'talk_enter'], 'boot')], s0))
 
-    def test_talk_enter_with_billing_off_is_dropped_but_the_entry_is_ok(self):
-        # owner 14: entering talk with the master switch off turns nothing on and is not an error
+    def test_talk_enter_with_billing_off_is_kept_for_the_free_part_and_the_entry_is_ok(self):
+        # owner 14: entering talk with the master switch off is not an error; the effect still reaches the hook so
+        # Billing.talk_enter can deselect 家人声音 (free) while it turns nothing paid on (review minor 1)
         self.ms.apply('backward', None, source='page', now_ms=1)
         self.ms.set_billing(False, source='page', now_ms=2)
         r = self.ms.apply('forward', None, source='asr', now_ms=3)
         self.assertEqual((r['snapshot']['mode'], r['result'], r['effects']),
-                         ('talk', {'code': 'ok', 'toast': 'BILLING OFF'}, ['stop_speech']))
-        self.assertEqual(self.db['mode_log'].docs[-1]['effects'], ['stop_speech'])
+                         ('talk', {'code': 'ok', 'toast': 'BILLING OFF'}, ['stop_speech', 'talk_enter']))
+
+    def test_talk_enter_refused_by_the_guard_is_dropped_but_the_entry_is_ok(self):
+        ms = ModeStore(FakeDB(), guard=lambda e, m: 'busy' if e == 'talk_enter' else None)
+        ms.apply('backward', None, source='page', now_ms=1)
+        r = ms.apply('forward', None, source='asr', now_ms=2)
+        self.assertEqual((r['result'], r['effects']), ({'code': 'ok', 'toast': 'BUSY'}, ['stop_speech']))
 
     def test_talk_enter_is_asked_of_the_guard(self):
         asked = []

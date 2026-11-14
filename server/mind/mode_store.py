@@ -13,7 +13,8 @@ apply() for every input, in this order:
      lock (they may call apply / set_billing themselves); everything else -> modes.transition under the lock.
   4. paid effects (PAID: say_round, prefetch_on, talk_enter) pass the pre-check: billing off -> billing_off, then
      guard(effect, meta); a returned code drops the effect and becomes result.code, except for talk_enter (SOFT_PAID),
-     where the code stays ok and only the toast says why (BILLING OFF). Mode changes are never blocked.
+     where the code stays ok and only the toast says why: billing off keeps it (Billing.talk_enter does only the free
+     part), a guard code drops it. Mode changes are never blocked.
   5. seq += 1 and hello.mode written only when the state changed; one mode_log row for every input.
 Then, outside the lock, the on_change hooks run in order with the effects: they only carry them out (effects are
 data from modes.transition, executed by name; ModeStore interprets none of them beyond the pre-check).
@@ -45,8 +46,9 @@ from .modes import SOURCES, result, snapshot as _snapshot, transition
 STALE_MS = 3000                  # device inputs older than this are dropped (DualKey resends after a reconnect)
 SETTINGS_TIMEOUT_MS = 300_000    # settings closes itself after 5 minutes without input
 PAID = ('say_round', 'prefetch_on', 'talk_enter')
-# Paid effects that ride on a mode change (owner 14): refusing one drops it but keeps the result ok (the entry into
-# talk happened); only the toast says why, e.g. BILLING OFF.
+# Paid effects that ride on a mode change (owner 14): refusing one keeps the result ok (the entry into talk happened)
+# and only the toast says why. With billing off the effect is KEPT (toast BILLING OFF), because it also has a free
+# part (家人声音 off) and Billing.talk_enter itself turns nothing paid on while billing is off; a guard code drops it.
 SOFT_PAID = ('talk_enter',)
 FIELDS = ('mode', 'dir', 'host', 'return_to')
 BOOT_STATE = {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}
@@ -95,7 +97,8 @@ class ModeStore:
         """guard(effect, meta) -> code | None for say_round / prefetch_on; speaking_fn() -> stop_speech has
         something to cancel; preset_fn(n, *, source, now_ms, meta) -> {result, ...extra}; billing_fn(on, *, source,
         now_ms, meta) must end in set_billing (default: set_billing alone). preset_fn / billing_fn may be set after
-        construction (A3's Billing needs this store first). guard and speaking_fn: lock-free in-memory reads that
+        construction (A3's Billing needs this store first). Extra keys either returns (robot, failed) are added to
+        apply's reply. guard and speaking_fn: lock-free in-memory reads that
         never call ModeStore (see the module docstring's lock contract)."""
         self.db = db
         self.coll = db['mode']
@@ -274,6 +277,10 @@ class ModeStore:
             meta['mode'] = new['mode']
             kept, code, soft = [], None, None
             for e in effects:
+                if e in SOFT_PAID and not self._billing:
+                    soft = soft or 'billing_off'
+                    kept.append(e)
+                    continue
                 if e in PAID:
                     c = 'billing_off' if not self._billing else (self.guard(e, dict(meta)) if self.guard else None)
                     if c:
@@ -323,6 +330,8 @@ class ModeStore:
             r = fn(value, source=source, now_ms=now, meta=dict(meta))
             res = r['result'] if isinstance(r, dict) and isinstance(r.get('result'), dict) else \
                 result('ok' if self._billing != was else 'already')
+            if isinstance(r, dict):
+                extra = {k: v for k, v in r.items() if k not in ('result', 'snapshot', 'effects')}
         with _LOCK:
             self._record(base, frm, res, [], key)
             return {'snapshot': self.current(), 'result': res, 'effects': [], **extra}

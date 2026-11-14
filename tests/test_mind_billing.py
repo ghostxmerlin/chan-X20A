@@ -39,6 +39,7 @@ class FakeCtx:
         self.tingwu, self.eye, self.notes, self.mind = tingwu, eye, notes, mind
         self.mouth, self.family, self.mode_value, self.cancelled = mouth, family, mode, False
         self.calls = []
+        self.say_worker.on_change.append(lambda on, t: self.calls.append(('prefetch', on)))
 
     # what Billing calls
     def set_switch(self, name, on):
@@ -143,17 +144,19 @@ class PresetDetailTest(unittest.TestCase):
     def test_table_matches_spec_section_7(self):
         P = mode_table.PRESETS
         robot = {'hearing': 'local', 'vision': 'upload'}
+        # 9 = 花费全开 (owner 4): the page's paid tiers, so its robot half keeps 听悟 / 识别 on (review I1)
+        paid = {'hearing': 'tingwu', 'vision': 'recognize'}
         self.assertEqual(set(P), set(range(10)))
         self.assertEqual({n: (P[n]['server'], P[n]['robot']) for n in P},
                          {0: (('billing_off',), {}), 1: (('billing_off',), robot), 2: (('toggle_tingwu',), {}),
                           3: (('toggle_prefetch',), {}), 4: (('mode_idle',), {}), 5: ((), {}), 6: ((), {}),
                           7: ((), {}), 8: ((), {}),
-                          9: (('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), robot)})
+                          9: (('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), paid)})
         self.assertTrue(all(isinstance(P[n]['name'], str) and P[n]['name'] for n in P))
 
     def test_table_validation_rejects_bad_rows(self):
         import copy
-        for brk in (lambda t: t[2].update(server=('fly',)), lambda t: t[1].update(robot={'hearing': 'tingwu'}),
+        for brk in (lambda t: t[2].update(server=('fly',)), lambda t: t[1].update(robot={'hearing': 'loud'}),
                     lambda t: t.pop(5), lambda t: t[0].update(robot={'smell': 'on'})):
             t = copy.deepcopy(mode_table.PRESETS)
             brk(t)
@@ -175,6 +178,10 @@ class PresetDetailTest(unittest.TestCase):
         r = apply_preset(9, self.b, source='quick', now_ms=2)
         self.assertEqual((r['result']['code'], self.b.allowed(), self.ctx.tingwu, self.ctx.prefetch),
                          ('senses_on_page', True, True, True))
+
+    def test_page_preset_nine_robot_half_keeps_the_paid_tiers(self):
+        r = apply_preset(9, self.b, source='page', now_ms=1)
+        self.assertEqual(r['robot'], {'hearing': 'tingwu', 'vision': 'recognize'})
 
     def test_toggle_tingwu_both_ways(self):
         r = apply_preset(2, self.b, source='asr', now_ms=1)
@@ -260,6 +267,50 @@ class StoreWiringTest(unittest.TestCase):
         r = self.ms.apply('billing', True, source='page', now_ms=4)
         self.assertEqual((r['result']['code'], r['snapshot']['billing'], self.ctx.tingwu), ('ok', True, False))
 
+    def _break_eye(self):
+        real = self.ctx.set_switch
+
+        def set_switch(name, on):
+            if name == 'eye':
+                raise OSError('mongo down')
+            real(name, on)
+        self.ctx.set_switch = set_switch
+
+    def test_partly_failed_off_still_does_the_rest_and_says_what_failed(self):
+        self._break_eye()
+        failed = self.b.off('page', 1)
+        self.assertEqual((failed, self.b.allowed(), self.ctx.tingwu, self.ctx.notes, self.ctx.mind, self.ctx.prefetch,
+                          self.ctx.auto, self.ctx.cancelled), (['eye'], False, False, False, False, False, False, True))
+        self.assertEqual(self.b.off('page', 2), ['eye'])                 # a second off is a real retry
+
+    def test_partly_failed_billing_input_is_logged_and_deduplicated(self):
+        self._break_eye()
+        kw = dict(source='quick', device='robot', boot='b1', dev_seq=4, now_ms=2)
+        r = self.ms.apply('billing', False, **kw)
+        self.assertEqual((r['result'], r['failed'], r['snapshot']['billing']),
+                         ({'code': 'ok', 'toast': 'BILLING OFF, 1 FAILED'}, ['eye'], False))
+        row = self.ms.db['mode_log'].docs[-1]
+        self.assertEqual((row['input'], row['dev_seq'], row['result']), ('billing', 4, r['result']))
+        again = self.ms.apply('billing', False, **kw)
+        self.assertEqual((again.get('duplicate'), again['result']), (True, r['result']))
+        r = self.ms.apply('billing', False, source='page', now_ms=3)       # already off, still names the failure
+        self.assertEqual((r['result'], r['failed']), ({'code': 'already', 'toast': 'BILLING OFF, 1 FAILED'}, ['eye']))
+
+    def test_partly_failed_preset_one_keeps_its_robot_half_and_log_row(self):
+        self._break_eye()
+        r = self.ms.apply('digit', 1, source='asr', device='robot', boot='b1', dev_seq=5, now_ms=2)
+        self.assertEqual((r['result'], r['failed'], r['robot']),
+                         ({'code': 'senses_on_page', 'toast': 'PRESET 1: 1 FAILED, USE PAGE'}, ['eye'],
+                          {'hearing': 'local', 'vision': 'upload'}))
+        self.assertEqual(self.ms.db['mode_log'].docs[-1]['dev_seq'], 5)
+        r = self.ms.apply('digit', 0, source='page', now_ms=3)
+        self.assertEqual((r['result'], r['failed']), ({'code': 'ok', 'toast': 'PRESET 0: 1 FAILED'}, ['eye']))
+
+    def test_clean_off_has_no_failed_key(self):
+        r = self.ms.apply('billing', False, source='page', now_ms=1)
+        self.assertNotIn('failed', r)
+        self.assertNotIn('failed', self.ms.apply('digit', 0, source='page', now_ms=2))
+
     def test_billing_off_comes_before_the_switches(self):
         order = []
         self.ctx.set_switch = lambda name, on: order.append((name, self.ms.billing()))
@@ -273,19 +324,26 @@ class TalkEnterTest(unittest.TestCase):
         self.b = Billing(self.ctx)
 
     def test_talk_enter_turns_writing_and_auto_on_and_family_off(self):
-        self.assertTrue(self.b.talk_enter(1))
+        self.assertTrue(self.b.talk_enter(1, is_current=lambda: True))
         self.assertEqual((self.ctx.prefetch, self.ctx.auto, self.ctx.family), (True, True, False))
+        # family first, so the first pre-written round is already non-family
+        self.assertLess(self.ctx.calls.index(('family', False)), self.ctx.calls.index(('prefetch', True)))
+
+    def test_is_current_is_required(self):
+        with self.assertRaises(TypeError):
+            self.b.talk_enter(1)
 
     def test_talk_enter_leaves_family_alone_when_already_off(self):
         self.ctx.family = False
-        self.b.talk_enter(1)
+        self.b.talk_enter(1, is_current=lambda: True)
         self.assertNotIn(('family', False), self.ctx.calls)
 
-    def test_talk_enter_with_billing_off_does_nothing(self):
+    def test_talk_enter_with_billing_off_only_deselects_family(self):
+        # owner 14: billing off exempts only the two paid behaviours; 家人声音 off is free
         self.b.off('page', 1)
         self.ctx.calls.clear()
-        self.assertFalse(self.b.talk_enter(2))
-        self.assertEqual((self.ctx.prefetch, self.ctx.auto, self.ctx.calls), (False, False, []))
+        self.assertFalse(self.b.talk_enter(2, is_current=lambda: True))
+        self.assertEqual((self.ctx.prefetch, self.ctx.auto, self.ctx.calls), (False, False, [('family', False)]))
 
     def test_talk_enter_superseded_before_it_starts_does_nothing(self):
         self.assertFalse(self.b.talk_enter(1, is_current=lambda: False))
@@ -298,7 +356,7 @@ class TalkEnterTest(unittest.TestCase):
 
     def test_talk_enter_outside_talk_does_nothing(self):
         self.ctx.mode_value = 'idle'
-        self.assertFalse(self.b.talk_enter(1))
+        self.assertFalse(self.b.talk_enter(1, is_current=lambda: True))
         self.assertEqual(self.ctx.prefetch, False)
 
 
