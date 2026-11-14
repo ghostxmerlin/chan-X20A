@@ -160,8 +160,9 @@ def transition(state, input, value=None, *, source, speaking=False):
     # 2. what this mode gives the input (tap, double_tap, next, previous, and forward inside talk)
     if input in m['inputs']:
         meaning = m['inputs'][input]
-        if input == 'tap' and speaking and m['touch']['tap'] == 'server':
+        if input == 'tap' and speaking and m['touch']['tap'] == 'server' and meaning != ():
             return _done(st, dict(st), ['stop_speech'])        # hello is speaking: a tap stops it (owner 9)
+        # meaning () (crowd's tap, 0.4.94): ok, no effects, never a stop; the robot always reports it to mind.
         if isinstance(meaning, str):
             return _same(st, meaning)
         return _done(st, dict(st), list(meaning))

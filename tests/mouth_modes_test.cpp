@@ -149,6 +149,29 @@ void inputs_become_reports()
     assert(a.out.code == collector::modes::rules::Code::UnknownInput && !a.reported && r.view().seq == seq);
 }
 
+// 0.4.94 (owner-approved): in crowd a tap is always reported to mind (input tap, no effects), speaking or not, and
+// never stops speech here; mind's realtime path greets. Offline it says OFFLINE.
+void crowd_tap_always_reported()
+{
+    Robot r;
+    r.feed(kHello);
+    r.drain();
+    Value sel; sel.target = Mode::Crowd;
+    assert(r.in(Input::Select, "select", sel).changed);
+    assert(r.drain() == report(3, "crowd", "select", "\"select\"", "\"stop_speech\",\"talk_leave\""));
+    Applied a = r.in(Input::Tap, "touch");
+    assert(!a.changed && a.reported && a.out.n_effects == 0 && !std::strcmp(r.view().toast, "OK"));
+    a = r.in(Input::Tap, "touch", Value{}, true);      // speaking: still no stop
+    assert(!a.changed && a.reported && a.out.n_effects == 0 && !a.out.has(collector::modes::rules::Effect::StopSpeech));
+    assert(r.drain() == report(4, "crowd", "touch", "\"tap\"", "") + report(5, "crowd", "touch", "\"tap\"", ""));
+    // A double tap in crowd is still not implemented: nothing for mind.
+    assert(!r.in(Input::DoubleTap, "touch").reported && !std::strcmp(r.view().toast, "NOT YET"));
+    // Offline the tap cannot reach mind: say so.
+    r.s.link_down();
+    a = r.in(Input::Tap, "touch");
+    assert(!a.reported && !std::strcmp(r.view().toast, "OFFLINE"));
+}
+
 void links()
 {
     Robot r;
@@ -380,6 +403,7 @@ int main()
     text_frames();
     boot_and_first_link();
     inputs_become_reports();
+    crowd_tap_always_reported();
     links();
     digits();
     settings_timeout();

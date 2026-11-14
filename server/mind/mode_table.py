@@ -14,7 +14,10 @@ Per mode:
   touch    home-screen single / double tap: server = send to mind, badge = robot flips its badge page locally,
            none = robot shows a local hint only, nothing sent
   inputs   what tap / double_tap / next / previous / forward mean inside this mode: a tuple of effect names, or
-           a result code. A server-side tap while hello is speaking always stops instead (modes.transition).
+           a result code. A server-side tap while hello is speaking always stops instead (modes.transition),
+           except a tap whose meaning is the empty tuple (): ok with no effects, never a stop. The robot reports
+           it to mind every time (input "tap"), so mind's own realtime path can act on it (crowd: tap-greet,
+           owner-approved 2026-11-14 night, collector-0.4.94).
   paid     what this mode MAY spend money on (step 1: only talk; nothing paid starts on entering any mode)
 """
 
@@ -68,8 +71,9 @@ MODES = {
     'crowd': {
         'name': '围观', 'kind': 'normal', 'enter': (), 'leave': (), 'dirs': {'left': None},
         'look': {'eye': 'v14', 'pool': 'lively', 'label': 'MEET', 'color': '30D060'},
-        'touch': {'tap': 'server', 'double': 'server'},          # tap = stop; double = protest (later)
-        'inputs': dict(_SHELL), 'paid': (),
+        'touch': {'tap': 'server', 'double': 'server'},          # tap = reported (mind greets); double = protest (later)
+        # tap (): always reported to mind, nothing run here, speaking or not (mind's realtime path greets).
+        'inputs': {'tap': (), 'double_tap': 'not_implemented'}, 'paid': (),
     },
     'companion': {
         # Spec §3.2: double tap = 无 here, so touch.double = none and a DualKey double click = no_action (the brief
@@ -129,7 +133,8 @@ def _validate(modes):
         inputs = m['inputs']
         _need(set(inputs) <= set(_MODE_INPUTS) and {'tap', 'double_tap'} <= set(inputs), mid)
         for k, v in inputs.items():
-            _need(v in _CODES if isinstance(v, str) else (isinstance(v, tuple) and v and set(v) <= set(_EFFECTS)), (mid, k))
+            _need(v in _CODES if isinstance(v, str) else
+                  (isinstance(v, tuple) and (v or k == 'tap') and set(v) <= set(_EFFECTS)), (mid, k))
         # The snapshot's touch is what the robot acts on, the server must agree with it (gap d): a tap the robot
         # handles alone (none / badge) can only reach mind as a DualKey click, and there it does nothing.
         for k, key in (('tap', 'tap'), ('double_tap', 'double')):

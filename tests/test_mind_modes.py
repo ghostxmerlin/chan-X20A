@@ -72,9 +72,15 @@ class TransitionTest(unittest.TestCase):
         self.assertEqual((s['mode'], s['return_to']), ('chat', None))
 
     def test_shell_taps_and_long_press(self):
-        for m in ('chat', 'crowd', 'companion'):
+        for m in ('chat', 'companion'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'not_implemented')
             self.assertEqual(self.go(m, 'tap', speaking=True)[2], ['stop_speech'])
+        # crowd (0.4.94, owner-approved): a tap is ok with no effects, speaking or not (never a stop); the robot
+        # reports it every time and mind's realtime path greets.
+        for speaking in (False, True):
+            s, r, e = self.go('crowd', 'tap', speaking=speaking)
+            self.assertEqual((s['mode'], r['code'], r['toast'], e), ('crowd', 'ok', 'OK', []))
+        self.assertEqual(self.go('crowd', 'double_tap')[1]['code'], 'not_implemented')
         for m in ('subtitle', 'event', 'settings'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'no_action')
         self.assertEqual(self.go('idle', 'tap')[1]['code'], 'no_action')            # DualKey click: no badge flip

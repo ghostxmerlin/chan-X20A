@@ -39,11 +39,15 @@ struct Meaning {
     bool has = false;           // false: the input is not in this mode's table
     bool code_only = false;     // true: answer `code`, nothing changes
     Code code = Code::Ok;
-    Effect effect = Effect::SayRound;   // when !code_only: one effect (every table entry has exactly one)
+    Effect effect = Effect::SayRound;   // when !code_only and !reported: one effect
+    bool reported = false;      // the table's empty tuple (): ok, no effects, never a stop; always reported to mind
 };
 constexpr Meaning kNone{};
-constexpr Meaning code_(Code c) { return Meaning{true, true, c, Effect::SayRound}; }
-constexpr Meaning fx(Effect e) { return Meaning{true, false, Code::Ok, e}; }
+constexpr Meaning code_(Code c) { return Meaning{true, true, c, Effect::SayRound, false}; }
+constexpr Meaning fx(Effect e) { return Meaning{true, false, Code::Ok, e, false}; }
+// 0.4.94 (owner-approved 2026-11-14 night): crowd's tap is reported to mind every time, speaking or not, and stops
+// nothing here; mind's realtime path greets.
+constexpr Meaning kReported{true, false, Code::Ok, Effect::SayRound, true};
 
 struct ModeDef {
     const char* label;
@@ -66,7 +70,7 @@ inline constexpr ModeDef kModes[kModeCount] = {
     {"SUB", 0x7C6CF0, Eye::PageSubtitle, Pool::Default, TouchAct::None, TouchAct::None,
      kNone, code_(Code::NoAction), code_(Code::NoAction), kNone, kNone},
     {"MEET", 0x30D060, Eye::V14, Pool::Lively, TouchAct::Server, TouchAct::Server,
-     kNone, code_(Code::NotImplemented), code_(Code::NotImplemented), kNone, kNone},
+     kNone, kReported, code_(Code::NotImplemented), kNone, kNone},
     {"PAL", 0xF2E6C8, Eye::V18, Pool::Default, TouchAct::Server, TouchAct::None,
      kNone, code_(Code::NotImplemented), code_(Code::NoAction), kNone, kNone},
     {"IDLE", 0x505050, Eye::PageIdle, Pool::Default, TouchAct::Badge, TouchAct::Server,
@@ -102,6 +106,7 @@ struct Outcome {
     char toast[kToastMax + 1] = {};
     Effect effects[kMaxEffects] = {};
     uint8_t n_effects = 0;
+    bool report = false;        // tell mind even with no change and no effects (crowd's tap)
     bool has(Effect e) const { for (uint8_t i = 0; i < n_effects; ++i) if (effects[i] == e) return true; return false; }
 };
 
@@ -261,6 +266,11 @@ inline Outcome transition(const State& st, Input in, const Value& v, bool speaki
     }
     // 2. what this mode gives the input
     if (const Meaning* mean = meaning(m, in)) {
+        if (mean->reported) {                         // crowd's tap: ok, nothing here, mind hears of it
+            Outcome o = done(st, st);
+            o.report = true;
+            return o;
+        }
         if (in == Input::Tap && speaking && m.tap == TouchAct::Server) {
             const Effect fx[] = {Effect::StopSpeech};
             return done(st, st, fx, 1);              // hello is speaking: a tap stops it (owner 9)

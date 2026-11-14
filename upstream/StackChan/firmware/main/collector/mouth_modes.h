@@ -142,7 +142,7 @@ public:
             std::strcpy(by_, source);
             ++version_;
         }
-        if (a.changed || a.out.n_effects) {
+        if (a.changed || a.out.n_effects || a.out.report) {
             if (online_) {
                 ++seq_;
                 push(report(seq_, source, in, true, a.out.effects, a.out.n_effects), a.out);
@@ -153,7 +153,7 @@ public:
             }
         }
         // Offline, an input that only asks mind for something (say a round, prefetch) does nothing: say so.
-        toast(!online_ && !a.changed && a.out.n_effects ? "OFFLINE" : a.out.toast);
+        toast(!online_ && !a.changed && (a.out.n_effects || a.out.report) ? "OFFLINE" : a.out.toast);
         return a;
     }
 
