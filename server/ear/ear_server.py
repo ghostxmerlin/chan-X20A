@@ -987,7 +987,7 @@ def main():
             peer = ws.remote_address
             print(f"+ {peer} signal", flush=True)
             try:
-                link = await signal_link.serve_link(ws, signal_post, f"{peer[0]}:{peer[1]}")
+                link = await signal_link.serve_link(ws, signal_post, f"{peer[0]}:{peer[1]}", hub=mode_hub)
             finally:
                 signal_active.discard(ws)
             print(f"- {peer} signal {link.device}: {link.signals} signals", flush=True)

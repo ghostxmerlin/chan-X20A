@@ -42,6 +42,79 @@ class SignalLinkTest(unittest.TestCase):
         ws, _ = self.run_link([hello, sig], lambda b: (400, {"error": "bad"}))
         self.assertEqual(ws.sent[1], {"type": "error", "seq": 4, "message": "bad"})
 
+    def test_mode_message(self):
+        ml = signal_link.SignalLink.mode_message
+        self.assertEqual(ml({'mode': 'crowd'}), {'type': 'mode', 'current': 'crowd'})
+        self.assertEqual(ml({'mode': 'idle'}), {'type': 'mode', 'current': 'idle'})
+        self.assertIsNone(ml({'mode': 5}))
+        self.assertIsNone(ml({}))
+
+    def test_push_mode_dedupes_by_seq_and_never_raises(self):
+        async def go():
+            ws = FakeWS([])
+            link = signal_link.SignalLink(lambda b: (200, {}), "p", ws=ws)
+            self.assertTrue(link.mode_wants_first is False)       # not said hello yet
+            link.device = "dualkey-ae1c"
+            self.assertTrue(link.mode_wants_first)
+            await link.push_mode({"seq": 3, "mode": "talk"})
+            await link.push_mode({"seq": 3, "mode": "talk"})
+            await link.push_mode({"seq": 4, "mode": "idle"})
+            await link.push_mode({"seq": 3, "mode": "talk"}, force=True)
+            self.assertEqual([m["current"] for m in ws.sent], ["talk", "idle", "talk"])
+            self.assertFalse(link.mode_wants_first)
+
+            class Dead(FakeWS):
+                async def send(self, text):
+                    raise ConnectionError("gone")
+            dead = signal_link.SignalLink(lambda b: (200, {}), "p", ws=Dead([]))
+            dead.device = "dualkey-x"
+            await dead.push_mode({"seq": 1, "mode": "talk"})       # swallowed
+            class Stuck(FakeWS):
+                async def send(self, text):
+                    await asyncio.sleep(3600)
+            stuck = signal_link.SignalLink(lambda b: (200, {}), "p", ws=Stuck([]))
+            stuck.device = "dualkey-x"
+            stuck.SEND_TIMEOUT = 0.05
+            await asyncio.wait_for(stuck.push_mode({"seq": 1, "mode": "talk"}), 1)
+        asyncio.run(go())
+
+    def test_hello_joins_hub_after_reply_and_leaves_at_end(self):
+        class Hub:
+            def __init__(self):
+                self.links, self.events = set(), []
+            def join(self, l):
+                self.links.add(l); self.events.append("join")
+            def leave(self, l):
+                self.links.discard(l); self.events.append("leave")
+        hub = Hub()
+        ws = FakeWS([json.dumps({"type": "hello", "device": "dualkey-ae1c", "boot": "b7"})])
+        asyncio.run(signal_link.serve_link(ws, lambda b: (200, {}), "p", hub=hub))
+        self.assertEqual(ws.sent[0], {"type": "hello", "ok": True})
+        self.assertEqual(hub.events, ["join", "leave"])
+        self.assertEqual(hub.links, set())
+        # a refused hello never joins
+        hub2 = Hub()
+        ws = FakeWS([json.dumps({"type": "hello", "device": "other"})])
+        asyncio.run(signal_link.serve_link(ws, lambda b: (200, {}), "p", hub=hub2))
+        self.assertEqual(hub2.events, [])
+
+    def test_hub_pushes_mode_to_signal_link(self):
+        import mouth_link
+        async def go():
+            calls = []
+            def call(method, path, body, timeout):
+                calls.append(path)
+                return (200, {"seq": 7}) if path == "/mode/seq" else (200, {"snapshot": {"seq": 7, "mode": "crowd"}})
+            hub = mouth_link.ModeHub(call)
+            ws = FakeWS([])
+            link = signal_link.SignalLink(lambda b: (200, {}), "p", ws=ws)
+            link.device = "dualkey-ae1c"
+            hub.join(link)
+            await hub.tick()
+            hub.close()
+            self.assertEqual(ws.sent, [{"type": "mode", "current": "crowd"}])
+        asyncio.run(go())
+
 
 if __name__ == "__main__":
     unittest.main()
