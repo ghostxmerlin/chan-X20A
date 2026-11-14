@@ -4,7 +4,8 @@ Step 1b (owner 2026-11-14, plan 2026-11-14-hello-modes-step1b-robot-owned): hell
 rules (modes.transition, exported as test vectors) itself and reports every change; report() mirrors that state,
 logs it and hands its effects to the hooks through the same pre-check / guard as before. mind still owns the master
 switch (billing) and presets 0 / 9 (digit). The HTTP layer no longer sends page / DualKey inputs through apply();
-apply()'s transition path stays as the reference the store tests pin (and for boot / timeout in those tests).
+apply()'s transition path stays as the reference the store tests pin. mind runs no settings timer: hello owns it
+and reports by:"timeout" (a mind-side timeout would flip the mirror under hello).
 
 ModeStore keeps the current state in memory and in hello.mode {_id: 'current'}, logs every input / report to
 hello.mode_log, and is the only writer of the master switch, so every change of either bumps mind's own `seq`
@@ -34,7 +35,7 @@ Lock contract (review I2): one process-wide lock covers each commit, including i
   - speaking_fn is called before the lock is taken; guard is called under it. Both must be in-memory reads that take
     no lock (e.g. speak._SAY_LOCK.locked() is fine; speak._ENQUEUE_LOCK, HTTP to soul-tts or a Billing lock are not)
     and never call ModeStore.
-  - Callers must not hold any lock of their own while calling apply / set_billing / robot_event / tick (A3's
+  - Callers must not hold any lock of their own while calling apply / set_billing / report / robot_closed (A3's
     Billing calls set_billing with no lock held). preset_fn / billing_fn / hooks run outside the lock and may call
     ModeStore, but preset_fn must not re-enter apply with the device key it is handling (raises ValueError).
 
@@ -50,7 +51,6 @@ from .mode_table import MODES, SUBTITLE_DIRS
 from .modes import EFFECTS, SOURCES, result, snapshot as _snapshot, transition
 
 STALE_MS = 3000                  # device inputs older than this are dropped (DualKey resends after a reconnect)
-SETTINGS_TIMEOUT_MS = 300_000    # settings closes itself after 5 minutes without input
 PAID = ('say_round', 'prefetch_on', 'talk_enter')
 # Paid effects that ride on a mode change (owner 14): refusing one keeps the result ok (the entry into talk happened)
 # and only the toast says why. With billing off the effect is KEPT (toast BILLING OFF), because it also has a free
@@ -455,12 +455,3 @@ class ModeStore:
             if r['boot'] == boot and conn is not None and r['conn'] == conn:
                 r.update(connected=False, at=now)
         return self.current()
-
-    def tick(self, now_ms=None):
-        """Main-loop tick: settings with no input for more than 5 minutes closes (back to return_to)."""
-        now = self.clock_ms() if now_ms is None else now_ms
-        with _LOCK:
-            due = self._state['mode'] == 'settings' and now - self._last_input > SETTINGS_TIMEOUT_MS
-        if due:
-            return self.apply('timeout', None, source='timeout', now_ms=now)
-        return None

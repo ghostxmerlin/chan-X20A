@@ -7,11 +7,13 @@ const route = '/v1/control';
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
 Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[],hearing_forget:['name']});
 // hello modes step 1b (owner 2026-11-14): hello owns the mode; the page asks it to switch like any other control.
-// Only select {mode, dir?} (the mode bar and quick keys 4-8); hello runs the rules and reports to mind.
+// select {mode, dir?} (the mode bar) or digit 4-8 (the quick keys: hello's own digit rule); hello runs the rules and
+// reports to mind. Digits 0 / 9 are mind's presets (the page sends those to mind), 1-3 are empty.
 Object.assign(fields,{mode:['input','value']});targets.mode='mode';
 const MODE_IDS=['talk','chat','settings','event','subtitle','crowd','companion','idle'];
 export const NO_MODES='hello 固件还不支持模式（等 0.4.92）';
 function validMode(input,value){
+  if(input==='digit')return Number.isInteger(value)&&value>=4&&value<=8;
   if(input!=='select'||!value||typeof value!=='object'||Array.isArray(value)||!MODE_IDS.includes(value.mode))return false;
   const extra=Object.keys(value).filter(k=>k!=='mode');
   if(value.mode!=='subtitle')return extra.length===0;
@@ -31,7 +33,7 @@ export class Controls {
       const n=input.name;
       if (typeof n!=='string' || !n.length || Buffer.byteLength(n,'utf8')>32 || /[\u0000-\u001f\u007f]/.test(n)) fail(400,'名字须为 1–32 字节，不能含控制字符');
     }
-    if (input.action==='mode' && !validMode(input.input,input.value)) fail(400,'模式参数无效（只接受 select 和八个模式之一）');
+    if (input.action==='mode' && !validMode(input.input,input.value)) fail(400,'模式参数无效（只接受 select 八个模式之一，或数字 4–8）');
     if (input.action==='yaw' && ![-45,45].includes(input.delta_deg)) fail(400,'左右每次只调整一档（45°）');
     if (input.action==='yaw_turn' && (!Number.isInteger(input.duration_ms) || input.duration_ms<100 || input.duration_ms>2000)) fail(400,'转身估计时长须为 100–2000 毫秒的整数');
     if (input.action==='yaw_center' && input.slot!==0) fail(400,'回中只接受 0 档');

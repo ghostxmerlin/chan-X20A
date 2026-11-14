@@ -76,6 +76,8 @@ class LocalDemoTest(unittest.TestCase):
         self.hello_call('/v1/control', {'target': 'mode', 'input': 'digit', 'value': 8})
         snap = self.call('/mode')[1]['snapshot']
         self.assertEqual((snap['mode'], snap['dir']), ('subtitle', 'en_zh'))
+        r = self.hello_call('/v1/control', {'target': 'mode', 'input': 'digit', 'value': 8})[1]
+        self.assertEqual((r['result']['code'], self.call('/mode')[1]['snapshot']['mode']), ('already', 'subtitle'))
 
     def test_page_cannot_switch_on_mind(self):
         st, r = self.call('/mode', {'input': 'select', 'value': {'mode': 'crowd'}})

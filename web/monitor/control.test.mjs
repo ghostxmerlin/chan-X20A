@@ -286,6 +286,9 @@ test('mode: hello switches itself (step 1b); select only, boot-checked, needs mo
   {action:'mode',input:'select',boot:'boot-a'},{...pick,extra:1}]) await assert.rejects(c.execute(bad),e=>e.status===400,JSON.stringify(bad));
  await assert.rejects(c.execute({...pick,boot:'old'}),e=>e.status===409&&/重启/.test(e.message));
  m.telemetry={...m.telemetry,mode:'idle'};await c.execute(pick);                              // the id alone also counts
- assert.equal(calls.length,4);
+ await c.execute({action:'mode',input:'digit',value:7,boot:'boot-a'});                         // quick keys 4-8
+ assert.deepEqual(calls[4][1],{target:'mode',input:'digit',value:7});
+ for(const v of [0,3,9,'5',4.5,null]) await assert.rejects(c.execute({action:'mode',input:'digit',value:v,boot:'boot-a'}),e=>e.status===400);
+ assert.equal(calls.length,5);
  assert.match((await c.execute(pick)).message,/已发给 hello/);
 });

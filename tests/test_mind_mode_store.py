@@ -46,10 +46,9 @@ class ModeStoreTest(unittest.TestCase):
         self.assertEqual((snap['seq'], snap['billing']), (s0 + 1, False))
         self.assertEqual(self.ms.set_billing(False, source='page', now_ms=6)['seq'], s0 + 1)   # no change, same seq
 
-    def test_settings_timeout(self):
-        self.ms.apply('open', None, source='page', now_ms=1000)
-        self.ms.tick(1000 + 299_000); self.assertEqual(self.ms.current()['mode'], 'settings')
-        self.ms.tick(1000 + 301_000); self.assertEqual(self.ms.current()['mode'], 'talk')
+    def test_mind_runs_no_settings_timer(self):
+        # step 1b: hello owns the settings timer and reports by:"timeout"; mind must never flip the mirror itself
+        self.assertFalse(hasattr(self.ms, 'tick'))
 
     def test_change_hooks_get_effects_and_meta(self):
         seen = []; self.ms.on_change.append(lambda o, n, e, m, t: seen.append((o['mode'], n['mode'], e, m['source'])))
@@ -391,22 +390,6 @@ class RobotAndTimeoutTest(unittest.TestCase):
         r = self.ms.apply('forward', None, source='asr', now_ms=2)
         self.assertEqual((seen, r['effects']), ([['stop_speech']], ['stop_speech']))
 
-    def test_timeout_counts_from_the_last_input_in_settings(self):
-        self.ms.apply('open', None, source='page', now_ms=1000)
-        self.ms.apply('tap', None, source='dualkey', now_ms=200_000)             # no_action, but still an input
-        self.ms.tick(1000 + 301_000); self.assertEqual(self.ms.current()['mode'], 'settings')
-        self.ms.tick(200_000 + 300_001)
-        self.assertEqual((self.ms.current()['mode'], self.ms.current()['by']), ('talk', 'timeout'))
-
-    def test_timeout_survives_restart_and_tick_elsewhere_is_quiet(self):
-        self.ms.apply('open', None, source='page', now_ms=1000)
-        again = ModeStore(self.db)
-        again.tick(1000 + 301_000)
-        self.assertEqual(again.current()['mode'], 'talk')
-        n = self.db.count('mode_log')
-        again.tick(10_000_000)
-        self.assertEqual(self.db.count('mode_log'), n)
-
 
 class ReviewFixesTest(unittest.TestCase):
     """A2 review: I1 superseded paid effects, I2 speaking_fn outside the lock, I3 robot view after a restart,
@@ -588,6 +571,22 @@ class ReportTest(unittest.TestCase):
     def test_closed_before_any_report_is_ignored(self):
         self.ms.robot_closed('b1', 7, now_ms=1)
         self.assertEqual(self.ms.robot()['conn'], None)
+
+
+
+class RelinkTest(unittest.TestCase):
+    """After a /mouth reconnect hello re-sends its current state: input null, by = the last change's source, no effects."""
+    def test_relink_report_is_a_state_refresh(self):
+        db = FakeDB(); ms = ModeStore(db, clock_ms=lambda: 0); seen = []
+        ms.on_change.append(lambda o, n, e, m, t: seen.append(e))
+        body = {'seq': 1, 'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None, 'by': 'touch',
+                'input': 'select', 'effects': ['stop_speech', 'talk_leave']}
+        ms.report(body, boot='b1', conn=1, now_ms=1)
+        ms.report({**body, 'seq': 2, 'input': None, 'effects': []}, boot='b1', conn=2, now_ms=2)    # re-link, new seq
+        dup = ms.report({**body, 'seq': 2, 'input': None, 'effects': []}, boot='b1', conn=3, now_ms=3)  # same seq again
+        self.assertEqual((seen, ms.current()['mode'], ms.current()['by'], ms.robot()['conn'], dup.get('duplicate')),
+                         ([['stop_speech', 'talk_leave']], 'crowd', 'touch', 2, True))
+        self.assertEqual(db['mode_log'].docs[-1]['input'], 'report')
 
 
 if __name__ == '__main__':

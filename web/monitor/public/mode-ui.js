@@ -32,13 +32,16 @@ const SWITCH_NAMES={tingwu:'听悟',eye:'识别',notes:'纪要',mind:'情景',sc
 const modeName=(mode,dir)=>NAMES[mode]?(mode==='subtitle'&&DIRS[dir]?`字幕 ${DIRS[dir]}`:NAMES[mode]):String(mode??'—');
 export const NO_MODES='hello 固件还不支持模式（等 0.4.92）';
 
-// /api/state -> hello's own mode. ok: online, fresh telemetry with a known telemetry.mode (an object with .mode, or the
-// id alone); unsupported: online and fresh but no mode in it (0.4.91); offline: anything else.
+// /api/state -> hello's own mode. ok: online, fresh telemetry with a known telemetry.mode (0.4.92: {mode, dir, host,
+// return_to, seq, label, by, since_ms = how long ago}, or the id alone); unsupported: online and fresh but no mode in it
+// (0.4.91); offline: anything else.
 export function robotMode(st){
  if(!st||st.online!==true||st.fresh?.telemetry!==true||!st.telemetry||typeof st.telemetry!=='object')return {status:'offline',boot:null,mode:null};
  const raw=st.telemetry.mode,o=typeof raw==='string'?{mode:raw}:raw;
  if(!o||typeof o!=='object'||!Object.hasOwn(NAMES,o.mode))return {status:'unsupported',boot:st.boot||null,mode:null};
- return {status:'ok',boot:st.boot||null,mode:o};
+ const at=Number.isFinite(st.receivedAt)&&st.receivedAt>0?st.receivedAt:Number.isFinite(st.now)?st.now:null;
+ const since=Number.isFinite(o.since)?o.since:Number.isFinite(o.since_ms)&&at!==null?at-o.since_ms:null;
+ return {status:'ok',boot:st.boot||null,mode:{...o,since}};
 }
 
 // (GET /mode reply, robotMode()) -> what the bar shows. Unknown (neither hello nor mind) is never shown as a mode.
@@ -52,12 +55,15 @@ export function modeView(state,robot=null,why=null){
   name:'模式未知',label:'',color:null,since:null,by:null,billing:null,event:null,dir:null,returnTo:null,seq:null};
  const [label,color]=LOOK[o.mode];
  return {known:true,why:null,robot:r.status,source:r.status==='ok'?'hello':'mind',canSwitch:r.status==='ok',boot:r.boot,
-  mode:o.mode,name:modeName(o.mode,o.dir),label:o.mode==='subtitle'&&SUB_LABELS[o.dir]?SUB_LABELS[o.dir]:label,color,
+  mode:o.mode,name:modeName(o.mode,o.dir),label:r.status==='ok'&&typeof o.label==='string'&&/^[\x20-\x7e]{1,10}$/.test(o.label)?o.label:
+   o.mode==='subtitle'&&SUB_LABELS[o.dir]?SUB_LABELS[o.dir]:label,color,
   since:Number.isFinite(o.since)?o.since:null,by:o.by??null,billing,event:o.host==='event'?'hosting':o.mode==='event'?'waiting':null,
   dir:o.dir??null,returnTo:o.mode==='settings'?(o.return_to||'idle'):null,seq:Number.isInteger(o.seq)?o.seq:null};
 }
 
 export function selectRequest(mode,dir,boot){return {action:'mode',boot,input:'select',value:dir?{mode,dir}:{mode}};}
+// Quick keys 4-8 send the digit itself: hello applies its own digit rule (the owner's table), not the bar's select.
+export function digitRequest(n,boot){return {action:'mode',boot,input:'digit',value:n};}
 
 export function logLine(r){
  const what=r?.input==='billing'?`计费总闸 ${r.value?'开':'关'}`:r?.input==='digit'?`预设 ${esc(r.value)}`:
@@ -103,7 +109,7 @@ export function quickHtml(view,talk=null){
  const keys=Object.entries(PRESETS).map(([k,name])=>{
   const n=Number(k);
   if(MIND_PRESETS.has(n))return `<button data-preset="${n}" title="${esc(name)}"${known?'':' disabled'}>${n}</button>`;
-  if(HELLO_PRESETS[n])return `<button data-hello-preset="${n}" title="${esc(locked?`${name}（${locked}）`:`${name}（hello 切）`)}"${locked?' disabled':''}>${n}</button>`;
+  if(HELLO_PRESETS[n])return `<button data-hello-preset="${n}" title="${esc(locked?`${name}（${locked}）`:`进 ${name}（hello 切）`)}"${locked?' disabled':''}>${n}</button>`;
   return `<button data-preset="${n}" title="空" disabled>${n}</button>`;
  }).join('');
  const word=b=>b===true?'开':b===false?'关':'未知';
@@ -237,7 +243,16 @@ export class ModeModel{
    return `${prefix}已发给 hello：${modeName(mode,dir)}（它切了会报上来；再点当前模式 = 离开）`;
   });
  }
- helloPreset(n){const [m,d]=HELLO_PRESETS[n]||[];return m?this.select(m,d,`预设 ${n}：`):Promise.resolve();}
+ helloPreset(n){
+  const [m,d]=HELLO_PRESETS[n]||[];
+  if(!m)return Promise.resolve();
+  return this.act(async()=>{
+   const why=lockedWhy(this.view);
+   if(why)return `预设 ${n}：${why}`;
+   await this.post('/api/control',digitRequest(n,this.robot.boot));
+   return `预设 ${n}：已发给 hello（进 ${modeName(m,d)}；它切了会报上来）`;
+  });
+ }
  preset(n){
   return this.act(async()=>{
    const robotState=(await fetchJson(this.fetchFn,'/api/state')).body;

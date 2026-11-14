@@ -48,7 +48,7 @@
 | `POST /switches {name: billing, on}` | 总闸；`GET /switches` 多一项 `billing: {on, at}` |
 
   回复都带 `effects`（真正执行的效果）；总闸关得不完整时带 `failed`。
-- **效果**（hello 报来，mind 执行）：`stop_speech` 停正在说的；`talk_leave` 提前写、连续说关（存货丢掉）；`talk_enter` 提前写开 + 连续说开 + 家人声音关（本来就关就不写设置版本；总闸关着只做家人声音关）；`say_round` 说一轮（今天的流程），先过守门：总闸关 `billing_off`、嘴不在 TTS `mouth_not_tts`、已有一轮在跑 `busy`、离上一轮开始（含页面的说一轮）不到 10 秒 `too_soon`；`prefetch_on` / `prefetch_off`。保险：报上来的模式不是脱口秀而提前写 / 连续说还开着，就关掉（不管带没带 `talk_leave`）。mind 重启不算进入脱口秀。
+- **效果**（hello 报来，mind 执行）：`stop_speech` 停正在说的；`talk_leave` 提前写、连续说关（存货丢掉）；`talk_enter` 提前写开 + 连续说开 + 家人声音关（本来就关就不写设置版本；总闸关着只做家人声音关）；`say_round` 说一轮（今天的流程），先过守门：总闸关 `billing_off`、嘴不在 TTS `mouth_not_tts`、已有一轮在跑 `busy`、离上一轮开始（含页面的说一轮）不到 10 秒 `too_soon`；`prefetch_on` / `prefetch_off`。保险：报上来的模式不是脱口秀而提前写 / 连续说还开着，就关掉（不管带没带 `talk_leave`）。mind 重启不算进入脱口秀。设置 5 分钟回去的计时在 hello 上（它报 `by: timeout`），mind 不再自己计时。重连后 hello 先补报一次当前状态（`input: null`、`by` = 上次切换的来源、没有效果），mind 只当作刷新。
 - **说话只在脱口秀**（按 hello 报的模式）：`/say`、`/say/round`、`/say/play`，以及打开 `/say/prefetch`、`/say/auto`，不在脱口秀时 409 `{error: 只在脱口秀模式, code: only_talk}`；关掉永远可以；`/say/stop` 永远放行。
 - **总闸**（第一步 = 关掉 + 禁止再开 + 拦说话）：关 = 先把总闸记成关（`seq` 加 1），再关听悟、识别、纪要、情景、连续说、提前写，停正在说的；每一步都试，失败的写进 `failed`，再关一次就是重试。开只开总闸本身。关着时：打开 `tingwu`/`eye`/`notes`、打开情景（`/switch`）、说话类接口、`/voice/try`、`/role/try` 一律 409 `{error: 计费关着, code: billing_off}`；关开关永远可以。库里存的总闸值坏了（不是布尔）按关；mind 启动时总闸是关的，就再执行一遍关。
 - **DualKey**：只打分。`/signal` 照旧存信号（打分、"这轮不行"；方向、单击也照存），不再切模式、不再停说。

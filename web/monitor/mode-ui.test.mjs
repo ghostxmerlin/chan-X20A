@@ -83,7 +83,7 @@ test('quick panel: 0 / 9 go to mind, 4-8 are hello selects, 1-3 are empty',()=>{
  for(const n of [0,9])assert.match(q,new RegExp(`data-preset="${n}"(?![^>]*disabled)`));
  for(const n of [1,2,3])assert.match(q,new RegExp(`data-preset="${n}"[^>]*disabled`));
  for(const n of [4,5,6,7,8])assert.match(q,new RegExp(`data-hello-preset="${n}"(?![^>]*disabled)`));
- assert.match(q,/data-hello-preset="7" title="字幕 中→英（hello 切）"/);
+ assert.match(q,/data-hello-preset="7" title="进 字幕 中→英（hello 切）"/);
  assert.match(q,/data-preset="9" title="花费全开"/);
  assert.deepEqual(ui.HELLO_PRESETS,{4:['idle'],5:['crowd'],6:['companion'],7:['subtitle','zh_en'],8:['subtitle','en_zh']});
 });
@@ -258,8 +258,8 @@ test('select posts to hello through /api/control and says so; nothing goes to mi
  assert.deepEqual(sent,[['/api/control',{action:'mode',boot:'b1',input:'select',value:{mode:'subtitle',dir:'zh_en'}}]]);
  assert.match(m.msg,/已发给 hello：字幕 中→英/);
  await m.helloPreset(5);
- assert.deepEqual(sent[1],['/api/control',{action:'mode',boot:'b1',input:'select',value:{mode:'crowd'}}]);
- assert.match(m.msg,/预设 5：已发给 hello：围观/);
+ assert.deepEqual(sent[1],['/api/control',{action:'mode',boot:'b1',input:'digit',value:5}]);   // hello's own digit rule
+ assert.match(m.msg,/预设 5：已发给 hello（进 围观/);
 });
 test('select while hello cannot switch sends nothing and says why',async()=>{
  const sent=[];const post=async(path,body)=>{sent.push(path);return {};};
@@ -323,4 +323,12 @@ test('hello\'s state can come from the bar\'s own event stream instead of /api/s
  assert.equal(m.view.mode,'companion');assert.equal(f.calls.filter(c=>c[0]==='/api/state').length,0);
  const js=readFileSync(new URL('./public/mode-ui.js',import.meta.url),'utf8');
  assert.match(js,/new EventSource\('\/api\/events\?camera=0&servo=0'\)/);
+});
+test('0.4.92 telemetry.mode: since_ms is an age, label comes from hello (ASCII, short)',()=>{
+ const st={online:true,fresh:{telemetry:true},boot:'b1',receivedAt:100000,now:100500,
+  telemetry:{boot_id:'b1',seq:4,mode:{mode:'subtitle',dir:'zh_en',host:null,return_to:null,seq:3,label:'SUB ZH>EN',by:'touch',since_ms:2500,online:true}}};
+ const v=ui.modeView(state(),ui.robotMode(st));
+ assert.deepEqual([v.mode,v.dir,v.label,v.since,v.by,v.seq],['subtitle','zh_en','SUB ZH>EN',97500,'touch',3]);
+ const odd=ui.modeView(state(),ui.robotMode({...st,telemetry:{...st.telemetry,mode:{...st.telemetry.mode,label:'<b>中文'}}}));
+ assert.equal(odd.label,'SUB ZH>EN');                                    // not ASCII: the page's own table
 });
