@@ -442,6 +442,12 @@ class FaceViewTest(unittest.TestCase):
 class GreetTest(HubBase):
     async def test_owner_appearing_is_greeted_once(self):
         self.hub.cfg.max_session_s = self.hub.cfg.idle_s = self.hub.cfg.hour_cap_s = 10 ** 6   # one session throughout
+        picks = iter([2, 4])                              # first short hello: the word 嗯哼？; second: two beeps
+
+        class Rng(__import__("random").Random):
+            def randrange(self, n):
+                return next(picks)
+        self.hub.rng = Rng(1)
         ws = await self.open_ready()
         items = lambda: [m["item"]["content"][0]["text"] for m in ws.sent if m["type"] == "conversation.item.create"]
 
@@ -471,17 +477,26 @@ class GreetTest(HubBase):
         await appear(2)                                   # gone only 30 s: not a new recognition
         self.assertEqual(len(items()), 1)
         leave(2, 120)
-        await appear(3)                                   # inside 10 min: a short hello
-        self.assertEqual(items()[-1], "[事件] 主人又出现了，短招呼。")
-        await reply("又回来啦")
+        await appear(3)                                   # inside 10 min: a short hello, one word, no name
+        self.assertEqual(items()[-1], "[事件] 主人又出现了，短招呼：只说「嗯哼？」。")
+        await reply("嗯哼？")
         leave(3, 61)
-        await appear(4)                                   # another short hello (>= 60 s apart), still no name
-        self.assertEqual(items()[-1], "[事件] 主人又出现了，短招呼。")
+        before = len(self.link.texts())
+        await appear(4)                                   # another short hello (>= 60 s apart): two beeps, no model
+        await settle(20)
+        self.assertEqual(len(items()), 2)
+        starts = [m for m in self.link.texts()[before:] if m.get("type") == "tts.start"]
+        self.assertEqual(len(starts), 1)
+        self.assertTrue(any("beep" in line for line in self.logs))
+        sid = starts[0]["stream"]
+        self.hub.on_report(self.link, {"type": "tts.playing", "stream": sid})
+        self.hub.on_report(self.link, {"type": "tts.done", "stream": sid, "played_ms": 330})
+        await settle()
         leave(4, 600)
         await appear(5)                                   # 10 min after the long one: a new long one, told what it said
         self.assertEqual(items()[-1], "[事件] 主人（阿大）出现在你面前了，长招呼。之前说过：「阿大回来啦，今天也在忙电路呀」。"
                                       "这次换个完全不同的说法。")
-        self.assertEqual(len(items()), 4)
+        self.assertEqual(len(items()), 3)
         self.assertFalse(any("阿大" in line or "电路" in line for line in self.logs))
 
     async def test_others_and_unknown_are_not_greeted_and_not_outside_crowd(self):
@@ -569,6 +584,17 @@ class SeenTest(HubBase):
         self.assertEqual(rl.seen_text([], {}, [], "x"), "眼前没有人脸。")
         faces = [{"name": "g1"}, {"name": None, "gender": None, "age_group": None}]
         self.assertEqual(rl.seen_text(faces, {"g1": "人物甲"}, [], "x"), "眼前有 2 个人：人物甲、一个认不出的人。")
+
+
+class BeepTest(unittest.TestCase):
+    def test_two_chirps_vary(self):
+        import random
+        import realtime_link as rl
+        a, b = rl.beep_pcm(random.Random(1)), rl.beep_pcm(random.Random(2))
+        self.assertNotEqual(a, b)
+        for pcm in (a, b):
+            self.assertEqual(len(pcm) % 2, 0)
+            self.assertTrue(0.2 < len(pcm) / 2 / rl.SR_OUT < 0.4)
 
 
 class TextTest(unittest.TestCase):

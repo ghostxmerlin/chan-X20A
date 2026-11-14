@@ -61,6 +61,8 @@ import collections
 import concurrent.futures
 import itertools
 import json
+import math
+import random
 import re
 import struct
 import time
@@ -92,7 +94,7 @@ PERSONA = (
     "- 背景只在跟话题有关时才用，不要硬扯，不要每句都提同一件事。\n"
     "- 收到“[事件] 主人（名字）出现在你面前了，长招呼”时：用这个名字大声、热情地喊主人，开心地打招呼，"
     "再顺口说一句你看到的情景或想到的事，两三句。每次都换新说法，不要跟事件里列的“之前说过”的一样。\n"
-    "- 收到“[事件] 主人又出现了，短招呼”时：刚才已经见过，只用一句很短的话打个招呼（比如“又回来啦”），不用喊全名。\n"
+    "- 收到“[事件] 主人又出现了，短招呼：只说「…」”时：刚才已经见过，只原样说「」里那个词，一个字都不多说，不喊名字。\n"
     "- 收到“[事件] 有人点了你一下，让你跟面前的人打招呼”时：按事件里说的称呼主动打招呼，嘴甜一点、热情一点；"
     "认识的人叫名字，不认识的就用事件给的称呼（美女、帅哥、小朋友、爷爷、奶奶）。只夸，不评论长相的缺点，不开人身玩笑。"
     "事件说没看到人脸，就说“我看看……咦，没看到人呀”这样的话，再友好地问声好。\n"
@@ -138,11 +140,34 @@ def session_config(voice, instr, silence_ms=500, threshold=0.5):
             "turn_detection": {"type": "server_vad", "threshold": threshold, "silence_duration_ms": silence_ms}}
 
 
-def greet_text(call, kind="long", said=()):
+SHORT_WORDS = ("hi", "你好", "嗯哼？", "嘿")     # owner 2026-11-14: a short hello is one of these, or two beeps
+
+
+def beep_pcm(rng=random):
+    """Two R2D2-style chirps (24 kHz PCM16 mono, ~0.33 s), a little different every time; made here, no model."""
+    out = bytearray()
+
+    def chirp(ms, f0, f1, warble):
+        n = SR_OUT * ms // 1000
+        ph = 0.0
+        for i in range(n):
+            x = i / n
+            f = f0 + (f1 - f0) * x + warble * math.sin(2 * math.pi * 30 * i / SR_OUT)
+            ph += 2 * math.pi * f / SR_OUT
+            env = min(1.0, i / (SR_OUT * 0.006), (n - i) / (SR_OUT * 0.012))
+            out.extend(struct.pack("<h", int(9000 * env * math.sin(ph))))
+
+    chirp(rng.randint(90, 130), rng.randint(1400, 1900), rng.randint(2600, 3300), rng.randint(80, 220))
+    out.extend(bytes(2 * SR_OUT * rng.randint(50, 80) // 1000))
+    chirp(rng.randint(70, 110), rng.randint(2500, 3100), rng.randint(1500, 2100), rng.randint(60, 200))
+    return bytes(out)
+
+
+def greet_text(call, kind="long", said=(), word=None):
     """Owner greeting event (owner 2026-11-14): one long, named, always-new greeting per long_greet_s; a re-recognition
     inside that window gets a short hello. said: hello's last long greetings (memory only), so it does not repeat."""
     if kind == "short":
-        return "[事件] 主人又出现了，短招呼。"
+        return f"[事件] 主人又出现了，短招呼：只说「{word or SHORT_WORDS[0]}」。"
     text = f"[事件] 主人（{call}）出现在你面前了，长招呼。"
     if said:
         text += "之前说过：" + "；".join(f"「{t}」" for t in said) + "。这次换个完全不同的说法。"
@@ -369,11 +394,13 @@ class Config:
 
 class RealtimeHub:
     def __init__(self, *, key, voice, modes, call, switch, db=None, connect=None, encoder_factory=None,
-                 cfg=None, clock=time.monotonic, wall_ms=None):
+                 cfg=None, clock=time.monotonic, wall_ms=None, rng=None):
         if connect is None:
             connect = _direct_connect
         self.key, self.voice, self.modes, self.call, self.switch, self.db = key, voice, modes, call, switch, db
         self.connect, self.encoder_factory = connect, encoder_factory or OpusFrames
+        self.rng = rng or random.Random()
+        self._beeps = itertools.count(1)
         self.cfg, self.clock = cfg or Config(), clock
         self.wall_ms = wall_ms or (lambda: int(time.time() * 1000))
         self.url = URL.format(model=self.cfg.model)
@@ -975,7 +1002,17 @@ class RealtimeHub:
         if g["kind"] == "owner":
             if not call:
                 return
-            text = greet_text(call, g.get("size", "long"), tuple(self._said))
+            if g.get("size") == "short":
+                pick = self.rng.randrange(len(SHORT_WORDS) + 1)       # a word, or (last slot) two beeps
+                if pick == len(SHORT_WORDS):
+                    self._greet = None
+                    self._last_greet = now
+                    self.stats["greeted"] += 1
+                    self._beep(now)
+                    return
+                text = greet_text(call, "short", word=SHORT_WORDS[pick])
+            else:
+                text = greet_text(call, "long", tuple(self._said))
         else:
             text = tap_text(g["pick"], self.ctx.get("names") or {}, owner.get("face_names") or [], call or "主人")
         self._greet = None
@@ -991,6 +1028,18 @@ class RealtimeHub:
         self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
                                                                       "content": [{"type": "input_text", "text": text}]}})
         self._send_soon({"type": "response.create"})
+
+    def _beep(self, now):
+        """A short hello as two local chirps: played like a reply (same /mouth stream path), no model, no cost."""
+        rid = f"beep{next(self._beeps)}"
+        pcm = beep_pcm(self.rng)
+        self._turns[rid] = {"kind": "greet_beep", "speech_end": None, "heard_chars": None, "rid": rid,
+                            "session": self.session_no, "response_at": now, "first_delta": now, "sound_at": None,
+                            "reply_chars": 0, "audio_ms": len(pcm) * 1000 // (SR_OUT * 2), "usage": None,
+                            "at": self.wall_ms()}
+        log(f"realtime: session {self.session_no} greet_short beep", flush=True)
+        self._out_put(("pcm", rid, pcm))
+        self._out_put(("end", rid, b""))
 
     # ---- records ----
     def _finish_turn(self, rid, state):
