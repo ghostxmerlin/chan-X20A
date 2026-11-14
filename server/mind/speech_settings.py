@@ -12,8 +12,9 @@ ROUND_LIMITS = {'moment_gap_s': (10, 600), 'moment_window_s': (10, 600), 'prefet
 ROUND_INTEGERS = {'auto_min_score'}
 # Chat v0 (plan 2026-11-14-chat-v0): the model is a setting (coordinator 2026-11-14: terra with reasoning_effort none
 # tested fastest); near_db = how far above the ear's floor a voice must be to count as near (owner: filter far voices).
-# near_db 5 (review I1): ~p13 of the robot's sentences with text (2026-11-08..10 recordings); 12 dropped 65 %.
-CHAT_DEFAULTS = {'model': 'gpt-6.1-terra', 'near_db': 5, 'max_chars': 60, 'history_turns': 8}
+# near_db 8 (2026-11-14, live hello.speech 11-12..14, 3543 sentences): known speakers (the owner, close) p5 9.4 dB, so 8 keeps
+# ~97 % of them and drops the quietest ~41 % of unrecognised speech (mostly far voices). Tune in settings after live chat_turns.
+CHAT_DEFAULTS = {'model': 'gpt-6.1-terra', 'near_db': 8, 'max_chars': 60, 'history_turns': 8}
 CHAT_LIMITS = {'near_db': (0, 40), 'max_chars': (20, 120), 'history_turns': (0, 20)}
 CHAT_INTEGERS = {'max_chars', 'history_turns'}
 MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$')

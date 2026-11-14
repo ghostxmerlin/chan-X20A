@@ -508,7 +508,7 @@ class ContextTest(ChatBase):
 class SettingsTest(unittest.TestCase):
     def test_defaults_and_validation(self):
         s = settings_mod.load(None)
-        self.assertEqual(speech_settings.chat_config(s), {'model': 'gpt-6.1-terra', 'near_db': 5, 'max_chars': 60,
+        self.assertEqual(speech_settings.chat_config(s), {'model': 'gpt-6.1-terra', 'near_db': 8, 'max_chars': 60,
                                                           'history_turns': 8})
         self.assertEqual(validate(s), [])
         for bad in ({'model': ''}, {'model': 'a b'}, {'model': 'gpt-6.1-terra\n'}, {'model': 3}, {'near_db': -1}, {'near_db': True},
