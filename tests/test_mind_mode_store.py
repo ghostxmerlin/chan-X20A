@@ -388,5 +388,112 @@ class RobotAndTimeoutTest(unittest.TestCase):
         self.assertEqual(self.db.count('mode_log'), n)
 
 
+class ReviewFixesTest(unittest.TestCase):
+    """A2 review: I1 superseded paid effects, I2 speaking_fn outside the lock, I3 robot view after a restart,
+    M1 same-thread re-entry, M5 returned results are copies."""
+
+    def setUp(self):
+        self.db = FakeDB(); self.ms = ModeStore(self.db, clock_ms=lambda: 0)
+
+    def _interleave(self, second):
+        """forward commits say_round; the first hook commits `second` before the later hooks of forward run."""
+        seen, fired = [], []
+
+        def h1(o, n, e, m, t):
+            if not fired:
+                fired.append(1); second()
+
+        self.ms.on_change.extend([h1, lambda o, n, e, m, t: seen.append((m['input'], list(e), n['seq']))])
+        r = self.ms.apply('forward', None, source='asr', now_ms=1)
+        return r, seen
+
+    def test_say_round_dropped_when_a_later_input_left_talk(self):
+        r, seen = self._interleave(lambda: self.ms.apply('backward', None, source='page', now_ms=2))
+        self.assertEqual(seen, [('backward', ['stop_speech', 'talk_leave'], 2)])    # forward's say_round never runs
+        self.assertEqual(r['effects'], [])
+
+    def test_say_round_dropped_when_billing_went_off_in_between(self):
+        r, seen = self._interleave(lambda: self.ms.set_billing(False, source='page', now_ms=2))
+        self.assertEqual(seen, [])
+
+    def test_unpaid_effects_still_run_when_superseded(self):
+        seen, fired = [], []
+
+        def h1(o, n, e, m, t):
+            if not fired:
+                fired.append(1); self.ms.set_billing(False, source='page', now_ms=2)
+
+        self.ms.on_change.extend([h1, lambda o, n, e, m, t: seen.append(list(e))])
+        self.ms.apply('backward', None, source='page', now_ms=1)
+        self.assertEqual(seen, [['stop_speech', 'talk_leave']])
+
+    def test_is_current_follows_the_committed_seq(self):
+        checks = []
+        self.ms.on_change.append(lambda o, n, e, m, t: checks.append(lambda: self.ms.seq() == n['seq']))
+        self.ms.apply('forward', None, source='asr', now_ms=1)
+        self.assertTrue(checks[0]())
+        self.ms.apply('backward', None, source='page', now_ms=2)
+        self.assertFalse(checks[0]())
+
+    def test_slow_speaking_fn_does_not_block_other_inputs(self):
+        gate, started = threading.Event(), threading.Event()
+        calls = []
+
+        def speaking():
+            calls.append(1)
+            if len(calls) == 1:
+                started.set(); gate.wait(5)
+            return False
+
+        self.ms.speaking_fn = speaking
+        t1 = threading.Thread(target=lambda: self.ms.apply('tap', None, source='touch', now_ms=1))
+        t1.start(); started.wait(5)
+        done = []
+        t2 = threading.Thread(target=lambda: done.append((self.ms.set_billing(False, source='page', now_ms=2),
+                                                          self.ms.apply('play', None, source='page', now_ms=3))))
+        t2.start(); t2.join(2)
+        finished = bool(done)
+        gate.set(); t1.join(5)
+        self.assertTrue(finished)
+
+    def test_robot_applied_after_mind_restart_adopts_the_connection(self):
+        self.ms.robot_event('b1', 7, 'hello', now_ms=1)
+        again = ModeStore(self.db, clock_ms=lambda: 0)
+        self.assertFalse(again.robot()['connected'])
+        again.apply('play', None, source='page', now_ms=2)
+        again.robot_event('b1', 7, 'applied', applied_seq=3, now_ms=3)
+        self.assertEqual(again.robot(), {'connected': True, 'boot': 'b1', 'conn': 7, 'applied_seq': 3, 'at': 3})
+        self.assertEqual(again.current()['mode'], 'chat')                   # same boot: not a reboot
+        again.robot_event('b1', 6, 'applied', applied_seq=9, now_ms=4)      # an older connection: still ignored
+        self.assertEqual(again.robot()['applied_seq'], 3)
+        again.robot_event('b1', 7, 'hello', now_ms=5)                       # a repeated hello is harmless
+        self.assertEqual(again.current()['mode'], 'chat')
+        again.robot_event('b1', 7, 'closed', now_ms=6)
+        self.assertFalse(again.robot()['connected'])
+
+    def test_adopted_connection_with_a_new_boot_is_a_reboot(self):
+        self.ms.robot_event('b1', 7, 'hello', now_ms=1)
+        self.ms.apply('play', None, source='page', now_ms=2)
+        again = ModeStore(self.db, clock_ms=lambda: 0)
+        again.robot_event('b2', 1, 'applied', applied_seq=2, now_ms=3)
+        self.assertEqual((again.current()['mode'], again.robot()['boot']), ('talk', 'b2'))
+
+    def test_closed_before_any_connection_is_ignored(self):
+        self.ms.robot_event('b1', 7, 'closed', now_ms=1)
+        self.assertEqual(self.ms.robot()['conn'], None)
+
+    def test_same_thread_reentry_with_the_same_key_raises(self):
+        kw = dict(source='asr', device='robot', boot='b1', dev_seq=1, now_ms=1)
+        self.ms.preset_fn = lambda n, **k: self.ms.apply('play', None, **kw)
+        with self.assertRaises(ValueError):
+            self.ms.apply('digit', 2, **kw)
+
+    def test_returned_results_are_copies(self):
+        kw = dict(source='asr', device='robot', boot='b1', dev_seq=1, now_ms=1)
+        a = self.ms.apply('play', None, **kw)
+        a['result']['extra'] = 1
+        self.assertNotIn('extra', self.ms.apply('play', None, **kw)['result'])
+
+
 if __name__ == '__main__':
     unittest.main()

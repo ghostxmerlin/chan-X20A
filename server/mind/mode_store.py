@@ -17,7 +17,21 @@ apply() for every input, in this order:
 Then, outside the lock, the on_change hooks run in order with the effects: they only carry them out (effects are
 data from modes.transition, executed by name; ModeStore interprets none of them beyond the pre-check).
 
-Reads (current, seq, billing, robot) are memory only and take no lock.
+Superseded paid effects (review I1): every later mode change and every billing change bumps seq, so before each
+hook a paid effect is dropped when seq() no longer equals the committed snapshot's seq. Hooks that start paid work
+must also hand it `is_current=lambda: store.seq() == new_snapshot['seq']` (speak.say_round checks it again after
+writing and before speaking), because the input that replaces it can land after the hook started.
+
+Lock contract (review I2): one process-wide lock covers each commit, including its Mongo calls.
+  - speaking_fn is called before the lock is taken; guard is called under it. Both must be in-memory reads that take
+    no lock (e.g. speak._SAY_LOCK.locked() is fine; speak._ENQUEUE_LOCK, HTTP to soul-tts or a Billing lock are not)
+    and never call ModeStore.
+  - Callers must not hold any lock of their own while calling apply / set_billing / robot_event / tick (A3's
+    Billing calls set_billing with no lock held). preset_fn / billing_fn / hooks run outside the lock and may call
+    ModeStore, but preset_fn must not re-enter apply with the device key it is handling (raises ValueError).
+
+Reads (current, seq, billing, robot) are memory only and take no lock; seq() / billing() read the snapshot itself,
+so they never disagree with current().
 """
 import collections
 import copy
@@ -77,7 +91,8 @@ class ModeStore:
         """guard(effect, meta) -> code | None for say_round / prefetch_on; speaking_fn() -> stop_speech has
         something to cancel; preset_fn(n, *, source, now_ms, meta) -> {result, ...extra}; billing_fn(on, *, source,
         now_ms, meta) must end in set_billing (default: set_billing alone). preset_fn / billing_fn may be set after
-        construction (A3's Billing needs this store first)."""
+        construction (A3's Billing needs this store first). guard and speaking_fn: lock-free in-memory reads that
+        never call ModeStore (see the module docstring's lock contract)."""
         self.db = db
         self.coll = db['mode']
         self.log_coll = db['mode_log']
@@ -98,10 +113,10 @@ class ModeStore:
         return copy.deepcopy(self._snap)
 
     def seq(self):
-        return self._seq
+        return self._snap['seq']
 
     def billing(self):
-        return self._billing
+        return self._snap['billing']
 
     def robot(self):
         return dict(self._robot)
@@ -173,7 +188,7 @@ class ModeStore:
         return row.get('result') if row and row.get('result') else None
 
     def _remember(self, key, res):
-        self._recent[key] = res
+        self._recent[key] = copy.deepcopy(res)
         while len(self._recent) > _RECENT:
             self._recent.popitem(last=False)
 
@@ -200,10 +215,13 @@ class ModeStore:
                     if hit is not None:
                         return {'snapshot': self.current(), 'result': copy.deepcopy(hit), 'effects': [],
                                 'duplicate': True}
-                    ev = self._pending.get(key)
-                    if ev is None:
-                        self._pending[key] = threading.Event()
+                    pend = self._pending.get(key)
+                    if pend is None:
+                        self._pending[key] = (threading.Event(), threading.get_ident())
                         break
+                    ev, owner = pend
+                    if owner == threading.get_ident():
+                        raise ValueError(f'apply re-entered with the device key it is handling: {key!r}')
                 if not ev.wait(_WAIT_S):
                     return {'snapshot': self.current(), 'result': result('busy'), 'effects': [], 'duplicate': True}
         meta = {'source': source, 'input': input, 'value': value, 'device': device, 'sid': sid, 'mode': None}
@@ -214,14 +232,24 @@ class ModeStore:
         finally:
             if key:
                 with _LOCK:
-                    self._pending.pop(key).set()
+                    self._pending.pop(key)[0].set()
         if hook:
+            old_snap, new_snap, effects, meta, t = hook
+            changed = any(old_snap[k] != new_snap[k] for k in FIELDS)
             for f in list(self.on_change):
+                effects = self._still_current(effects, new_snap)
+                if not (changed or effects):
+                    continue
                 try:
-                    f(*hook)
+                    f(old_snap, new_snap, list(effects), dict(meta), t)
                 except Exception as e:      # a hook only carries out effects; one failing must not stop the rest
                     _log(f'on_change hook {getattr(f, "__name__", f)!r} failed: {type(e).__name__}: {e}')
+            out['effects'] = self._still_current(effects, new_snap)
         return out
+
+    def _still_current(self, effects, snap):
+        """Paid effects only while nothing replaced this commit (a later mode change or billing change bumps seq)."""
+        return list(effects) if self.seq() == snap['seq'] else [e for e in effects if e not in PAID]
 
     def _run(self, input, value, source, now, age_ms, meta, base, key):
         if age_ms is not None and age_ms > STALE_MS:
@@ -232,9 +260,10 @@ class ModeStore:
                 return {'snapshot': self.current(), 'result': res, 'effects': []}, None
         if input in ('digit', 'billing'):
             return self._route(input, value, source, now, meta, base, key), None
+        speaking = bool(self.speaking_fn())             # outside the lock: a point sample (review I2)
         with _LOCK:
             old, old_snap = dict(self._state), self._snap
-            new, res, effects = transition(old, input, value, source=source, speaking=bool(self.speaking_fn()))
+            new, res, effects = transition(old, input, value, source=source, speaking=speaking)
             if not valid_state(new):
                 raise ValueError(f'transition produced an impossible state {new!r} from {old!r} on {input!r}')
             meta['mode'] = new['mode']
@@ -309,13 +338,15 @@ class ModeStore:
     def robot_event(self, boot, conn, event, applied_seq=None, *, now_ms=None):
         """/mouth connection events from ear. hello: conn becomes the current connection, a new boot id = the robot
         rebooted -> apply('boot'). applied / closed count only for the current connection (a late close of an old
-        connection is ignored)."""
+        connection is ignored). The connection is not persisted: after a mind restart the first `applied` adopts
+        its conn (same boot check as hello), so the robot shows online without reconnecting (review I3)."""
         now = self.clock_ms() if now_ms is None else now_ms
         rebooted = False
         with _LOCK:
             r = self._robot
-            if event == 'hello':
-                r.update(connected=True, boot=boot, conn=conn, applied_seq=None, at=now)
+            adopt = event == 'applied' and r['conn'] is None   # after a mind restart: /mouth on ear never dropped
+            if event == 'hello' or adopt:
+                r.update(connected=True, boot=boot, conn=conn, applied_seq=applied_seq if adopt else None, at=now)
                 if boot != self._robot_boot:
                     self._robot_boot, rebooted = boot, True
                     self._write()
