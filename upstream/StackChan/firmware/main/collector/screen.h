@@ -98,9 +98,12 @@ enum class ScreenHomeGesture : uint8_t { None, Tap, DoubleTap };
 ScreenHomeGesture screen_take_home_gesture();
 // Corner badge, every page: the mode's ASCII label on its color; offline = grey with " OFF".
 void screen_update_mode(const char* label, uint32_t color, bool online);
-// 0.4.95 CJK font demo: the summary page's title row shows the mode's name. `font` is the CJK font for a Chinese
-// text (ui_font.h), or nullptr for ASCII text in the screen's ASCII font. The caller picks with ui_font::choose().
-void screen_update_mode_name(const char* text, const lv_font_t* font);
+// 0.4.95 Chinese words: the SD CJK font (ui_font.h; 16 px and 24 px variants, nullptr = not loaded). The caller
+// passes them again whenever ui_font::generation() changes. Every page word then shows in Chinese (ui_text_zh.h);
+// without the 16 px font, its ASCII stand-in (ui::text) in the ASCII font, so the screen works with no font on SD.
+// The summary title row shows "状态摘要" and "模式 <名>" ("chan-X20A", "TALK" without). Open pages are rebuilt.
+// The corner badge and toasts stay ASCII.
+void screen_set_cjk_font(const lv_font_t* small, const lv_font_t* large);
 // A short ASCII line at the bottom for 2 s (the mode's toast). Empty text shows nothing.
 void screen_show_toast(const char* text, uint32_t now_ms);
 // 0.4.93 chat stage dots (chat_stage.h), home page top left: visible only in chat; lit = -1 none, 0 / 1 / 2 =

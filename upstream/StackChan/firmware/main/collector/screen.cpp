@@ -6,6 +6,7 @@
 #include "remote_gestures.h"
 #include "home_touch.h"
 #include "ui_pages.h"
+#include "ui_font_blob.h"   // choose() only: pure, no IDF (the font itself comes in through screen_set_cjk_font)
 #include "eyes/view.h"
 #include <cstdio>
 #include <cstdlib>
@@ -82,6 +83,10 @@ ScreenHomeGesture home_pending = ScreenHomeGesture::None;
 // Mode corner badge (top right, every page) and the 2 s toast; small LVGL objects (internal RAM).
 lv_obj_t *mode_badge = nullptr, *mode_toast = nullptr;
 lv_obj_t* summary_mode = nullptr;        // summary title row: "模式 脱口秀" in the CJK font, else ASCII
+lv_obj_t* summary_version = nullptr;     // summary title row, x 210: the firmware version (ASCII font)
+// 0.4.95 SD CJK font (screen_set_cjk_font), nullptr = not loaded: every page word then falls back to its ASCII
+// stand-in in collector_mono_15 (ui_font::choose). The 16 px variant decides; 24 px is only for page titles.
+const lv_font_t *cjk16 = nullptr, *cjk24 = nullptr;
 uint32_t toast_until_ms = 0;
 bool toast_shown = false;
 constexpr uint32_t kToastMs = 2000;
@@ -185,6 +190,52 @@ lv_obj_t* label(lv_obj_t* parent, int x, int y, const char* text, uint32_t color
 void set_text(lv_obj_t* obj, const char* text)
 {
     if (std::strcmp(lv_label_get_text(obj), text) != 0) lv_label_set_text(obj, text);
+}
+// 0.4.95 Chinese words (ui_text_zh.h) with their ASCII stand-in (ui::text). `font` nullptr = collector_mono_15.
+void use_font(lv_obj_t* obj, const lv_font_t* font)
+{
+    const lv_font_t* f = font ? font : &collector_mono_15;
+    if (lv_obj_get_style_text_font(obj, LV_PART_MAIN) != f) lv_obj_set_style_text_font(obj, f, 0);
+}
+// The y that puts a label in `font` on the same middle line as a collector_mono_15 label at `y`.
+int font_y(int y, const lv_font_t* font)
+{
+    return font ? y + (int(collector_mono_15.line_height) - int(font->line_height)) / 2 : y;
+}
+// A label showing zh in the CJK font when it is loaded, else the ASCII stand-in (ui_font::choose).
+lv_obj_t* zlabel(lv_obj_t* parent, int x, int y, const char* zh, const char* ascii, uint32_t color,
+                 const lv_font_t* font = nullptr)
+{
+    if (!font) font = cjk16;
+    const auto c = ui_font::choose(zh, ascii, font != nullptr);
+    auto obj = label(parent, x, font_y(y, c.cjk ? font : nullptr), c.text, color);
+    if (c.cjk) use_font(obj, font);
+    return obj;
+}
+void set_ztext(lv_obj_t* obj, const char* zh, const char* ascii)
+{
+    const auto c = ui_font::choose(zh, ascii, cjk16 != nullptr);
+    use_font(obj, c.cjk ? cjk16 : nullptr);
+    set_text(obj, c.text);
+}
+// The summary page's words: title (状态摘要 / chan-X20A), the mode name next to it and the hint row. The page
+// lives for the whole boot, so a font that arrives later moves its labels to the CJK font's middle line.
+void render_summary_words()
+{
+    if (!summary_title) return;
+    set_ztext(summary_title, ui_text::kSummaryTitle, "chan-X20A");
+    lv_obj_set_y(summary_title, font_y(7, cjk16));
+    modes::rules::State s;
+    s.mode = static_cast<modes::rules::Mode>(mode_now);
+    s.dir = static_cast<modes::rules::Dir>(dir_now);
+    char line[48];
+    if (cjk16) std::snprintf(line, sizeof line, "%s %s", ui_text::kModeWord, ui_text::mode_name(s.mode));
+    else std::snprintf(line, sizeof line, "%s", modes::rules::label(s));   // "SUB EN>ZH" fits, "mode ..." would not
+    use_font(summary_mode, cjk16);
+    set_text(summary_mode, line);
+    lv_obj_set_y(summary_mode, font_y(7, cjk16));
+    set_ztext(summary_rows[9], ui_text::kSummaryHint, ui::text::kSummaryHint);
+    lv_obj_set_y(summary_rows[9], font_y(219, cjk16));
 }
 void render_log()
 {
@@ -516,10 +567,13 @@ void screen_create(lv_obj_t* parent)
 
     summary = box(parent, 0, 0, 320, 240, kInk);
     summary_title = label(summary, 12, 7, "chan-X20A", kSignal);
-    // 0.4.95: the mode's Chinese name (CJK font demo), between the title and the version (x 210, under the badge).
-    summary_mode = label(summary, 104, 5, "", kSignal);
-    lv_obj_set_width(summary_mode, 104);
+    lv_obj_set_width(summary_title, 88);
+    lv_label_set_long_mode(summary_title, LV_LABEL_LONG_CLIP);
+    // 0.4.95: the mode's name ("模式 脱口秀" / "TALK") between the title and the version (x 210, under the badge).
+    summary_mode = label(summary, 104, 7, "", kSignal);
+    lv_obj_set_width(summary_mode, 100);
     lv_label_set_long_mode(summary_mode, LV_LABEL_LONG_CLIP);
+    summary_version = label(summary, 210, 7, "", kSignal);
     box(summary, 12, 28, 296, 1, kRule);
     const int row_x[] = {50, 210, 50, 232, 12, 42, 42, 47, 207, 12};
     const int row_y[] = {41, 41, 77, 77, 106, 148, 169, 194, 194, 219};
@@ -546,7 +600,7 @@ void screen_create(lv_obj_t* parent)
     lv_obj_set_user_data(icons[static_cast<unsigned>(IconKind::Mic)].obj, mic_text);
     box(summary, 12, 125, 296, 1, kRule);
     box(summary, 12, 212, 296, 1, kRule);
-    set_text(summary_rows[9], ui::text::kSummaryHint);
+    render_summary_words();
 
     terminal = box(parent, 0, 0, 320, 240, kInk);
     box(terminal, 0, 0, 320, 28, kChrome);
@@ -733,7 +787,8 @@ void screen_tick(uint32_t now_ms)
     if (quick_page && now_ms - billing_line_ms >= 1000) {
         billing_line_ms = now_ms;
         char text[64];
-        ui::billing_line(text, sizeof text, billing_last, billing_code, int64_t(uint32_t(now_ms - billing_at_ms) / 1000));
+        ui::billing_line(text, sizeof text, billing_last, billing_code, int64_t(uint32_t(now_ms - billing_at_ms) / 1000),
+                         cjk16 != nullptr);
         set_text(quick_last, text);
     }
     if (reaction != ScreenReaction::None && now_ms - reaction_at >= kReactionDurationMs) {
@@ -810,8 +865,8 @@ void screen_update(const ScreenStatus& s)
     char text[160];
     const char* version = s.version ? s.version : "";
     if (std::strncmp(version, "collector-", 10) == 0) version += 10;
-    std::snprintf(text, sizeof(text), "chan-X20A             %.8s", version);
-    set_text(summary_title, text);
+    std::snprintf(text, sizeof(text), "%.8s", version);
+    set_text(summary_version, text);
     set_text(summary_rows[0], s.wifi_connected ? (s.ssid && s.ssid[0] ? s.ssid : "online") : "offline");
     if (s.camera_working)
         std::snprintf(text, sizeof(text), "%4.1f fps", std::isfinite(s.camera_fps) ? s.camera_fps : 0);
@@ -971,28 +1026,32 @@ uint32_t dimmed(uint32_t c)
 {
     return ((c >> 16 & 0xFF) * 115 / 255) << 16 | ((c >> 8 & 0xFF) * 115 / 255) << 8 | (c & 0xFF) * 115 / 255;
 }
-// A full-screen page with a title bar: "< Back" on the left (the top-right corner is the mode badge's).
-lv_obj_t* titled_page(const char* title)
+// A full-screen page with a title bar: "< Back" on the left (the top-right corner is the mode badge's). Chinese
+// words when the CJK font is loaded (built on open, so a font that arrives later shows on the next open, or at once
+// through screen_set_cjk_font).
+lv_obj_t* titled_page(const char* title_zh, const char* title)
 {
     auto p = box(screen_root, 0, 0, 320, 240, kInk);
     box(p, 0, 0, 320, ui::kTitleH, kChrome);
     box(p, 0, ui::kTitleH, 320, 1, kRule);
-    label(p, 12, 6, ui::text::kBack, kMuted);
-    label(p, 100, 6, title, kSignal);
+    zlabel(p, 12, 6, ui_text::kBack, ui::text::kBack, kMuted);
+    zlabel(p, 100, 6, title_zh, title, kSignal, cjk16 && cjk24 ? cjk24 : nullptr);
     return p;
 }
-lv_obj_t* button(lv_obj_t* parent, const ui::Rect& r, const char* text)
+lv_obj_t* button(lv_obj_t* parent, const ui::Rect& r, const char* zh, const char* text)
 {
     auto b = box(parent, r.x, r.y, r.w, r.h, kChrome);
     lv_obj_set_style_border_color(b, lv_color_hex(kRule), 0);
     lv_obj_set_style_border_width(b, 1, 0);
-    auto t = label(b, 0, 0, text, kSignal);
+    auto t = zlabel(b, 0, 0, zh, text, kSignal);
     lv_obj_center(t);
     return t;
 }
+// A one-line label for changing text: in the CJK font (Chinese and ASCII alike) when it is loaded.
 lv_obj_t* clipped(lv_obj_t* parent, int x, int y, int w, uint32_t color)
 {
-    auto l = label(parent, x, y, "", color);
+    auto l = label(parent, x, font_y(y, cjk16), "", color);
+    use_font(l, cjk16);
     lv_obj_set_width(l, w);
     lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
     return l;
@@ -1000,43 +1059,47 @@ lv_obj_t* clipped(lv_obj_t* parent, int x, int y, int w, uint32_t color)
 void render_quick()
 {
     if (!quick_page) return;
+    const bool zh = cjk16 != nullptr;   // the page was built in the same font (rebuilt when it changes)
     char text[64];
     if (quick_volume_shown >= 0) std::snprintf(text, sizeof text, "%3d", quick_volume_shown);
     else std::snprintf(text, sizeof text, " --");
     set_text(quick_volume, text);
     if (net_connected) {
-        std::snprintf(text, sizeof text, ui::text::kWifiNamed, net_ssid[0] ? net_ssid : ui::text::kWifiHidden);
+        // The SSID and IP / RSSI are shown as they are; only the words around them change.
+        std::snprintf(text, sizeof text, zh ? ui_text::kWifiNamed : ui::text::kWifiNamed,
+                      net_ssid[0] ? net_ssid : zh ? ui_text::kWifiHidden : ui::text::kWifiHidden);
         set_text(quick_net[0], text);
         if (net_rssi_valid) std::snprintf(text, sizeof text, "%s  %d dBm", net_ip, net_rssi);
         else std::snprintf(text, sizeof text, "%s", net_ip);
         set_text(quick_net[1], text);
     } else {
-        set_text(quick_net[0], ui::text::kWifiOffline);
-        set_text(quick_net[1], ui::text::kNotConnected);
+        set_ztext(quick_net[0], ui_text::kWifiOffline, ui::text::kWifiOffline);
+        set_ztext(quick_net[1], ui_text::kNotConnected, ui::text::kNotConnected);
     }
-    set_text(quick_hear, hearing_shown ? ui::text::kOn : ui::text::kOff);
-    ui::billing_line(text, sizeof text, billing_last, billing_code, int64_t(uint32_t(screen_now_ms - billing_at_ms) / 1000));
+    if (hearing_shown) set_ztext(quick_hear, ui_text::kOn, ui::text::kOn);
+    else set_ztext(quick_hear, ui_text::kOff, ui::text::kOff);
+    ui::billing_line(text, sizeof text, billing_last, billing_code, int64_t(uint32_t(screen_now_ms - billing_at_ms) / 1000), zh);
     set_text(quick_last, text);
 }
 void open_quick()
 {
     if (quick_page) return;
-    quick_page = titled_page(ui::text::kQuickTitle);
-    label(quick_page, 12, 44, ui::text::kVolume, kSignal);
-    button(quick_page, ui::kVolumeDown, "-");
-    button(quick_page, ui::kVolumeUp, "+");
+    quick_page = titled_page(ui_text::kQuickTitle, ui::text::kQuickTitle);
+    zlabel(quick_page, 12, 44, ui_text::kVolume, ui::text::kVolume, kSignal);
+    button(quick_page, ui::kVolumeDown, "", "-");
+    button(quick_page, ui::kVolumeUp, "", "+");
     quick_volume = label(quick_page, 202, 44, "", kSignal);
     box(quick_page, 12, 73, 296, 1, kRule);
     quick_net[0] = clipped(quick_page, 12, 76, 204, kSignal);
     quick_net[1] = clipped(quick_page, 12, 95, 204, kMuted);
-    button(quick_page, ui::kWifiButton, ui::text::kWifiButton);
+    button(quick_page, ui::kWifiButton, ui_text::kWifiButton, ui::text::kWifiButton);
     box(quick_page, 12, 115, 296, 1, kRule);
-    label(quick_page, 12, 128, ui::text::kBilling, kSignal);
-    button(quick_page, ui::kAllOn, ui::text::kAllOn);
-    button(quick_page, ui::kAllOff, ui::text::kAllOff);
+    zlabel(quick_page, 12, 128, ui_text::kBilling, ui::text::kBilling, kSignal);
+    button(quick_page, ui::kAllOn, ui_text::kAllOn, ui::text::kAllOn);
+    button(quick_page, ui::kAllOff, ui_text::kAllOff, ui::text::kAllOff);
     quick_last = clipped(quick_page, 12, 158, 296, kMuted);
-    label(quick_page, 12, 188, ui::text::kHearing, kSignal);
-    quick_hear = button(quick_page, ui::kHearing, "");
+    zlabel(quick_page, 12, 188, ui_text::kHearing, ui::text::kHearing, kSignal);
+    quick_hear = button(quick_page, ui::kHearing, "", "");
     if (int32_t(screen_now_ms - volume_hold_until) >= 0) quick_volume_shown = status_volume;
     if (int32_t(screen_now_ms - hearing_hold_until) >= 0) hearing_shown = status_hearing;
     billing_line_ms = screen_now_ms;
@@ -1066,13 +1129,13 @@ void render_picker()
 void open_picker()
 {
     if (picker_page) return;
-    picker_page = titled_page(ui::text::kPickerTitle);
+    picker_page = titled_page(ui_text::kPickerTitle, ui::text::kPickerTitle);
     for (size_t i = 0; i < ui::kTiles; ++i) {
         const ui::Rect r = ui::tile_rect(i);
         picker_tiles[i] = box(picker_page, r.x, r.y, r.w, r.h, ui::tile_color(i));
         lv_obj_set_style_radius(picker_tiles[i], 6, 0);
         lv_obj_set_style_border_color(picker_tiles[i], lv_color_hex(0xFFFFFF), 0);
-        picker_labels[i] = label(picker_tiles[i], 0, 0, ui::tile_label(i), kInk);
+        picker_labels[i] = zlabel(picker_tiles[i], 0, 0, ui::tile_name_zh(i), ui::tile_label(i), kInk);
         lv_obj_center(picker_labels[i]);
     }
     render_picker();
@@ -1262,12 +1325,14 @@ void screen_update_mode(const char* text, uint32_t color, bool online)
     lv_obj_set_style_bg_color(mode_badge, lv_color_hex(bg), 0);
     lv_obj_set_style_text_color(mode_badge, lv_color_hex(ink_for(bg)), 0);
 }
-void screen_update_mode_name(const char* text, const lv_font_t* font)
+void screen_set_cjk_font(const lv_font_t* small, const lv_font_t* large)
 {
-    if (!summary_mode) return;
-    const lv_font_t* use = font ? font : &collector_mono_15;
-    if (lv_obj_get_style_text_font(summary_mode, LV_PART_MAIN) != use) lv_obj_set_style_text_font(summary_mode, use, 0);
-    set_text(summary_mode, text ? text : "");
+    if (small == cjk16 && large == cjk24) return;
+    cjk16 = small; cjk24 = large;
+    render_summary_words();
+    // The quick / picker pages are built in one font: an open one is built again (same page, nothing else changes).
+    if (quick_page) { close_quick(); open_quick(); }
+    if (picker_page) { close_picker(); open_picker(); }
 }
 void screen_show_toast(const char* text, uint32_t now_ms)
 {
@@ -1315,6 +1380,7 @@ void screen_update_mode_state(uint8_t mode, uint8_t dir)
     if (mode == mode_now && dir == dir_now) return;
     mode_now = mode; dir_now = dir;
     render_picker();
+    render_summary_words();
 }
 void screen_update_billing(int digit, const char* code, uint32_t at_ms)
 {

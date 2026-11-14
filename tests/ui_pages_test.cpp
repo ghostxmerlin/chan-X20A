@@ -112,8 +112,11 @@ void picker()
 {
     // Nine tiles in mode-table order; the subtitle twice, with its direction.
     const char* labels[] = {"TALK", "CHAT", "SET", "AUTO", "SUB ZH>EN", "SUB EN>ZH", "MEET", "PAL", "IDLE"};
+    // 0.4.95: their Chinese names (mode_table.py names; IDLE has none there).
+    const char* names[] = {"脱口秀", "对话", "设置", "事件驱动", "字幕 中→英", "字幕 英→中", "围观", "陪伴", "IDLE"};
     for (size_t i = 0; i < kTiles; ++i) {
         assert(!std::strcmp(tile_label(i), labels[i]));
+        assert(!std::strcmp(tile_name_zh(i), names[i]));
         const Rect r = tile_rect(i);
         assert(picker_hit(r.x + r.w / 2, r.y + r.h / 2) == int(i));
         assert(picker_hit(r.x, r.y) == int(i) && picker_hit(r.x + r.w - 1, r.y + r.h - 1) == int(i));
@@ -177,6 +180,16 @@ void quick()
     assert(!std::strcmp(line, "last: ALL ON senses_on_page  2h ago"));
     billing_line(line, sizeof line, 0, nullptr, -3);
     assert(!std::strcmp(line, "last: ALL OFF  0s ago"));
+    // 0.4.95 Chinese line (CJK font only).
+    char zh[96];
+    billing_line(zh, sizeof zh, 9, "ok", 125, true);
+    assert(!std::strcmp(zh, "上次：全开 2 分钟前"));
+    billing_line(zh, sizeof zh, 0, "ok", 5, true);
+    assert(!std::strcmp(zh, "上次：全关 5 秒前"));
+    billing_line(zh, sizeof zh, 9, "senses_on_page", 7200, true);
+    assert(!std::strcmp(zh, "上次：全开 senses_on_page 2 小时前"));
+    billing_line(zh, sizeof zh, -1, "ok", 5, true);
+    assert(!zh[0]);
 }
 }
 

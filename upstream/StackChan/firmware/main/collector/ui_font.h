@@ -15,6 +15,8 @@ namespace collector::ui_font {
 // The loaded CJK font closest to `px` (16 or 24), or nullptr (still loading, SD or parts missing, invalid).
 // Callable from any task; a font once returned stays valid until reboot.
 const lv_font_t* cjk(int px);
+// Exactly the `px` variant, or nullptr (not loaded). For layouts sized to one variant (the screen pages, 16 px).
+const lv_font_t* cjk_exact(int px);
 // Grows by one each time a variant becomes available, so the screen can redraw labels that fell back to ASCII.
 uint32_t generation();
 // Once, at boot, after the LCD is attached to shared storage (screen creation): starts the loader task.

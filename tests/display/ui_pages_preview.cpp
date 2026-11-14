@@ -2,8 +2,12 @@
 // / the mode picker / the summary, the opposite swipe and "< Back" close them, 30 s idle goes home, the pages are
 // built on open and deleted on close, and their buttons hand back requests. Writes PPM screenshots of both pages
 // (the top layer with the mode badge and toast included).
+//   ui_pages_preview <output dir> [<CJK font parts dir, e.g. assets/ui-font/sdcard/soul/font>]
+// quick / picker / summary.ppm without the font; with the parts also quick-cjk / picker-cjk / summary-cjk.ppm
+// (collector-0.4.95 Chinese words), a font arriving on an open page, and the ASCII fallback afterwards.
 #include <collector/screen.h>
 #include <collector/ui_pages.h>
+#include "font_load.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -46,11 +50,18 @@ void save(const std::string& path)
 }
 uint32_t children() { return lv_obj_get_child_count(lv_screen_active()); }
 const uint8_t* px(int x, int y) { return &display_pixels[(y * 320 + x) * 3]; }
+// Lit pixels in a rectangle of the last saved frame.
+size_t lit(int x0, int y0, int x1, int y1)
+{
+    size_t n = 0;
+    for (int y = y0; y < y1; ++y) for (int x = x0; x < x1; ++x) { const uint8_t* p = px(x, y); n += p[0] + p[1] + p[2] > 120; }
+    return n;
+}
 }
 
 int main(int argc, char** argv)
 {
-    assert(argc == 2);
+    assert(argc == 2 || argc == 3);   // <output dir> [<CJK font parts dir>]
     const std::string out = argv[1];
     lv_init();
     auto display = lv_display_create(320, 240);
@@ -131,6 +142,8 @@ int main(int argc, char** argv)
     // Left: the summary; right closes it. A tap on home stays the mode's (no page).
     stroke(260, 120, 80, 120);
     assert(screen_showing_status() && !screen_showing_log());
+    tick(100);
+    save(out + "/summary.ppm");
     stroke(80, 120, 260, 120);
     assert(!screen_showing_status());
     tap(160, 120);
@@ -144,5 +157,45 @@ int main(int argc, char** argv)
     assert(screen_showing_quick());
     tick(1200);
     assert(!screen_showing_status() && children() == base);
+
+    // 0.4.95 Chinese words: with the SD font's parts given, the same pages in the CJK font (*-cjk.ppm).
+    if (argc == 3) {
+        static LoadedFont fonts[ui_font::kVariantCount];
+        for (size_t i = 0; i < ui_font::kVariantCount; ++i)
+            if (!load_font(argv[2], ui_font::kVariants[i], fonts[i])) { std::fprintf(stderr, "no font parts\n"); return 1; }
+        // A font arriving while a page is open rebuilds that page in place (still one page object, still open).
+        stroke(160, 60, 160, 180);
+        assert(screen_showing_quick());
+        tick(100);
+        const size_t quick_ascii = lit(100, 0, 200, ui::kTitleH);
+        screen_set_cjk_font(&fonts[0].font, &fonts[1].font);
+        tick(1100);
+        assert(screen_showing_quick() && children() == base + 1);
+        save(out + "/quick-cjk.ppm");
+        const size_t quick_cjk = lit(100, 0, 200, ui::kTitleH);
+        std::printf("quick title lit pixels: ASCII %zu, CJK %zu\n", quick_ascii, quick_cjk);
+        assert(quick_cjk > quick_ascii && quick_ascii > 0);
+        // Its buttons still work the same.
+        tap(140, 130);
+        assert(screen_take_billing_request() == 9);
+        stroke(160, 180, 160, 60);
+        assert(!screen_showing_status() && children() == base);
+        stroke(160, 180, 160, 60);
+        assert(screen_showing_picker() && children() == base + 1);
+        tick(100);
+        save(out + "/picker-cjk.ppm");
+        tap(160, 196);
+        assert(screen_take_mode_pick(tile) && tile == 7);
+        stroke(260, 120, 80, 120);
+        assert(screen_showing_status());
+        tick(100);
+        save(out + "/summary-cjk.ppm");
+        stroke(80, 120, 260, 120);
+        // The font going away again (only on a host; the robot keeps a font until reboot): ASCII as before.
+        screen_set_cjk_font(nullptr, nullptr);
+        stroke(160, 60, 160, 180);
+        tick(100);
+        assert(screen_showing_quick() && lit(100, 0, 200, ui::kTitleH) == quick_ascii);
+    }
     std::puts("ui pages preview ok");
 }

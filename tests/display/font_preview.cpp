@@ -4,8 +4,7 @@
 // Writes font-sample.ppm (both sizes) and summary-cjk.ppm / summary-ascii.ppm (the summary page with and without
 // the font), and fails if a mode name has a missing glyph or draws nothing.
 #include <collector/screen.h>
-#include <collector/ui_font_catalog.generated.h>
-#include <collector/ui_font_lvgl.h>
+#include "font_load.h"
 #include <collector/ui_text_zh.h>
 #include <src/misc/lv_text_private.h>
 #include <cassert>
@@ -21,34 +20,6 @@ namespace hal_bridge { void board_set_display_backlight_enabled(bool) {} }
 using namespace collector;
 
 std::vector<uint8_t> pixels(320 * 240 * 3);
-
-struct Loaded {
-    std::vector<uint8_t> blob;
-    std::vector<lv_font_fmt_txt_glyph_dsc_t> glyphs;
-    std::vector<lv_font_fmt_txt_cmap_t> cmaps;
-    lv_font_fmt_txt_dsc_t dsc{};
-    lv_font_t font{};
-};
-
-bool load(const std::string& dir, const ui_font::Variant& v, Loaded& out)
-{
-    for (uint8_t k = 0; k < v.part_count; ++k) {
-        const std::string path = v.parts[k].path;
-        std::ifstream f(dir + path.substr(path.rfind('/')), std::ios::binary);
-        if (!f) return false;
-        out.blob.insert(out.blob.end(), std::istreambuf_iterator<char>(f), {});
-    }
-    ui_font::Header h;
-    if (const char* e = ui_font::validate(out.blob.data(), out.blob.size(), h, ui_font::kMaxBitmapIndex)) {
-        std::fprintf(stderr, "%s: %s\n", v.id, e);
-        return false;
-    }
-    assert(h.px == v.px && h.bpp == v.bpp && out.blob.size() == v.bytes);
-    out.glyphs.resize(h.glyph_count);
-    out.cmaps.resize(h.cmap_count);
-    ui_font::bind(out.blob.data(), h, out.glyphs.data(), out.cmaps.data(), out.dsc, out.font);
-    return true;
-}
 
 void snapshot(lv_obj_t* obj, const std::string& path)
 {
@@ -99,9 +70,9 @@ int main(int argc, char** argv)
         lv_display_flush_ready(d);
     });
 
-    static Loaded fonts[ui_font::kVariantCount];
+    static LoadedFont fonts[ui_font::kVariantCount];
     for (size_t i = 0; i < ui_font::kVariantCount; ++i) {
-        if (!load(dir, ui_font::kVariants[i], fonts[i])) { std::fprintf(stderr, "missing parts in %s\n", dir.c_str()); return 1; }
+        if (!load_font(dir, ui_font::kVariants[i], fonts[i])) { std::fprintf(stderr, "missing parts in %s\n", dir.c_str()); return 1; }
     }
     // Every mode name resolves to real glyphs in both sizes.
     for (auto& f : fonts)
@@ -146,17 +117,13 @@ int main(int argc, char** argv)
     screen_touch(false, 1100);
     for (uint32_t t = 1100; t < 2000; t += 20) { screen_tick(t); lv_tick_inc(20); lv_timer_handler(); }
     assert(screen_showing_status());
-    const lv_font_t* cjk16 = &fonts[0].font;
-    auto pick = ui_font::choose(ui_text::mode_name(modes::rules::Mode::Event), "AUTO", true);
-    std::string line = std::string(ui_text::kModeWord) + " " + pick.text;
-    screen_update_mode_name(line.c_str(), pick.cjk ? cjk16 : nullptr);
+    // 0.4.95: the screen takes the font (screen_set_cjk_font) and picks every word itself.
+    screen_update_mode_state(uint8_t(modes::rules::Mode::Event), 0);
+    screen_set_cjk_font(&fonts[0].font, &fonts[1].font);
     lv_refr_now(display);
     const size_t with_font = lit(104, 4, 208, 26);
     snapshot(lv_screen_active(), out + "/summary-cjk.ppm");
-    pick = ui_font::choose(ui_text::mode_name(modes::rules::Mode::Event), "AUTO", false);
-    line = std::string("mode ") + pick.text;
-    assert(!pick.cjk && line == "mode AUTO");
-    screen_update_mode_name(line.c_str(), nullptr);
+    screen_set_cjk_font(nullptr, nullptr);
     lv_refr_now(display);
     const size_t ascii = lit(104, 4, 208, 26);
     snapshot(lv_screen_active(), out + "/summary-ascii.ppm");

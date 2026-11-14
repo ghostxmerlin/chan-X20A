@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #include "mode_rules.h"
+#include "ui_text_zh.h"
 #include "touch_gesture.h"
 #include "volume_setting.h"
 #include <algorithm>
@@ -19,10 +20,9 @@ namespace collector::ui {
 // summary; pairing left = Wi-Fi list; a tap on summary / log goes home, on pairing to the summary.
 enum class Page : uint8_t { Home, Summary, Log, Pairing, Faces, Wifi, WifiKey, Quick, Picker };
 
-// Every word the new pages show, in one place. ASCII today: the screen font (collector_mono_15) has only 0x20-0x7E
-// and the linked xiaozhi font_puhui_basic_20_4 lacks most of these characters (计费全上次选择返回...). When the CJK
-// font (branch codex/ui-font-cjk, ui_font_cjk(size)) merges, switch these to Chinese and the labels' font with them.
-// Mode tile labels stay the mode table's (mode_rules.h), like the corner badge.
+// Every word the new pages show, in one place: the ASCII stand-ins. collector-0.4.95 draws the Chinese word of the
+// same name (ui_text_zh.h) in the SD CJK font when it is loaded (ui_font::choose), else these in collector_mono_15
+// (0x20-0x7E only), so the pages work without the font. The corner badge and toasts stay ASCII.
 namespace text {
 inline constexpr const char* kBack = "< Back";
 inline constexpr const char* kQuickTitle = "Quick";        // 快捷设置
@@ -154,6 +154,12 @@ inline const char* tile_label(size_t i)
     const Tile& t = kTileModes[i];
     return t.mode == modes::rules::Mode::Subtitle ? modes::rules::kSubtitleLabels[size_t(t.dir)] : modes::rules::def(t.mode).label;
 }
+// The tile's Chinese name (mode_table names; subtitle with its direction), for the CJK font; tile_label() stands in.
+inline const char* tile_name_zh(size_t i)
+{
+    const Tile& t = kTileModes[i];
+    return t.mode == modes::rules::Mode::Subtitle ? ui_text::kSubtitleNames[size_t(t.dir)] : ui_text::mode_name(t.mode);
+}
 inline uint32_t tile_color(size_t i) { return modes::rules::def(kTileModes[i].mode).color; }
 // Highlighted: the current mode (subtitle: its direction too).
 inline bool tile_current(size_t i, const modes::rules::State& s)
@@ -200,18 +206,20 @@ inline int billing_digit(Quick b) { return b == Quick::AllOn ? 9 : b == Quick::A
 
 // The line under the billing buttons. Billing has no state (mind keeps none): it says what the last answered 9 / 0
 // was and how long ago, by the robot's clock (it has no wall clock). digit < 0 (no answer yet, or the answer's
-// input is not known) = an empty line. A code other than ok is shown.
-inline void billing_line(char* out, size_t n, int digit, const char* code, int64_t age_s)
+// input is not known) = an empty line. A code other than ok is shown. zh: the Chinese line ("上次：全开 2 分钟前"),
+// for the CJK font only.
+inline void billing_line(char* out, size_t n, int digit, const char* code, int64_t age_s, bool zh = false)
 {
     if (!n) return;
     out[0] = 0;
     if (digit != 0 && digit != 9) return;
     if (age_s < 0) age_s = 0;
-    char age[16];
-    if (age_s < 60) std::snprintf(age, sizeof age, "%ds", int(age_s));
-    else if (age_s < 3600) std::snprintf(age, sizeof age, "%dm", int(age_s / 60));
-    else std::snprintf(age, sizeof age, "%dh", int(age_s / 3600 > 99 ? 99 : age_s / 3600));
+    char age[24];
+    if (age_s < 60) std::snprintf(age, sizeof age, zh ? ui_text::kAgeSeconds : "%ds", int(age_s));
+    else if (age_s < 3600) std::snprintf(age, sizeof age, zh ? ui_text::kAgeMinutes : "%dm", int(age_s / 60));
+    else std::snprintf(age, sizeof age, zh ? ui_text::kAgeHours : "%dh", int(age_s / 3600 > 99 ? 99 : age_s / 3600));
     const bool ok = !code || !*code || !std::strcmp(code, "ok");
-    std::snprintf(out, n, text::kLastFormat, digit == 9 ? text::kAllOn : text::kAllOff, ok ? "" : " ", ok ? "" : code, age);
+    const char* what = zh ? (digit == 9 ? ui_text::kAllOn : ui_text::kAllOff) : (digit == 9 ? text::kAllOn : text::kAllOff);
+    std::snprintf(out, n, zh ? ui_text::kLastFormat : text::kLastFormat, what, ok ? "" : " ", ok ? "" : code, age);
 }
 }

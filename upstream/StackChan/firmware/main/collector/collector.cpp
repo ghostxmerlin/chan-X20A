@@ -30,8 +30,6 @@
 #include "eye_mode.h"
 #include "ui_pages.h"
 #include "ui_font.h"
-#include "ui_font_blob.h"
-#include "ui_text_zh.h"
 #include <ArduinoJson.hpp>
 #include <board.h>
 #include <audio/audio_codec.h>
@@ -1839,24 +1837,20 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                 static ChatDots* cd = nullptr;
                 if (!cd) if (void* m = heap_caps_calloc(1, sizeof(ChatDots), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) cd = new (m) ChatDots();
                 const uint32_t version = mouth::mode_version();
-                static uint32_t fonts_seen = 0;         // 0.4.95: redraw the mode name when a CJK font arrives
-                const uint32_t fonts = ui_font::generation();
-                if (!mode_drawn || version != mode_seen || fonts != fonts_seen) {
+                // 0.4.95: the SD CJK font, once per variant loaded; until then (or without SD) the pages are ASCII.
+                static uint32_t fonts_seen = 0;
+                if (const uint32_t fonts = ui_font::generation(); fonts != fonts_seen) {
+                    fonts_seen = fonts;
+                    screen_set_cjk_font(ui_font::cjk_exact(16), ui_font::cjk_exact(24));
+                }
+                if (!mode_drawn || version != mode_seen) {
                     mouth::ModeView view;
                     mouth::mode_view(view);
-                    mode_seen = version; mode_drawn = true; fonts_seen = fonts;
+                    mode_seen = version; mode_drawn = true;
                     screen_update_mode(view.look.label, view.look.color, view.online);
                     screen_update_mode_state(static_cast<uint8_t>(view.state.mode), static_cast<uint8_t>(view.state.dir));
                     if (view.have_result)
                         screen_update_billing(view.result_digit, view.result.code, static_cast<uint32_t>(view.result_at_us / 1000));
-                    {
-                        // CJK font demo: "模式 脱口秀" on the summary title row; without the SD font "mode TALK".
-                        const lv_font_t* cjk = ui_font::cjk(16);
-                        const auto pick = ui_font::choose(ui_text::mode_name(view.state.mode), view.look.label, cjk != nullptr);
-                        char line[40];
-                        std::snprintf(line, sizeof line, "%s %s", pick.cjk ? ui_text::kModeWord : "mode", pick.text);
-                        screen_update_mode_name(line, pick.cjk ? cjk : nullptr);
-                    }
                     if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
                     if (cd) { cd->in_chat = view.state.mode == modes::rules::Mode::Chat; cd->color = view.look.color; cd->state = view.chat; }
                 }

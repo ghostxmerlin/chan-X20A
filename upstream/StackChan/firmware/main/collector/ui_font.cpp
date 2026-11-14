@@ -113,6 +113,15 @@ const lv_font_t* cjk(int px)
     return i < 0 ? nullptr : slots[i].published.load(std::memory_order_acquire);
 }
 
+const lv_font_t* cjk_exact(int px)
+{
+    Slot* slots = slot_table.load(std::memory_order_acquire);
+    if (!slots) return nullptr;
+    for (size_t i = 0; i < kVariantCount; ++i)
+        if (kVariants[i].px == px) return slots[i].published.load(std::memory_order_acquire);
+    return nullptr;
+}
+
 uint32_t generation() { return loaded_generation.load(); }
 
 void start()

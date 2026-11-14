@@ -11,7 +11,7 @@
   - 计费 `ALL ON` / `ALL OFF`（全开 / 全关）：就是数字 9 / 0，和 ASR 数字词走同一条路：`mode_input {"source":"quick","input":"digit","value":9|0}` 经 `/mouth` 给 mind，屏幕先提示 `PRESET 9`，mind 的 `mode_result` 带来真正的提示；离线提示 `OFFLINE`。计费没有状态，页面不显示开关状态，只显示 `last: ALL ON  2m ago`（mind 最近一次回答的是哪个数字、多久以前，按机器人自己的时钟，它没有墙上时间；回答不是 `ok` 时带上 code）。模式会话记住最近 8 个发出去的数字的 seq，用来认出回答的是 9 还是 0（`ModeView.result_digit`、`result_at_us`）。
   - 听觉 `ON` / `OFF`：本地开关（和遥控器上推同一个，只在 RAM），主循环调用 `hearing::set_listening`；没有配置 ear 时提示 `HEARING: NO EAR SET`。
 - **模式选择页**：3×3 九格（TALK、CHAT、SET、AUTO、SUB ZH>EN、SUB EN>ZH、MEET、PAL、IDLE），用模式表的名字和颜色；当前模式全色加白框，其他变暗。点一格 = `select {mode, dir}`，由 hello 自己的规则（`mode_rules.h`）执行，来源 `select`，然后回首页、显示提示；点当前模式 = 离开（规则照旧：去 IDLE，设置回原处，字幕点另一个方向 = 换方向）。离线也能切（规则在 hello 上），连上后报给 mind。
-- **文字**：全部 ASCII。屏幕字体 `collector_mono_15` 只有 0x20–0x7E；固件里已有的 xiaozhi `font_puhui_basic_20_4`（800 字）缺"计费全上次选择返回"等大部分字。页面上的词集中在 `ui_pages.h` 的 `ui::text`，中文字体（`codex/ui-font-cjk`）合并后在那里换。
+- **文字**：0.4.94 全部 ASCII（`collector_mono_15` 只有 0x20–0x7E）。**collector-0.4.95** 起，SD 中文字库（思源黑体，`docs/sd-media.md`）装好后这三页显示中文：快捷设置 / 音量 / 网络 <SSID> / 改网络 / 计费 全开 全关 / `上次：全开 2 分钟前` / 听觉 开 关 / `< 返回`；模式页标题“选择模式”，九格为模式表中文名（脱口秀、对话、设置、事件驱动、字幕 中→英、字幕 英→中、围观、陪伴、IDLE），当前模式高亮不变；摘要页标题行“状态摘要 模式 <名> <版本>”，底行操作提示也是中文。页标题用 24 px，其他 16 px。中文在 `ui_text_zh.h`，ASCII 替身仍是 `ui_pages.h` 的 `ui::text`（同名），每个标签经 `ui_font::choose()` 选择：没卡、缺片或字库没装时整屏照旧 ASCII，可正常使用。SSID、IP、dBm、音量数字、`-`/`+` 原样；角标和提示（toast）保持 ASCII。字库在开机后由 PSRAM 任务载入，`ui_font::generation()` 变化时主循环调 `screen_set_cjk_font(cjk_exact(16), cjk_exact(24))`，已打开的页面就地重建。
 - **内存**：两个页面的 LVGL 对象打开时建、关掉时删（各约 25 个小对象，内部 RAM）；静态内部 RAM 比 0.4.93 多 304 B（.data +48、.bss +256），IRAM 不变。只有屏幕任务画；`/mouth` 任务不碰 LVGL 和 NVS。
 - **顺带修正**：关屏期间缓存的状态以前没有复制 SSID（指向已经失效的临时字符串），现在复制。
 
