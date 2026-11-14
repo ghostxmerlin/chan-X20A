@@ -356,8 +356,31 @@ void chat_stages()
     assert(r.view().chat.speak_from_us == 0);
 }
 
+// 0.4.93.1 (owner 2026-11-14, crowd realtime): a tap in crowd changes nothing and has no effect, but it is reported
+// (input tap, effects []) so the ear's realtime session takes the look; toast LOOK; speaking does not make it a stop.
+void crowd_tap()
+{
+    Robot r;
+    r.feed(kHello);
+    r.drain();
+    Value v; v.digit = 5;
+    assert(r.in(Input::Digit, "asr", v).changed && r.view().state.mode == Mode::Crowd);
+    r.drain();
+    Applied a = r.in(Input::Tap, "touch");
+    assert(!a.changed && a.reported && !a.out.n_effects && !std::strcmp(r.view().toast, "LOOK"));
+    a = r.in(Input::Tap, "touch", Value{}, true);                             // while speaking: still a look
+    assert(a.reported && !a.out.n_effects && !std::strcmp(r.view().toast, "LOOK"));
+    assert(r.drain() == report(4, "crowd", "touch", "\"tap\"", "") + report(5, "crowd", "touch", "\"tap\"", ""));
+    // Double tap in crowd is still not implemented: nothing for mind.
+    assert(!r.in(Input::DoubleTap, "touch").reported && !std::strcmp(r.view().toast, "NOT YET"));
+    // Offline the look cannot reach the ear: OFFLINE, no report.
+    r.s.link_down();
+    assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "OFFLINE"));
+}
+
 int main()
 {
+    crowd_tap();
     chat_stages();
     text_frames();
     boot_and_first_link();

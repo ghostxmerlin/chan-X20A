@@ -72,9 +72,14 @@ class TransitionTest(unittest.TestCase):
         self.assertEqual((s['mode'], s['return_to']), ('chat', None))
 
     def test_shell_taps_and_long_press(self):
-        for m in ('chat', 'crowd', 'companion'):
+        for m in ('chat', 'companion'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'not_implemented')
             self.assertEqual(self.go(m, 'tap', speaking=True)[2], ['stop_speech'])
+        # crowd (owner 2026-11-14, crowd realtime): a tap is "look", always: ok, toast LOOK, no effect (not even stop
+        # while speaking); hello reports it and the ear's realtime session takes it.
+        for speaking in (False, True):
+            s, r, e = self.go('crowd', 'tap', speaking=speaking)
+            self.assertEqual((s['mode'], r, e), ('crowd', {'code': 'ok', 'toast': 'LOOK'}, []))
         for m in ('subtitle', 'event', 'settings'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'no_action')
         self.assertEqual(self.go('idle', 'tap')[1]['code'], 'no_action')            # DualKey click: no badge flip

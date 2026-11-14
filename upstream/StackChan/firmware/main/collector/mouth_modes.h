@@ -139,7 +139,10 @@ public:
             std::strcpy(by_, source);
             ++version_;
         }
-        if (a.changed || a.out.n_effects) {
+        // Reported: a change, an input with effects, or any other accepted (ok) input. The last is only crowd's tap
+        // ("look", 0.4.93.1): no change, no effect, but the ear's realtime session takes it from the report.
+        const bool accepted = a.out.code == modes::rules::Code::Ok;
+        if (a.changed || a.out.n_effects || accepted) {
             if (online_) {
                 ++seq_;
                 push(report(seq_, source, in, true, a.out.effects, a.out.n_effects), a.out);
@@ -150,7 +153,7 @@ public:
             }
         }
         // Offline, an input that only asks mind for something (say a round, prefetch) does nothing: say so.
-        toast(!online_ && !a.changed && a.out.n_effects ? "OFFLINE" : a.out.toast);
+        toast(!online_ && !a.changed && (a.out.n_effects || accepted) ? "OFFLINE" : a.out.toast);
         return a;
     }
 

@@ -68,8 +68,10 @@ MODES = {
     'crowd': {
         'name': '围观', 'kind': 'normal', 'enter': (), 'leave': (), 'dirs': {'left': None},
         'look': {'eye': 'v14', 'pool': 'lively', 'label': 'MEET', 'color': '30D060'},
-        'touch': {'tap': 'server', 'double': 'server'},          # tap = stop; double = protest (later)
-        'inputs': dict(_SHELL), 'paid': (),
+        'touch': {'tap': 'server', 'double': 'server'},          # tap = look (realtime, ear); double = protest (later)
+        # tap = 'look' (owner 2026-11-14, crowd realtime): always ok / LOOK with no effect, even while speaking;
+        # hello reports it (mode_report input tap) and the ear's realtime session takes the look.
+        'inputs': {'tap': 'look', 'double_tap': 'not_implemented'}, 'paid': (),
     },
     'companion': {
         # Spec §3.2: double tap = 无 here, so touch.double = none and a DualKey double click = no_action (the brief
@@ -91,7 +93,7 @@ _IDS = ('talk', 'chat', 'settings', 'event', 'subtitle', 'crowd', 'companion', '
 _KINDS = ('normal', 'temporary', 'host', 'idle')
 _MODE_INPUTS = ('forward', 'tap', 'double_tap', 'next', 'previous')
 _EFFECTS = ('say_round', 'prefetch_on', 'prefetch_off')
-_CODES = ('not_implemented', 'no_action')
+_CODES = ('not_implemented', 'no_action', 'look')     # look: crowd's tap (ok, toast LOOK, no effect)
 
 
 def _label_ok(s):

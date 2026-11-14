@@ -40,10 +40,12 @@ struct Meaning {
     bool code_only = false;     // true: answer `code`, nothing changes
     Code code = Code::Ok;
     Effect effect = Effect::SayRound;   // when !code_only: one effect (every table entry has exactly one)
+    bool look = false;          // crowd's tap (owner 2026-11-14): ok, toast LOOK, no effect, even while speaking
 };
 constexpr Meaning kNone{};
-constexpr Meaning code_(Code c) { return Meaning{true, true, c, Effect::SayRound}; }
-constexpr Meaning fx(Effect e) { return Meaning{true, false, Code::Ok, e}; }
+constexpr Meaning code_(Code c) { return Meaning{true, true, c, Effect::SayRound, false}; }
+constexpr Meaning fx(Effect e) { return Meaning{true, false, Code::Ok, e, false}; }
+constexpr Meaning kLook{true, true, Code::Ok, Effect::SayRound, true};
 
 struct ModeDef {
     const char* label;
@@ -66,7 +68,7 @@ inline constexpr ModeDef kModes[kModeCount] = {
     {"SUB", 0x7C6CF0, Eye::PageSubtitle, Pool::Default, TouchAct::None, TouchAct::None,
      kNone, code_(Code::NoAction), code_(Code::NoAction), kNone, kNone},
     {"MEET", 0x30D060, Eye::V14, Pool::Lively, TouchAct::Server, TouchAct::Server,
-     kNone, code_(Code::NotImplemented), code_(Code::NotImplemented), kNone, kNone},
+     kNone, kLook, code_(Code::NotImplemented), kNone, kNone},
     {"PAL", 0xF2E6C8, Eye::V18, Pool::Default, TouchAct::Server, TouchAct::None,
      kNone, code_(Code::NotImplemented), code_(Code::NoAction), kNone, kNone},
     {"IDLE", 0x505050, Eye::PageIdle, Pool::Default, TouchAct::Badge, TouchAct::Server,
@@ -261,6 +263,9 @@ inline Outcome transition(const State& st, Input in, const Value& v, bool speaki
     }
     // 2. what this mode gives the input
     if (const Meaning* mean = meaning(m, in)) {
+        if (mean->look) {                            // crowd tap: look (reported by the session), never a stop
+            Outcome o; o.state = st; o.code = Code::Ok; put_toast(o, "LOOK"); return o;
+        }
         if (in == Input::Tap && speaking && m.tap == TouchAct::Server) {
             const Effect fx[] = {Effect::StopSpeech};
             return done(st, st, fx, 1);              // hello is speaking: a tap stops it (owner 9)
