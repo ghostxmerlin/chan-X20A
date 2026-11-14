@@ -1,0 +1,7 @@
+# Characters the screen's CJK font carries on top of ASCII, GB2312 row 1 (punctuation, symbols), row 3 (full-width
+# forms) and the 3,755 GB2312 level-1 hanzi (scripts/ui_font_tools.py charset()).
+# Add a character here when a screen string needs one outside that set; tests/test_ui_font.py names any it finds,
+# then run scripts/generate-cjk-font.py, rebuild the firmware and install the new parts (docs/sd-media.md).
+# Everything after '#' on a line is ignored; whitespace is ignored.
+
+·—  # U+00B7 middle dot and U+2014 em dash (Chinese text uses these; GB2312 row 1 maps to U+30FB / U+2015)

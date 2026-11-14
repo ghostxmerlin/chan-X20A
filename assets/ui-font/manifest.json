@@ -1,0 +1,75 @@
+{
+ "format": "HCJK v1 (scripts/ui_font_tools.py)",
+ "source": {
+  "name": "Source Han Sans 2.005R (思源黑体), SourceHanSansCN-Medium.otf",
+  "url": "https://github.com/adobe-fonts/source-han-sans/releases/download/2.005R/19_SourceHanSansCN.zip",
+  "release_sha256": "3a769d1b082ebd813cdb4c06ea57d29b340bce548edcc8e61976b78ca28e6236",
+  "otf_sha256": "a94e558a2fe972bee4f46bce0843abff37063fd68c33f1e7d9058f6f09432b01",
+  "license": "SIL OFL 1.1"
+ },
+ "converter": "lv_font_conv 1.5.3 --no-compress --no-kerning",
+ "charset": {
+  "count": 4040,
+  "sha256": "ab0e143ce1d66df304e08a60b10797f5a9f6738e6854ba904bfac5617f76c5a8",
+  "sets": "ASCII 0x20-0x7E, GB2312 rows 1 and 3, GB2312 level 1 (3755), config/ui-font-extra.txt"
+ },
+ "part_bytes": 262144,
+ "license": {
+  "path": "sdcard/soul/font/LICENSE-OFL.txt",
+  "source": "assets/ui-font/LICENSE-OFL.txt",
+  "bytes": 4463,
+  "sha256": "fcac737e761ec63dbfbdce11030a1780161920d80315edba9c8beff1c2bac5a2"
+ },
+ "variants": [
+  {
+   "id": "cjk16",
+   "px": 16,
+   "bpp": 4,
+   "bytes": 533806,
+   "sha256": "829a91447eb791ccf8cb68427a92f0fde9e081e333bf3397ec5f35847f8177d7",
+   "glyphs": 4041,
+   "parts": [
+    {
+     "path": "sdcard/soul/font/cjk16.0.bin",
+     "bytes": 262144,
+     "sha256": "54c6043c68ac98c43560113c3f53f3c60456686b1bd9a293b0b128e16edfffb4"
+    },
+    {
+     "path": "sdcard/soul/font/cjk16.1.bin",
+     "bytes": 262144,
+     "sha256": "eba4bd299e657339c78bd48bc86b42d10f9e48322b8c3402de26d295d32b6d36"
+    },
+    {
+     "path": "sdcard/soul/font/cjk16.2.bin",
+     "bytes": 9518,
+     "sha256": "cda37116d11438f8d2ed872f277117b1143f137b2154497dc858c50bfd913a85"
+    }
+   ]
+  },
+  {
+   "id": "cjk24",
+   "px": 24,
+   "bpp": 2,
+   "bytes": 581043,
+   "sha256": "9b7a7042e6daf50713ccbda537fe4bf8e6711b77c6780bb169532d2625f46cb9",
+   "glyphs": 4041,
+   "parts": [
+    {
+     "path": "sdcard/soul/font/cjk24.0.bin",
+     "bytes": 262144,
+     "sha256": "0e7a09579681e6cfad152068cf2354d74264617471c43c27e389477324d047b6"
+    },
+    {
+     "path": "sdcard/soul/font/cjk24.1.bin",
+     "bytes": 262144,
+     "sha256": "2ea14713f5f301537e188e64087a78df8e9f3e84025699551913b578ec26cd54"
+    },
+    {
+     "path": "sdcard/soul/font/cjk24.2.bin",
+     "bytes": 56755,
+     "sha256": "6948f8be6afde7492b16217e47c2a592317077ecb9e9eafd1335a72a517adca1"
+    }
+   ]
+  }
+ ]
+}

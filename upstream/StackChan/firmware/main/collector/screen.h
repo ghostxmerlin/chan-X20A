@@ -98,6 +98,9 @@ enum class ScreenHomeGesture : uint8_t { None, Tap, DoubleTap };
 ScreenHomeGesture screen_take_home_gesture();
 // Corner badge, every page: the mode's ASCII label on its color; offline = grey with " OFF".
 void screen_update_mode(const char* label, uint32_t color, bool online);
+// 0.4.95 CJK font demo: the summary page's title row shows the mode's name. `font` is the CJK font for a Chinese
+// text (ui_font.h), or nullptr for ASCII text in the screen's ASCII font. The caller picks with ui_font::choose().
+void screen_update_mode_name(const char* text, const lv_font_t* font);
 // A short ASCII line at the bottom for 2 s (the mode's toast). Empty text shows nothing.
 void screen_show_toast(const char* text, uint32_t now_ms);
 // 0.4.93 chat stage dots (chat_stage.h), home page top left: visible only in chat; lit = -1 none, 0 / 1 / 2 =
