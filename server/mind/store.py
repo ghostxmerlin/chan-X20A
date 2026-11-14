@@ -61,6 +61,8 @@ class Store:
         db["conversations"].create_index([("start_ms", 1)])
         from .library import Library
         Library(db).ensure_indexes()
+        from .mode_store import ensure_indexes as mode_indexes      # hello.mode_log: by time and by device input
+        mode_indexes(db)
 
     def latest(self, lane, minute):
         return self.packages.find_one({"lane": lane, "minute": minute}, {"_id": 0}, sort=[("version", -1)])
