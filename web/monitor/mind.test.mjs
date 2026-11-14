@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {EventEmitter} from 'node:events';
-import {MindProxy} from './mind.mjs';
+import {MindProxy,mindFromEnv} from './mind.mjs';
 import {Monitor} from './core.mjs';
-import {createMonitorServer} from './server.mjs';
+import {createMonitorServer,localDemo} from './server.mjs';
 const ui=await import('data:text/javascript;base64,'+readFileSync(new URL('./public/mind-ui.js',import.meta.url)).toString('base64'));
 
 function fakeSsh(log=[]){return (cmd,args)=>{const child=new EventEmitter();child.killed=false;child.kill=()=>{child.killed=true;child.emit('exit',0);};log.push({cmd,args,child});return child;};}
@@ -257,4 +257,79 @@ test('local server routes /api/mind/db/*', async t=>{
  for(const p of ['/db/person','/db/person/note','/db/memory','/db/knowledge'])
   assert.equal((await fetch(url+'/api/mind'+p,{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{}'})).status,200,p);
  assert.equal((await fetch(url+'/api/mind/db/delete',{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{}'})).status,404);
+});
+
+// ---- hello modes step 1 (B1): mode paths, and the dev-only local mind for the page demo ----
+test('mode paths: /mode and /mode/seq read, /mode and /preset write; ear-only paths stay closed', async()=>{
+ assert.equal(MindProxy.check('/mode'),'/mode');
+ assert.equal(MindProxy.check('/mode/seq'),'/mode/seq');
+ assert.equal(MindProxy.check('/mode/input'),null);
+ const seen=[],proxy=new MindProxy({ssh:'h',token:'k',socketPath:SOCK,prepareFn:()=>{},spawnFn:fakeSsh(),
+  requestFn:async(sock,p)=>{seen.push(p);return {status:200,body:'{}'};}});
+ assert.equal((await proxy.post('/mode','{"input":"forward"}')).status,200);
+ assert.equal((await proxy.post('/preset','{"n":0}')).status,200);
+ assert.equal((await proxy.post('/mode/input','{}')).status,400);
+ assert.equal((await proxy.post('/mode/robot','{}')).status,400);
+ assert.equal((await proxy.post('/mode/seq','{}')).status,400);
+ assert.deepEqual(seen,['/mode','/preset']);
+});
+test('server passes the mode paths and keeps the ear-only ones out', async t=>{
+ const calls=[],mind={get:async p=>{calls.push(['GET',p]);return {status:200,body:'{}'};},post:async p=>{calls.push(['POST',p]);return {status:200,body:'{}'};},stop(){}};
+ const server=createMonitorServer(new Monitor({binding:{address:'http://127.0.0.1:8080',token:'b'.repeat(32)}}),undefined,mind);
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const url=`http://127.0.0.1:${server.address().port}`,h={'Content-Type':'application/json',Origin:url};
+ assert.equal((await fetch(url+'/api/mind/mode')).status,200);
+ assert.equal((await fetch(url+'/api/mind/mode/seq')).status,200);
+ assert.equal((await fetch(url+'/api/mind/mode',{method:'POST',headers:h,body:'{}'})).status,200);
+ assert.equal((await fetch(url+'/api/mind/preset',{method:'POST',headers:h,body:'{}'})).status,200);
+ assert.equal((await fetch(url+'/api/mind/mode/input',{method:'POST',headers:h,body:'{}'})).status,404);
+ assert.equal((await fetch(url+'/api/mind/mode/robot',{method:'POST',headers:h,body:'{}'})).status,404);
+ assert.deepEqual(calls,[['GET','/mode'],['GET','/mode/seq'],['POST','/mode'],['POST','/preset']]);
+ for(const f of ['/mode-ui.js','/mode.css'])assert.equal((await fetch(url+f)).status,200);
+});
+test('local mind: loopback only', ()=>{
+ for(const ok of ['http://127.0.0.1:52790','http://localhost:52790','http://[::1]:52790','http://127.0.0.1:52790/'])
+  assert.ok(new MindProxy({local:ok,token:'t'}).local);
+ for(const bad of ['http://10.0.0.1:52790','http://example.com:52790','http://127.0.0.1.evil.com:1','https://127.0.0.1:52790',
+  'http://127.0.0.1','http://u:p@127.0.0.1:52790','http://127.0.0.1:52790/x','http://127.0.0.1:52790/?a=1','127.0.0.1:52790','',
+  'http://0.0.0.0:52790','http://127.0.0.2:52790'])
+  assert.throws(()=>new MindProxy({local:bad,token:'t'}),/本机回环/,bad);
+});
+test('local mind: plain HTTP to the loopback URL with the demo token, no ssh, same whitelist', async()=>{
+ const seen=[],spawned=[];
+ const proxy=new MindProxy({local:'http://127.0.0.1:52790',token:'demo',spawnFn:fakeSsh(spawned),
+  requestFn:async(target,p,h,o={})=>{seen.push([target,p,h.Authorization,o.method||'GET']);return {status:200,body:'{}'};}});
+ assert.equal((await proxy.get('/mode')).status,200);
+ assert.equal((await proxy.post('/mode','{"input":"forward"}')).status,200);
+ assert.equal((await proxy.get('/evil')).status,400);
+ assert.equal((await proxy.post('/mode/input','{}')).status,400);
+ assert.equal(spawned.length,0);
+ assert.deepEqual(seen,[[{host:'127.0.0.1',port:52790},'/mode','Bearer demo','GET'],[{host:'127.0.0.1',port:52790},'/mode','Bearer demo','POST']]);
+ assert.equal((await new MindProxy({local:'http://127.0.0.1:52790',token:''}).get('/mode')).status,503);
+ proxy.stop();
+});
+test('local mind: a real request over loopback TCP', async t=>{
+ const http=await import('node:http');let auth='';
+ const srv=http.createServer((req,res)=>{auth=req.headers.authorization;res.end(JSON.stringify({path:req.url}));});
+ await new Promise(r=>srv.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>srv.close(r)));
+ const proxy=new MindProxy({local:`http://127.0.0.1:${srv.address().port}`,token:'demo'});
+ const r=await proxy.get('/mode');
+ assert.equal(r.status,200);assert.deepEqual(JSON.parse(r.body),{path:'/mode'});assert.equal(auth,'Bearer demo');
+});
+test('mindFromEnv: unset = today\'s ssh proxy; set = local demo that never takes the .env token', ()=>{
+ const live=mindFromEnv({}, {SOUL_SERVER_SSH:'h',SOUL_EAR_TOKEN:'real'});
+ assert.equal(live.local,null);assert.equal(live.ssh,'h');assert.equal(live.token,'real');
+ const demo=mindFromEnv({SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo'}, {SOUL_SERVER_SSH:'h',SOUL_EAR_TOKEN:'real'});
+ assert.deepEqual(demo.local,{host:'127.0.0.1',port:52790});assert.equal(demo.token,'demo');assert.equal(demo.ssh,undefined);
+ assert.throws(()=>mindFromEnv({SOUL_MIND_LOCAL:'http://10.1.2.3:52790',SOUL_MIND_LOCAL_TOKEN:'demo'},{}),/本机回环/);
+ assert.throws(()=>mindFromEnv({SOUL_MIND_LOCAL:'http://127.0.0.1:52790'},{}),/SOUL_MIND_LOCAL_TOKEN/);
+});
+test('local demo monitor: own port, no robot connection, no private config', async()=>{
+ assert.equal(localDemo({}),null);
+ const d=localDemo({SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo'});
+ assert.equal(d.port,8807);assert.deepEqual(d.mind.local,{host:'127.0.0.1',port:52790});
+ await assert.rejects(d.monitor.client.connect(),/本机演示/);
+ assert.equal(d.monitor.client.push,undefined);
+ assert.equal(localDemo({SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo',SOUL_MONITOR_PORT:'8811'}).port,8811);
+ assert.throws(()=>localDemo({SOUL_MIND_LOCAL:'http://127.0.0.1:52790',SOUL_MIND_LOCAL_TOKEN:'demo',SOUL_MONITOR_PORT:'80'}),/端口/);
 });

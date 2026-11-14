@@ -1,0 +1,29 @@
+/* Mode bar + quick settings (mode-ui.js), under the switch bar on both pages; same look as switches.css. */
+.modebar{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px;flex-shrink:0;margin:4px 0;font-size:14px;color:#ddd}
+.modebar .mode-main,.modebar .mode-quick{display:flex;flex-direction:column;gap:6px;min-width:0;padding:6px 12px;border:2px solid #555;border-radius:8px;background:#1a1a1a}
+.modebar .mode-main{flex:3 1 520px}
+.modebar .mode-quick{flex:1 1 260px}
+.modebar.unknown .mode-main,.modebar.unknown .mode-quick{border-style:dashed;border-color:#8a6d3b;color:#d9c79c}
+.modebar .mode-now{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0}
+.modebar .mode-name{font-size:16px;font-weight:700}
+.modebar .mode-chip{--mode-color:#505050;padding:1px 8px;border-radius:5px;background:var(--mode-color);color:#111;font:700 13px/1.5 ui-monospace,Menlo,monospace;white-space:nowrap}
+.modebar .mode-auto{padding:0 6px;border:1px solid #20b8c8;border-radius:5px;color:#7fe6f0;font:700 12px/1.6 ui-monospace,Menlo,monospace}
+.modebar .mode-note{font-size:12px;opacity:.8;overflow-wrap:anywhere}
+.modebar .mode-sync{font-size:12px;padding:1px 6px;border-radius:5px;border:1px solid #555}
+.modebar .mode-sync-yes{border-color:#2e9d4f;color:#b9f5c8}
+.modebar .mode-sync-waiting{border-color:#8a6d3b;color:#f4bd72}
+.modebar .mode-sync-offline{border-style:dashed;color:#aaa}
+.modebar .mode-buttons,.modebar .mode-quick-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.modebar button{min-height:30px;padding:3px 10px;font-size:14px;border-radius:6px;border:1px solid #555;background:#222;color:inherit;cursor:pointer}
+.modebar button[aria-pressed=true]{border-color:#2e9d4f;background:#1f5c35;color:#e8ffef;font-weight:700}
+.modebar button:disabled{opacity:.5;cursor:not-allowed}
+.modebar .mode-presets{display:grid;grid-template-columns:repeat(5,minmax(34px,1fr));gap:6px;max-width:300px}
+.modebar .mode-presets button{min-width:0;padding:3px 0;font-variant-numeric:tabular-nums}
+.modebar .mode-billing[aria-pressed=false]{border-color:#6f5937;color:#f4bd72}
+.modebar .mode-log{font-size:12px}
+.modebar .mode-log summary{cursor:pointer;opacity:.85}
+.modebar .mode-log ol{margin:4px 0 0;padding-left:20px;max-height:180px;overflow:auto}
+.modebar .mode-log li{overflow-wrap:anywhere}
+.modebar .mode-msg{flex-basis:100%;margin:0;min-height:0;font-size:13px;color:#9fd8ae;overflow-wrap:anywhere}
+.modebar .mode-msg:empty{display:none}
+@media(max-width:600px){.modebar .mode-main,.modebar .mode-quick{flex-basis:100%;padding:6px 8px}.modebar .mode-buttons button{flex:1 1 28%;min-width:0;padding:3px 4px}}

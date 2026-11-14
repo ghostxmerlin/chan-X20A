@@ -8,7 +8,7 @@ import {SerialDeviceClient} from './serial-client.mjs';
 import { Controls } from './control.mjs';
 import { existingHearingConfig } from './hearing.mjs';
 import { M12System } from './m12-system.mjs';
-import { MindProxy } from './mind.mjs';
+import { mindFromEnv } from './mind.mjs';
 import { parseEnv } from 'node:util';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -18,7 +18,8 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/hearing-ui.js', ['hearing-ui.js','text/javascript; charset=utf-8']], ['/servo-tuning-ui.js', ['servo-tuning-ui.js','text/javascript; charset=utf-8']], ['/wifi-ui.js', ['wifi-ui.js','text/javascript; charset=utf-8']], ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
     ['/mind.html', ['mind.html', 'text/html; charset=utf-8']], ['/mind-ui.js', ['mind-ui.js', 'text/javascript; charset=utf-8']], ['/mind.css', ['mind.css', 'text/css; charset=utf-8']],
     ['/db.html', ['db.html', 'text/html; charset=utf-8']], ['/db-ui.js', ['db-ui.js', 'text/javascript; charset=utf-8']], ['/db.css', ['db.css', 'text/css; charset=utf-8']],
-    ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/say-ui.js', ['say-ui.js', 'text/javascript; charset=utf-8']], ['/scene-ui.js', ['scene-ui.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']]]);
+    ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/say-ui.js', ['say-ui.js', 'text/javascript; charset=utf-8']], ['/scene-ui.js', ['scene-ui.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']],
+    ['/mode-ui.js', ['mode-ui.js', 'text/javascript; charset=utf-8']], ['/mode.css', ['mode.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -51,7 +52,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (req.method === 'POST' && url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/settings', '/mark', '/label', '/rerun', '/place', '/switch', '/switches', '/say', '/say/stop', '/voice/try', '/speech/settings', '/memory/edit', '/role/try', '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/settings', '/mark', '/label', '/rerun', '/place', '/switch', '/switches', '/say', '/say/stop', '/voice/try', '/speech/settings', '/memory/edit', '/role/try', '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge', '/mode', '/preset'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (origin !== 'http://' + req.headers.host) { respond(403, '写入必须来自当前观察页面'); return; }
       if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') { respond(415, '只接受 JSON'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
@@ -81,7 +82,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain', '/say/rounds', '/say/stats', '/scenes', '/signals', '/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain', '/say/rounds', '/say/stats', '/scenes', '/signals', '/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item', '/mode', '/mode/seq'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
       mind.get(sub + url.search).then(r => {
         res.writeHead(r.status, { 'Content-Type': r.status === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });
@@ -124,20 +125,44 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
   return server;
 }
 
+// Dev-only local demo (docs/mode-demo.md): SOUL_MIND_LOCAL set = a second monitor on its own port (SOUL_MONITOR_PORT,
+// default 8807) pointed at scripts/mind-local-demo.py. It reads neither .private/stackchan-monitor.json nor .env, and
+// it never opens the robot's USB port or Wi-Fi link (the running monitor keeps them). Unset: null, today's startup.
+class NoRobotClient {
+  constructor() { this.binding = { address: '' }; this.verified = false; }
+  async connect() { throw new Error('本机演示：没有连机器人（只演示模式切换）'); }
+  async json() { throw new Error('本机演示：没有连机器人'); }
+  async request() { throw new Error('本机演示：没有连机器人'); }
+}
+export function localDemo(env) {
+  if (!env.SOUL_MIND_LOCAL) return null;
+  const mind = mindFromEnv(env, {});
+  const port = env.SOUL_MONITOR_PORT === undefined ? 8807 : Number(env.SOUL_MONITOR_PORT);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('SOUL_MONITOR_PORT 端口无效（1024–65535）');
+  const monitor = new Monitor(new NoRobotClient(), new M12System(null));
+  const controls = new Controls(monitor, { loadHearingConfig: () => { throw new Error('本机演示不读 .env'); } });
+  return { port, monitor, mind, controls };
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.umask(0o077);
-  const filename = path.join(root, '.private/stackchan-monitor.json');
-  if (!fs.existsSync(filename)) { console.error('缺少本机绑定配置，见 web/monitor/README.md'); process.exit(1); }
-  const config = JSON.parse(fs.readFileSync(filename));
-  const port = config.port ?? 8787;
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('本机端口无效');
-  const monitor = new Monitor(config.transport==='http'?new DeviceClient(config):new SerialDeviceClient(config), new M12System(config.m12, {root}));
-  let env = {};
-  try { env = parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8')); } catch {}
-  const mind = new MindProxy({ ssh: env.SOUL_SERVER_SSH, token: env.SOUL_EAR_TOKEN });
-  const server = createMonitorServer(monitor, undefined, mind);
+  const demo = localDemo(process.env);
+  let monitor, mind, controls, port;
+  if (demo) ({ monitor, mind, controls, port } = demo);
+  else {
+    const filename = path.join(root, '.private/stackchan-monitor.json');
+    if (!fs.existsSync(filename)) { console.error('缺少本机绑定配置，见 web/monitor/README.md'); process.exit(1); }
+    const config = JSON.parse(fs.readFileSync(filename));
+    port = config.port ?? 8787;
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('本机端口无效');
+    monitor = new Monitor(config.transport==='http'?new DeviceClient(config):new SerialDeviceClient(config), new M12System(config.m12, {root}));
+    let env = {};
+    try { env = parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8')); } catch {}
+    mind = mindFromEnv({}, env);
+  }
+  const server = createMonitorServer(monitor, controls, mind);
   server.on('error', error => { console.error('本机观察台启动失败：' + error.code); process.exit(1); });
-  server.listen(port, '127.0.0.1', () => console.log(`StackChan 观察台：http://127.0.0.1:${port}/`));
+  server.listen(port, '127.0.0.1', () => console.log(demo ? `本机模式演示观察台（没有机器人）：http://127.0.0.1:${port}/` : `StackChan 观察台：http://127.0.0.1:${port}/`));
   const close = async () => { monitor.stop(); mind.stop(); server.closeAllConnections(); await monitor.client.close?.(); server.close(() => process.exit(0)); };
   process.on('SIGTERM', close); process.on('SIGINT', close);
 }

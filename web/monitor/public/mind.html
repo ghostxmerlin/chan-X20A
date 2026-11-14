@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>hello 情景</title>
-  <link rel="stylesheet" href="/mind.css"><link rel="stylesheet" href="/switches.css"><script type="module" src="/switches-ui.js"></script><script type="module" src="/mind-ui.js"></script>
+  <link rel="stylesheet" href="/mind.css"><link rel="stylesheet" href="/switches.css"><link rel="stylesheet" href="/mode.css"><script type="module" src="/switches-ui.js"></script><script type="module" src="/mode-ui.js"></script><script type="module" src="/mind-ui.js"></script>
 </head>
 <body>
   <header>
@@ -17,6 +17,7 @@
     <span id="mind-status">连接中…</span>
   </header>
   <nav id="switches" class="switches" data-poll="robot" aria-label="总开关"></nav>
+  <nav id="modebar" class="modebar" aria-label="模式"></nav>
   <main>
     <section><h2>此刻</h2><div id="mind-now"></div></section>
     <section id="mind-frame"><h2>服务器收到的画面</h2><img id="mind-frame-img" alt="服务器收到的最新机身摄像头画面" hidden><p id="mind-frame-cap" class="alt">还没有收到画面</p><h3>视觉识别</h3><div id="mind-eye"><p class="alt">还没有识别结果</p></div></section>

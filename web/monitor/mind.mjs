@@ -2,13 +2,15 @@
 // server's loopback only. An ssh forward to a Unix socket in a private (0700) directory carries it —
 // no local TCP port another process could squat to catch the token. The token is added here and
 // never reaches the browser. Only GET state / timeline / minute with numeric from, to, t, version pass.
+// Dev-only local demo (docs/mode-demo.md): with SOUL_MIND_LOCAL=http://127.0.0.1:<port> the proxy talks plain HTTP
+// to that loopback mind (scripts/mind-local-demo.py) with SOUL_MIND_LOCAL_TOKEN instead; no ssh, no .env token.
 import {spawn} from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item']);
-const POST_PATHS=new Set(['/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try','/say/round','/say/play','/signal','/say/prefetch','/say/auto','/db/person','/db/person/note','/db/memory','/db/knowledge']);
+const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item','/mode','/mode/seq']);
+const POST_PATHS=new Set(['/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try','/say/round','/say/play','/signal','/say/prefetch','/say/auto','/db/person','/db/person/note','/db/memory','/db/knowledge','/mode','/preset']);   // not /mode/input, /mode/robot: ear only
 const PARAMS=new Set(['from','to','t','version','days','lane','offset','limit','status','id','uid','rid','kind','person','topic','q','c']);
 const KINDS=new Set('owner regular visitor family unknown trait fact preference boundary relation event told feeling place work commitment life term self other'.split(' '));
 const DB_CARDS=new Set(['people_cards','people_notes','memory_items','knowledge_items']);
@@ -18,20 +20,34 @@ function prepareSocketDir(socketPath){
  const dir=path.dirname(socketPath);
  fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.chmodSync(dir,0o700);
 }
-export function socketRequest(socketPath,pathAndQuery,headers,{method='GET',body=null,timeout=8000}={}){
+// target: the Unix socket path (live), or {host, port} on loopback (local demo).
+export function socketRequest(target,pathAndQuery,headers,{method='GET',body=null,timeout=8000}={}){
  return new Promise((resolve,reject)=>{
   const h=body==null?headers:{...headers,'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)};
-  const req=http.request({socketPath,path:pathAndQuery,method,headers:h,timeout},res=>{
+  const where=typeof target==='string'?{socketPath:target}:{host:target.host,port:target.port};
+  const req=http.request({...where,path:pathAndQuery,method,headers:h,timeout},res=>{
    let body='';res.setEncoding('utf8');res.on('data',c=>{body+=c;if(body.length>4e6)req.destroy(new Error('too large'));});
    res.on('end',()=>resolve({status:res.statusCode,body}));
   });
   req.on('timeout',()=>req.destroy(new Error('timeout')));req.on('error',reject);req.end(body??undefined);
  });
 }
+const LOOPBACK=new Set(['127.0.0.1','localhost','[::1]']);
+// The local demo URL: http, a loopback host, an explicit port, nothing else. Anything else throws.
+export function loopbackTarget(text){
+ let u;try{u=new URL(text);}catch{u=null;}
+ if(!u||u.protocol!=='http:'||!LOOPBACK.has(u.hostname)||!u.port||u.username||u.password||u.pathname!=='/'||u.search||u.hash)
+  throw new Error('SOUL_MIND_LOCAL 只能是本机回环地址，例如 http://127.0.0.1:52790');
+ return {host:u.hostname==='[::1]'?'::1':u.hostname,port:Number(u.port)};
+}
 export class MindProxy {
- constructor({ssh,token,socketPath=DEFAULT_SOCKET,remotePort=52740,spawnFn=spawn,requestFn=socketRequest,prepareFn=prepareSocketDir,now=Date.now}={}){
-  Object.assign(this,{ssh,token,socketPath,remotePort,spawnFn,requestFn,prepareFn,now});this.child=null;this.lastStart=-Infinity;
+ constructor({ssh,token,local=null,socketPath=DEFAULT_SOCKET,remotePort=52740,spawnFn=spawn,requestFn=socketRequest,prepareFn=prepareSocketDir,now=Date.now}={}){
+  if(local!=null){local=loopbackTarget(local);ssh=undefined;}
+  Object.assign(this,{ssh,token,local,socketPath,remotePort,spawnFn,requestFn,prepareFn,now});this.child=null;this.lastStart=-Infinity;
  }
+ get target(){return this.local||this.socketPath;}
+ configured(){return this.local?!!this.token:!!this.ssh&&!!this.token;}
+ missing(){return this.local?'本机演示缺少 SOUL_MIND_LOCAL_TOKEN':'本机 .env 缺少 SOUL_SERVER_SSH 或 SOUL_EAR_TOKEN';}
  static check(pathAndQuery){
   let url;try{url=new URL(pathAndQuery,'http://x');}catch{return null;}
   if(!pathAndQuery.startsWith('/')||!PATHS.has(url.pathname)||url.pathname!==pathAndQuery.split('?')[0])return null;
@@ -43,7 +59,7 @@ export class MindProxy {
   return url.pathname+url.search;
  }
  tunnel(){
-  if(this.child)return true;
+  if(this.local||this.child)return true;
   if(this.now()-this.lastStart<5000)return false;
   this.lastStart=this.now();
   this.prepareFn(this.socketPath);
@@ -55,22 +71,31 @@ export class MindProxy {
   this.child=child;return true;
  }
  async get(pathAndQuery){
-  if(!this.ssh||!this.token)return {status:503,body:'本机 .env 缺少 SOUL_SERVER_SSH 或 SOUL_EAR_TOKEN'};
+  if(!this.configured())return {status:503,body:this.missing()};
   const target=MindProxy.check(pathAndQuery);
   if(!target)return {status:400,body:'参数不允许'};
   if(!this.tunnel())return {status:503,body:'情景服务连接中'};
-  try{return await this.requestFn(this.socketPath,target,{Authorization:`Bearer ${this.token}`});}
+  try{return await this.requestFn(this.target,target,{Authorization:`Bearer ${this.token}`});}
   catch{return {status:503,body:'情景服务连接中'};}
  }
  async post(path,bodyText){
-  if(!this.ssh||!this.token)return {status:503,body:'本机 .env 缺少 SOUL_SERVER_SSH 或 SOUL_EAR_TOKEN'};
+  if(!this.configured())return {status:503,body:this.missing()};
   if(!POST_PATHS.has(path))return {status:400,body:'不允许的写入'};
   const maxBody=['/settings','/speech/settings'].includes(path)?512*1024:MAX_BODY;
   if(typeof bodyText!=='string'||Buffer.byteLength(bodyText)>maxBody)return {status:413,body:'内容过长'};
   if(!this.tunnel())return {status:503,body:'情景服务连接中'};
   // a rerun may wait for two model calls (90 s each)
-  try{return await this.requestFn(this.socketPath,path,{Authorization:`Bearer ${this.token}`},{method:'POST',body:bodyText,timeout:200000});}
+  try{return await this.requestFn(this.target,path,{Authorization:`Bearer ${this.token}`},{method:'POST',body:bodyText,timeout:200000});}
   catch{return {status:503,body:'情景服务连接中'};}
  }
  stop(){const c=this.child;this.child=null;if(c&&!c.killed)c.kill();}
+}
+
+// env: process.env; dotenv: the repo .env. SOUL_MIND_LOCAL set = the local demo (its own token, never .env's).
+export function mindFromEnv(env,dotenv){
+ if(env.SOUL_MIND_LOCAL){
+  if(!env.SOUL_MIND_LOCAL_TOKEN)throw new Error('SOUL_MIND_LOCAL 需要同时给 SOUL_MIND_LOCAL_TOKEN（演示脚本打印的那一行）');
+  return new MindProxy({local:env.SOUL_MIND_LOCAL,token:env.SOUL_MIND_LOCAL_TOKEN});
+ }
+ return new MindProxy({ssh:dotenv.SOUL_SERVER_SSH,token:dotenv.SOUL_EAR_TOKEN});
 }

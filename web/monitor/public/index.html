@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>StackChan 观察台</title>
-  <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/switches.css"><script type="module" src="/app.js"></script>
+  <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/switches.css"><link rel="stylesheet" href="/mode.css"><script type="module" src="/app.js"></script><script type="module" src="/mode-ui.js"></script>
 </head>
 <body>
 <main>
@@ -12,6 +12,7 @@
     <div class="actions"><a class="button-link" href="/mind.html" target="_blank" rel="noopener">情景</a><a class="button-link" href="/db.html" target="_blank" rel="noopener">库</a><button data-open="monitor-settings">设置</button><button id="pause" aria-pressed="false">暂停监控</button></div>
   </header>
   <nav id="switches" class="switches" aria-label="总开关"></nav>
+  <nav id="modebar" class="modebar" aria-label="模式"></nav>
   <div class="status-line"><p id="notice" class="notice" role="status">正在连接本机数据桥…</p><span id="freshness">尚未收到数据</span></div>
   <div class="dashboard">
     <section class="panel system-panel" id="system-panel">
