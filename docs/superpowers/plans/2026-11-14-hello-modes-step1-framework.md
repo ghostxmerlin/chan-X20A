@@ -1,5 +1,11 @@
 # hello 模式 第一步：切换框架 Implementation Plan
 
+> **〔2026-11-14 晚：本计划已部分被取代〕** 主人下午把方向改成"以 hello 为准"，没做完的部分由 [2026-11-14-hello-modes-step1b-robot-owned.md](2026-11-14-hello-modes-step1b-robot-owned.md) 取代；第一步已于 17:13 上线（collector-0.4.92），计费 18:22 又简化成两个整体动作（spec 第 1.2 节第 16–17 条）。
+> - **做完、仍在用**：A0 + D0（ear 终结 `/mouth`，13:25 上线）、A1（`modes.py`，规则又移植到固件 `mode_rules.h`，两边共用测试向量）、C1–C3（消息格式、口令改绑、手势分类，被 1b 的 F2 复用）。
+> - **做了，后来被 1b 改掉或撤掉**：A2 / A4（mind 存模式、切换、推快照 → 1b S1：mind 只记录 `mode_report`、按效果执行）；A3（计费闸门 → 18:22 简化，不再拦任何东西；预设表换成新数字表）；A5（ear 推快照 → 1b S2：只转发 `mode_report`）；A6（DualKey 摇杆灯，撤掉：DualKey 只打分）；B1（页面模式条发给 mind → 1b W1：发给 hello）；B2 保留；D1（16:05 提前上线的服务器版本，17:11 被 1b 替换）。
+> - **没按本计划做，由 1b 取代**：C4（停在 WIP，部分代码被 1b 复用）、C5（外观由 1b F2 做；上滑 / 下滑页、占位页推到 0.4.93）、C6 和 D2（由 1b 的"B 构建与统一审查"和 17:13 刷机取代）。
+> 下面是原文，留作记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让"模式"成为一个真实的、到处一致的状态：mind 存当前模式并负责切换；机器人、DualKey、页面上报输入，并显示 mind 确认过的模式（眼睛、角标、触摸含义、摇杆灯、页面模式条）；加计费总闸（关掉 + 禁止再开）和 0–9 预设的服务器那一半。脱口秀 = 今天的行为，IDLE 有自己的屏幕，其余六个模式是空壳。
