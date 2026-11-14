@@ -1,8 +1,14 @@
 """hello's modes: the store around the pure state machine (plan task A2; spec 2026-11-14-hello-modes-design-v2).
 
-mind is the only place that changes the mode. ModeStore keeps the current state in memory and in
-hello.mode {_id: 'current'}, logs every input to hello.mode_log, and is the only writer of the master switch
-(billing), so every change of either bumps `seq` and ear / the robot see it.
+Step 1b (owner 2026-11-14, plan 2026-11-14-hello-modes-step1b-robot-owned): hello owns the mode. It runs the same
+rules (modes.transition, exported as test vectors) itself and reports every change; report() mirrors that state,
+logs it and hands its effects to the hooks through the same pre-check / guard as before. mind still owns the master
+switch (billing) and presets 0 / 9 (digit). The HTTP layer no longer sends page / DualKey inputs through apply();
+apply()'s transition path stays as the reference the store tests pin (and for boot / timeout in those tests).
+
+ModeStore keeps the current state in memory and in hello.mode {_id: 'current'}, logs every input / report to
+hello.mode_log, and is the only writer of the master switch, so every change of either bumps mind's own `seq`
+(is_current for paid hooks). hello's own report seq is kept apart, in robot()['seq'].
 
 apply() for every input, in this order:
   1. device inputs (device + boot + dev_seq all given) are deduplicated: a repeat returns the first result and
@@ -41,7 +47,7 @@ import threading
 import time
 
 from .mode_table import MODES, SUBTITLE_DIRS
-from .modes import SOURCES, result, snapshot as _snapshot, transition
+from .modes import EFFECTS, SOURCES, result, snapshot as _snapshot, transition
 
 STALE_MS = 3000                  # device inputs older than this are dropped (DualKey resends after a reconnect)
 SETTINGS_TIMEOUT_MS = 300_000    # settings closes itself after 5 minutes without input
@@ -51,6 +57,8 @@ PAID = ('say_round', 'prefetch_on', 'talk_enter')
 # part (家人声音 off) and Billing.talk_enter itself turns nothing paid on while billing is off; a guard code drops it.
 SOFT_PAID = ('talk_enter',)
 FIELDS = ('mode', 'dir', 'host', 'return_to')
+REPORT_DEVICE = 'robot.report'   # dedup / log key of hello's reports: its own seq, not the mode_input seq
+STALE_DROPS = ('stop_speech', 'say_round', 'prefetch_on', 'talk_enter')   # a late report keeps only the "turn off"s
 BOOT_STATE = {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}
 DOC_ID = 'current'
 _RECENT = 1024                   # device-input results kept in memory (older ones are looked up in mode_log)
@@ -111,7 +119,7 @@ class ModeStore:
         self.on_change = []
         self._recent = collections.OrderedDict()
         self._pending = {}
-        self._robot = {'connected': False, 'boot': None, 'conn': None, 'applied_seq': None, 'at': None}
+        self._robot = {'connected': False, 'boot': None, 'conn': None, 'seq': None, 'at': None}
         with _LOCK:
             self._load()
 
@@ -216,31 +224,44 @@ class ModeStore:
             raise ValueError(f'unknown source {source!r}')
         now = self.clock_ms() if now_ms is None else now_ms
         key = (device, boot, dev_seq) if device is not None and boot is not None and dev_seq is not None else None
-        if key:
-            while True:
-                with _LOCK:
-                    hit = self._seen(key)
-                    if hit is not None:
-                        return {'snapshot': self.current(), 'result': copy.deepcopy(hit), 'effects': [],
-                                'duplicate': True}
-                    pend = self._pending.get(key)
-                    if pend is None:
-                        self._pending[key] = (threading.Event(), threading.get_ident())
-                        break
-                    ev, owner = pend
-                    if owner == threading.get_ident():
-                        raise ValueError(f'apply re-entered with the device key it is handling: {key!r}')
-                if not ev.wait(_WAIT_S):
-                    return {'snapshot': self.current(), 'result': result('busy'), 'effects': [], 'duplicate': True}
+        dup = self._claim(key, 'apply')
+        if dup:
+            return dup
         meta = {'source': source, 'input': input, 'value': value, 'device': device, 'sid': sid, 'mode': None}
         base = {'at': now, 'source': source, 'device': device, 'boot': boot, 'dev_seq': dev_seq, 'sid': sid,
                 'input': input, 'value': value}
         try:
             out, hook = self._run(input, value, source, now, age_ms, meta, base, key)
         finally:
-            if key:
-                with _LOCK:
-                    self._pending.pop(key)[0].set()
+            self._release(key)
+        return self._hooks(out, hook)
+
+    def _claim(self, key, what):
+        """Dedup for a device key: -> the duplicate reply, or None after claiming the key (release with _release)."""
+        if not key:
+            return None
+        while True:
+            with _LOCK:
+                hit = self._seen(key)
+                if hit is not None:
+                    return {'snapshot': self.current(), 'result': copy.deepcopy(hit), 'effects': [], 'duplicate': True}
+                pend = self._pending.get(key)
+                if pend is None:
+                    self._pending[key] = (threading.Event(), threading.get_ident())
+                    return None
+                ev, owner = pend
+                if owner == threading.get_ident():
+                    raise ValueError(f'{what} re-entered with the device key it is handling: {key!r}')
+            if not ev.wait(_WAIT_S):
+                return {'snapshot': self.current(), 'result': result('busy'), 'effects': [], 'duplicate': True}
+
+    def _release(self, key):
+        if key:
+            with _LOCK:
+                self._pending.pop(key)[0].set()
+
+    def _hooks(self, out, hook):
+        """Outside the lock: run the on_change hooks in order, dropping paid effects a later commit replaced."""
         if hook:
             old_snap, new_snap, effects, meta, t = hook
             changed = any(old_snap[k] != new_snap[k] for k in FIELDS)
@@ -254,6 +275,25 @@ class ModeStore:
                     _log(f'on_change hook {getattr(f, "__name__", f)!r} failed: {type(e).__name__}: {e}')
             out['effects'] = self._still_current(effects, new_snap)
         return out
+
+    def _check_effects(self, effects, meta):
+        """The pre-check for paid effects (under the lock) -> (kept, hard code or None, soft code or None)."""
+        kept, code, soft = [], None, None
+        for e in effects:
+            if e in SOFT_PAID and not self._billing:
+                soft = soft or 'billing_off'
+                kept.append(e)
+                continue
+            if e in PAID:
+                c = 'billing_off' if not self._billing else (self.guard(e, dict(meta)) if self.guard else None)
+                if c:
+                    if e in SOFT_PAID:
+                        soft = soft or c
+                    else:
+                        code = code or c
+                    continue
+            kept.append(e)
+        return kept, code, soft
 
     def _still_current(self, effects, snap):
         """Paid effects only while nothing replaced this commit (a later mode change or billing change bumps seq)."""
@@ -275,21 +315,7 @@ class ModeStore:
             if not valid_state(new):
                 raise ValueError(f'transition produced an impossible state {new!r} from {old!r} on {input!r}')
             meta['mode'] = new['mode']
-            kept, code, soft = [], None, None
-            for e in effects:
-                if e in SOFT_PAID and not self._billing:
-                    soft = soft or 'billing_off'
-                    kept.append(e)
-                    continue
-                if e in PAID:
-                    c = 'billing_off' if not self._billing else (self.guard(e, dict(meta)) if self.guard else None)
-                    if c:
-                        if e in SOFT_PAID:
-                            soft = soft or c
-                        else:
-                            code = code or c
-                        continue
-                kept.append(e)
+            kept, code, soft = self._check_effects(effects, meta)
             if code:
                 res = result(code)
             elif soft and res['code'] == 'ok':
@@ -354,31 +380,80 @@ class ModeStore:
                               'result': result('ok'), 'seq': self._seq, 'effects': []})
             return self.current()
 
-    def robot_event(self, boot, conn, event, applied_seq=None, *, now_ms=None):
-        """/mouth connection events from ear. hello: conn becomes the current connection, a new boot id = the robot
-        rebooted -> apply('boot'). applied / closed count only for the current connection (a late close of an old
-        connection is ignored). The connection is not persisted: after a mind restart the first `applied` adopts
-        its conn (same boot check as hello), so the robot shows online without reconnecting (review I3)."""
+    def report(self, rep, *, boot, conn=None, age_ms=0, now_ms=None):
+        """hello's own mode change (step 1b), forwarded by ear: {seq, mode, dir, host, return_to, by, input, effects}.
+
+        The state is mirrored as reported (it must be a state the rules can produce: valid_state); its effects go
+        through the same pre-check / guard as apply() and then the hooks. Deduplicated per (boot, seq) (hello's own
+        counter); a report older than the last one of the same boot changes nothing (code stale). A report that
+        waited longer than STALE_MS (age_ms) still moves the mirror and keeps its turn-offs (talk_leave,
+        prefetch_off), but its stop / paid effects are dropped. -> {snapshot, result, effects} (+ duplicate).
+        Raises ValueError for a malformed report (the HTTP layer answers 400)."""
+        if not isinstance(rep, dict):
+            raise ValueError('report must be an object')
+        rseq, by, inp, effects = rep.get('seq'), rep.get('by'), rep.get('input'), rep.get('effects', [])
+        st = {k: rep.get(k) for k in FIELDS}
+        if not (_is_int(rseq) and rseq >= 0) or not (isinstance(boot, str) and boot):
+            raise ValueError('report needs an integer seq and the robot boot')
+        if not valid_state(st):
+            raise ValueError(f'impossible reported state {st!r}')
+        if by not in SOURCES:
+            raise ValueError(f'unknown by {by!r}')
+        if inp is not None and not (isinstance(inp, str) and 0 < len(inp) <= 32):
+            raise ValueError('input must be a short text or null')
+        if not (isinstance(effects, list) and all(e in EFFECTS for e in effects)):
+            raise ValueError(f'unknown effects {effects!r}')
+        if conn is not None and not _is_int(conn):
+            raise ValueError('conn must be an integer')
         now = self.clock_ms() if now_ms is None else now_ms
-        rebooted = False
+        key = (REPORT_DEVICE, boot, rseq)
+        dup = self._claim(key, 'report')
+        if dup:
+            return dup
+        try:
+            out, hook = self._commit_report(st, rseq, by, inp, list(effects), boot, conn, age_ms, now, key)
+        finally:
+            self._release(key)
+        return self._hooks(out, hook)
+
+    def _commit_report(self, st, rseq, by, inp, effects, boot, conn, age_ms, now, key):
+        base = {'at': now, 'source': by, 'device': REPORT_DEVICE, 'boot': boot, 'dev_seq': rseq, 'sid': None,
+                'input': inp or 'report', 'value': None}
         with _LOCK:
             r = self._robot
-            adopt = event == 'applied' and r['conn'] is None   # after a mind restart: /mouth on ear never dropped
-            if event == 'hello' or adopt:
-                r.update(connected=True, boot=boot, conn=conn, applied_seq=applied_seq if adopt else None, at=now)
-                if boot != self._robot_boot:
-                    self._robot_boot, rebooted = boot, True
-                    self._write()
-            elif event in ('applied', 'closed'):
-                if conn == r['conn']:
-                    if event == 'applied':
-                        r.update(applied_seq=applied_seq, at=now)
-                    else:
-                        r.update(connected=False, at=now)
-            else:
-                raise ValueError(f'unknown robot event {event!r}')
-        if rebooted:
-            self.apply('boot', None, source='boot', now_ms=now)
+            old, old_snap = dict(self._state), self._snap
+            if r['boot'] == boot and _is_int(r['seq']) and rseq < r['seq']:
+                res = result('stale')                     # an older report overtaken by a newer one: keep the newer
+                self._record(base, old['mode'], res, [], key)
+                return {'snapshot': self.current(), 'result': res, 'effects': []}, None
+            r.update(connected=True, boot=boot, conn=conn if conn is not None else r['conn'], seq=rseq, at=now)
+            if age_ms is not None and age_ms > STALE_MS:
+                effects = [e for e in effects if e not in STALE_DROPS]
+            meta = {'source': by, 'input': inp, 'value': None, 'device': REPORT_DEVICE, 'sid': None, 'mode': st['mode']}
+            kept, code, soft = self._check_effects(effects, meta)
+            res = result(code) if code else result('ok', result(soft)['toast'] if soft else None)
+            changed = st != old
+            if changed:
+                self._state, self._seq, self._since, self._by = dict(st), self._seq + 1, now, by
+            self._last_input = now
+            if changed or boot != self._robot_boot:
+                self._robot_boot = boot
+                self._rebuild()
+                self._write()
+            self._record(base, old['mode'], res, kept, key)
+            snap = self._snap
+            out = {'snapshot': copy.deepcopy(snap), 'result': res, 'effects': list(kept)}
+            hook = (copy.deepcopy(old_snap), copy.deepcopy(snap), list(kept), meta, now) if changed or kept else None
+            return out, hook
+
+    def robot_closed(self, boot, conn, *, now_ms=None):
+        """ear: hello's /mouth link ended. Only the link the latest report came on counts (a late close of an old
+        link is ignored). The mirrored mode stays what hello last reported."""
+        now = self.clock_ms() if now_ms is None else now_ms
+        with _LOCK:
+            r = self._robot
+            if r['boot'] == boot and conn is not None and r['conn'] == conn:
+                r.update(connected=False, at=now)
         return self.current()
 
     def tick(self, now_ms=None):

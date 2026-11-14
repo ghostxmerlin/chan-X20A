@@ -171,50 +171,17 @@ def _talk_on(b, source, now_ms, out):
     return None, None
 
 
-def _toggle_tingwu(b, source, now_ms, out):
-    on = not b.ctx.switch_on('tingwu')
-    if on and not b.allowed():
-        return 'billing_off', None             # turning it off never needs the switch
-    b.ctx.set_switch('tingwu', on)
-    if on and not b.allowed():
-        b.ctx.set_switch('tingwu', False)
-        return 'billing_off', None
-    return None, 'TINGWU ON' if on else 'TINGWU OFF'
-
-
-def _toggle_prefetch(b, source, now_ms, out):
-    worker = b.ctx.say_worker
-    if b.ctx.mode() != 'talk':
-        return 'only_talk', None
-    if worker is None:
-        return 'not_implemented', None
-    on = not worker.enabled()
-    if on and not b.allowed():
-        return 'billing_off', None
-    worker.set_enabled(on, now_ms)             # off also turns 连续说 off (say_auto follows it)
-    if on and not (b.allowed() and b.ctx.mode() == 'talk'):
-        worker.set_enabled(False, now_ms)
-        return 'billing_off' if not b.allowed() else 'only_talk', None
-    return None, 'PREFETCH ON' if on else 'PREFETCH OFF'
-
-
-def _mode_idle(b, source, now_ms, out):
-    r = b.ms.apply('select', {'mode': 'idle'}, source=source, now_ms=now_ms)['result']
-    return (None, r['toast']) if r['code'] == 'ok' else (r['code'], None)
-
-
 ACTIONS = {'billing_off': _billing_off, 'billing_on': _billing_on, 'paid_senses_on': _paid_senses_on,
-           'mouth_tts': _mouth_tts, 'talk_on': _talk_on, 'toggle_tingwu': _toggle_tingwu,
-           'toggle_prefetch': _toggle_prefetch, 'mode_idle': _mode_idle}
+           'mouth_tts': _mouth_tts, 'talk_on': _talk_on}
 
 
 def apply_preset(n, billing, *, source, now_ms):
     """Run preset n's server half -> {result: {code, toast}, robot: {hearing?, vision?}} (+ failed: [step names]
     when a billing off inside it partly failed; the toast then says 'PRESET N: K FAILED').
 
-    robot is the preset's robot half, always returned; step 1 only the page carries it out, so a preset with a robot
-    half sent from anywhere but the page (robot digit word, quick settings) answers senses_on_page after doing the
-    server half. Toasts: ok = 'PRESET N' (+ ': detail'), else the code's own toast. Stops at the first refused step.
+    robot is the preset's robot half, always returned; only the page carries it out, so a preset with a robot half
+    sent from anywhere but the page (hello's digit word) answers senses_on_page after doing the server half. 1-8 are
+    undefined_preset here (4-8 are mode selects hello does itself, 1-3 empty). Toasts: ok = 'PRESET N' (+ ': detail'), else the code's own toast. Stops at the first refused step.
     """
     if not isinstance(n, int) or isinstance(n, bool) or not 0 <= n <= 9:
         raise ValueError(f'preset must be 0-9, not {n!r}')

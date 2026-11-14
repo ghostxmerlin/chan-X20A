@@ -8,10 +8,11 @@ POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voic
 POST /say/round /say/play /signal /say/prefetch /say/auto (talk show; 连续说 state is in GET /say/stats under auto)
 GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
 POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
-GET  /mode /mode/seq; POST /mode (page) /mode/input (ear, robot inputs) /mode/robot (ear, /mouth events) /preset
-     (modes step 1; /switches also takes {name: billing, on}, the master switch). With a mode store in ctx, 说话类
-     接口 answer 409 {code: only_talk} outside talk, and paid things refuse to turn on while billing is off
-     (409 {code: billing_off}); turning things off and /say/stop always work.
+GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/robot (ear: hello's /mouth closed)
+     /mode/input (ear: hello's digits 0 / 9) /mode (page: billing only) /preset (modes step 1b: hello owns the mode,
+     mind mirrors it; /switches also takes {name: billing, on}, the master switch). With a mode store in ctx, 说话类
+     接口 answer 409 {code: only_talk} outside talk (the mirrored mode), and paid things refuse to turn on while
+     billing is off (409 {code: billing_off}); turning things off and /say/stop always work.
 """
 import base64
 import copy
@@ -66,10 +67,11 @@ class ModeConflict(Conflict):
         self.code = code
 
 
-PAGE_INPUTS = tuple(i for i in MODE_INPUTS if i not in ('boot', 'timeout'))      # boot / timeout: mind only
-DEVICE_SOURCES = ('asr', 'touch', 'select', 'quick', 'dualkey')                   # what ear forwards for the robot
-ROBOT_EVENTS = ('hello', 'applied', 'closed')
-CLICK_INPUT = {'single': 'tap', 'double': 'double_tap', 'long': 'long'}           # DualKey clicks -> mode inputs
+# Step 1b (owner 2026-11-14): hello switches the mode itself and reports it (/mode/report). mind only takes the inputs
+# that are its own: the master switch (billing) and the presets (digit; only 0 and 9 do something).
+MIND_INPUTS = ('digit', 'billing')
+DEVICE_SOURCES = ('asr', 'touch', 'select', 'quick')                               # what ear forwards for hello
+ON_HELLO = 'mode is switched on hello'
 
 
 def _int(q, name, required=True):
@@ -205,33 +207,18 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         return isinstance(v, int) and not isinstance(v, bool)
 
     def mode_input(body):
-        """ear forwards a robot input: device + boot + seq is the dedup key, so all three are required (A2 M7)."""
+        """ear forwards hello's digit (0 / 9): device + boot + seq is the dedup key, so all three are required."""
         if not (isinstance(body.get("device"), str) and body["device"] and isinstance(body.get("boot"), str) and body["boot"]
                 and _is_int(body.get("seq")) and _is_int(body.get("age_ms")) and body["age_ms"] >= 0):
             raise BadRequest("device, boot (text), seq and age_ms (integers) required")
         if body.get("source") not in DEVICE_SOURCES:
             raise BadRequest(f"source must be one of {'/'.join(DEVICE_SOURCES)}")
-        if body.get("input") not in PAGE_INPUTS:
+        if body.get("input") not in MODE_INPUTS or body["input"] in ("boot", "timeout"):
             raise BadRequest("unknown input")
+        if body["input"] not in MIND_INPUTS:
+            raise ModeConflict(ON_HELLO, "on_hello")
         return modes().apply(body["input"], body.get("value"), source=body["source"], device=body["device"],
                              boot=body["boot"], dev_seq=body["seq"], age_ms=body["age_ms"], sid=None)
-
-    def mode_signal(doc, body, now):
-        """DualKey direction / click from /signal -> a mode input (dedup on device + boot + seq, 3 s stale rule);
-        its result is added to the signal row. Ratings never come here (no 3 s rule for them)."""
-        ms = ctx.get("mode_store")
-        if not ms or doc.get("kind") not in ("mode", "click") or doc.get("result") is not None:
-            return doc
-        if doc["kind"] == "mode":
-            inp, value = "direction", doc["value"]["direction"]
-        else:
-            inp, value = CLICK_INPUT[doc["value"]["type"]], None
-        src = doc.get("source") or {}
-        age = body.get("age_ms") if _is_int(body.get("age_ms")) else 0
-        r = ms.apply(inp, value, source="dualkey", device=src.get("device"), boot=src.get("boot"),
-                     dev_seq=src.get("seq") if _is_int(src.get("seq")) else None, age_ms=age, sid=doc.get("sid"), now_ms=now)
-        db["owner_signals"].update_one({"sid": doc["sid"]}, {"$set": {"result": r["result"]}})
-        return {**doc, "result": r["result"], "effects": r["effects"], "snapshot": r["snapshot"]}
 
     def latest_frame():
         """Newest body-camera frame the ear stored (hello.frames + the file under recordings/)."""
@@ -567,10 +554,9 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise Conflict(str(e)) from None
         if path == '/signal':
             try:
-                doc = owner_signals.put_signal(db, body, now)
+                return owner_signals.put_signal(db, body, now)      # DualKey: ratings only (step 1b), nothing else
             except ValueError as e:
                 raise BadRequest(str(e)) from None
-            return mode_signal(doc, body, now)
         if path == '/say/prefetch':
             worker = ctx.get('say_worker')
             if not worker:
@@ -640,19 +626,28 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             store.set_state(enabled=body["enabled"], switched_at=now)
             return {"enabled": store.enabled(), "at": now}
         if path == "/mode":
-            if body.get("input") not in PAGE_INPUTS:
+            if body.get("input") not in MODE_INPUTS or body["input"] in ("boot", "timeout"):
                 raise BadRequest("unknown input")
-            return modes().apply(body["input"], body.get("value"), source="page", now_ms=now)
+            if body["input"] != "billing":          # the page switches modes on hello (/api/control target mode)
+                raise ModeConflict(ON_HELLO, "on_hello")
+            return modes().apply("billing", body.get("value"), source="page", now_ms=now)
         if path == "/mode/input":
             return mode_input(body)
+        if path == "/mode/report":
+            ms = modes()
+            if not (_is_int(body.get("age_ms", 0)) and body.get("age_ms", 0) >= 0):
+                raise BadRequest("age_ms must be a non-negative integer")
+            rep = {k: body.get(k) for k in ("seq", "mode", "dir", "host", "return_to", "by", "input")}
+            rep["effects"] = body.get("effects", [])
+            try:
+                return ms.report(rep, boot=body.get("boot"), conn=body.get("conn"), age_ms=body.get("age_ms", 0), now_ms=now)
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
         if path == "/mode/robot":
             if not (isinstance(body.get("boot"), str) and body["boot"] and _is_int(body.get("conn"))
-                    and body.get("event") in ROBOT_EVENTS):
-                raise BadRequest(f"boot (text), conn (integer) and event ({'/'.join(ROBOT_EVENTS)}) required")
-            if body["event"] == "applied" and not _is_int(body.get("applied_seq")):
-                raise BadRequest("applied needs applied_seq (integer)")
-            return {"snapshot": modes().robot_event(body["boot"], body["conn"], body["event"], body.get("applied_seq"),
-                                                    now_ms=now)}
+                    and body.get("event") == "closed"):
+                raise BadRequest("boot (text), conn (integer) and event closed required")
+            return {"snapshot": modes().robot_closed(body["boot"], body["conn"], now_ms=now)}
         if path == "/preset":
             n, source = body.get("n"), body.get("source", "page")
             if not _is_int(n) or not 0 <= n <= 9:
@@ -756,7 +751,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             url = urlsplit(self.path)
             if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
                                 '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
-                                '/mode', '/mode/input', '/mode/robot', '/preset'):
+                                '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats", "/mode/seq"):
                     self._send(405, {"error": "read only"})
                 else:

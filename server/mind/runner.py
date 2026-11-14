@@ -197,7 +197,8 @@ class _BillingCtx:
 
 def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_round_fn, speaking_fn=None,
                clock_ms=lambda: int(time.time() * 1000), log=print):
-    """Build ModeStore + Billing with the guard and the hook -> (mode_store, billing, round_gate).
+    """Build ModeStore + Billing with the guard and the hook -> (mode_store, billing, round_gate). hello reports its own
+    mode (ModeStore.report); the hook carries out the reported effects.
 
     say_round_fn(trigger, is_current) runs one 说一轮 (live: speak.say_round, today's pipeline); None = not here.
     Startup: a master switch that reads off (also a corrupt stored value) runs billing.off again, so a partly failed
@@ -261,7 +262,9 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
             say_worker.set_enabled(False, now)
 
     def on_change(old, new, effects, meta, now):
-        """Only carries the effects out, each on its own (one failing must not keep the rest, e.g. talk_leave)."""
+        """Carries the effects out, each on its own (one failing must not keep the rest, e.g. talk_leave). Then a
+        safety net for hello's reports (step 1b): outside talk 提前写 / 连续说 are off whatever effects came along
+        (a report that lost its talk_leave on the way must not leave them spending)."""
         is_current = lambda: ms.seq() == new['seq']
         for e in effects:
             try:
@@ -279,6 +282,10 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
                     say_worker.set_enabled(False, now)
             except Exception as ex:               # noqa: BLE001 - logged, the next effect still runs
                 log(f'mind mode: effect {e} failed: {type(ex).__name__}: {str(ex)[:160]}', flush=True)
+        on = (say_worker is not None and say_worker.enabled()) or (say_auto is not None and say_auto.enabled())
+        if new['mode'] != 'talk' and on:
+            log(f'mind mode: {new["mode"]} with 提前写 / 连续说 on (no talk_leave came): turned off', flush=True)
+            talk_off(now)
     ms.on_change.append(on_change)
 
     if not billing.allowed():
@@ -356,7 +363,8 @@ def main():
         return speak.say_round(env, store, s, speak.load_roles(a.roles), tts, int(time.time() * 1000), worker=say_worker,
                                trigger=trigger, settings_version=version,
                                is_current=lambda: is_current() and settings_store.current()[1] == version and mouth_fn() == 'tts')
-    # Modes (step 1): mind is the only place that changes the mode; the guard / hooks are in wire_modes.
+    # Modes (step 1b): hello owns the mode and reports it (/mode/report); mind mirrors it and runs its effects
+    # through the guard / hooks in wire_modes. The master switch and presets 0 / 9 stay on mind.
     mode_store, billing, round_gate = wire_modes(db, store, settings_store=settings_store, tts=tts, say_worker=say_worker,
                                                  say_auto=say_auto_live, say_round_fn=say_round_live if env and tts else None)
     say_worker.mode_fn = auto_worker.mode_fn = lambda: mode_store.current()["mode"]
@@ -373,11 +381,7 @@ def main():
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}, mode {mode_store.current()['mode']} "
           f"seq {mode_store.seq()} billing {'on' if billing.allowed() else 'OFF'}", flush=True)
-    while True:
-        try:
-            mode_store.tick(int(time.time() * 1000))          # settings closes itself after 5 minutes without input
-        except Exception as e:                   # noqa: BLE001 - the minute loop must keep running
-            print(f"mind mode tick error: {type(e).__name__}: {str(e)[:200]}", flush=True)
+    while True:                                  # step 1b: hello owns the mode and its settings timer, no tick here
         try:
             good, version = settings_store.current()      # settings are versioned in the database (phase 1)
             selfvoice.refresh_spoken(db, int(time.time() * 1000))   # hello's own lines count as her voice

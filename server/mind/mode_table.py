@@ -2,7 +2,7 @@
 
 A Python module (not JSON) because server/mind/deploy.sh only ships server/mind/*.py. The robot does not know
 which mode wears which eyes: it only reads the `look` / `touch` words from the snapshot (modes.snapshot).
-PRESETS (0-9, spec §7) are the second table here; billing.apply_preset runs their server half.
+PRESETS (0-9, owner's step-1b table) are the second table here; billing.apply_preset runs their server half.
 
 Per mode:
   name     Chinese name for people
@@ -142,38 +142,30 @@ def _validate(modes):
 _validate(MODES)
 
 
-# ---- presets 0-9 (spec §7, owner 2026-11-14 "字面意思") ----------------------------------------------------------
-# server: action names run in order by billing.apply_preset:
+# ---- presets 0-9 (owner 2026-11-14 new table, plan step 1b; replaces the step-1 table) --------------------------
+# Only 0 and 9 are mind's: hello sends those digits as mode_input (the paid services live on the server). 4-8 are
+# mode selects hello does itself (IDLE, 围观, 陪伴, 字幕 中→英, 字幕 英→中) and 1-3 are empty there; on mind 1-8 are
+# undefined_preset. server: action names run in order by billing.apply_preset:
 #   billing_off      master switch off: 听悟 / 识别 / 纪要 / 情景 off, 提前写 / 连续说 off, stop speaking
 #   billing_on       master switch on (restores nothing)
 #   paid_senses_on   听悟 / 识别 / 纪要 / 情景 on
 #   mouth_tts        嘴 -> TTS
 #   talk_on          提前写 + 连续说 on; outside talk skipped (said in the toast; entering talk turns them on anyway)
-#   toggle_tingwu    听悟 flips (turning it on needs the master switch: billing_off)
-#   toggle_prefetch  提前写 flips, only in talk (only_talk); turning it on needs the master switch
-#   mode_idle        go to IDLE
-# robot: the robot half, in the page's own tier names (switches-ui.js levelRequests / visionRequests). Step 1: only
-#   the page carries it out (same requests as the switch bar); a robot-sent 1 / 9 does the server half and answers
-#   senses_on_page. 1 = local / upload (those tiers also send tingwu:false / eye:false, right for 数据收集);
-#   9 = tingwu / recognize, the paid tiers, so the robot half keeps 听悟 / 识别 on (owner 4: 花费全开; review I1).
-PRESET_ACTIONS = ('billing_off', 'billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on', 'toggle_tingwu',
-                  'toggle_prefetch', 'mode_idle')
+# robot: the robot half, in the page's own tier names (switches-ui.js levelRequests / visionRequests). Only the page
+#   carries it out; a robot-sent 9 does the server half and answers senses_on_page. 9 = tingwu / recognize, the paid
+#   tiers, so the robot half keeps 听悟 / 识别 on (owner 4: 花费全开).
+PRESET_ACTIONS = ('billing_off', 'billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on')
 ROBOT_HALF = {'hearing': ('local', 'tingwu'), 'vision': ('upload', 'recognize')}
-_SENSES = {'hearing': 'local', 'vision': 'upload'}
 _PAID_SENSES = {'hearing': 'tingwu', 'vision': 'recognize'}
+_ON_HELLO = {4: 'IDLE', 5: '进围观', 6: '进陪伴', 7: '进中音英字', 8: '进英音中字'}    # hello's own selects
 
 PRESETS = {
     0: {'name': '花费全关', 'server': ('billing_off',), 'robot': {}},
-    1: {'name': '数据收集', 'server': ('billing_off',), 'robot': dict(_SENSES)},
-    2: {'name': '听悟反转', 'server': ('toggle_tingwu',), 'robot': {}},
-    3: {'name': '提前写反转', 'server': ('toggle_prefetch',), 'robot': {}},
-    4: {'name': 'IDLE', 'server': ('mode_idle',), 'robot': {}},
-    5: {'name': '空', 'server': (), 'robot': {}},          # 听觉先手动 (owner 2026-11-14): kept empty
-    6: {'name': '空', 'server': (), 'robot': {}},
-    7: {'name': '空', 'server': (), 'robot': {}},
-    8: {'name': '空', 'server': (), 'robot': {}},
+    **{n: {'name': '空', 'server': (), 'robot': {}} for n in (1, 2, 3)},
+    **{n: {'name': f'{name}（hello 自己切）', 'server': (), 'robot': {}} for n, name in _ON_HELLO.items()},
     9: {'name': '花费全开', 'server': ('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), 'robot': dict(_PAID_SENSES)},
 }
+PRESETS = dict(sorted(PRESETS.items()))
 
 
 def _validate_presets(presets):

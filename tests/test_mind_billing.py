@@ -102,18 +102,13 @@ class BillingTest(unittest.TestCase):
         self.b.off('page', 1); self.b.on('page', 2)
         self.assertEqual((self.b.allowed(), self.ctx.tingwu), (True, False))
 
-    def test_preset_one_from_robot_says_use_page(self):
-        r = apply_preset(1, self.b, source='asr', now_ms=1)
-        self.assertEqual((r['result']['code'], r['robot']), ('senses_on_page', {'hearing': 'local', 'vision': 'upload'}))
-        self.assertFalse(self.b.allowed())
-
-    def test_toggle_tingwu_needs_billing(self):
-        self.b.off('page', 1)
-        self.assertEqual(apply_preset(2, self.b, source='asr', now_ms=2)['result']['code'], 'billing_off')
-
-    def test_toggle_prefetch_only_in_talk(self):
-        self.ctx.mode_value = 'idle'
-        self.assertEqual(apply_preset(3, self.b, source='asr', now_ms=1)['result']['code'], 'only_talk')
+    def test_one_to_eight_are_undefined_on_mind(self):
+        # owner 2026-11-14 (step 1b): 4-8 are mode selects hello does itself, 1-3 are empty
+        for n in range(1, 9):
+            r = apply_preset(n, self.b, source='asr', now_ms=1)
+            self.assertEqual((r['result']['code'], r['robot']), ('undefined_preset', {}), n)
+        self.assertTrue(self.b.allowed())
+        self.assertEqual(self.ctx.state()['tingwu'], True)              # nothing touched
 
     def test_nine_is_everything_paid(self):
         self.b.off('page', 1)
@@ -143,31 +138,25 @@ class PresetDetailTest(unittest.TestCase):
 
     def test_table_matches_spec_section_7(self):
         P = mode_table.PRESETS
-        robot = {'hearing': 'local', 'vision': 'upload'}
+        # owner's step-1b table: 0 = 花费全关, 9 = 花费全开, 1-8 nothing on mind (4-8: hello's own selects)
         # 9 = 花费全开 (owner 4): the page's paid tiers, so its robot half keeps 听悟 / 识别 on (review I1)
         paid = {'hearing': 'tingwu', 'vision': 'recognize'}
         self.assertEqual(set(P), set(range(10)))
         self.assertEqual({n: (P[n]['server'], P[n]['robot']) for n in P},
-                         {0: (('billing_off',), {}), 1: (('billing_off',), robot), 2: (('toggle_tingwu',), {}),
-                          3: (('toggle_prefetch',), {}), 4: (('mode_idle',), {}), 5: ((), {}), 6: ((), {}),
-                          7: ((), {}), 8: ((), {}),
+                         {0: (('billing_off',), {}), **{n: ((), {}) for n in range(1, 9)},
                           9: (('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), paid)})
+        self.assertEqual(list(P), list(range(10)))
         self.assertTrue(all(isinstance(P[n]['name'], str) and P[n]['name'] for n in P))
 
     def test_table_validation_rejects_bad_rows(self):
         import copy
         for brk in (lambda t: t[2].update(server=('fly',)), lambda t: t[1].update(robot={'hearing': 'loud'}),
+                    lambda t: t[3].update(server=('toggle_tingwu',)),
                     lambda t: t.pop(5), lambda t: t[0].update(robot={'smell': 'on'})):
             t = copy.deepcopy(mode_table.PRESETS)
             brk(t)
             with self.assertRaises(ValueError):
                 mode_table._validate_presets(t)
-
-    def test_page_preset_one_is_ok_and_hands_back_the_robot_half(self):
-        self.ctx.tingwu = True
-        r = apply_preset(1, self.b, source='page', now_ms=1)
-        self.assertEqual((r['result']['code'], r['robot'], self.ctx.tingwu, self.b.allowed()),
-                         ('ok', {'hearing': 'local', 'vision': 'upload'}, False, False))
 
     def test_presets_without_a_robot_half_hand_back_an_empty_one(self):
         self.assertEqual(apply_preset(0, self.b, source='asr', now_ms=1), {'result': {'code': 'ok', 'toast': 'PRESET 0'},
@@ -182,35 +171,6 @@ class PresetDetailTest(unittest.TestCase):
     def test_page_preset_nine_robot_half_keeps_the_paid_tiers(self):
         r = apply_preset(9, self.b, source='page', now_ms=1)
         self.assertEqual(r['robot'], {'hearing': 'tingwu', 'vision': 'recognize'})
-
-    def test_toggle_tingwu_both_ways(self):
-        r = apply_preset(2, self.b, source='asr', now_ms=1)
-        self.assertEqual((r['result'], self.ctx.tingwu), ({'code': 'ok', 'toast': 'PRESET 2: TINGWU ON'}, True))
-        r = apply_preset(2, self.b, source='asr', now_ms=2)
-        self.assertEqual((r['result']['toast'], self.ctx.tingwu), ('PRESET 2: TINGWU OFF', False))
-
-    def test_toggle_tingwu_off_still_works_with_billing_off(self):
-        self.b.off('page', 1)
-        self.ctx.tingwu = True                       # left on somehow: turning it off never needs the switch
-        self.assertEqual((apply_preset(2, self.b, source='asr', now_ms=2)['result']['code'], self.ctx.tingwu), ('ok', False))
-
-    def test_toggle_prefetch_in_talk(self):
-        self.assertEqual(apply_preset(3, self.b, source='asr', now_ms=1)['result']['toast'], 'PRESET 3: PREFETCH ON')
-        self.assertTrue(self.ctx.prefetch)
-        self.ctx.say_auto.set_enabled(True, 2)
-        self.assertEqual(apply_preset(3, self.b, source='asr', now_ms=3)['result']['toast'], 'PRESET 3: PREFETCH OFF')
-        self.assertEqual((self.ctx.prefetch, self.ctx.auto), (False, False))        # 连续说 follows 提前写 off
-
-    def test_toggle_prefetch_on_needs_billing(self):
-        self.b.off('page', 1)
-        self.assertEqual((apply_preset(3, self.b, source='asr', now_ms=2)['result']['code'], self.ctx.prefetch),
-                         ('billing_off', False))
-
-    def test_four_goes_to_idle_through_the_store(self):
-        self.ctx.say_worker.set_enabled(True, 0)
-        r = apply_preset(4, self.b, source='asr', now_ms=1)
-        self.assertEqual((r['result']['code'], self.ms.current()['mode'], self.ms.current()['by']), ('ok', 'idle', 'asr'))
-        self.assertEqual(apply_preset(4, self.b, source='asr', now_ms=2)['result']['code'], 'already')
 
     def test_every_preset_result_is_known_and_short(self):
         from mind.modes import CODES
@@ -238,24 +198,22 @@ class StoreWiringTest(unittest.TestCase):
         self.b = Billing(self.ctx)
         self.ms = self.ctx.mode_store
 
-    def test_robot_preset_two_resent_toggles_once(self):
+    def test_robot_preset_nine_resent_runs_once(self):
+        self.b.off('page', 1)
+        self.ctx.calls.clear()
         kw = dict(source='asr', device='robot', boot='b1', dev_seq=7, now_ms=5)
-        r1 = self.ms.apply('digit', 2, **kw)
-        r2 = self.ms.apply('digit', 2, **kw)
-        self.assertEqual((r1['result']['code'], r2.get('duplicate'), r2['result'], self.ctx.tingwu),
-                         ('ok', True, r1['result'], False))
-        self.ms.apply('digit', 2, **dict(kw, dev_seq=8))                    # a new input does toggle back
-        self.assertTrue(self.ctx.tingwu)
-
-    def test_robot_preset_three_resent_toggles_once(self):
-        kw = dict(source='asr', device='robot', boot='b1', dev_seq=9, now_ms=5)
-        self.ms.apply('digit', 3, **kw); self.ms.apply('digit', 3, **kw)
-        self.assertFalse(self.ctx.prefetch)
+        r1 = self.ms.apply('digit', 9, **kw)
+        n = len(self.ctx.calls)
+        r2 = self.ms.apply('digit', 9, **kw)
+        self.assertEqual((r1['result']['code'], r2.get('duplicate'), r2['result'], len(self.ctx.calls)),
+                         ('senses_on_page', True, r1['result'], n))
+        self.assertTrue(self.b.allowed())
 
     def test_preset_result_and_robot_half_come_back_through_apply(self):
-        r = self.ms.apply('digit', 1, source='page', now_ms=1)
+        r = self.ms.apply('digit', 9, source='page', now_ms=1)
         self.assertEqual((r['result']['code'], r['robot'], r['snapshot']['billing']),
-                         ('ok', {'hearing': 'local', 'vision': 'upload'}, False))
+                         ('ok', {'hearing': 'tingwu', 'vision': 'recognize'}, True))
+        self.assertEqual(self.ms.apply('digit', 4, source='asr', now_ms=2)['result']['code'], 'undefined_preset')
 
     def test_billing_input_runs_the_off_actions(self):
         s0 = self.ms.seq()
@@ -296,15 +254,12 @@ class StoreWiringTest(unittest.TestCase):
         r = self.ms.apply('billing', False, source='page', now_ms=3)       # already off, still names the failure
         self.assertEqual((r['result'], r['failed']), ({'code': 'already', 'toast': 'BILLING OFF, 1 FAILED'}, ['eye']))
 
-    def test_partly_failed_preset_one_keeps_its_robot_half_and_log_row(self):
+    def test_partly_failed_preset_zero_keeps_its_log_row(self):
         self._break_eye()
-        r = self.ms.apply('digit', 1, source='asr', device='robot', boot='b1', dev_seq=5, now_ms=2)
+        r = self.ms.apply('digit', 0, source='asr', device='robot', boot='b1', dev_seq=5, now_ms=2)
         self.assertEqual((r['result'], r['failed'], r['robot']),
-                         ({'code': 'senses_on_page', 'toast': 'PRESET 1: 1 FAILED, USE PAGE'}, ['eye'],
-                          {'hearing': 'local', 'vision': 'upload'}))
+                         ({'code': 'ok', 'toast': 'PRESET 0: 1 FAILED'}, ['eye'], {}))
         self.assertEqual(self.ms.db['mode_log'].docs[-1]['dev_seq'], 5)
-        r = self.ms.apply('digit', 0, source='page', now_ms=3)
-        self.assertEqual((r['result'], r['failed']), ({'code': 'ok', 'toast': 'PRESET 0: 1 FAILED'}, ['eye']))
 
     def test_clean_off_has_no_failed_key(self):
         r = self.ms.apply('billing', False, source='page', now_ms=1)

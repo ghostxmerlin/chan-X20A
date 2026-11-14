@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 from mind_fixtures import FakeDB
-from mind.mode_store import ModeStore, valid_state
+from mind.mode_store import STALE_MS, ModeStore, valid_state
 from mind.modes import result
 
 
@@ -45,20 +45,6 @@ class ModeStoreTest(unittest.TestCase):
         snap = self.ms.set_billing(False, source='quick', now_ms=5)
         self.assertEqual((snap['seq'], snap['billing']), (s0 + 1, False))
         self.assertEqual(self.ms.set_billing(False, source='page', now_ms=6)['seq'], s0 + 1)   # no change, same seq
-
-    def test_new_robot_boot_returns_to_talk(self):
-        self.ms.robot_event('b1', 1, 'hello', now_ms=1)
-        self.ms.apply('start', None, source='page', now_ms=2)
-        self.ms.robot_event('b1', 2, 'hello', now_ms=3)                      # reconnect, same boot
-        self.assertEqual(self.ms.current()['mode'], 'event')
-        self.ms.robot_event('b2', 3, 'hello', now_ms=4)                      # rebooted
-        self.assertEqual((self.ms.current()['mode'], self.ms.current()['by']), ('talk', 'boot'))
-
-    def test_old_connection_close_ignored(self):
-        self.ms.robot_event('b1', 1, 'hello', now_ms=1)
-        self.ms.robot_event('b1', 2, 'hello', now_ms=2)
-        self.ms.robot_event('b1', 1, 'closed', now_ms=3)
-        self.assertTrue(self.ms.robot()['connected'])
 
     def test_settings_timeout(self):
         self.ms.apply('open', None, source='page', now_ms=1000)
@@ -364,26 +350,11 @@ class RobotAndTimeoutTest(unittest.TestCase):
     def setUp(self):
         self.db = FakeDB(); self.ms = ModeStore(self.db, clock_ms=lambda: 0)
 
-    def test_robot_view(self):
-        self.ms.robot_event('b1', 4, 'hello', now_ms=1)
-        self.ms.robot_event('b1', 4, 'applied', applied_seq=3, now_ms=2)
-        self.ms.robot_event('b1', 3, 'applied', applied_seq=9, now_ms=3)      # an old connection: ignored
-        self.assertEqual(self.ms.robot(), {'connected': True, 'boot': 'b1', 'conn': 4, 'applied_seq': 3, 'at': 2})
-        self.ms.robot_event('b1', 4, 'closed', now_ms=5)
-        self.assertFalse(self.ms.robot()['connected'])
-
-    def test_robot_boot_persists_across_restart(self):
-        self.ms.robot_event('b1', 1, 'hello', now_ms=1)
-        self.ms.apply('play', None, source='page', now_ms=2)
-        again = ModeStore(self.db)
-        again.robot_event('b1', 1, 'hello', now_ms=3)              # same robot boot after a mind restart: keep chat
-        self.assertEqual(again.current()['mode'], 'chat')
-
     def test_boot_input_runs_talk_enter_even_in_talk(self):
         seen = []
         self.ms.on_change.append(lambda o, n, e, m, t: seen.append((e, m['source'])))
         s0 = self.ms.seq()
-        self.ms.robot_event('b1', 1, 'hello', now_ms=1)
+        self.ms.apply('boot', None, source='boot', now_ms=1)
         self.assertEqual((seen, self.ms.seq()), ([(['stop_speech', 'talk_enter'], 'boot')], s0))
 
     def test_talk_enter_with_billing_off_is_kept_for_the_free_part_and_the_entry_is_ok(self):
@@ -505,32 +476,6 @@ class ReviewFixesTest(unittest.TestCase):
         gate.set(); t1.join(5)
         self.assertTrue(finished)
 
-    def test_robot_applied_after_mind_restart_adopts_the_connection(self):
-        self.ms.robot_event('b1', 7, 'hello', now_ms=1)
-        again = ModeStore(self.db, clock_ms=lambda: 0)
-        self.assertFalse(again.robot()['connected'])
-        again.apply('play', None, source='page', now_ms=2)
-        again.robot_event('b1', 7, 'applied', applied_seq=3, now_ms=3)
-        self.assertEqual(again.robot(), {'connected': True, 'boot': 'b1', 'conn': 7, 'applied_seq': 3, 'at': 3})
-        self.assertEqual(again.current()['mode'], 'chat')                   # same boot: not a reboot
-        again.robot_event('b1', 6, 'applied', applied_seq=9, now_ms=4)      # an older connection: still ignored
-        self.assertEqual(again.robot()['applied_seq'], 3)
-        again.robot_event('b1', 7, 'hello', now_ms=5)                       # a repeated hello is harmless
-        self.assertEqual(again.current()['mode'], 'chat')
-        again.robot_event('b1', 7, 'closed', now_ms=6)
-        self.assertFalse(again.robot()['connected'])
-
-    def test_adopted_connection_with_a_new_boot_is_a_reboot(self):
-        self.ms.robot_event('b1', 7, 'hello', now_ms=1)
-        self.ms.apply('play', None, source='page', now_ms=2)
-        again = ModeStore(self.db, clock_ms=lambda: 0)
-        again.robot_event('b2', 1, 'applied', applied_seq=2, now_ms=3)
-        self.assertEqual((again.current()['mode'], again.robot()['boot']), ('talk', 'b2'))
-
-    def test_closed_before_any_connection_is_ignored(self):
-        self.ms.robot_event('b1', 7, 'closed', now_ms=1)
-        self.assertEqual(self.ms.robot()['conn'], None)
-
     def test_same_thread_reentry_with_the_same_key_raises(self):
         kw = dict(source='asr', device='robot', boot='b1', dev_seq=1, now_ms=1)
         self.ms.preset_fn = lambda n, **k: self.ms.apply('play', None, **kw)
@@ -542,6 +487,107 @@ class ReviewFixesTest(unittest.TestCase):
         a = self.ms.apply('play', None, **kw)
         a['result']['extra'] = 1
         self.assertNotIn('extra', self.ms.apply('play', None, **kw)['result'])
+
+
+class ReportTest(unittest.TestCase):
+    """Step 1b: hello owns the mode; report() mirrors it and runs its effects through the pre-check and the hooks."""
+    def setUp(self):
+        self.db = FakeDB()
+        self.seen = []
+        self.guard = None
+        self.ms = ModeStore(self.db, clock_ms=lambda: 0, guard=lambda e, m: self.guard(e, m) if self.guard else None)
+        self.ms.on_change.append(lambda o, n, e, m, t: self.seen.append((o['mode'], n['mode'], e, m['source'])))
+
+    def rep(self, seq, mode, effects=(), by='asr', inp='forward', boot='b1', conn=1, age_ms=0, **st):
+        body = {'seq': seq, 'mode': mode, 'dir': st.get('dir'), 'host': st.get('host'),
+                'return_to': st.get('return_to'), 'by': by, 'input': inp, 'effects': list(effects)}
+        return self.ms.report(body, boot=boot, conn=conn, age_ms=age_ms, now_ms=10 + seq)
+
+    def test_mirrors_the_reported_state_and_runs_its_effects(self):
+        s0 = self.ms.seq()
+        r = self.rep(1, 'crowd', ['stop_speech', 'talk_leave'], by='touch', inp='select')
+        self.assertEqual((r['snapshot']['mode'], r['snapshot']['by'], r['snapshot']['seq'], r['effects']),
+                         ('crowd', 'touch', s0 + 1, ['stop_speech', 'talk_leave']))
+        self.assertEqual(self.seen, [('talk', 'crowd', ['stop_speech', 'talk_leave'], 'touch')])
+        self.assertEqual(self.ms.robot(), {'connected': True, 'boot': 'b1', 'conn': 1, 'seq': 1, 'at': 11})
+        row = self.db['mode_log'].docs[-1]
+        self.assertEqual((row['device'], row['dev_seq'], row['input'], row['from'], row['to']),
+                         ('robot.report', 1, 'select', 'talk', 'crowd'))
+        self.assertEqual(ModeStore(self.db).current()['mode'], 'crowd')          # kept across a mind restart
+
+    def test_same_seq_runs_once(self):
+        self.rep(1, 'talk', ['say_round'])
+        again = self.rep(1, 'talk', ['say_round'])
+        self.assertEqual((again.get('duplicate'), len(self.seen)), (True, 1))
+        self.rep(2, 'talk', ['say_round'])
+        self.assertEqual(len(self.seen), 2)
+
+    def test_report_seq_is_apart_from_mode_input_seq(self):
+        self.ms.apply('digit', 5, source='asr', device='robot', boot='b1', dev_seq=3, now_ms=1)
+        self.assertNotIn('duplicate', self.rep(3, 'idle', ['stop_speech', 'talk_leave'], inp='backward'))
+        self.assertEqual(self.ms.current()['mode'], 'idle')
+
+    def test_new_boot_restarts_the_seq(self):
+        self.rep(5, 'crowd', inp='select')
+        r = self.rep(0, 'talk', ['stop_speech', 'talk_enter'], by='boot', inp=None, boot='b2', conn=2)
+        self.assertEqual((r['result']['code'], r['snapshot']['mode'], r['snapshot']['by']), ('ok', 'talk', 'boot'))
+        self.assertEqual(self.db['mode_log'].docs[-1]['input'], 'report')
+
+    def test_older_report_of_the_same_boot_changes_nothing(self):
+        self.rep(5, 'crowd', inp='select')
+        r = self.rep(4, 'idle', ['stop_speech'], inp='backward')
+        self.assertEqual((r['result']['code'], self.ms.current()['mode'], len(self.seen)), ('stale', 'crowd', 1))
+
+    def test_paid_effects_pass_the_billing_and_the_guard(self):
+        self.ms.set_billing(False, source='page', now_ms=1)
+        r = self.rep(1, 'talk', ['say_round'])
+        self.assertEqual((r['result']['code'], r['effects'], self.seen), ('billing_off', [], []))
+        self.ms.set_billing(True, source='page', now_ms=2)
+        self.guard = lambda e, m: 'too_soon' if e == 'say_round' else None
+        r = self.rep(2, 'talk', ['say_round'])
+        self.assertEqual((r['result']['code'], r['effects']), ('too_soon', []))
+
+    def test_talk_entry_with_billing_off_keeps_talk_enter_for_the_free_part(self):
+        self.rep(1, 'idle', ['stop_speech', 'talk_leave'], inp='backward')
+        self.ms.set_billing(False, source='page', now_ms=2)
+        r = self.rep(2, 'talk', ['stop_speech', 'talk_enter'])
+        self.assertEqual((r['result'], r['effects']), ({'code': 'ok', 'toast': 'BILLING OFF'},
+                                                       ['stop_speech', 'talk_enter']))
+
+    def test_a_late_report_keeps_only_the_turn_offs(self):
+        r = self.rep(1, 'crowd', ['stop_speech', 'talk_leave'], inp='select', age_ms=STALE_MS + 1)
+        self.assertEqual((r['snapshot']['mode'], r['effects']), ('crowd', ['talk_leave']))
+        r = self.rep(2, 'talk', ['stop_speech', 'talk_enter'], inp='select', age_ms=STALE_MS + 1)
+        self.assertEqual((r['snapshot']['mode'], r['effects']), ('talk', []))
+
+    def test_bad_reports_are_refused(self):
+        good = {'seq': 1, 'mode': 'talk', 'dir': None, 'host': None, 'return_to': None, 'by': 'asr', 'input': 'x',
+                'effects': []}
+        for bad in ({**good, 'mode': 'fly'}, {**good, 'mode': 'settings'}, {**good, 'mode': 'subtitle'},
+                    {**good, 'seq': 'x'}, {**good, 'seq': True}, {**good, 'by': 'robot'}, {**good, 'effects': ['fly']},
+                    {**good, 'effects': 'stop_speech'}, {**good, 'input': ''}, 'nope'):
+            with self.assertRaises(ValueError, msg=bad):
+                self.ms.report(bad, boot='b1', now_ms=1)
+        with self.assertRaises(ValueError):
+            self.ms.report(good, boot='', now_ms=1)
+        self.assertEqual((self.ms.current()['mode'], self.db.count('mode_log')), ('talk', 0))
+
+    def test_subtitle_and_settings_states(self):
+        self.rep(1, 'subtitle', inp='direction', dir='en_zh')
+        self.rep(2, 'settings', inp='open', dir='en_zh', return_to='subtitle')
+        cur = self.ms.current()
+        self.assertEqual((cur['mode'], cur['dir'], cur['return_to'], cur['look']['label']), ('settings', 'en_zh', 'subtitle', 'SET'))
+
+    def test_robot_closed_only_for_the_latest_link(self):
+        self.rep(1, 'talk', conn=4)
+        self.ms.robot_closed('b1', 3, now_ms=50)               # an older link closing late
+        self.assertTrue(self.ms.robot()['connected'])
+        self.ms.robot_closed('b1', 4, now_ms=51)
+        self.assertEqual((self.ms.robot()['connected'], self.ms.current()['mode']), (False, 'talk'))
+
+    def test_closed_before_any_report_is_ignored(self):
+        self.ms.robot_closed('b1', 7, now_ms=1)
+        self.assertEqual(self.ms.robot()['conn'], None)
 
 
 if __name__ == '__main__':
