@@ -116,11 +116,11 @@ class GateTest(ChatBase):
             ('empty', heard(text='  。')),
             ('filler', heard(text='嗯嗯啊')),
             ('filler', heard(text='Um.')),
-            ('not_voice', heard(loud_db=7.0, voice={'p': 0.1, 'band': 'none', 'loud_db': 7.0})),
+            ('not_voice', heard(loud_db=9.5, voice={'p': 0.1, 'band': 'none', 'loud_db': 9.5})),
             ('far_quiet', heard(loud_db=4.0, voice={'p': 0.5, 'band': 'voice', 'loud_db': 4.0})),
             ('far_quiet', heard(loud_db=4.0, voice={'p': 0.1, 'band': 'none', 'loud_db': 4.0})),
-            (None, heard(loud_db=9.0, voice={'p': 0.1, 'band': 'none', 'loud_db': 9.0})),      # none but loud: answered
-            (None, heard(loud_db=5.5, voice={'p': 0.3, 'band': 'unclear', 'loud_db': 5.5})),   # quiet robot mic, unclear
+            (None, heard(loud_db=11.5, voice={'p': 0.1, 'band': 'none', 'loud_db': 11.5})),      # none but loud: answered
+            (None, heard(loud_db=8.5, voice={'p': 0.3, 'band': 'unclear', 'loud_db': 8.5})),   # just above near_db, unclear
             (None, heard(loud_db=30.0, voice={'p': 0.1, 'band': 'none', 'loud_db': 30.0})),
         ]
         for n, (reason, body) in enumerate(cases, start=1):
