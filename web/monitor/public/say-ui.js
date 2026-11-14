@@ -4,11 +4,14 @@
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const hhmmss=ms=>new Date(ms).toLocaleTimeString('zh-CN',{hour12:false});
 
-export function roundControlsHtml(prefetchOn,familyOn){
+export function roundControlsHtml(prefetchOn,familyOn,autoOn){
  return `<button data-say-round="1" class="say-round-button">说一轮</button><button data-say-stop="1" class="stop-button">别说了</button>`+
   `<label class="prefetch-switch"><input type="checkbox" data-prefetch="1"${prefetchOn?' checked':''}> 提前写（讨论激烈时开）</label>`+
+  `<label class="prefetch-switch"><input type="checkbox" data-auto="1"${autoOn?' checked':''}> 连续说（每 2–3 分钟，播高分的提前写）</label>`+
   `<label class="prefetch-switch"><input type="checkbox" data-family="1"${familyOn?' checked':''}> 家人声音（主人和孩子们，普通话）</label>`;
 }
+// 连续说 plays what 提前写 wrote (2026-11-14): turning it on turns 提前写 on; turning 提前写 off turns it off.
+export function linkedSwitches(which,on){return which==='auto'&&on?{prefetch:true}:which==='prefetch'&&!on?{auto:false}:{};}
 // 家人声音 (2026-11-14): one boolean in the speech settings (speech.round.family); saved like the settings page does.
 export function familySettingsBody(cfg,on){
  const speech=structuredClone(cfg.speech);speech.round={...(speech.round||{}),family:!!on};
@@ -80,14 +83,22 @@ export function earlierRoundsHtml(rows){
 }
 const PREFETCH_WHY={off:'条件不满足（嘴不在 TTS 或不是一轮模式）',no_speech:'最近没有听清的话',waiting:'等这段话说完（静 5 秒）',
  nothing_new:'说完后没有新话',spacing:'离上一轮不到 30 秒',same_moment:'还是同一时刻，不重写',budget:'本小时已到 0.6 美元上限',wrote:'刚写完一轮'};
+const AUTO_WHY={no_stock:'没有可用的提前写',no_high_score:'没有高分句',checked_none:'核对新话后都不合适',thin:'最近一分钟没人说话',
+ off:'条件不满足（嘴不在 TTS 或不是一轮模式）',no_mouth:'hello 的嘴没连上',busy:'正在说别的，跳过',error:'出错'};
+export function autoStatusHtml(st){
+ if(!st?.on)return '<p class="note say-auto-state">连续说关着</p>';
+ const l=st.last,what=!l?'还没醒过':`${hhmmss(l.at)} ${l.reason==='played'?`播了 ${Number(l.n)||0} 句${l.stopped?'（中途停了）':''}`:AUTO_WHY[l.reason]||escapeHtml(l.reason)}`;
+ return `<p class="note say-auto-state">连续说开着 · ${st.next_at?`下次 ${hhmmss(st.next_at)} · `:''}上次 ${what}</p>`;
+}
 // 提前写 (2026-11-13): the rounds written ahead, newest first, with whether each was used, still waiting, or expired (5 min).
-export function prefetchRoundsHtml(rows,status,now=Date.now()){
+// With 连续说 (2026-11-14) its state line follows the list.
+export function prefetchRoundsHtml(rows,status,now=Date.now(),auto=null){
  const mine=(rows||[]).filter(r=>r.source==='prefetch').reverse();
  const head=!status?.on?'提前写关着':`提前写开着 · ${status.last?`${hhmmss(status.last.at)} ${PREFETCH_WHY[status.last.reason]||escapeHtml(status.last.reason)}`:'还没跑'}`;
  return `<details class="say-prefetch"><summary>提前写（${mine.length} 轮）· ${head}</summary>${mine.length?'<ul class="utterances">'+mine.map(r=>{
   const st=r.triggered?'已用':now-r.written_at>300000?'过期':'待用';
   const byKey=Object.fromEntries((r.lines||[]).map(l=>[l.key,l]));
-  return `<li><span class="muted">${hhmmss(r.written_at)} · ${st}</span> ${(r.order||[]).map((k,i)=>byKey[k]?.text?`${i===0?'<b>':''}${escapeHtml(byKey[k].text)}${i===0?'</b>':''}`:'').filter(Boolean).join(' / ')}</li>`;}).join('')+'</ul>':'<p class="note">最近一小时还没有提前写的轮次</p>'}</details>`;
+  return `<li><span class="muted">${hhmmss(r.written_at)} · ${st}</span> ${(r.order||[]).map((k,i)=>byKey[k]?.text?`${i===0?'<b>':''}${escapeHtml(byKey[k].text)}${i===0?'</b>':''}`:'').filter(Boolean).join(' / ')}</li>`;}).join('')+'</ul>':'<p class="note">最近一小时还没有提前写的轮次</p>'}</details>${auto?autoStatusHtml(auto):''}`;
 }
 const DIR_ZH={up:'上',down:'下',left:'左',right:'右'};
 export function signalsHtml(rows){
@@ -132,7 +143,7 @@ export class SayPanel{
   Promise.all([getJson('/roles'),getJson('/speech/settings').catch(()=>null),getJson('/say/stats?days=1').catch(()=>null)]).then(([r,cfg,st])=>{
    this.roles=r;this.mode=cfg?.speech?.pipeline==='round'?'round':'roles';
    // With the one-button talk show the five role buttons move into a folded section (spec 13).
-   $('say-buttons').innerHTML=this.mode==='round'?roundControlsHtml(st?.prefetch?.on,cfg?.speech?.round?.family)+`<details class="say-roles"><summary>单个角色</summary>${roleButtonsHtml(r)}</details>`:roleButtonsHtml(r);
+   $('say-buttons').innerHTML=this.mode==='round'?roundControlsHtml(st?.prefetch?.on,cfg?.speech?.round?.family,st?.auto?.on)+`<details class="say-roles"><summary>单个角色</summary>${roleButtonsHtml(r)}</details>`:roleButtonsHtml(r);
    this.refresh();
   },()=>{$('say-buttons').innerHTML='<span class="muted">角色读不到（情景服务未连接）</span>';});
   getJson('/voices').then(v=>{this.voices=v;$('say-voices').innerHTML=voiceButtonsHtml(v);},()=>{$('say-voices').innerHTML='<span class="muted">音色读不到</span>';});
@@ -144,9 +155,14 @@ export class SayPanel{
     catch(e){ev.target.checked=!on;$('say-msg').textContent=sayErrorMessage(e);}
     return;
    }
-   if(!ev.target.dataset.prefetch)return;
-   try{const r=await postJson('/say/prefetch',{enabled:ev.target.checked});$('say-msg').textContent=r.enabled?'提前写已打开':'提前写已关闭';}
-   catch(e){ev.target.checked=!ev.target.checked;$('say-msg').textContent=sayErrorMessage(e);}
+   const which=ev.target.dataset.auto?'auto':ev.target.dataset.prefetch?'prefetch':null;
+   if(!which)return;
+   const on=ev.target.checked;
+   try{const r=await postJson(which==='auto'?'/say/auto':'/say/prefetch',{enabled:on});
+    for(const [k,v] of Object.entries(linkedSwitches(which,r.enabled))){const box=$('say-buttons').querySelector(`input[data-${k}]`);if(box)box.checked=v;}
+    $('say-msg').textContent=which==='auto'?(r.enabled?'连续说已打开（提前写也开了）：每 2–3 分钟播一次高分的提前写':'连续说已关闭'):r.enabled?'提前写已打开':'提前写已关闭';
+    this.prefetchSeen=null;this.refreshRound();}
+   catch(e){ev.target.checked=!on;$('say-msg').textContent=sayErrorMessage(e);}
   });
   const card=$('say-round');
   if(card){
@@ -208,7 +224,7 @@ export class SayPanel{
    const key=roundKey(last)+'|'+rows.filter(r=>r.triggered).length;
    if(last&&key!==this.roundKeySeen){this.roundKeySeen=key;this.round=last;this.renderRound(last.marks,earlierRoundsHtml(rows));}
    const pf=this.doc.getElementById('say-prefetch');
-   if(pf){const st=(await getJson('/say/stats?days=1')).prefetch;const html=prefetchRoundsHtml(rows,st);
+   if(pf){const stats=await getJson('/say/stats?days=1');const html=prefetchRoundsHtml(rows,stats.prefetch,Date.now(),stats.auto||{on:false});
     if(html!==this.prefetchSeen){const open=pf.querySelector('details')?.open;this.prefetchSeen=html;pf.innerHTML=html;if(open)pf.querySelector('details').open=true;}}
   }catch{}
  }

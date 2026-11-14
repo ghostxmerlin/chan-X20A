@@ -51,7 +51,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (req.method === 'POST' && url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/settings', '/mark', '/label', '/rerun', '/place', '/switch', '/switches', '/say', '/say/stop', '/voice/try', '/speech/settings', '/memory/edit', '/role/try', '/say/round', '/say/play', '/signal', '/say/prefetch', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/settings', '/mark', '/label', '/rerun', '/place', '/switch', '/switches', '/say', '/say/stop', '/voice/try', '/speech/settings', '/memory/edit', '/role/try', '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (origin !== 'http://' + req.headers.host) { respond(403, '写入必须来自当前观察页面'); return; }
       if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') { respond(415, '只接受 JSON'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }

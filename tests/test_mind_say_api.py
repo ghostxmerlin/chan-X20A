@@ -1,4 +1,4 @@
-"""HTTP routes of the one-button talk show: /say/round, /say/play, /signal, /say/prefetch, /say/rounds, /say/stats."""
+"""HTTP routes of the one-button talk show: /say/round, /say/play, /signal, /say/prefetch, /say/auto, /say/rounds, /say/stats."""
 import json
 import threading
 import unittest
@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 from mind_fixtures import FakeDB, T0
-from mind import api, say_prefetch
+from mind import api, say_auto, say_prefetch
 from mind.store import Store
 from mind.settings_store import SettingsStore
 from test_mind_speak import FakeTts, ROOT
@@ -28,8 +28,11 @@ class SayApiTest(unittest.TestCase):
         self.tts = FakeTts()
         self.worker = say_prefetch.Worker(self.store, settings_fn=lambda: self.ss.current()[0], mouth_fn=lambda: 'tts',
                                           ctx_fn=lambda s, now: None, write_fn=lambda c, n: None)
+        self.auto = say_auto.Worker(self.store, prefetch=self.worker, settings_fn=lambda: self.ss.current()[0], mouth_fn=lambda: 'tts',
+                                    play_fn=lambda s, now, cur: {'reason': 'no_stock', 'played': []})
         self.server = api.make_server(self.store, 'k', port=0, ctx={
             'settings_store': self.ss, 'tts': self.tts, 'roles_dir': str(ROOT / 'config/roles'), 'say_worker': self.worker,
+            'say_auto': self.auto,
             'env': {'base_url': 'http://unused.invalid', 'api_key': 'unused'}})
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
@@ -61,6 +64,18 @@ class SayApiTest(unittest.TestCase):
         self.assertEqual((status, body['enabled']), (200, True))
         self.assertTrue(self.worker.enabled())
         self.assertEqual(self.call('/say/prefetch', {'enabled': 'yes'})[0], 400)
+
+    def test_auto_switch_turns_prefetch_on_and_shows_in_stats(self):
+        self.assertEqual(self.call('/say/stats?days=1')[1]['auto'], {'on': False, 'next_at': None, 'last': None})
+        status, body = self.call('/say/auto', {'enabled': True})
+        self.assertEqual((status, body['enabled'], body['prefetch']), (200, True, True))
+        self.assertTrue(self.worker.enabled())
+        st = self.call('/say/stats?days=1')[1]
+        self.assertTrue(st['auto']['on'] and st['prefetch']['on'])
+        self.assertIsInstance(st['auto']['next_at'], int)
+        self.assertEqual(self.call('/say/auto', {'enabled': 1})[0], 400)
+        self.call('/say/prefetch', {'enabled': False})
+        self.assertFalse(self.call('/say/stats?days=1')[1]['auto']['on'])
 
     def test_rounds_hide_clone_ids_and_context(self):
         self.db.add('say_rounds', stored_round())

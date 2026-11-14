@@ -223,6 +223,16 @@ test('talk-show round routes pass the proxy and the local server', async t=>{
  for(const p of ['/say/rounds?from=1&to=2','/say/stats?days=1','/say/explain?rid=rab12','/scenes?from=1&to=2','/signals?from=1&to=2'])
   assert.equal((await fetch(url+'/api/mind'+p)).status,200,p);
 });
+test('连续说 route /say/auto passes the proxy and the local server', async t=>{
+ const proxy=new MindProxy({ssh:'h',token:'k',socketPath:SOCK,prepareFn:()=>{},spawnFn:fakeSsh(),requestFn:async()=>({status:200,body:'{}'})});
+ assert.equal((await proxy.post('/say/auto','{"enabled":true}')).status,200);
+ const calls=[],mind={get:async()=>({status:200,body:'{}'}),post:async(p,b)=>{calls.push([p,b]);return {status:200,body:'{}'};},stop(){}};
+ const server=createMonitorServer(new Monitor({binding:{address:'http://127.0.0.1:8080',token:'b'.repeat(32)}}),undefined,mind);
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const url=`http://127.0.0.1:${server.address().port}`;
+ assert.equal((await fetch(url+'/api/mind/say/auto',{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{"enabled":true}'})).status,200);
+ assert.deepEqual(calls,[['/say/auto','{"enabled":true}']]);
+});
 test('db query validation',()=>{
  for(const p of ['/db/overview','/db/people','/db/person?id=owner','/db/person?id=p_0123456789ab',
    '/db/memories?kind=event&person=p_0123456789ab&topic=k_0123456789ab&offset=0&limit=20',

@@ -5,6 +5,7 @@ scenes. Sentence text only leaves through this API; nothing is logged.
 
 GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes /roles /utterances /voices
 POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voice/try
+POST /say/round /say/play /signal /say/prefetch /say/auto (talk show; 连续说 state is in GET /say/stats under auto)
 GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
 POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
 """
@@ -371,7 +372,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             scope_id = speech_settings.scope(current_settings()[0])['id']
             return {**owner_signals.stats(db, scope_id, now - days * 86400_000, now + 60_000), 'days': days,
                     'prefetch': {'on': bool(ctx.get('say_worker') and ctx['say_worker'].enabled()),
-                                 'last': ctx['say_worker'].last if ctx.get('say_worker') else None}}
+                                 'last': ctx['say_worker'].last if ctx.get('say_worker') else None},
+                    'auto': ctx['say_auto'].status() if ctx.get('say_auto') else {'on': False, 'next_at': None, 'last': None}}
         raise NotFound("not found")
 
     def post(path, body):
@@ -490,6 +492,14 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise BadRequest('enabled must be true or false')
             worker.set_enabled(body['enabled'], now)
             return {'enabled': worker.enabled()}
+        if path == '/say/auto':
+            auto = ctx.get('say_auto')
+            if not auto:
+                raise Conflict('连续说 is not configured here')
+            if not isinstance(body.get('enabled'), bool):
+                raise BadRequest('enabled must be true or false')
+            auto.set_enabled(body['enabled'], now)             # on also turns 提前写 on
+            return {'enabled': auto.enabled(), 'prefetch': auto.prefetch.enabled()}
         if path == "/voice/try":
             tts = ctx.get("tts")
             if not tts:
@@ -620,7 +630,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 return
             url = urlsplit(self.path)
             if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
-                                '/say/round', '/say/play', '/signal', '/say/prefetch', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge'):
+                                '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats"):
                     self._send(405, {"error": "read only"})
                 else:

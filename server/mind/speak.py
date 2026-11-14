@@ -31,6 +31,7 @@ SAY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["tex
 _SAY_LOCK = threading.Lock()
 _ENQUEUE_LOCK = threading.RLock()
 _EPOCH = 0
+_ROUNDS = 0                                      # 说一轮 presses since start: 连续说 stops when one lands mid-sequence
 
 
 class NotConnected(Exception):
@@ -315,6 +316,8 @@ def say_round(env, store, s, roles, tts, now_ms, *, worker, force_new=False, tri
         raise NotConnected('hello 的嘴没连上')
     if not _SAY_LOCK.acquire(blocking=False):
         raise NotConnected('正在说上一轮，请稍等或先停止')
+    global _ROUNDS
+    _ROUNDS += 1
     try:
         _check_pending(epoch, is_current)
         ctx = speech_context.build(store.db, store, s, now_ms)
@@ -374,6 +377,77 @@ def say_round(env, store, s, roles, tts, now_ms, *, worker, force_new=False, tri
         return {'rid': r['rid'], 'played': key, 'why': why, 'uid': uid, 'server_ms': server_ms, 'round': compact_round(r)}
     finally:
         _SAY_LOCK.release()
+
+
+AUTO_TRIGGER = {'source': 'auto'}
+AUTO_GAP_S = 10
+
+
+def _auto_pick(env, store, s, now_ms, worker):
+    """(round, keys, None) to play, or (None, None, reason): fresh untouched stock of this voice mode, not thin,
+    its high-score lines in judge order; one check call when clear speech came after it was written."""
+    ctx = speech_context.build(store.db, store, s, now_ms)
+    min_score = (s['speech'].get('round') or {}).get('auto_min_score', speech_settings.ROUND_DEFAULTS['auto_min_score'])
+    with worker.writing():
+        r = worker.stock(ctx['scope']['id'])
+        if not r or now_ms - r['written_at'] > STOCK_TTL_MS or r.get('plays') or r.get('triggers') or \
+                bool(r.get('family')) != rounds.family_on(s):
+            return None, None, 'no_stock'
+        if rounds.is_thin(r, ctx, now_ms, s):
+            return None, None, 'thin'
+        keys = [k for k in rounds.ranked_keys(r) if k != rounds.HUYU and not rounds.line(r, k).get('dropped')
+                and (rounds.line(r, k).get('score') or 0) >= min_score]
+        if not keys:
+            return None, None, 'no_high_score'
+        if any(e.get('kind') == 'speech' and e.get('quality') == 'usable' and e['at'] > r['written_at'] for e in ctx['evidence']):
+            pick = rounds.check_round(env, store, s, r, ctx, now_ms, chat=CHAT, keys=keys)
+            if not pick:
+                _note_trigger(store, r, now_ms, 'auto_skip', AUTO_TRIGGER)      # never reconsidered
+                return None, None, 'checked_none'
+            keys = keys[keys.index(pick):]
+        _note_trigger(store, r, now_ms, 'auto', AUTO_TRIGGER)
+        return r, keys, None
+
+
+def auto_play(env, store, s, tts, now_ms, *, worker, sleep=time.sleep, clock=time.time, is_current=None, gap_s=AUTO_GAP_S):
+    """连续说 (owner 2026-11-14): play the high-score lines of the pre-written stock, each after the previous
+    one finished plus gap_s. Never writes; 别说了, a settings change or a 说一轮 press stops the rest.
+    _SAY_LOCK is taken per line without waiting, never across a gap. Returns {reason, played, stopped}."""
+    epoch, presses = _EPOCH, _ROUNDS
+    alive = lambda: epoch == _EPOCH and presses == _ROUNDS and (is_current is None or is_current())
+    out = lambda reason, played=(), stopped=False: {'reason': reason, 'played': list(played), 'stopped': stopped}
+    if not ((tts.health().get('mouth') or {}).get('device')):
+        return out('no_mouth')
+    if not _SAY_LOCK.acquire(blocking=False):
+        return out('busy')
+    try:
+        if not alive():
+            return out('off')
+        r, keys, reason = _auto_pick(env, store, s, now_ms, worker)
+        if reason:
+            return out(reason)
+        try:
+            uid, tts_id = _speak_line(store, tts, r, keys[0], now_ms, 'auto', epoch=epoch, is_current=is_current)
+        except NotConnected:
+            return out('played', stopped=True)
+    finally:
+        _SAY_LOCK.release()
+    played = [keys[0]]
+    for key in keys[1:]:
+        _finish(store.db, tts, uid, tts_id)
+        if alive():
+            sleep(gap_s)
+        if not alive() or not _SAY_LOCK.acquire(blocking=False):
+            return out('played', played, stopped=True)
+        try:
+            uid, tts_id = _speak_line(store, tts, r, key, int(clock() * 1000), 'auto', epoch=epoch, is_current=is_current)
+        except NotConnected:
+            return out('played', played, stopped=True)
+        finally:
+            _SAY_LOCK.release()
+        played.append(key)
+    _finish(store.db, tts, uid, tts_id)
+    return out('played', played)
 
 
 def play_line(store, s, roles, tts, rid, key, now_ms, *, voice=None, dialect=None, wait=False):

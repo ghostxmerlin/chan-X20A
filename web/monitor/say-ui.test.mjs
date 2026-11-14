@@ -125,3 +125,30 @@ test('家人声音 switch: rendered state and the settings body it saves',()=>{
  assert.equal(body.speech.round.family,true);assert.equal(body.speech.round.huyu,true);assert.equal(body.speech.max_chars,40);
  assert.equal(cfg.speech.round.family,false);              // the loaded settings are not mutated
 });
+
+test('连续说 switch: rendered next to 提前写 with its checked state',()=>{
+ const on=ui.roundControlsHtml(true,false,true),off=ui.roundControlsHtml(true,false,false);
+ assert.match(on,/data-auto="1" checked/);assert.doesNotMatch(off,/data-auto="1" checked/);
+ assert.match(on,/连续说（每 2–3 分钟，播高分的提前写）/);
+ assert.ok(on.indexOf('data-prefetch')<on.indexOf('data-auto')&&on.indexOf('data-auto')<on.indexOf('data-family'));
+ assert.doesNotMatch(on,/style="/);
+});
+test('连续说 and 提前写 move together: auto on ticks prefetch, prefetch off unticks auto',()=>{
+ assert.deepEqual(ui.linkedSwitches('auto',true),{prefetch:true});
+ assert.deepEqual(ui.linkedSwitches('auto',false),{});
+ assert.deepEqual(ui.linkedSwitches('prefetch',false),{auto:false});
+ assert.deepEqual(ui.linkedSwitches('prefetch',true),{});
+});
+test('连续说 state line: on/off, next wake, last result with its time',()=>{
+ const now=new Date(2026,10,14,10,0,0).getTime();
+ assert.match(ui.autoStatusHtml({on:false,next_at:null,last:null}),/连续说关着/);
+ const html=ui.autoStatusHtml({on:true,next_at:now+150000,last:{reason:'played',at:now-30000,n:2,stopped:false}});
+ assert.match(html,/连续说开着/);assert.match(html,/下次 10:02:30/);assert.match(html,/09:59:30 播了 2 句/);
+ for(const [reason,text] of [['no_stock','没有可用的提前写'],['no_high_score','没有高分'],['checked_none','都不合适'],['thin','没人说话'],['off','条件不满足']])
+  assert.match(ui.autoStatusHtml({on:true,next_at:now,last:{reason,at:now,n:0}}),new RegExp(text),reason);
+ assert.match(ui.autoStatusHtml({on:true,next_at:now,last:{reason:'played',at:now,n:1,stopped:true}}),/中途停了/);
+ assert.match(ui.autoStatusHtml({on:true,next_at:now,last:{reason:'<x>',at:now,n:0}}),/&lt;x&gt;/);
+ const pf=ui.prefetchRoundsHtml([],{on:true},now,{on:true,next_at:now+150000,last:null});
+ assert.match(pf,/连续说开着/);assert.match(ui.prefetchRoundsHtml([],{on:false},now),/提前写关着/);
+ assert.doesNotMatch(html,/style="/);
+});

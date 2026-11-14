@@ -32,6 +32,7 @@ class Worker:
         self._on = False
         self._attempt = {}                 # scope -> last write attempt (ms), successful or not
         self.last = None                   # {reason, at} of the latest step, shown on the page
+        self.on_change = []                # f(on, now_ms) after every switch (连续说 follows it off)
         self.store.set_state(say_prefetch={'on': False, 'since': None})       # a restart always starts off
 
     # ---- switch ----
@@ -43,6 +44,8 @@ class Worker:
         if not on:
             self._stock.clear()
         self.store.set_state(say_prefetch={'on': self._on, 'since': now_ms})
+        for f in self.on_change:
+            f(self._on, now_ms)
 
     # ---- shared with the click path ----
     def busy(self):

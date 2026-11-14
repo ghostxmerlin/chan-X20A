@@ -4,9 +4,11 @@ import math
 
 PROFILES = ('office', 'home', 'friends')
 ROUND_DEFAULTS = {'thin_no_speech': True, 'thin_judge_weak': False, 'huyu': True, 'family': False, 'moment_gap_s': 90,
-                  'moment_window_s': 90, 'prefetch_quiet_s': 5, 'prefetch_spacing_s': 30, 'prefetch_usd_per_hour': 0.6}
+                  'moment_window_s': 90, 'prefetch_quiet_s': 5, 'prefetch_spacing_s': 30, 'prefetch_usd_per_hour': 0.6,
+                  'auto_min_score': 8}          # 连续说 plays pre-written lines the judge scored at least this (2026-11-14)
 ROUND_LIMITS = {'moment_gap_s': (10, 600), 'moment_window_s': (10, 600), 'prefetch_quiet_s': (1, 60),
-                'prefetch_spacing_s': (5, 600), 'prefetch_usd_per_hour': (0, 5)}
+                'prefetch_spacing_s': (5, 600), 'prefetch_usd_per_hour': (0, 5), 'auto_min_score': (1, 10)}
+ROUND_INTEGERS = {'auto_min_score'}
 ROLES = ('comfort', 'deadpan', 'roast', 'sad', 'worst')
 DIALECTS = {'普通话': '请讲普通话。', '上海话': '请讲上海话。',
             '四川话': '请讲四川话。', '武汉话': '请讲湖北武汉话。'}
@@ -47,6 +49,8 @@ def validate(speech, memory):
             limits = ROUND_LIMITS.get(key)
             if limits is None and not isinstance(value, bool):
                 errors.append(f'speech.round.{key}: true or false')
+            elif key in ROUND_INTEGERS and not (type(value) is int and _number(value, *limits)):
+                errors.append(f'speech.round.{key}: integer {limits[0]}–{limits[1]}')
             elif limits and not _number(value, *limits):
                 errors.append(f'speech.round.{key}: {limits[0]}–{limits[1]}')
     if speech.get('profile') not in PROFILES:
