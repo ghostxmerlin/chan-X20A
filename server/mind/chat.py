@@ -69,6 +69,8 @@ REFRESH_BUDGET_MS = 100
 IDLE_WAIT_S = 10
 NOT_VOICE_MARGIN_DB = 3              # band none counts only below near_db + 3 (2026-11-08..10 robot recordings, impl-report)
 QUIET_POLL_S = 0.05
+STREAM_CALL_S = 2.0                  # begin / cancel: a hung soul-tts must not hold the turn (review v1 M2)
+DEAD_STATES = ('cancelled', 'failed', 'done')
 FILLER_CHARS = set('嗯啊哦呃额唉哈嘿呀噢喔诶欸哎呢吧嘛哼呵唔')
 FILLER_WORDS = {'um', 'uh', 'umm', 'hmm', 'hm', 'mm', 'mhm', 'ah', 'oh', 'eh', 'er', 'ha', 'haha'}
 STATES = ('queued', 'thinking', 'answered', 'skipped', 'superseded')
@@ -433,9 +435,16 @@ class Chat:
                 return self._skip(item, why, heard_only=why == 'hello_speaking',
                                   **{'timings.wait_ms': int((self.mono() - item['received']) * 1000)})
             wait_ms = int((self.mono() - item['received']) * 1000)
+        self._refresh(self.clock_ms(), budget_ms=None, names=('cost',))
+        cost = self._part('cost')
+        if cost is not None and cost >= (s.get('budget_usd_per_day') or 0):
+            return self._skip(item, 'budget', **{'timings.wait_ms': wait_ms})      # before the open (review v1 M5)
         epoch = speak._EPOCH
         cfg = speech_settings.chat_config(s)
-        stream = self._open_stream(s, cfg)   # chat v1: soul-tts gets ready while the model thinks
+        stream = self._open_stream(s, cfg, gen, epoch)   # chat v1: soul-tts gets ready while the model thinks
+        if stream and stream.get('gone'):
+            return self._skip(item, 'left_chat' if not self._alive(gen) else 'cancelled',
+                              **{'timings.wait_ms': wait_ms})
         try:
             return self._think(item, gen, s, cfg, epoch, wait_ms, stream)
         finally:
@@ -447,9 +456,6 @@ class Chat:
         self._refresh(self.clock_ms(), budget_ms=REFRESH_BUDGET_MS)
         if not self._history_loaded:
             self._load_history(self.clock_ms())
-        cost = self._part('cost')
-        if cost is not None and cost >= (s.get('budget_usd_per_day') or 0):
-            return self._skip(item, 'budget', **{'timings.wait_ms': wait_ms})
         ctx = self.context(s, item)
         context_ms = int((self.mono() - t0) * 1000)
         hist = list(self._history)[-cfg['history_turns']:] if cfg['history_turns'] else []
@@ -495,13 +501,23 @@ class Chat:
         role = speech_settings.role_config((self.roles_fn() or {}).get(ROLE) or FALLBACK_ROLE, s)
         return {k: role[k] for k in ('instruction', 'rate') if role.get(k) is not None}
 
-    def _open_stream(self, s, cfg):
-        """Open the soul-tts line for this turn -> {id, open_ms, open_at, used} / {error} / None (stream off)."""
+    def _open_stream(self, s, cfg, gen=None, epoch=None):
+        """Open the soul-tts line for this turn -> {id, open_ms, open_at, used} / {error} / None (stream off).
+        The open interrupts, so it runs under _ENQUEUE_LOCK after the same alive / epoch check as every say path
+        (review v1 M3): a leave or stop that came first wins."""
         if not cfg.get('stream', True) or not hasattr(self.tts, 'begin') or self.mouth_fn() != 'tts':
             return None
         t0 = self.mono()
         try:
-            sid = self.tts.begin(voice=VOICE, interrupt=True, **self._role_opts(s))
+            opts = self._role_opts(s)
+            with speak._ENQUEUE_LOCK:
+                try:
+                    speak._check_pending(speak._EPOCH if epoch is None else epoch,
+                                         lambda: self._active and self.mode_fn() == 'chat' and
+                                         (gen is None or gen == self._gen))
+                except speak.NotConnected:
+                    return {'error': 'cancelled', 'gone': True}     # a stop / leave came first: no model call either
+                sid = self.tts.begin(voice=VOICE, interrupt=True, timeout=STREAM_CALL_S, **opts)
         except Exception as e:               # noqa: BLE001 - 409 no robot / 429 busy / soul-tts down: say() later
             self.log(f'mind chat: stream open failed: {type(e).__name__}', flush=True)
             return {'error': type(e).__name__}
@@ -509,7 +525,7 @@ class Chat:
 
     def _cancel_stream(self, stream):
         try:
-            self.tts.cancel(stream['id'])
+            self.tts.cancel(stream['id'], timeout=STREAM_CALL_S)
         except Exception as e:               # noqa: BLE001 - a stop already ended it, or soul-tts is away
             self.log(f'mind chat: stream cancel failed: {type(e).__name__}', flush=True)
         stream['cancelled'] = True
@@ -591,7 +607,10 @@ class Chat:
             tts_id = None
             if live:
                 try:
-                    self.tts.text(live['id'], first)
+                    r = self.tts.text(live['id'], first)
+                    state = r.get('state') if isinstance(r, dict) else None
+                    if state in DEAD_STATES:     # review v1 M1: soul-tts took the text into a line already ended
+                        raise RuntimeError(f'stream {state}')
                     tts_id, live['used'] = live['id'], True
                 except speak.NotConnected:
                     raise
@@ -609,10 +628,12 @@ class Chat:
                     self.tts.text(tts_id, rest)
             except Exception as e:           # noqa: BLE001 - the first sentence is said; end it anyway
                 self.log(f'mind chat: stream rest failed: {type(e).__name__}', flush=True)
-            try:
-                self.tts.end(tts_id)
-            except Exception as e:           # noqa: BLE001 - soul-tts ends an idle stream by itself after 30 s
-                self.log(f'mind chat: stream end failed: {type(e).__name__}', flush=True)
+            for attempt in (1, 2):           # an un-ended line holds the robot (and its hearing mute) 30 s (review v1 M4)
+                try:
+                    self.tts.end(tts_id)
+                    break
+                except Exception as e:       # noqa: BLE001 - soul-tts ends an idle stream by itself after 30 s
+                    self.log(f'mind chat: stream end failed ({attempt}): {type(e).__name__}', flush=True)
         uid = 'u' + uuid.uuid4().hex
         self.db['utterances'].insert_one({'uid': uid, 'role': 'chat', 'text': text, 'voice': VOICE, 'tts_id': tts_id,
                                           'at': submit_at, 'state': 'sent', 'pipeline': 'chat',
@@ -708,10 +729,11 @@ class Chat:
         got = self._ctx.get(name)
         return got[1] if got else None
 
-    def _refresh(self, now_ms, budget_ms=REFRESH_BUDGET_MS):
+    def _refresh(self, now_ms, budget_ms=REFRESH_BUDGET_MS, names=('cost', 'persona', 'scene', 'notes', 'people',
+                                                                 'memories')):
         """Refresh the parts whose TTL ran out, oldest need first, until budget_ms is spent (None: all)."""
         t0 = self.mono()
-        for name in ('cost', 'persona', 'scene', 'notes', 'people', 'memories'):
+        for name in names:
             got = self._ctx.get(name)
             if got and self.mono() - got[0] < TTL_MS[name] / 1000:
                 continue
