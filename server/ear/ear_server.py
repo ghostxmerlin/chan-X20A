@@ -927,6 +927,7 @@ def main():
     ears = set()                     # live Ear objects (for the 听悟 status document)
     vision_active = set()
     mouth_active = set()
+    mouth_no = [0]                                   # /mouth connection number (conn)
     tw_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("tingwu")) if database else (lambda: None))
     mouth = mouth_mode.ModeReader((lambda: database.read_switch("mouth")) if database else (lambda: None))
 
@@ -961,18 +962,20 @@ def main():
         if not hp.authenticate(path, header, token_value):
             await ws.close(code=4401, reason="bad token")
             return
-        if urlsplit(path).path == "/mouth":            # speaker downlink: relayed to soul-tts (2026-11-11)
+        if urlsplit(path).path == "/mouth":            # speaker downlink: ear ends it, soul-tts behind (2026-11-14)
             if len(mouth_active) >= 2:
                 await ws.close(code=1013, reason="server busy")
                 return
             mouth_active.add(ws)
+            mouth_no[0] += 1
             peer = ws.remote_address
-            print(f"+ {peer} mouth", flush=True)
+            print(f"+ {peer} mouth m{mouth_no[0]}", flush=True)
+            link = mouth_link.MouthLink(ws, upstream_url=mouth_link.UPSTREAM, token=token_value, conn=mouth_no[0])
             try:
-                why = await mouth_link.relay(ws, mouth_link.UPSTREAM, token_value)
+                why = await link.run()
             finally:
                 mouth_active.discard(ws)
-            print(f"- {peer} mouth: {why}", flush=True)
+            print(f"- {peer} mouth m{link.conn} boot={link.boot}: {why}, {link.upstream_drops} soul-tts drops", flush=True)
             return
         if urlsplit(path).path == "/signal":           # DualKey owner signals, relayed to mind (2026-11-13)
             if len(signal_active) >= 4:
