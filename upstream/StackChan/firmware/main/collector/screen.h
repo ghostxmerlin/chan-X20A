@@ -111,8 +111,8 @@ void screen_show_toast(const char* text, uint32_t now_ms);
 void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color);
 
 // 0.4.94 global swipes (ui_pages.h): on home in every mode, down = quick settings, up = mode picker, left = summary;
-// each page closes with the opposite swipe, its "< Back" title, or 30 s without a touch. Both pages are built when
-// they open and deleted when they close. The screen only draws and hands requests back, one at a time; the
+// each page closes with the opposite swipe, its "< Back" title, or (quick / picker) 30 s without a touch. Those two are
+// built when they open and deleted when they close. The screen only draws and hands requests back, one at a time; the
 // caller runs them (mode_apply for picks and billing, the main loop for volume / hearing, which take service locks).
 // The current mode for the picker's highlight (modes::rules::Mode / Dir as numbers).
 void screen_update_mode_state(uint8_t mode, uint8_t dir);

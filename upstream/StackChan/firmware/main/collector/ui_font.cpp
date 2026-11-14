@@ -16,6 +16,9 @@
 namespace collector::ui_font {
 namespace {
 constexpr char kTag[] = "UiFont";
+// The loader waits this long after the screen is up before its first SD read, so boot keeps its screen and touch:
+// each 256 KiB part holds the LVGL lock about 0.8-1 s (shared_storage reads a file under one display lease).
+constexpr uint32_t kStartDelayMs = 10000;
 
 // One per catalog variant, in PSRAM. LVGL keeps pointing at `font` once it is published.
 struct Slot {
@@ -53,6 +56,12 @@ void load(size_t i)
     ++s.attempts;
     const int64_t began = esp_timer_get_time();
     if (!shared_storage::available()) { s.error = "storage_unavailable"; return; }
+    // Read only a complete variant: every part there with its size (a stat each). An install calls reload() after
+    // each part, so without this the loader would re-read the parts already on the card after every upload.
+    for (uint8_t k = 0; k < v.part_count; ++k) {
+        const Part& p = v.parts[k];
+        if (const char* e = shared_storage::check_file({p.path, p.bytes, p.sha256})) { s.error = e; return; }
+    }
     auto* blob = static_cast<uint8_t*>(heap_caps_malloc(v.bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!blob) { s.error = "no_memory"; return; }
     size_t at = 0;
@@ -83,6 +92,7 @@ void load(size_t i)
 void loader_task(void*)
 {
     Slot* slots = slot_table.load();
+    vTaskDelay(pdMS_TO_TICKS(kStartDelayMs));   // boot first (a reload() meanwhile is taken by the loop below)
     for (;;) {
         for (size_t i = 0; i < kVariantCount; ++i) {
             // The LVGL lock (1 s bound in shared storage) can be busy at boot: retry that, nothing else.
@@ -133,7 +143,8 @@ void start()
     for (size_t i = 0; i < kVariantCount; ++i) new (&created[i]) Slot();
     slot_table.store(created, std::memory_order_release);
     TaskHandle_t handle = nullptr;
-    // Priority 1: after boot work; SD reads take the LVGL lock per part (~0.2 s each), as the eyes do.
+    // Priority 1, first read kStartDelayMs after this call: SD reads take the LVGL lock per part, about 0.8-1 s for
+    // a 256 KiB part (one display lease per file, as the eyes' reads), so the screen pauses once per part.
     if (xTaskCreatePinnedToCoreWithCaps(loader_task, "ui_font", 6144, nullptr, 1, &handle, tskNO_AFFINITY,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGW(kTag, "loader task not started; ASCII only");

@@ -101,6 +101,9 @@ constexpr uint32_t kDotDim = 0x5A5A5A, kDotGrey = 0x8C8C8C;
 // 0.4.94 quick settings (swipe down) and mode picker (swipe up), ui_pages.h: small LVGL objects (internal RAM),
 // built when the page opens and deleted when it closes. Requests wait here until the LVGL timer takes them.
 lv_obj_t *quick_page = nullptr, *quick_volume = nullptr, *quick_net[2] = {}, *quick_last = nullptr, *quick_hear = nullptr;
+lv_obj_t* quick_allon = nullptr;          // the 全开 button's label: "再点确认" while armed (ui::BillingConfirm)
+ui::BillingConfirm billing_confirm;
+constexpr uint32_t kArmed = 0xFFBF40;     // amber (the ribbon's recognition colour) while 全开 waits for a second tap
 lv_obj_t *picker_page = nullptr, *picker_tiles[ui::kTiles] = {}, *picker_labels[ui::kTiles] = {};
 int volume_request = -1, billing_request = -1, hearing_request = -1, pick_request = -1;
 int quick_volume_shown = -1;
@@ -270,6 +273,7 @@ void close_quick();
 void open_picker();
 void close_picker();
 void render_quick();
+void render_allon(uint32_t now_ms);
 void show_page(Page target, uint32_t now_ms)
 {
     if (target != Page::Home) { home_gesture.reset(); home_pending = ScreenHomeGesture::None; }
@@ -782,8 +786,9 @@ void screen_tick(uint32_t now_ms)
         default: if (const Page target = nav.swipe(g); target != page) show_page(target, now_ms); break;
         }
     } else if (nav.idle(now_ms)) {
-        show_page(Page::Home, now_ms);   // 30 s without a touch (Wi-Fi pages 90 s)
+        show_page(Page::Home, now_ms);   // quick / picker 30 s without a touch, Wi-Fi pages 90 s (ui::idle_limit)
     }
+    if (billing_confirm.lapsed(now_ms)) render_allon(now_ms);   // no second tap within 2 s: 全开 again
     if (quick_page && now_ms - billing_line_ms >= 1000) {
         billing_line_ms = now_ms;
         char text[64];
@@ -1095,7 +1100,7 @@ void open_quick()
     button(quick_page, ui::kWifiButton, ui_text::kWifiButton, ui::text::kWifiButton);
     box(quick_page, 12, 115, 296, 1, kRule);
     zlabel(quick_page, 12, 128, ui_text::kBilling, ui::text::kBilling, kSignal);
-    button(quick_page, ui::kAllOn, ui_text::kAllOn, ui::text::kAllOn);
+    quick_allon = button(quick_page, ui::kAllOn, ui_text::kAllOn, ui::text::kAllOn);
     button(quick_page, ui::kAllOff, ui_text::kAllOff, ui::text::kAllOff);
     quick_last = clipped(quick_page, 12, 158, 296, kMuted);
     zlabel(quick_page, 12, 188, ui_text::kHearing, ui::text::kHearing, kSignal);
@@ -1109,8 +1114,20 @@ void close_quick()
 {
     if (!quick_page) return;
     lv_obj_delete(quick_page);           // its children with it
-    quick_page = quick_volume = quick_last = quick_hear = nullptr;
+    quick_page = quick_volume = quick_last = quick_hear = quick_allon = nullptr;
     quick_net[0] = quick_net[1] = nullptr;
+    billing_confirm.reset();             // a closed page never sends a half-confirmed 全开
+}
+// 全开 or, while armed (ui::BillingConfirm), "再点确认" / "TAP AGAIN" in amber.
+void render_allon(uint32_t now_ms)
+{
+    if (!quick_allon) return;
+    const bool armed = billing_confirm.armed(now_ms);
+    if (armed) set_ztext(quick_allon, ui_text::kConfirm, ui::text::kConfirm);
+    else set_ztext(quick_allon, ui_text::kAllOn, ui::text::kAllOn);
+    lv_obj_set_style_text_color(quick_allon, lv_color_hex(armed ? kArmed : kSignal), 0);
+    lv_obj_t* frame = lv_obj_get_parent(quick_allon);
+    lv_obj_set_style_border_color(frame, lv_color_hex(armed ? kArmed : kRule), 0);
 }
 void render_picker()
 {
@@ -1162,7 +1179,11 @@ void quick_tap(int x, int y, uint32_t now_ms)
         break;
     }
     case ui::Quick::Wifi: open_wifi_page(now_ms); break;
-    case ui::Quick::AllOn: case ui::Quick::AllOff: billing_request = ui::billing_digit(b); break;   // toast: mind's
+    case ui::Quick::AllOn: case ui::Quick::AllOff:
+        // 全开 needs a second tap within 2 s (paid services); 全关 is one tap. The toast is mind's answer.
+        if (const int digit = billing_confirm.tap(b, now_ms); digit >= 0) billing_request = digit;
+        render_allon(now_ms);
+        break;
     case ui::Quick::Hearing:
         hearing_shown = !hearing_shown;
         hearing_request = hearing_shown ? 1 : 0;

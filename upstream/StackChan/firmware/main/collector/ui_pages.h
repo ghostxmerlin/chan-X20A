@@ -15,8 +15,9 @@ namespace collector::ui {
 // Global gestures, the same in every mode, on the home page (taps and double taps stay the mode's):
 //   swipe down = quick settings, swipe up = mode picker, swipe left = status summary.
 // Every page closes back with the opposite swipe (quick: up, picker: down, summary: right) or its back control
-// (the title bar), and goes home by itself after 30 s without a touch (the Wi-Fi list / keypad: 90 s, typing a
-// password takes longer). The older pages keep their own moves: summary left = log, hold = pairing; log right =
+// (the title bar). Quick settings and the picker go home by themselves after 30 s without a touch (the Wi-Fi list /
+// keypad: 90 s, typing a password takes longer); summary, log and pairing never do (as before 0.4.94: the log is
+// watched while debugging). The older pages keep their own moves: summary left = log, hold = pairing; log right =
 // summary; pairing left = Wi-Fi list; a tap on summary / log goes home, on pairing to the summary.
 enum class Page : uint8_t { Home, Summary, Log, Pairing, Faces, Wifi, WifiKey, Quick, Picker };
 
@@ -35,6 +36,7 @@ inline constexpr const char* kWifiOffline = "Wi-Fi offline";   // 没有网络
 inline constexpr const char* kNotConnected = "not connected";
 inline constexpr const char* kBilling = "Billing";         // 计费
 inline constexpr const char* kAllOn = "ALL ON";            // 全开
+inline constexpr const char* kConfirm = "TAP AGAIN";       // 再点确认 (全开 armed, BillingConfirm)
 inline constexpr const char* kAllOff = "ALL OFF";          // 全关
 inline constexpr const char* kLastFormat = "last: %s%s%.18s  %s ago";   // 上次：全开 ...
 inline constexpr const char* kHearing = "Hearing";         // 听觉
@@ -51,7 +53,8 @@ constexpr uint32_t kTypingIdleMs = 90000;
 inline uint32_t idle_limit(Page p)
 {
     switch (p) {
-    case Page::Home: case Page::Faces: return 0;
+    // Pages older than 0.4.94 keep never timing out (the log is watched while debugging).
+    case Page::Home: case Page::Faces: case Page::Summary: case Page::Log: case Page::Pairing: return 0;
     case Page::Wifi: case Page::WifiKey: return kTypingIdleMs;
     default: return kIdleMs;
     }
@@ -203,6 +206,36 @@ inline int volume_after(Quick b, int current)
 }
 // 计费 全开 / 全关 = the digits 9 / 0, sent to mind as the ASR digit words are (mode_input); -1 otherwise.
 inline int billing_digit(Quick b) { return b == Quick::AllOn ? 9 : b == Quick::AllOff ? 0 : -1; }
+
+// 全开 (digit 9) starts paid services, so it takes two taps (pre-flash review 2026-11-14): the first arms it (the
+// button reads "再点确认" / "TAP AGAIN" for 2 s), a second tap within 2 s sends 9, otherwise it reverts. 全关 stays
+// one tap and disarms (turning things off is always safe: owner rule "no cost when off").
+constexpr uint32_t kConfirmMs = 2000;
+class BillingConfirm {
+public:
+    // The digit to send for a tap on button b (9 / 0), or -1 (nothing to send: 全开 just armed, or another button).
+    int tap(Quick b, uint32_t now_ms)
+    {
+        if (b == Quick::AllOff) { armed_ = false; return 0; }
+        if (b != Quick::AllOn) return -1;
+        if (armed(now_ms)) { armed_ = false; return 9; }
+        armed_ = true; at_ms_ = now_ms;
+        return -1;
+    }
+    bool armed(uint32_t now_ms) const { return armed_ && now_ms - at_ms_ < kConfirmMs; }
+    // True once when an armed 全开 ran out (the caller shows 全开 again).
+    bool lapsed(uint32_t now_ms)
+    {
+        if (!armed_ || now_ms - at_ms_ < kConfirmMs) return false;
+        armed_ = false;
+        return true;
+    }
+    void reset() { armed_ = false; }
+
+private:
+    bool armed_ = false;
+    uint32_t at_ms_ = 0;
+};
 
 // The line under the billing buttons. Billing has no state (mind keeps none): it says what the last answered 9 / 0
 // was and how long ago, by the robot's clock (it has no wall clock). digit < 0 (no answer yet, or the answer's

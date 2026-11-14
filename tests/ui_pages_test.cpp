@@ -81,10 +81,10 @@ void idle_timeout()
     assert(!n.idle(1000 + kIdleMs - 1) && n.idle(1000 + kIdleMs));
     n.touched(20000);                       // a finger on the page keeps it open
     assert(!n.idle(1000 + kIdleMs) && n.idle(20000 + kIdleMs));
-    for (Page p : {Page::Picker, Page::Summary, Page::Log, Page::Pairing}) {
-        Nav m = at(p, 5000);
-        assert(!m.idle(5000 + kIdleMs - 1) && m.idle(5000 + kIdleMs));
-    }
+    Nav m = at(Page::Picker, 5000);
+    assert(!m.idle(5000 + kIdleMs - 1) && m.idle(5000 + kIdleMs));
+    // The pages from before 0.4.94 never time out (the log stays up for live debugging).
+    for (Page p : {Page::Summary, Page::Log, Page::Pairing}) assert(!at(p, 5000).idle(5000 + 10 * kTypingIdleMs));
     // Typing a password gets longer; the face page follows its own request.
     Nav w = at(Page::WifiKey, 0);
     assert(!w.idle(kIdleMs) && w.idle(kTypingIdleMs));
@@ -180,6 +180,22 @@ void quick()
     assert(!std::strcmp(line, "last: ALL ON senses_on_page  2h ago"));
     billing_line(line, sizeof line, 0, nullptr, -3);
     assert(!std::strcmp(line, "last: ALL OFF  0s ago"));
+    // 全开 takes a second tap within 2 s; 全关 is one tap and disarms; a lapsed arm reverts once.
+    BillingConfirm c;
+    assert(c.tap(Quick::AllOn, 1000) == -1 && c.armed(1000) && c.armed(2999) && !c.armed(3000));
+    assert(c.tap(Quick::AllOn, 2999) == 9 && !c.armed(2999));
+    assert(c.tap(Quick::AllOn, 5000) == -1 && c.tap(Quick::AllOn, 7000) == -1);   // too late: arms again
+    assert(c.armed(7000) && c.tap(Quick::AllOff, 7100) == 0 && !c.armed(7100) && !c.lapsed(9100));
+    assert(c.tap(Quick::AllOn, 10000) == -1 && !c.lapsed(11999) && c.lapsed(12000) && !c.lapsed(12001));
+    assert(c.tap(Quick::AllOn, 12002) == -1);                                     // after a lapse: arm, not send
+    assert(c.tap(Quick::Hearing, 12003) == -1 && c.armed(12003));                 // other buttons leave it
+    c.reset();
+    assert(!c.armed(12004) && c.tap(Quick::AllOff, 12005) == 0);
+    Quick none = Quick::None;
+    assert(c.tap(none, 0) == -1);
+    // Wraps with the millisecond clock.
+    BillingConfirm w;
+    assert(w.tap(Quick::AllOn, 0xFFFFFF00u) == -1 && w.tap(Quick::AllOn, 0x100) == 9);
     // 0.4.95 Chinese line (CJK font only).
     char zh[96];
     billing_line(zh, sizeof zh, 9, "ok", 125, true);

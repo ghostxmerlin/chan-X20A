@@ -35,6 +35,7 @@ inline constexpr const char* kNotConnected = "未连接";
 inline constexpr const char* kBilling = "计费";
 inline constexpr const char* kAllOn = "全开";
 inline constexpr const char* kAllOff = "全关";
+inline constexpr const char* kConfirm = "再点确认";
 inline constexpr const char* kLastFormat = "上次：%s%s%.18s %s前";   // "上次：全开 2 分钟前" (ui::billing_line)
 inline constexpr const char* kAgeSeconds = "%d 秒";
 inline constexpr const char* kAgeMinutes = "%d 分钟";

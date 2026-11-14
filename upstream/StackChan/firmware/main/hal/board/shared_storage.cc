@@ -135,6 +135,16 @@ const char* read_file(const FileSpec& a,uint8_t* destination,size_t capacity)
     if (mbedtls_sha256(destination,total,digest,0) || std::memcmp(digest,a.sha256,32)) return "asset_invalid";
     ++stats.reads; return nullptr;
 }
+const char* check_file(const FileSpec& a)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!stats.mounted) return "storage_unavailable";
+    DisplayLease display;
+    if (display.error!=ESP_OK) return "display_bus_unavailable";
+    struct stat st{};
+    if (stat(a.path,&st)) return errno==ENOENT?"asset_missing":io_error();
+    return size_t(st.st_size)==a.bytes?nullptr:"asset_invalid";
+}
 const char* install(const collector::eyes::Asset& a,const uint8_t* bytes,size_t length,bool& unchanged)
 {
     if (!known(a)) return "invalid_argument";

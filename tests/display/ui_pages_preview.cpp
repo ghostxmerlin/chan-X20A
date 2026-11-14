@@ -97,9 +97,21 @@ int main(int argc, char** argv)
     assert(screen_take_volume_request() == 90 && screen_take_volume_request() == -1);
     tap(150, 50); tap(150, 50);
     assert(screen_take_volume_request() == 70);
-    // Billing: 全开 = 9, 全关 = 0 (sent by the caller as the digit words).
+    // Billing: 全开 = 9, 全关 = 0 (sent by the caller as the digit words). 全开 takes a second tap within 2 s: the
+    // first turns the button amber ("TAP AGAIN"); left alone it reverts; then two taps send 9.
+    const ui::Rect on = ui::kAllOn;
+    tap(140, 130);
+    assert(screen_take_billing_request() == -1);
+    save(out + "/quick-armed.ppm");
+    assert(px(on.x, on.y + on.h / 2)[0] == 0xFF && px(on.x, on.y + on.h / 2)[1] == 0xBF);   // amber frame
+    tick(2000);
+    assert(screen_take_billing_request() == -1);
+    save(out + "/quick-lapsed.ppm");
+    assert(px(on.x, on.y + on.h / 2)[0] != 0xFF);
+    tap(140, 130);
     tap(140, 130);
     assert(screen_take_billing_request() == 9);
+    tap(140, 130);                          // armed again; 全关 disarms and sends 0 at once
     tap(250, 130);
     assert(screen_take_billing_request() == 0 && screen_take_billing_request() == -1);
     // Hearing toggles from what the status said (off).
@@ -157,6 +169,18 @@ int main(int argc, char** argv)
     assert(screen_showing_quick());
     tick(1200);
     assert(!screen_showing_status() && children() == base);
+    // The summary and the log stay up (live debugging), as before 0.4.94.
+    stroke(260, 120, 80, 120);
+    stroke(260, 120, 80, 120);
+    assert(screen_showing_log());
+    tick(ui::kIdleMs + 2000);
+    assert(screen_showing_log());
+    stroke(80, 120, 260, 120);
+    assert(screen_showing_status() && !screen_showing_log());
+    tick(ui::kIdleMs + 2000);
+    assert(screen_showing_status());
+    stroke(80, 120, 260, 120);
+    assert(!screen_showing_status());
 
     // 0.4.95 Chinese words: with the SD font's parts given, the same pages in the CJK font (*-cjk.ppm).
     if (argc == 3) {
@@ -175,7 +199,10 @@ int main(int argc, char** argv)
         const size_t quick_cjk = lit(100, 0, 200, ui::kTitleH);
         std::printf("quick title lit pixels: ASCII %zu, CJK %zu\n", quick_ascii, quick_cjk);
         assert(quick_cjk > quick_ascii && quick_ascii > 0);
-        // Its buttons still work the same.
+        // Its buttons still work the same: 全开 shows 再点确认, the second tap sends 9.
+        tap(140, 130);
+        assert(screen_take_billing_request() == -1);
+        save(out + "/quick-armed-cjk.ppm");
         tap(140, 130);
         assert(screen_take_billing_request() == 9);
         stroke(160, 180, 160, 60);

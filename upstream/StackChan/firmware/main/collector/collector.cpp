@@ -1774,7 +1774,7 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
     display->LvglLock();
     if (!screen_initialized) {
         screen_create(lv_screen_active());
-        ui_font::start();   // 0.4.95: CJK font from SD in a PSRAM task; the screen stays ASCII until it is loaded
+        ui_font::start();   // 0.4.95: CJK font from SD in a PSRAM task, first read ~10 s after boot; ASCII until then
         lv_timer_create([](lv_timer_t*) {
             const auto touch = hal_bridge::get_touch_point();
             const int64_t now = esp_timer_get_time();

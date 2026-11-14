@@ -30,7 +30,7 @@ python3 scripts/generate-cjk-font.py --fetch .cache/ui-font/source   # 下载官
 node scripts/install-font-assets.mjs                                 # 先装许可，再逐片上传；已一致的跳过
 ```
 
-开机建屏后，PSRAM 栈的 `ui_font` 任务逐片读入一块 PSRAM 缓冲（每片照常持 LVGL 锁并排空 LCD DMA、核对 SHA-256），再检查容器边界，才交给 LVGL；位图和码表就地使用，只另配字形表（各约 65 KB PSRAM）。没有卡、缺片或校验失败时屏幕保持 ASCII 字体，`info.ui_font.variants[].error` 给出原因；装完最后一片后无需重启即加载。字集变更（改 `config/ui-font-extra.txt`）需要重新生成、重编固件并重装分片，`tests/test_ui_font.py` 会指出固件字符串中不在字集里的字。
+开机建屏约 10 秒后（让开机先用屏幕和触摸；每个 256 KiB 分片读入时持 LVGL 锁约 0.8–1 秒），PSRAM 栈的 `ui_font` 任务先逐片 stat，某一字号的分片齐全且长度正确才逐片读入一块 PSRAM 缓冲（每片照常持 LVGL 锁并排空 LCD DMA、核对 SHA-256），再检查容器边界，才交给 LVGL；位图和码表就地使用，只另配字形表（各约 65 KB PSRAM）。没有卡、缺片或校验失败时屏幕保持 ASCII 字体，`info.ui_font.variants[].error` 给出原因；装完最后一片后无需重启即加载。字集变更（改 `config/ui-font-extra.txt`）需要重新生成、重编固件并重装分片，`tests/test_ui_font.py` 会指出固件字符串中不在字集里的字。
 
 ## 播放和总线
 

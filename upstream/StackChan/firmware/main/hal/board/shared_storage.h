@@ -19,6 +19,9 @@ void attach_display(esp_lcd_panel_io_handle_t panel);
 // Firmware-owned paths and digests only; never populated from HTTP path input.
 struct FileSpec { const char* path; size_t bytes; const uint8_t* sha256; };
 const char* read_file(const FileSpec& file, uint8_t* destination, size_t capacity);
+// nullptr when the file is there with its size (stat only: no read, no hash), else read_file's error words
+// ("asset_missing", "asset_invalid", ...). Same lock and display lease as a read, held for one stat.
+const char* check_file(const FileSpec& file);
 const char* install_file(const FileSpec& file, const uint8_t* bytes, size_t length, bool& unchanged);
 const char* read(const collector::eyes::Asset& asset, uint8_t* destination, size_t capacity);
 const char* install(const collector::eyes::Asset& asset, const uint8_t* bytes, size_t length, bool& unchanged);
