@@ -4,9 +4,15 @@
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const hhmmss=ms=>new Date(ms).toLocaleTimeString('zh-CN',{hour12:false});
 
-export function roundControlsHtml(prefetchOn){
+export function roundControlsHtml(prefetchOn,familyOn){
  return `<button data-say-round="1" class="say-round-button">说一轮</button><button data-say-stop="1" class="stop-button">别说了</button>`+
-  `<label class="prefetch-switch"><input type="checkbox" data-prefetch="1"${prefetchOn?' checked':''}> 提前写（讨论激烈时开）</label>`;
+  `<label class="prefetch-switch"><input type="checkbox" data-prefetch="1"${prefetchOn?' checked':''}> 提前写（讨论激烈时开）</label>`+
+  `<label class="prefetch-switch"><input type="checkbox" data-family="1"${familyOn?' checked':''}> 家人声音（主人和孩子们，普通话）</label>`;
+}
+// 家人声音 (2026-11-14): one boolean in the speech settings (speech.round.family); saved like the settings page does.
+export function familySettingsBody(cfg,on){
+ const speech=structuredClone(cfg.speech);speech.round={...(speech.round||{}),family:!!on};
+ return {speech,memory:cfg.memory,expected_version:cfg.version,note:on?'家人声音 开':'家人声音 关'};
 }
 export function roleButtonsHtml(roles){
  return (roles||[]).map(r=>`<button data-role="${escapeHtml(r.id)}" title="${escapeHtml(r.name)}">${escapeHtml(r.button)}</button>`).join('')+
@@ -126,11 +132,18 @@ export class SayPanel{
   Promise.all([getJson('/roles'),getJson('/speech/settings').catch(()=>null),getJson('/say/stats?days=1').catch(()=>null)]).then(([r,cfg,st])=>{
    this.roles=r;this.mode=cfg?.speech?.pipeline==='round'?'round':'roles';
    // With the one-button talk show the five role buttons move into a folded section (spec 13).
-   $('say-buttons').innerHTML=this.mode==='round'?roundControlsHtml(st?.prefetch?.on)+`<details class="say-roles"><summary>单个角色</summary>${roleButtonsHtml(r)}</details>`:roleButtonsHtml(r);
+   $('say-buttons').innerHTML=this.mode==='round'?roundControlsHtml(st?.prefetch?.on,cfg?.speech?.round?.family)+`<details class="say-roles"><summary>单个角色</summary>${roleButtonsHtml(r)}</details>`:roleButtonsHtml(r);
    this.refresh();
   },()=>{$('say-buttons').innerHTML='<span class="muted">角色读不到（情景服务未连接）</span>';});
   getJson('/voices').then(v=>{this.voices=v;$('say-voices').innerHTML=voiceButtonsHtml(v);},()=>{$('say-voices').innerHTML='<span class="muted">音色读不到</span>';});
   $('say-buttons').addEventListener('change',async ev=>{
+   if(ev.target.dataset.family){
+    const on=ev.target.checked;
+    try{const cfg=await getJson('/speech/settings');await postJson('/speech/settings',familySettingsBody(cfg,on));
+     $('say-msg').textContent=on?'家人声音已打开：下一轮用主人和孩子们的声音':'家人声音已关闭';}
+    catch(e){ev.target.checked=!on;$('say-msg').textContent=sayErrorMessage(e);}
+    return;
+   }
    if(!ev.target.dataset.prefetch)return;
    try{const r=await postJson('/say/prefetch',{enabled:ev.target.checked});$('say-msg').textContent=r.enabled?'提前写已打开':'提前写已关闭';}
    catch(e){ev.target.checked=!ev.target.checked;$('say-msg').textContent=sayErrorMessage(e);}

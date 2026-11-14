@@ -3,7 +3,7 @@ import copy
 import math
 
 PROFILES = ('office', 'home', 'friends')
-ROUND_DEFAULTS = {'thin_no_speech': True, 'thin_judge_weak': False, 'huyu': True, 'moment_gap_s': 90,
+ROUND_DEFAULTS = {'thin_no_speech': True, 'thin_judge_weak': False, 'huyu': True, 'family': False, 'moment_gap_s': 90,
                   'moment_window_s': 90, 'prefetch_quiet_s': 5, 'prefetch_spacing_s': 30, 'prefetch_usd_per_hour': 0.6}
 ROUND_LIMITS = {'moment_gap_s': (10, 600), 'moment_window_s': (10, 600), 'prefetch_quiet_s': (1, 60),
                 'prefetch_spacing_s': (5, 600), 'prefetch_usd_per_hour': (0, 5)}

@@ -149,6 +149,27 @@ class SayEntryReviewFixesTest(SayEntryTest):
         self.assertEqual(calls.calls, [])
         self.assertEqual(len(self.tts.said), 1)
 
+    def test_family_mode_quiet_room_still_speaks_in_a_family_voice(self):
+        # 家人声音: no Shanghainese fallback and no thin-moment silence — the kids press to hear the voices.
+        self.s['speech']['round']['family'] = True
+        self.stock(self.now - 2000)                       # nobody spoke: would be thin outside family mode
+        first = self.click()
+        second = self.click(now=self.now + 5000)
+        self.assertEqual(first['why'], 'stock')
+        self.assertIn(second['why'], ('next', 'fresh'))     # never 'silent' or 'huyu'
+        self.assertEqual(len(self.tts.said), 2)
+        self.assertTrue(all(c[1]['voice'] in say_round.FAMILY_VOICES for c in self.tts.said))
+        self.assertTrue(all(c[1]['instruction'].startswith('请讲普通话。') for c in self.tts.said))
+
+    def test_stock_from_the_other_mode_is_not_used(self):
+        self.heard(age=8000)
+        self.stock(self.now - 2000)                       # written with the role voices
+        self.s['speech']['round']['family'] = True
+        rec = self.click()
+        self.assertEqual(rec['why'], 'fresh')
+        self.assertEqual([c[0] for c in self.chat.calls].count('line'), 5)
+        self.assertIn(self.tts.said[0][1]['voice'], say_round.FAMILY_VOICES)
+
     def test_stock_used_even_after_the_talk_moved_on(self):
         self.heard(id=1, age=125000, text='第一件事')
         self.stock(self.now - 118000)                     # > 90 s ago: no longer the same moment

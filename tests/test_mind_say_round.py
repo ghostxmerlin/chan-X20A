@@ -22,7 +22,7 @@ class RoutedChat:
     """Answers by prompt kind; per-direction overrides; thread-safe call log."""
     def __init__(self, scores=(3, 9, 5, 1, 7), weak=False, bad=(), check_pick=1):
         self.scores, self.weak, self.bad, self.check_pick = list(scores), weak, set(bad), check_pick
-        self.calls, self.lock = [], threading.Lock()
+        self.calls, self.bodies, self.lock = [], [], threading.Lock()
 
     def kind(self, body):
         system = body['messages'][0]['content']
@@ -37,6 +37,7 @@ class RoutedChat:
         kind, d = self.kind(body)
         with self.lock:
             self.calls.append((kind, d, body.get('temperature')))
+            self.bodies.append(body)
         if kind == 'line':
             content = '{bad json' if d in self.bad else json.dumps({'point': f'{d}点', 'device': '反话', 'text': f'这是{d}写的一句'})
         elif kind == 'huyu':
@@ -102,6 +103,31 @@ class SayRoundTest(unittest.TestCase):
         self.assertEqual((line['roast']['voice'], line['roast']['instruction']), (roast['voice'], roast['instruction']))
         self.assertTrue(line['huyu']['instruction'].startswith('请讲上海话。'))
         self.assertEqual(line['huyu']['gloss'], '你说说看嘛')
+
+    def test_family_voices_mode(self):
+        # 2026-11-14 owner: "家人声音" — the owner's voice and two family voices, all Mandarin, all with
+        # the owner's (me01) role file; no Shanghainese fallback line in this mode.
+        self.s['speech']['round']['family'] = True
+        chat = RoutedChat()
+        r = self.write(chat)
+        kinds = [c[0] for c in chat.calls]
+        self.assertEqual((kinds.count('line'), kinds.count('huyu'), kinds.count('judge')), (5, 0, 1))
+        self.assertTrue(r['family'])
+        lines = {x['key']: x for x in r['lines']}
+        self.assertNotIn('huyu', lines)
+        me = speech_settings.role_config(self.roles['worst'], self.s)
+        delivery = me['instruction'][len(speech_settings.DIALECTS[me['dialect']]):]
+        voices = [lines[k]['voice'] for k in R.KEYS]
+        self.assertEqual(set(voices), set(R.FAMILY_VOICES))
+        for k in R.KEYS:
+            self.assertEqual(lines[k]['dialect'], '普通话')
+            self.assertEqual(lines[k]['instruction'], '请讲普通话。' + delivery)
+        writer_prompts = [b for b in chat.bodies if P.DIRECTIONS['roast'] in b['messages'][0]['content']]
+        self.assertIn(P.VOICE_LABELS['me01'], writer_prompts[0]['messages'][0]['content'])
+
+    def test_family_off_by_default(self):
+        self.assertFalse(self.s['speech']['round']['family'])
+        self.assertFalse(self.write(RoutedChat())['family'])
 
     def test_moment_id_passed_through(self):
         r = self.write(RoutedChat(), moment_id='rold')

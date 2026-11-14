@@ -17,6 +17,10 @@ from .speech_context import norm
 MODEL = 'gpt-6.1-terra'
 KEYS = tuple(P.DIRECTIONS)                       # comfort deadpan roast sad worst
 HUYU = 'huyu'
+# 家人声音 (owner 2026-11-14): the owner's voice and two family voices from soul-tts, all Mandarin,
+# all with the owner's own role file (worst, voice me01). Labels with names live only in soul-tts.
+FAMILY_VOICES = ('me01', 'yy01', 'yz01')
+FAMILY_ROLE = 'worst'
 PROMPTS = {'line': 'say-line-v1', 'huyu': 'say-huyu-v1', 'judge': 'say-judge-v1', 'check': 'say-check-v2'}
 CALL_TIMEOUT_S = 12
 HISTORY_ROUNDS = 6
@@ -50,6 +54,21 @@ def _casting(roles, s, key):
             'instruction': role['instruction']}
 
 
+def family_on(s):
+    return bool(((s.get('speech') or {}).get('round') or {}).get('family'))
+
+
+def _family_casting(roles, s, rng):
+    """One family voice per direction, every voice at least once per round; the owner's role file."""
+    role = speech_settings.role_config(roles[FAMILY_ROLE], s)
+    delivery = role['instruction'][len(speech_settings.DIALECTS[role['dialect']]):]
+    voices = list(FAMILY_VOICES)
+    rng.shuffle(voices)
+    return {k: {'voice': voices[i % len(voices)], 'dialect': '普通话', 'rate': role.get('rate'),
+                'instruction': speech_settings.DIALECTS['普通话'] + delivery, 'persona_voice': role['voice']}
+            for i, k in enumerate(KEYS)}
+
+
 def _problem(text, ctx, max_chars):
     if not isinstance(text, str) or not 2 <= len(text.strip()) <= max_chars or BAD_CHARS.search(text):
         return 'format'
@@ -63,22 +82,27 @@ def write_round(env, store, s, roles, ctx, now_ms, *, chat=None, trigger=None, m
     max_chars = s['speech']['max_chars']
     scope_id = ctx['scope']['id']
     hist = history(store.db, scope_id, now_ms)
-    cast = {k: _casting(roles, s, k) for k in (*KEYS, HUYU)}
+    family = family_on(s)
+    cast = _family_casting(roles, s, rng) if family else {k: _casting(roles, s, k) for k in (*KEYS, HUYU)}
+    keys = KEYS if family else (*KEYS, HUYU)
     started = time.monotonic()
 
     def write(key):
         if key == HUYU:
             msgs = P.huyu_messages(ctx, now_ms, hist, max_chars)
             return key, _call(env, store, s, 'say_huyu', PROMPTS['huyu'], P.HUYU_SCHEMA, msgs, now_ms, chat, 0.65, 160)
-        msgs = P.line_messages(key, {**roles[key], **cast[key]}, ctx, now_ms, hist, max_chars)
+        prompt_role = {**roles[key], **cast[key]}
+        if family:
+            prompt_role['voice'] = cast[key]['persona_voice']     # the writer writes as the owner
+        msgs = P.line_messages(key, prompt_role, ctx, now_ms, hist, max_chars)
         return key, _call(env, store, s, 'say_line', PROMPTS['line'], P.LINE_SCHEMA, msgs, now_ms, chat, 0.65, 160)
 
-    with ThreadPoolExecutor(len(KEYS) + 1) as pool:
-        results = dict(pool.map(write, (*KEYS, HUYU)))
+    with ThreadPoolExecutor(len(keys)) as pool:
+        results = dict(pool.map(write, keys))
     write_ms = int((time.monotonic() - started) * 1000)
     run_ids = [r[1] for r in results.values() if r[1]]
     lines = []
-    for key in (*KEYS, HUYU):
+    for key in keys:
         out, _, err = results[key]
         line = {'key': key, **cast[key], 'score': None, 'shown_as': None, 'dropped': None}
         if err or not isinstance(out, dict):
@@ -92,7 +116,7 @@ def write_round(env, store, s, roles, ctx, now_ms, *, chat=None, trigger=None, m
         raise RuntimeError('这一轮没写出足够的句子，请重试')
     order = list(usable)
     rng.shuffle(order)
-    labels = [{'text': x['text'], 'voice_label': P.VOICE_LABELS.get(x['voice'], x['voice']), 'dialect': x['dialect']}
+    labels = [{'text': x['text'], 'voice_label': P.VOICE_LABELS.get(x.get('persona_voice') or x['voice'], x['voice']), 'dialect': x['dialect']}
               for x in order]
     judge_started = time.monotonic()
     out, judge_run, err = _call(env, store, s, 'say_judge', PROMPTS['judge'], P.JUDGE_SCHEMA,
@@ -112,7 +136,7 @@ def write_round(env, store, s, roles, ctx, now_ms, *, chat=None, trigger=None, m
     cost = sum(d.get('cost_usd') or 0 for d in store.db['mind_runs'].find({'run_id': {'$in': run_ids}}, {'cost_usd': 1}))
     doc = {'rid': rid, 'moment_id': moment_id or rid, 'at': now_ms, 'written_at': now_ms, 'scope_id': scope_id,
            'trigger': trigger or {'source': 'page'}, 'prompts': PROMPTS, 'model': MODEL,
-           'signature': signature(ctx, now_ms), 'context': ctx, 'lines': lines,
+           'signature': signature(ctx, now_ms), 'context': ctx, 'lines': lines, 'family': family,
            'judge': {'order': [x['key'] for x in ranked], 'best_key': ranked[0]['key'],
                      'weak': bool(isinstance(out, dict) and out.get('weak')),
                      'error': err if not scores else None, 'run_id': judge_run},
@@ -134,6 +158,8 @@ def is_thin(round_, ctx, now_ms, s):
     # Replay 2026-11-13: requiring 'usable' speech (both recognisers agreeing) or trusting the judge's weak
     # flag made 4 of 5 typical moments "thin". Thin = no speech at all in 60 s; the weak flag is opt-in
     # until the owner's "这一轮都不行" marks calibrate it.
+    if family_on(s):
+        return False                      # 家人声音: the family presses to hear the voices; never stay silent
     flags = (s.get('speech') or {}).get('round') or {}
     no_speech = not any(e.get('kind') == 'speech' and e.get('at', 0) >= now_ms - 60_000 for e in ctx.get('evidence', []))
     return (flags.get('thin_no_speech', True) and no_speech) or (flags.get('thin_judge_weak', False) and round_['judge']['weak'])

@@ -114,3 +114,14 @@ test('pre-written rounds are listed with their state and the worker status', ()=
  assert.match(html,/待用/);assert.match(html,/已用/);assert.match(html,/过期/);
  assert.match(ui.prefetchRoundsHtml([],{on:false},now),/提前写关着/);
 });
+
+test('家人声音 switch: rendered state and the settings body it saves',()=>{
+ assert.match(ui.roundControlsHtml(false,true),/data-family="1" checked/);
+ assert.doesNotMatch(ui.roundControlsHtml(false,false),/data-family="1" checked/);
+ const cfg={version:7,speech:{pipeline:'round',round:{huyu:true,family:false},max_chars:40},memory:{learning:true,apply:false},roles:[],history:[]};
+ const body=ui.familySettingsBody(cfg,true);
+ assert.deepEqual(Object.keys(body).sort(),['expected_version','memory','note','speech']);
+ assert.equal(body.expected_version,7);
+ assert.equal(body.speech.round.family,true);assert.equal(body.speech.round.huyu,true);assert.equal(body.speech.max_chars,40);
+ assert.equal(cfg.speech.round.family,false);              // the loaded settings are not mutated
+});

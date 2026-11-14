@@ -320,10 +320,13 @@ def say_round(env, store, s, roles, tts, now_ms, *, worker, force_new=False, tri
         ctx = speech_context.build(store.db, store, s, now_ms)
         scope_id = ctx['scope']['id']
         sig = say_moment.signature(ctx, now_ms)
-        huyu_on = (s['speech'].get('round') or {}).get('huyu', True)
+        family = rounds.family_on(s)
+        huyu_on = (s['speech'].get('round') or {}).get('huyu', True) and not family
         key, why, thin_path = None, None, False
         with worker.writing():
             r = worker.stock(scope_id)
+            if r and bool(r.get('family')) != family:
+                r = None                                     # written for the other voice mode (家人声音 switch)
             triggered = bool(r) and bool(r.get('plays') or r.get('triggers'))
             same = bool(r) and (say_moment.same_moment(r.get('signature'), sig) or _quiet_continuation(r, ctx, now_ms))
             if triggered and same and not force_new:
