@@ -96,6 +96,16 @@ class ContextTest(Base):
         self.assertLess(notes.index('午饭：想吃面'), notes.index('调试：在查舵机'))   # newest first
         self.assertIn('画面：主人在看屏幕。办公桌前，台灯亮着。这一分钟的变化：有人从右边走过。', t)
 
+    def test_timeline_starts_at_the_scope(self):
+        self.db['mind_scenes'].insert_one({'lane': LANE, 'minute': self.now - 20 * 60_000, 'version': 1,
+                                           'source': 'model', 'scene': {'people_doing': {'text': '换地方以前'}}})
+        self.db['mind_scenes'].insert_one({'lane': LANE, 'minute': self.now - 5 * 60_000, 'version': 1,
+                                           'source': 'model', 'scene': {'people_doing': {'text': '换地方以后'}}})
+        since = rt.speech_settings.scope(self.ss.current()[0]).get('since') or 0
+        lines = rt.recent_scenes(self.db, LANE, self.now, 'Asia/Shanghai', since_ms=self.now - 10 * 60_000)
+        self.assertEqual([x.split(' ', 1)[1] for x in lines], ['换地方以后'])
+        self.assertGreaterEqual(len(rt.recent_scenes(self.db, LANE, self.now, 'Asia/Shanghai', since_ms=since)), 1)
+
     def test_empty_database_gives_time_only(self):
         b = self.rc.block()
         self.assertTrue(b['text'].startswith('现在：'))

@@ -67,10 +67,11 @@ def _hhmm(ms, tz):
     return settings_mod.local_time(ms, tz).strftime('%H:%M')
 
 
-def recent_scenes(db, lane, now_ms, tz, window_ms=RECENT_MS, lines=RECENT_LINES):
+def recent_scenes(db, lane, now_ms, tz, since_ms=None, window_ms=RECENT_MS, lines=RECENT_LINES):
     """The scene timeline of the last window: 'HH:MM what people were doing', one line per change, newest kept."""
     best = {}
-    for d in db['mind_scenes'].find({'lane': lane, 'minute': {'$gte': now_ms - window_ms, '$lte': now_ms}},
+    lo = max(since_ms or 0, now_ms - window_ms)        # never before the current scope (place switch)
+    for d in db['mind_scenes'].find({'lane': lane, 'minute': {'$gte': lo, '$lte': now_ms}},
                                     {'_id': 0, 'minute': 1, 'version': 1, 'source': 1, 'scene': 1}):
         if d.get('source') in ('model', 'carried') and d.get('version', 0) >= best.get(d['minute'], {}).get('version', -1):
             best[d['minute']] = d
@@ -147,9 +148,9 @@ class RealtimeContext:
         faces = self._part('faces', lambda: visible_faces(self.db, now)) or []
         eye = self._part('eye', lambda: latest_eye(self.db, now))
         lane = SCENE_LANE
-        timeline = self._part('timeline', lambda: recent_scenes(self.db, lane, now, s['tz'])) or []
         since = speech_settings.scope(s).get('since')
-        past = self._part('past_notes', lambda: recent_notes(self.db, since, now, s['tz'])) or []
+        timeline = self._part(f'timeline:{since}', lambda: recent_scenes(self.db, lane, now, s['tz'], since)) or []
+        past = self._part(f'past_notes:{since}', lambda: recent_notes(self.db, since, now, s['tz'])) or []
         cards = self._part('cards', lambda: face_cards(self.db)) or {}
         others = {n: p.get('display') for p in s.get('people') or [] for n in p.get('face_names') or [] if p.get('display')}
 
