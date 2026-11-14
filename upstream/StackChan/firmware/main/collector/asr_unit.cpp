@@ -9,6 +9,7 @@
 #include "boot_tracking.h"
 #include "interaction_policy.h"
 #include "m12_unit.h"
+#include "mouth_link.h"
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_log.h>
@@ -50,13 +51,11 @@ struct RemoteYawPort {
 AsrYawPlan yaw_plan;
 BootTracking boot_tracking; // only asr_task changes it; asr_json reads the result string
 
-// Mode words go to mind over /mouth (hello modes step 1). The /mouth input queue arrives with
-// Task C4, which replaces this body with mode_link_send_input("asr", input, digit) (digit < 0 =
-// value null). Until then every mode word is reported as not sent ("offline").
+// Mode words go to mind over /mouth (hello modes step 1): queued for the /mouth task, never sent
+// from here (digit < 0 = value null). false = /mouth is offline, reported as "(offline)".
 bool send_mode_input(const char* input, int digit)
 {
-    (void)input; (void)digit;
-    return false;
+    return mouth::mode_link_send_input("asr", input, digit) != 0;
 }
 struct MotionState {
     uint32_t seq = 0;           // ASR event that started the latest action
