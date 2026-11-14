@@ -65,12 +65,36 @@ class ContextTest(Base):
         b = self.rc.block()
         t = b['text']
         for want in ('此刻的情景：大家在商量午饭', '在聊：午饭吃面', '声音：说笑声', '对话纪要：午饭：想吃面',
-                     '看到的人（M12 认出）：客人小王、主人（阿大）', '画面：主人桌前笑', '认识的人：客人小王（喜欢猫）。不要调侃他。'):
+                     '看到的人（M12 认出）：客人小王、主人（阿大）', '画面：主人桌前笑。', '认识的人：客人小王（喜欢猫）。不要调侃他。'):
             self.assertIn(want, t)
         self.assertNotIn('同事甲', t)
         self.assertEqual(b['owner'], {'face_names': ['boss_face'], 'call': '阿大'})
         self.assertEqual(b['names'], {'colleague_face': '同事甲', 'guest_face': '客人小王'})
         self.assertLessEqual(len(t), rt.MAX_CHARS)
+
+    def test_recent_timeline_notes_and_full_photo_line(self):
+        for i, doing in enumerate(['主人在调电路', '主人在调电路', '同事来拿饭', '大家在聊午饭']):
+            self.db['mind_scenes'].insert_one({'lane': LANE, 'minute': self.now - (20 - i) * 60_000, 'version': 1,
+                                               'source': 'model', 'scene': {'people_doing': {'text': doing}}})
+        self.db['mind_scenes'].insert_one({'lane': LANE, 'minute': self.now - 40 * 60_000, 'version': 1,
+                                           'source': 'model', 'scene': {'people_doing': {'text': '太早了'}}})
+        self.db['mind_scenes'].insert_one({'lane': 'replay', 'minute': self.now - 5 * 60_000, 'version': 1,
+                                           'source': 'model', 'scene': {'people_doing': {'text': '别的通道'}}})
+        for k, (title, notes) in enumerate([('调试', '在查舵机'), ('午饭', '想吃面')]):
+            self.db['conversations'].insert_one({'start_ms': self.now - (50 - 20 * k) * 60_000, 'end_ms': self.now - 1,
+                                                 'title': title, 'notes': notes})
+        self.db['eye_minutes'].insert_one({'minute': self.now - 30_000, 'version': 1, 'source': 'model', 'result': {
+            'people_count': 1, 'people': [], 'activity': '主人在看屏幕', 'scene': '办公桌前，台灯亮着',
+            'changes': '有人从右边走过'}})
+        t = self.rc.block()['text']
+        line = next(x for x in t.splitlines() if x.startswith('最近的情景'))
+        self.assertEqual(line.count('主人在调电路'), 1)                   # one line per change
+        self.assertLess(line.index('主人在调电路'), line.index('大家在聊午饭'))
+        self.assertNotIn('太早了', t)
+        self.assertNotIn('别的通道', t)
+        notes = next(x for x in t.splitlines() if x.startswith('最近的纪要'))
+        self.assertLess(notes.index('午饭：想吃面'), notes.index('调试：在查舵机'))   # newest first
+        self.assertIn('画面：主人在看屏幕。办公桌前，台灯亮着。这一分钟的变化：有人从右边走过。', t)
 
     def test_empty_database_gives_time_only(self):
         b = self.rc.block()
@@ -81,7 +105,7 @@ class ContextTest(Base):
         self.put_scene(self.now - 10 * 60_000)
         self.vision(self.now - rt.VISIBLE_MS - 1000, 'face_named', 1, 'boss_face')
         self.assertNotIn('看到的人', self.rc.block()['text'])
-        self.assertNotIn('情景', self.rc.block()['text'])
+        self.assertNotIn('此刻的情景', self.rc.block()['text'])
 
     def test_vision_off_clears_that_session(self):
         self.vision(self.now - 5000, 'face_named', 1, 'boss_face')

@@ -10,6 +10,8 @@ The block (plain Chinese text, at most MAX_CHARS):
   对话纪要            the latest conversation notes (chat._load_notes)
   看到的人            who the M12 named in the last VISIBLE_MS (a later face_lost drops that face) and the latest eye
                       minute (people / activity, fresh within EYE_FRESH_MS)
+  最近的情景 / 最近的纪要  the last RECENT_MS of scenes (one line per change, at most RECENT_LINES, HH:MM) and the last
+                      RECENT_NOTES conversation notes of RECENT_NOTES_MS (owner 2026-11-14: recent questions go to these first)
   你记得              at most 3 remembered statements (MemoryStore.recall, best first)
   认识的人            library cards of the people seen or of the owner: display + active notes (+ "不要调侃他")
 The answer also carries owner {face_names, call} and names {M12 face name: display} (library cards' links.face_names,
@@ -22,12 +24,16 @@ import collections
 import time
 
 from . import recall, settings as settings_mod, speech_settings
-from .chat import MAX_MEMORIES
+from .chat import LANE as SCENE_LANE, MAX_MEMORIES
 from .library import Library
 
 VISIBLE_MS = 3 * 60_000
 EYE_FRESH_MS = 3 * 60_000
-MAX_CHARS = 1500
+MAX_CHARS = 2600
+RECENT_MS = 30 * 60_000
+RECENT_LINES = 8
+RECENT_NOTES = 4
+RECENT_NOTES_MS = 3 * 3600_000
 TTL_S = 15
 
 
@@ -55,6 +61,39 @@ def latest_eye(db, now_ms, fresh_ms=EYE_FRESH_MS):
     if not doc or now_ms - (doc.get('minute') or 0) > fresh_ms + 60_000 or not isinstance(doc.get('result'), dict):
         return None
     return doc['result']
+
+
+def _hhmm(ms, tz):
+    return settings_mod.local_time(ms, tz).strftime('%H:%M')
+
+
+def recent_scenes(db, lane, now_ms, tz, window_ms=RECENT_MS, lines=RECENT_LINES):
+    """The scene timeline of the last window: 'HH:MM what people were doing', one line per change, newest kept."""
+    best = {}
+    for d in db['mind_scenes'].find({'lane': lane, 'minute': {'$gte': now_ms - window_ms, '$lte': now_ms}},
+                                    {'_id': 0, 'minute': 1, 'version': 1, 'source': 1, 'scene': 1}):
+        if d.get('source') in ('model', 'carried') and d.get('version', 0) >= best.get(d['minute'], {}).get('version', -1):
+            best[d['minute']] = d
+    out, last = [], None
+    for m in sorted(best):
+        sc = best[m].get('scene') or {}
+        text = ((sc.get('people_doing') or {}).get('text') or sc.get('summary') or '').strip()
+        if text and text != last:
+            out.append((m, text[:80]))
+            last = text
+    if len(out) > lines:                               # spread over the window, always keep the newest
+        step = len(out) / lines
+        out = [out[int(i * step)] for i in range(lines - 1)] + [out[-1]]
+    return [f'{_hhmm(m, tz)} {t}' for m, t in out]
+
+
+def recent_notes(db, since_ms, now_ms, tz, n=RECENT_NOTES, window_ms=RECENT_NOTES_MS):
+    """The last n conversation notes (newest first) of the window: 'HH:MM title：notes'."""
+    rows = [c for c in db['conversations'].find({'start_ms': {'$gte': max(since_ms or 0, now_ms - window_ms)}},
+                                                {'_id': 0, 'start_ms': 1, 'title': 1, 'notes': 1})
+            if c.get('notes') or c.get('title')]
+    rows.sort(key=lambda c: -(c.get('start_ms') or 0))
+    return [f'{_hhmm(c["start_ms"], tz)} {c.get("title") or ""}：{c.get("notes") or ""}'[:160] for c in rows[:n]]
 
 
 def face_cards(db):
@@ -107,6 +146,10 @@ class RealtimeContext:
         memories = recall.plain((self._part('memories', lambda: chat._load_memories(now)) if chat else None) or [], crowd=True)
         faces = self._part('faces', lambda: visible_faces(self.db, now)) or []
         eye = self._part('eye', lambda: latest_eye(self.db, now))
+        lane = SCENE_LANE
+        timeline = self._part('timeline', lambda: recent_scenes(self.db, lane, now, s['tz'])) or []
+        since = speech_settings.scope(s).get('since')
+        past = self._part('past_notes', lambda: recent_notes(self.db, since, now, s['tz'])) or []
         cards = self._part('cards', lambda: face_cards(self.db)) or {}
         others = {n: p.get('display') for p in s.get('people') or [] for n in p.get('face_names') or [] if p.get('display')}
 
@@ -137,8 +180,14 @@ class RealtimeContext:
         if eye:
             seen = '；'.join(f'{p.get("who")}{p.get("where") or ""}{p.get("doing") or ""}'
                             for p in (eye.get('people') or [])[:4] if isinstance(p, dict))
-            if seen or eye.get('activity'):
-                L.append(f'画面：{seen or eye.get("activity")}')
+            parts = [x for x in (seen or eye.get('activity'), eye.get('scene'),
+                                 eye.get('changes') and f'这一分钟的变化：{eye["changes"]}') if x]
+            if parts:
+                L.append('画面：' + '。'.join(str(x).strip('。 ')[:160] for x in parts) + '。')
+        if timeline:
+            L.append('最近的情景（半小时内，按时间）：' + '；'.join(timeline))
+        if past:
+            L.append('最近的纪要（新的在前）：' + '；'.join(past))
         if memories:
             L.append('你记得（只在相关时提）：' + '；'.join(memories[:MAX_MEMORIES]))
         for p in people[:4]:
