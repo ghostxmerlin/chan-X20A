@@ -17,7 +17,8 @@ namespace collector::mouth {
 //   {"type":"mode_report","seq","mode","dir","host","return_to","by","input","effects"} for mind, which only
 //   mirrors the mode and runs the effects (say a round, prefetch, stop speaking, talk enter / leave).
 // - After each /mouth handshake (the ear's hello) one report of the current state goes first: by "boot" the
-//   first time after a real boot (input "boot"), else by "link" (input null). Its effects are the mode-change
+//   first time after a real boot (input "boot"), else input null and by = what made the last change (mind only
+//   takes its own source words: asr, touch, page, timeout, boot). Its effects are the mode-change
 //   effects since the last report mind actually got, so a switch made while offline still turns talk's
 //   prefetch off / on. Reports not sent when the link drops are dropped: that sync report replaces them.
 // - Digits 0 and 9 (all paid off / on) are mind's: they go up as {"type":"mode_input",...} (C1 wire) and mind's
@@ -164,7 +165,7 @@ public:
         Effect fx[modes::rules::kMaxEffects];
         const uint8_t n = mode_change(boot_sent_ ? sent_state_ : State{modes::rules::Mode::None}, fx);
         ++seq_;
-        push(report(seq_, boot_sent_ ? "link" : "boot", Input::Boot, !boot_sent_, fx, n), Outcome{});
+        push(report(seq_, boot_sent_ ? by_ : "boot", Input::Boot, !boot_sent_, fx, n), Outcome{});
     }
     // /mouth is gone: unsent reports and queued digits are dropped (the next link sends the state again).
     void link_down()

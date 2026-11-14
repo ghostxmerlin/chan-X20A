@@ -1,7 +1,8 @@
 // hello modes step 1b (collector-0.4.92): hello owns the mode. The /mouth side of it (fw/mouth_modes.h), frame by
 // frame: text messages are length-checked and fully parsed before anything reads them; every input runs through
 // mode_rules.h on the robot; a change (or an input with effects) becomes a mode_report for mind; after each
-// handshake the current state goes first (by boot once after a real boot, else by link, with the mode-change
+// handshake the current state goes first (by boot once after a real boot, else input null and by = the last
+// change's source, with the mode-change
 // effects since the last report mind got); digits 0 and 9 go to mind as mode_input and mode_result brings their
 // toast; settings closes after 5 minutes without input; a report stays pending until the socket took it.
 #include "mouth_modes.h"
@@ -100,6 +101,15 @@ void boot_and_first_link()
     assert(r.view().online);
     assert(r.drain() == report(2, "talk", "boot", "\"boot\"", "\"stop_speech\",\"talk_enter\""));
     assert(r.drain().empty());
+    // The next link, nothing changed since boot: the state again, input null, by still "boot" (the last change).
+    r.s.link_down(); r.feed(kHello);
+    assert(r.drain() == report(3, "talk", "boot", "null", ""));
+    // After a touch change, a re-link names touch.
+    r.in(Input::Pause, "touch");                                              // outside chat: not_in_mode, no report
+    r.in(Input::Backward, "touch");                                           // talk -> idle
+    r.drain();
+    r.s.link_down(); r.feed(kHello);
+    assert(r.drain() == report(5, "idle", "touch", "null", ""));
 
     // A switch made before the first link: the boot report carries the state now and what mind must do.
     Robot o;
@@ -152,17 +162,17 @@ void links()
     assert(r.in(Input::Forward).changed);                                   // chat -> talk
     assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "OFFLINE"));
     assert(r.drain().empty());
-    // Back: one "link" report with what mind needs to get from chat to talk.
+    // Back: one report (input null, by = the last change's source) with what mind needs to get from chat to talk.
     r.feed(kHello);
-    assert(r.drain() == report(5, "talk", "link", "null", "\"stop_speech\",\"talk_enter\""));
+    assert(r.drain() == report(5, "talk", "asr", "null", "\"stop_speech\",\"talk_enter\""));
     // Reconnect with nothing changed: the state again, no effects.
     r.s.link_down(); r.feed(kHello);
-    assert(r.drain() == report(6, "talk", "link", "null", ""));
-    // Reports not sent when the link drops are replaced by the link report (from the last one mind got).
+    assert(r.drain() == report(6, "talk", "asr", "null", ""));
+    // Reports not sent when the link drops are replaced by that report (from the last one mind got).
     r.in(Input::Play);
     r.in(Input::Pause);                                                      // chat -> idle
     r.s.link_down(); r.feed(kHello);
-    assert(r.drain() == report(9, "idle", "link", "null", "\"stop_speech\",\"talk_leave\""));
+    assert(r.drain() == report(9, "idle", "asr", "null", "\"stop_speech\",\"talk_leave\""));
     // A send that fails keeps the report at the front.
     r.in(Input::Forward);
     OutLine l; uint32_t seq;
