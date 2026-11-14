@@ -29,6 +29,8 @@ RULE_CODES = {"rule:owner", "rule:coverage", "rule:time", "rule:place", "rule:se
 
 # Only v3 is kept (2026-11-11, user: "有了v3，我们不必再管v2 v1了"); old runs keep their prompt name.
 # v3: positive, most-likely wording (v2) + the eye result e1 as the main visual evidence, shorter output.
+# 2026-11-14 (owner: "地点以你点的为准"): an owner-reported place wins over what the picture looks like;
+# offline replay of 11:30-11:34 that day: 5/5 minutes said 家里 (before: 0/5).
 V3_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
 
 【怎么写】
@@ -53,6 +55,10 @@ V3_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟�
 - who_am_i 写 hello 自己（我是谁、此刻感官怎样），不要写别人；where_am_i 写 hello 在哪；people_doing 写旁边的人在干什么。各一句正向陈述，带把握。
 - 有人说话时写 topic：两个转写里一致出现的词说明了最可能的话题，就写出来（把握可以是 low）；完全听不清时才不写。
 - summary 不超过 20 个字。changes 写这一分钟变了什么（没变留空）。
+
+【地点】
+- rule:place 写着“主人报告”时，地点就是主人说的那个地方，以此为准：where_am_i 和 time_place 照它写，把握 high，evidence 引用 rule:place。画面看起来像别的地方（例如像办公室工位）也不改地点；画面只描述看到了什么（书桌、书架、白墙），不要拿画面去判断是办公室还是家。
+- 没有主人报告时，地点按 rule:place 写（Wi-Fi 或默认值），画面可以帮着判断。
 
 【画面】
 - e1 是视觉识别：另一个模型看过这一分钟的画面后写的结果（几个人、谁、在哪、在做什么、环境）。画面以 e1 为主要依据：people、activity、vision 条目引用 e1，basis 可以是 seen；M12 的脸记录只用来补充名字。
@@ -133,7 +139,7 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
     L.append(f"rule:time {st['time']['label']}，星期{st['time']['weekday']}，{'工作时段' if st['time']['work_hours'] else '非工作时段'}")
     pl = st["place"]
     if pl.get("label") and pl.get("source") == "owner_report":
-        L.append(f"rule:place 地点：{pl['label']}（主人报告，{_hhmm(pl['at'], tz)}）")
+        L.append(f"rule:place 地点：{pl['label']}（主人报告，{_hhmm(pl['at'], tz)}，以此为准）")
     elif pl.get("label"):
         L.append(f"rule:place 地点：{pl['label']}（来自 Wi-Fi）")
     else:

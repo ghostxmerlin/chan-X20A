@@ -61,6 +61,10 @@ class PromptsTest(unittest.TestCase):
         st = copy.deepcopy(self.strong); st["place"] = {"label": "办公室", "source": "owner_report", "at": T0 - 3600_000}
         u = render("v3", S, self.pkg, st, None, [], {})[1]["content"]
         self.assertIn("rule:place 地点：办公室（主人报告", u)
+        self.assertRegex(u, r"rule:place 地点：办公室（主人报告，\d\d:\d\d，以此为准）")   # owner 2026-11-14: the report wins
+        from mind import prompts as P
+        self.assertIn("【地点】", P.V3_SYSTEM)
+        self.assertIn("以此为准", P.V3_SYSTEM)
 
     def test_speech_text_off_hides_words(self):
         s2 = deep(S, sources={"speech_text": False})
