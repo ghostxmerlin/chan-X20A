@@ -1,5 +1,13 @@
 # Collector 局域网协议 v1
 
+## 0.4.96：首页上下滑放宽 + 手势诊断（2026-11-14）
+
+主人（0.4.95 实机）：“下拉不太好触发啊”。
+
+- **上下滑放宽**（`collector/touch_gesture.h`，主机测试 `tests/touch_gesture_test.cpp`、`tests/home_touch_test.cpp`）：主方向 ≥ 40 px（原 55）、主方向 > 1.5 倍横向（原 2 倍）、途中横向偏离 ≤ 70 px（原 55）。左右滑不变（55 px、2 倍、55 px）。所有滑动的时长上限 1500 ms（原 1000）。断触续接 120 ms（原 60，80 px 不变），所以一笔在松手 120 ms 后才判定。单击不变（30–700 ms、≤ 18 px）：滑动至少 40 px，单击至多 18 px，两者不会互相变成对方；19–39 px 的一笔什么也不是。
+- **时间用触摸读数自己的时间**：FT6336 每 20 ms 轮询一次并打时间戳；首页分类器现在用这个时间（不是 20 ms 屏幕定时器读到它的时间），定时器被眼睛动画拖慢时，一笔仍从第一个按下的读数开始计时、计位置；同一读数被读到两次只算一次。其他页面照旧。
+- **诊断**：遥测 `touch.home_strokes`（最近 8 笔，旧的在前）和 `touch.home_strokes_total`。每笔：`held_ms`、`dx`、`dy`（终点相对起点）、`max_dx`、`max_dy`（途中最大偏离）、`samples`（新读数个数）、`lost`（读失败 / 过期次数）、`gap_max_ms`（相邻两个读数的最大间隔）、`result`（`tap` / `double` / `swipe_up|down|left|right` / `none`），`none` 时加 `why`：`too_short`（不到 30 ms，或移动了 19 px 到滑动下限之间）、`too_slow`（超时长）、`diagonal`（不够偏向一个方向）、`cross`（途中偏离太多）。静态内部 RAM：环形缓冲约 150 B。
+
 ## 0.4.96：经 `/mouth` 安装 SD 资源（2026-11-14）
 
 主人选了“b吧”：不拔卡也能把 SD 资源（先是中文字库的 6 片 + 许可证）装上。机器人的 HTTP 服务在这一版不启动（`start_server` 没有调用），所以 `POST /v1/assets` 到不了；改走机器人一直连着的 `/mouth` websocket，由服务器上的 ear 推下去。

@@ -1062,6 +1062,21 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     touch["count"] = point.num;
     touch["x"] = point.x;
     touch["y"] = point.y;
+    {   // 0.4.96: the last home strokes, oldest first (why a swipe did not trigger)
+        touch::Stroke strokes[kScreenHomeStrokes];
+        uint32_t total = 0;
+        const size_t n = screen_home_strokes(strokes, kScreenHomeStrokes, total);
+        touch["home_strokes_total"] = total;
+        auto list = touch["home_strokes"].to<JsonArray>();
+        for (size_t i = 0; i < n; ++i) {
+            const auto& s = strokes[i];
+            auto o = list.add<JsonObject>();
+            o["held_ms"] = s.held_ms; o["dx"] = s.dx; o["dy"] = s.dy; o["max_dx"] = s.max_dx; o["max_dy"] = s.max_dy;
+            o["samples"] = s.samples; o["lost"] = s.lost; o["gap_max_ms"] = s.gap_max_ms;
+            o["result"] = touch::gesture_id(s.result);
+            if (s.result == touch::Gesture::None) o["why"] = touch::why_id(s.why);
+        }
+    }
     int level = 0;
     bool charging = false;
     int64_t power_us = 0;
@@ -1801,9 +1816,12 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                 if (wifi_scan_fresh) { screen_update_wifi_scan(wifi_scan_results.data(), wifi_scan_results.size(), wifi_scan_running); wifi_scan_fresh = false; }
                 if (wifi_status_dirty) { screen_update_wifi_status(wifi_status_text.c_str()); wifi_status_dirty = false; }
             }
+            // 0.4.96: home also gets the reading's own time (its FT6336 poll), so a stroke is timed from its first
+            // down sample even when this timer runs late (the eyes drawing); the same reading is fed once.
             if (touch.valid && now - touch.timestampUs < 100000)
                 screen_touch(touch.num > 0, static_cast<uint32_t>(now / 1000),
-                             touch.num > 0 ? touch.x : -1, touch.num > 0 ? touch.y : -1);
+                             touch.num > 0 ? touch.x : -1, touch.num > 0 ? touch.y : -1,
+                             static_cast<uint32_t>(touch.timestampUs / 1000));
             else screen_cancel_touch();
             {
                 // hello modes step 1b: home tap / double tap are the mode's (rules on the robot, mouth_link.h);

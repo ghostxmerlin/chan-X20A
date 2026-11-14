@@ -2,6 +2,7 @@
 #pragma once
 #include <lvgl.h>
 #include <cstdint>
+#include "touch_gesture.h"
 
 namespace collector {
 enum ScreenFunction : uint8_t {
@@ -62,7 +63,8 @@ void screen_tick(uint32_t now_ms);
 // Valid fresh samples only. Coordinates are required while down for swipes.
 // A release without coordinates uses the last down sample. Summary hold opens
 // pairing at 900 ms; other pages ignore holds. A hold never repeats navigation.
-void screen_touch(bool down, uint32_t now_ms, int x = -1, int y = -1);
+// sample_ms (0.4.96): the reading's own time; the home classifier runs on it (0 = now_ms). Other pages use now_ms.
+void screen_touch(bool down, uint32_t now_ms, int x = -1, int y = -1, uint32_t sample_ms = 0);
 // Reactions are transient home-only feedback; a new event restarts its 1000 ms
 // at UI acceptance. Input freshness is checked separately by the caller.
 void screen_show_reaction(ScreenReaction reaction, uint32_t now_ms);
@@ -77,6 +79,10 @@ void screen_update_faces(const ScreenFace* faces, size_t count, const char* stat
 bool screen_showing_faces();
 // Discard an interrupted/invalid touch sample without generating navigation.
 void screen_cancel_touch();
+// 0.4.96: copies the last finished home strokes (oldest first) into out; returns how many. total = strokes since
+// boot. Any task (own small lock).
+constexpr size_t kScreenHomeStrokes = 8;
+size_t screen_home_strokes(touch::Stroke* out, size_t cap, uint32_t& total);
 bool screen_showing_status();
 bool screen_showing_log();
 bool screen_showing_pairing();

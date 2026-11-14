@@ -46,9 +46,13 @@ int main()
 {
     // A left swipe of 9 frames x 12 px = 108 px with one failed read after the 3rd frame: still one left swipe.
     { Run r; r.frames("dddldddddduu", 200, -12); r.idle(400); assert(r.lefts == 1 && r.taps == 0 && r.others == 0); }
-    // Two failed reads in a row: the next real frame is 60 ms after the last one, the end of the rejoin window
-    // (C3: 60 ms). The swipe is lost (both halves are too short), but nothing turns into a tap.
-    { Run r; r.frames("dddllddddduu", 200, -12); r.idle(400); assert(r.lefts == 0 && r.taps == 0); }
+    // Two failed reads in a row (next real frame 60 ms after the last one): since 0.4.96 (rejoin 120 ms) still one
+    // swipe; so are four (100 ms).
+    { Run r; r.frames("dddllddddduu", 200, -12); r.idle(400); assert(r.lefts == 1 && r.taps == 0); }
+    { Run r; r.frames("dddllllddddduu", 200, -12); r.idle(400); assert(r.lefts == 1 && r.taps == 0); }
+    // Five (the next real frame 120 ms after the last one, the end of the rejoin window): the swipe is lost (both
+    // halves too short), but nothing turns into a tap.
+    { Run r; r.frames("dddlllllddddduu", 200, -12); r.idle(400); assert(r.lefts == 0 && r.taps == 0); }
     // The same stroke without a glitch, for reference.
     { Run r; r.frames("ddddddddduu", 200, -12); r.idle(400); assert(r.lefts == 1 && r.taps == 0); }
     // The bug this guards against: a swipe that starts slowly (3 frames, 2 px) and has a failed read before it speeds
@@ -75,5 +79,24 @@ int main()
     { Run r; r.frames("dddlllllduu", 160, 0); r.idle(400); assert(r.taps >= 1 && r.lefts == 0); }
     // reset() (leaving home, screen off) drops a pending tap.
     { Run r; r.frames("dddduu", 160, 0); r.h.reset(); r.idle(400); assert(r.taps == 0); }
+    // 0.4.96: the same reading seen twice (the screen timer faster than the touch poll) is one sample; a stroke whose
+    // timer reads come late is timed by the readings' own times.
+    {
+        HomeTouch h;
+        h.sample(true, 1000, 160, 60); h.sample(true, 1000, 160, 60); h.sample(true, 1020, 160, 80);
+        h.sample(true, 1020, 160, 80); h.lost(); h.sample(true, 1060, 160, 110); h.sample(false, 1080, -1, -1);
+        Gesture g = Gesture::None;
+        for (uint32_t t = 1100; t < 1600 && g == Gesture::None; t += 20) g = h.take(t);
+        assert(g == Gesture::SwipeDown);
+        Stroke s;
+        assert(h.take_stroke(s) && s.samples == 3 && s.lost == 1 && s.held_ms == 80 && s.gap_max_ms == 40 && s.dy == 50);
+        assert(s.result == Gesture::SwipeDown && s.why == Why::None && !h.take_stroke(s));
+    }
+    // The telemetry ring keeps the last 8, oldest first.
+    {
+        StrokeRing<8> ring;
+        for (int i = 0; i < 11; ++i) { Stroke s; s.dx = int16_t(i); ring.push(s); }
+        assert(ring.size() == 8 && ring.total() == 11 && ring.at(0).dx == 3 && ring.at(7).dx == 10);
+    }
     std::puts("home touch ok");
 }

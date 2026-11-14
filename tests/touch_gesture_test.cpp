@@ -5,6 +5,8 @@
 #include "touch_gesture.h"
 #include <cassert>
 #include <cstdint>
+#include <cstring>
+#include <initializer_list>
 
 using namespace collector::touch;
 
@@ -97,10 +99,10 @@ int main() {
     { GestureClassifier g;
       stroke(g, 0, 100, 100, 100, 100, 80);                      // release at 100
       stroke(g, 300, 250, 120, 100, 120, 200);                   // pressed 200 ms after, swipe left
-      assert(g.take(570) == Gesture::None);                      // release at 520, still inside the 60 ms rejoin window
-      assert(g.take(580) == Gesture::Tap);
-      assert(g.take(580) == Gesture::SwipeLeft);
-      assert(g.take(580) == Gesture::None); }
+      assert(g.take(630) == Gesture::None);                      // release at 520, still inside the 120 ms rejoin window
+      assert(g.take(640) == Gesture::Tap);
+      assert(g.take(640) == Gesture::SwipeLeft);
+      assert(g.take(640) == Gesture::None); }
     // A tap then a long hold inside the window: the tap still counts, the hold is nothing.
     { GestureClassifier g;
       stroke(g, 0, 100, 100, 100, 100, 80);
@@ -120,14 +122,74 @@ int main() {
       assert(idle(g, 160, 1000) == Gesture::None); }
     { GestureClassifier g; stroke(g, 0, 200, 120, 145, 120, 120);                            // 55 px: swipe left
       assert(idle(g, 160, 1000) == Gesture::SwipeLeft); }
-    { GestureClassifier g; stroke(g, 0, 160, 220, 160, 40, 1000);                            // held 1020 ms: too slow
-      assert(idle(g, 1040, 2000) == Gesture::None); }
+    { GestureClassifier g; stroke(g, 0, 160, 220, 160, 40, 1000);                            // held 1020 ms: a swipe since 0.4.96
+      assert(idle(g, 1040, 2000) == Gesture::SwipeUp); }
+    { GestureClassifier g; stroke(g, 0, 160, 220, 160, 40, 1480);                            // held 1500 ms: still a swipe
+      assert(idle(g, 1520, 2600) == Gesture::SwipeUp); }
+    { GestureClassifier g; stroke(g, 0, 160, 220, 160, 40, 1500);                            // held 1520 ms: too slow
+      assert(idle(g, 1540, 2600) == Gesture::None);
+      Stroke s; assert(g.take_stroke(s) && s.why == Why::TooSlow && s.result == Gesture::None); }
     { GestureClassifier g;                                       // horizontal end point but a 60 px bulge on the way
       g.feed(true, 0, 260, 120); g.feed(true, 40, 220, 160); g.feed(true, 80, 180, 180); g.feed(true, 120, 140, 160);
       g.feed(true, 160, 100, 122); g.feed(false, 180, -1, -1);
       assert(idle(g, 200, 1000) == Gesture::None); }
     { GestureClassifier g; stroke(g, 0, 0, 60, 0, 140, 200);                                  // x = 0 is a real point
       assert(idle(g, 240, 1000) == Gesture::SwipeDown); }
+
+    // ---- 0.4.96 vertical swipes: 40 px, 1.5 x ratio, 70 px cross; left / right keep 55 px, 2 x, 55 px.
+    { GestureClassifier g; stroke(g, 0, 160, 100, 160, 140, 200);                           // 40 px down: swipe
+      assert(idle(g, 240, 1000) == Gesture::SwipeDown); }
+    { GestureClassifier g; stroke(g, 0, 160, 100, 160, 139, 200);                           // 39 px: nothing
+      assert(idle(g, 240, 1000) == Gesture::None);
+      Stroke s; assert(g.take_stroke(s) && s.why == Why::TooShort && s.dy == 39); }
+    { GestureClassifier g; stroke(g, 0, 160, 140, 160, 100, 200);                           // 40 px up: swipe
+      assert(idle(g, 240, 1000) == Gesture::SwipeUp); }
+    { GestureClassifier g; stroke(g, 0, 160, 100, 195, 160, 200);                           // 60 down, 35 across: 1.5 x holds
+      assert(idle(g, 240, 1000) == Gesture::SwipeDown); }
+    { GestureClassifier g; stroke(g, 0, 160, 100, 200, 160, 200);                           // 60 down, 40 across: diagonal
+      assert(idle(g, 240, 1000) == Gesture::None);
+      Stroke s; assert(g.take_stroke(s) && s.why == Why::Diagonal); }
+    { GestureClassifier g;                                       // vertical end point, 75 px bulge on the way: cross
+      g.feed(true, 0, 160, 40); g.feed(true, 40, 200, 80); g.feed(true, 80, 235, 120); g.feed(true, 120, 200, 160);
+      g.feed(true, 160, 165, 200); g.feed(false, 180, -1, -1);
+      assert(idle(g, 200, 1000) == Gesture::None);
+      Stroke s; assert(g.take_stroke(s) && s.why == Why::Cross && s.max_dx == 75); }
+    { GestureClassifier g;                                       // a 65 px bulge is fine for up / down
+      g.feed(true, 0, 160, 40); g.feed(true, 40, 200, 80); g.feed(true, 80, 225, 120); g.feed(true, 120, 200, 160);
+      g.feed(true, 160, 165, 200); g.feed(false, 180, -1, -1);
+      assert(idle(g, 200, 1000) == Gesture::SwipeDown); }
+    { GestureClassifier g; stroke(g, 0, 200, 120, 146, 140, 200);                           // left/right unchanged: 54 px
+      assert(idle(g, 240, 1000) == Gesture::None); }
+    { GestureClassifier g; stroke(g, 0, 200, 120, 140, 150, 200);                           // 60 left, 30 down: not 2 x
+      assert(idle(g, 240, 1000) == Gesture::None); }
+    // A 300 ms tap (TALK: says a round) is never a swipe, a swipe never a tap, and the gap between is nothing.
+    for (int drift : {0, 9, 18}) {
+        GestureClassifier g; stroke(g, 0, 160, 120, 160, 120 + drift, 300);
+        assert(idle(g, 340, 1200) == Gesture::Tap);
+        GestureClassifier h; stroke(h, 0, 160, 120, 160 + drift, 120, 300);
+        assert(idle(h, 340, 1200) == Gesture::Tap);
+    }
+    for (int drift : {19, 25, 39}) {
+        GestureClassifier g; stroke(g, 0, 160, 120, 160, 120 + drift, 300);
+        assert(idle(g, 340, 1200) == Gesture::None);
+        Stroke s; assert(g.take_stroke(s) && s.why == Why::TooShort);
+    }
+    { GestureClassifier g; stroke(g, 0, 160, 120, 160, 160, 300); assert(idle(g, 340, 1200) == Gesture::SwipeDown); }
+    // A slow-sampled swipe (the LVGL timer late while the eyes draw): 3 samples 100 ms apart are still a swipe.
+    { GestureClassifier g;
+      g.feed(true, 0, 160, 60); g.feed(true, 100, 160, 90); g.feed(true, 200, 160, 120); g.feed(false, 220, -1, -1);
+      assert(idle(g, 240, 1000) == Gesture::SwipeDown);
+      Stroke s; assert(g.take_stroke(s) && s.samples == 3 && s.gap_max_ms == 100 && s.held_ms == 220 && s.dy == 60); }
+    // Records: a lost read in the middle is counted; a double tap's second stroke says double.
+    { GestureClassifier g;
+      g.feed(true, 0, 160, 60); g.feed(true, 20, 160, 80); g.note_lost(); g.feed(false, 20, -1, -1);
+      g.feed(true, 120, 160, 120); g.feed(false, 140, -1, -1);
+      assert(idle(g, 160, 1000) == Gesture::SwipeDown);
+      Stroke s; assert(g.take_stroke(s) && s.lost == 1 && s.samples == 3 && s.gap_max_ms == 100 && !g.take_stroke(s)); }
+    { GestureClassifier g; stroke(g, 0, 100, 100, 100, 100, 100); stroke(g, 320, 101, 100, 101, 100, 80);
+      assert(wait(g, 420, 900) == Gesture::DoubleTap);
+      Stroke s; assert(g.take_stroke(s) && s.result == Gesture::DoubleTap); }
+    assert(!std::strcmp(gesture_id(Gesture::SwipeDown), "swipe_down") && !std::strcmp(why_id(Why::Cross), "cross"));
 
     // ---- Frames that carry no point.
     { GestureClassifier g;                                       // idle release frames do nothing

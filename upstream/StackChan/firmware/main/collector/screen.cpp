@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <mutex>
 // Keep the renderer host-testable without importing the board's IDF headers.
 namespace hal_bridge { void board_set_display_backlight_enabled(bool enabled); }
 #ifdef ESP_PLATFORM
@@ -79,6 +80,17 @@ uint32_t pressed_at = 0, last_release = 0;
 // Home page (hello modes step 1b): taps and swipes go through the C3 classifier; tap / double tap are the
 // mode's (screen_take_home_gesture), a left swipe opens the summary. Up / down swipes are not wired yet.
 touch::HomeTouch home_gesture;           // a failed read on home is a release it may rejoin (home_touch.h)
+// 0.4.96 diagnostics ("下拉不太好触发"): the last 8 finished home strokes for telemetry touch.home_strokes. Written
+// by the LVGL timer, read by the telemetry builder; this lock guards only the ring (~150 B static).
+std::mutex stroke_mutex;
+touch::StrokeRing<kScreenHomeStrokes> home_strokes;
+void publish_stroke()
+{
+    touch::Stroke s;
+    if (!home_gesture.take_stroke(s)) return;
+    std::lock_guard<std::mutex> lock(stroke_mutex);
+    home_strokes.push(s);
+}
 ScreenHomeGesture home_pending = ScreenHomeGesture::None;
 // Mode corner badge (top right, every page) and the 2 s toast; small LVGL objects (internal RAM).
 lv_obj_t *mode_badge = nullptr, *mode_toast = nullptr;
@@ -779,7 +791,9 @@ void screen_tick(uint32_t now_ms)
     if (toast_shown && int32_t(now_ms - toast_until_ms) >= 0) { lv_obj_add_flag(mode_toast, LV_OBJ_FLAG_HIDDEN); toast_shown = false; }
     if (page == Page::Home) {
         // 0.4.94: the swipes are global (every mode): down quick settings, up mode picker, left summary.
-        switch (const auto g = home_gesture.take(now_ms)) {
+        const auto g = home_gesture.take(now_ms);
+        publish_stroke();                // before a swipe leaves home (leaving resets the classifier)
+        switch (g) {
         case touch::Gesture::Tap: home_pending = ScreenHomeGesture::Tap; break;
         case touch::Gesture::DoubleTap: home_pending = ScreenHomeGesture::DoubleTap; break;
         case touch::Gesture::None: break;
@@ -1202,7 +1216,7 @@ void picker_tap(int x, int y, uint32_t now_ms)
     show_page(Page::Home, now_ms);
 }
 }
-void screen_touch(bool down, uint32_t now_ms, int x, int y)
+void screen_touch(bool down, uint32_t now_ms, int x, int y, uint32_t sample_ms)
 {
     if (!home) return;
     if (!enabled) {
@@ -1214,7 +1228,7 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
         return;
     }
     if (page == Page::Home) {
-        home_gesture.sample(down, now_ms, x, y);
+        home_gesture.sample(down, sample_ms ? sample_ms : now_ms, x, y);
         if (!down && pressed) last_release = now_ms;
         pressed = down;
         return;
@@ -1260,6 +1274,14 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
         }
     }
     pressed = down;
+}
+size_t screen_home_strokes(touch::Stroke* out, size_t cap, uint32_t& total)
+{
+    std::lock_guard<std::mutex> lock(stroke_mutex);
+    total = home_strokes.total();
+    const size_t n = std::min(cap, home_strokes.size());
+    for (size_t i = 0; i < n; ++i) out[i] = home_strokes.at(home_strokes.size() - n + i);
+    return n;
 }
 void screen_cancel_touch()
 {
