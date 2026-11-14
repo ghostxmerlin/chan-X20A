@@ -4,7 +4,7 @@
 #include "laughing_man.h"
 #include "packed_palette.h"
 #include "remote_gestures.h"
-#include "touch_gesture.h"
+#include "home_touch.h"
 #include "eyes/view.h"
 #include <cstdio>
 #include <cstdlib>
@@ -72,9 +72,8 @@ bool pressed = false, touch_cancelled = false, long_press_fired = false;
 uint32_t pressed_at = 0, last_release = 0;
 // Home page (hello modes step 1b): taps and swipes go through the C3 classifier; tap / double tap are the
 // mode's (screen_take_home_gesture), a left swipe opens the summary. Up / down swipes are not wired yet.
-touch::GestureClassifier home_gesture;
+touch::HomeTouch home_gesture;           // a failed read on home is a release it may rejoin (home_touch.h)
 ScreenHomeGesture home_pending = ScreenHomeGesture::None;
-uint32_t last_touch_ms = 0;
 // Mode corner badge (top right, every page) and the 2 s toast; small LVGL objects (internal RAM).
 lv_obj_t *mode_badge = nullptr, *mode_toast = nullptr;
 uint32_t toast_until_ms = 0;
@@ -901,9 +900,8 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
         if (!down) touch_cancelled = false;
         return;
     }
-    last_touch_ms = now_ms;
     if (page == Page::Home) {
-        home_gesture.feed(down, now_ms, x, y);
+        home_gesture.sample(down, now_ms, x, y);
         if (!down && pressed) last_release = now_ms;
         pressed = down;
         return;
@@ -949,8 +947,10 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
 }
 void screen_cancel_touch()
 {
-    // Home: a lost sample is a release for the classifier (it rejoins a stroke that continues within 60 ms).
-    if (page == Page::Home) home_gesture.feed(false, last_touch_ms, -1, -1);
+    // Home: a failed read is only a release for the classifier, which rejoins the stroke if the finger is still
+    // there within 60 ms. Cancelling here (touch_cancelled) would drop the rest of the stroke and turn a cut-off
+    // stroke into a phantom tap (review I1). Other pages keep the cancel.
+    if (page == Page::Home) { home_gesture.lost(); pressed = false; return; }
     touch_cancelled = pressed || touch_cancelled;
     pressed = false;
     touch_start_x = touch_start_y = touch_last_x = touch_last_y = -1;

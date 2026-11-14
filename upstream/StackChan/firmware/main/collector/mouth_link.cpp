@@ -68,10 +68,14 @@ void queue_locked(const Report& r)
 
 void on_mode_result(ArduinoJson::JsonObjectConst o)
 {
-    std::lock_guard<std::mutex> lock(mode_mutex);
-    if (!modes_session) return;
-    if (!modes_session->on_result(o)) ESP_LOGW(kTag, "mode_result dropped");
-    mode_publish_locked();
+    bool ok = true;
+    {
+        std::lock_guard<std::mutex> lock(mode_mutex);
+        if (!modes_session) return;
+        ok = modes_session->on_result(o);
+        mode_publish_locked();
+    }
+    if (!ok) ESP_LOGW(kTag, "mode_result dropped");     // after the lock (review M3)
 }
 
 void on_message(const char* data, size_t n, bool binary)
@@ -313,10 +317,14 @@ bool speaking_now()
 Applied mode_apply(const char* source, modes::rules::Input input, const modes::rules::Value& value)
 {
     const bool speaking = speaking_now();       // the audio lock first, released before the mode lock
-    std::lock_guard<std::mutex> lock(mode_mutex);
-    if (!modes_session) { Applied a; std::snprintf(a.out.toast, sizeof a.out.toast, "NO MODES"); a.out.code = modes::rules::Code::UnknownInput; return a; }
-    const Applied a = modes_session->apply(esp_timer_get_time(), source, input, value, speaking);
-    mode_publish_locked();
+    Applied a;
+    {
+        std::lock_guard<std::mutex> lock(mode_mutex);
+        if (!modes_session) { std::snprintf(a.out.toast, sizeof a.out.toast, "NO MODES"); a.out.code = modes::rules::Code::UnknownInput; return a; }
+        a = modes_session->apply(esp_timer_get_time(), source, input, value, speaking);
+        mode_publish_locked();
+    }
+    // Logged after the lock: a backed-up console must not hold the /mouth task's hello / mode_result (review M3).
     if (a.changed) ESP_LOGI(kTag, "mode %s by %s (%s)", modes::rules::label(a.out.state), source, modes::rules::input_id(input));
     return a;
 }
@@ -324,11 +332,15 @@ Applied mode_apply(const char* source, modes::rules::Input input, const modes::r
 void mode_tick()
 {
     const bool speaking = speaking_now();
-    std::lock_guard<std::mutex> lock(mode_mutex);
-    if (modes_session && modes_session->tick(esp_timer_get_time(), speaking)) {
-        mode_publish_locked();
-        ESP_LOGI(kTag, "mode %s by timeout", modes::rules::label(modes_session->state()));
+    const char* back = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mode_mutex);
+        if (modes_session && modes_session->tick(esp_timer_get_time(), speaking)) {
+            mode_publish_locked();
+            back = modes::rules::label(modes_session->state());   // a constant table string: safe after the lock
+        }
     }
+    if (back) ESP_LOGI(kTag, "mode %s by timeout", back);
 }
 
 bool mode_view(ModeView& out)
