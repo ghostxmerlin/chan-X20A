@@ -183,6 +183,20 @@ class ReportTest(ModeApiBase):
         self.report('crowd', ['stop_speech'], inp='select')                 # talk_leave lost on the way
         self.assertEqual((self.worker.enabled(), self.auto.enabled()), (False, False))
 
+    def test_paid_effects_outside_talk_are_refused(self):
+        # review I2 (defence in depth): the rules never send these outside talk, but a report that does starts nothing
+        r = self.report('idle', ['say_round'], inp='forward')[1]
+        self.assertEqual((r['result']['code'], r['effects'], self.say_calls), ('only_talk', [], []))
+        r = self.report('crowd', ['prefetch_on'], by='touch', inp='double_tap')[1]
+        self.assertEqual((r['result']['code'], r['effects'], self.worker.enabled(), self.auto.enabled()),
+                         ('only_talk', [], False, False))
+        self.assertIsNone(self.gate.last)                                  # no 10 s reservation taken
+        meta = {'source': 'asr', 'input': 'x', 'value': None, 'device': 'robot.report', 'sid': None, 'mode': 'idle'}
+        self.assertEqual([self.ms.guard(e, meta) for e in ('say_round', 'prefetch_on', 'talk_enter')],
+                         ['only_talk', 'only_talk', None])
+        r = self.report('talk', ['say_round'])[1]                          # in talk it still works
+        self.assertEqual(r['result']['code'], 'ok')
+
     def test_bad_reports(self):
         self.assertEqual(self.report('fly')[0], 400)
         self.assertEqual(self.report('settings')[0], 400)                 # settings without return_to

@@ -212,8 +212,11 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
     holder = {}
 
     def guard(effect, meta):
-        """Called under ModeStore's lock (talk_enter included: None, Billing.talk_enter decides itself)."""
+        """Called under ModeStore's lock (talk_enter included: None, Billing.talk_enter decides itself and does nothing
+        outside talk). meta['mode'] is the mode after the change (the reported one for hello's reports)."""
         ms = holder['ms']
+        if effect in ('say_round', 'prefetch_on') and meta.get('mode') != 'talk':
+            return 'only_talk'               # review I2: paid talk-show work never starts outside talk, whatever came in
         if effect == 'say_round':
             if not ms.billing():
                 return 'billing_off'
