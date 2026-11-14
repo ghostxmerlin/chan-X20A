@@ -1,11 +1,14 @@
 // 情景摘要 (2026-11-13): the per-minute scene beside the talk-show card, so a line can be read against
-// what mind thought was happening. Reads /api/mind/scenes (latest version of each minute).
+// what mind thought was happening, heard as well as seen (topic, sound; 2026-11-14). Reads /api/mind/scenes
+// (latest version of each minute).
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const hhmm=ms=>new Date(ms).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'});
 export function sceneMinutesHtml(rows){
  if(!rows||!rows.length)return '<p class="note">还没有情景（情景开关关着，或最近没有新分钟）</p>';
  return '<ol class="scene-minutes">'+[...rows].reverse().map(r=>`<li><span class="muted">${hhmm(r.minute)}${r.source==='carried'?' · 沿用':''}</span> ${escapeHtml(r.text||'—')}${
-  r.summary?`<br><span class="scene-summary">${escapeHtml(r.summary)}</span>`:''}</li>`).join('')+'</ol>';
+  r.summary?`<br><span class="scene-summary">${escapeHtml(r.summary)}</span>`:''}${
+  r.topic?.length?`<br><span class="scene-summary">话题：${r.topic.map(escapeHtml).join('、')}</span>`:''}${
+  r.sound?`<br><span class="scene-summary">声音：${escapeHtml(r.sound)}</span>`:''}</li>`).join('')+'</ol>';
 }
 export class SceneMinutesPanel{
  constructor(doc){

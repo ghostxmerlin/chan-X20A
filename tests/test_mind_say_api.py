@@ -102,6 +102,22 @@ class SayApiTest(unittest.TestCase):
                                     'scene': {'people_doing': {'text': '主人在工位打字', 'confidence': 'high'}, 'summary': '安静工作'}})
         status, rows = self.call(f'/scenes?from={m - 1}&to={m + 60000}')
         self.assertEqual((status, rows[-1]['text'], rows[-1]['summary']), (200, '主人在工位打字', '安静工作'))
+        self.assertEqual((rows[-1]['topic'], rows[-1]['sound']), ([], ''))
+
+    def test_scene_minutes_carry_hearing(self):
+        # 2026-11-14 owner: "情景摘要，为何只有视觉部分啊" — topic and sound_scene entries go out too.
+        import time as _t
+        m = (int(_t.time() * 1000) // 60000) * 60000 - 60000
+        ent = lambda dim, text: {'key': f'{dim}.{text}', 'dimension': dim, 'text': text}
+        self.db.add('mind_scenes', {'lane': 'live', 'minute': m, 'version': 1, 'source': 'model',
+                                    'scene': {'people_doing': {'text': '两人讨论'}, 'summary': '讨论',
+                                              'entries': [ent('topic', '交期'), ent('activity', '打字'), ent('topic', '客户需求'),
+                                                          ent('sound_scene', '有人说话，偶尔敲键盘'), ent('topic', '芯片'), ent('topic', '午饭')]}})
+        status, rows = self.call(f'/scenes?from={m - 1}&to={m + 60000}')
+        self.assertEqual(status, 200)
+        self.assertEqual(rows[-1]['topic'], ['交期', '客户需求', '芯片'])
+        self.assertEqual(rows[-1]['sound'], '有人说话，偶尔敲键盘')
+        self.assertEqual((rows[-1]['text'], rows[-1]['summary']), ('两人讨论', '讨论'))
 
     def test_stats_shape(self):
         status, body = self.call('/say/stats?days=7')

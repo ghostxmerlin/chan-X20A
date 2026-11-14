@@ -356,8 +356,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             out = []
             for d in store.scenes_range(LANE, lo, hi)[-60:]:
                 sc = d.get('scene') or {}
+                said = lambda dim: [e.get('text') for e in sc.get('entries') or [] if e.get('dimension') == dim and e.get('text')]
+                # Hearing too (owner 2026-11-14): the topic and sound_scene entries, not only what was seen.
                 out.append({'minute': d['minute'], 'source': d.get('source'), 'version': d.get('version'),
-                            'text': (sc.get('people_doing') or {}).get('text') or '', 'summary': sc.get('summary') or ''})
+                            'text': (sc.get('people_doing') or {}).get('text') or '', 'summary': sc.get('summary') or '',
+                            'topic': said('topic')[:3], 'sound': '；'.join(said('sound_scene')[:2])})
             return out
         if path == '/signals':
             lo, hi = _range(q)
