@@ -2,7 +2,8 @@
 
 No database, no clock, no I/O: ModeStore (task A2) owns seq / since / persistence / dedup / staleness / the
 settings timeout clock, and runs the returned effects in order. `digit` (presets, A3) and `billing` (the master
-switch, A2/A3) are not handled here and come back as unknown_input.
+switch, A2/A3) are routed by ModeStore, never here: passing them raises ValueError so a misroute is loud instead
+of looking like junk input (genuinely unknown inputs still answer unknown_input).
 
 State = {mode, dir, host, return_to}:
   mode       one of mode_table.MODES
@@ -33,6 +34,7 @@ _EFFECT_TOAST = {'say_round': 'SAYING', 'prefetch_on': 'PREFETCH ON', 'prefetch_
 _WORDS = {w: (mid, 'enter') for mid, m in MODES.items() for w in m['enter']}
 _WORDS.update({w: (mid, 'leave') for mid, m in MODES.items() for w in m['leave']})
 _DIR_OWNER = {d: mid for mid, m in MODES.items() for d in (m['dirs'] or {})}
+_NOT_HERE = ('digit', 'billing')               # presets / master switch: ModeStore routes them (A2, A3)
 _DEFAULT_DIR = SUBTITLE_DIRS[0]                 # select subtitle without a dir = 中→英 (【我定】, same as DualKey up)
 
 
@@ -137,6 +139,8 @@ def transition(state, input, value=None, *, source, speaking=False):
     st = _state(state)
     if source not in SOURCES:
         raise ValueError(f'unknown source {source!r}')
+    if input in _NOT_HERE:
+        raise ValueError(f'{input!r}: digit/billing are routed by ModeStore, not transition')
     mode, m = st['mode'], MODES[st['mode']]
 
     # 1. the same in every mode

@@ -185,8 +185,7 @@ class EdgeCaseTest(unittest.TestCase):
 
     def test_bad_values_are_unknown_input(self):
         for inp, val in (('direction', 'sideways'), ('select', {'mode': 'party'}), ('select', 'chat'),
-                         ('select', {'mode': 'subtitle', 'dir': 'fr_de'}), ('wiggle', None),
-                         ('digit', 3), ('billing', False)):
+                         ('select', {'mode': 'subtitle', 'dir': 'fr_de'}), ('wiggle', None)):
             s, r, e = self.go('talk', inp, val)
             self.assertEqual((s['mode'], r['code'], e), ('talk', 'unknown_input', []), (inp, val))
 
@@ -302,6 +301,12 @@ class EdgeCaseTest(unittest.TestCase):
                             self.assertIsNone(s['return_to'])
                         if s['mode'] != 'subtitle' and not (s['mode'] == 'settings' and s['return_to'] == 'subtitle'):
                             self.assertIsNone(s['dir'])
+
+    def test_digit_and_billing_are_not_routed_here(self):
+        # presets and the master switch go through ModeStore / billing (A2, A3); a misroute must be loud
+        for inp, val in (('digit', 3), ('billing', False)):
+            with self.assertRaisesRegex(ValueError, 'routed by ModeStore'):
+                self.go('talk', inp, val)
 
     def test_bad_state_or_source_raises(self):
         with self.assertRaises(ValueError):
