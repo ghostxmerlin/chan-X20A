@@ -7,7 +7,11 @@ GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /l
 POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voice/try
 POST /say/round /say/play /signal /say/prefetch /say/auto (talk show; 连续说 state is in GET /say/stats under auto)
 GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
+     /db/changes (extracted memories, latest change first; lane live / replay) /db/sources (one memory's sources)
+     /db/extract (记忆整理: switch, caps, spend, recent jobs; long-term memory phase A, mind/memory_extract.py)
 POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only versions; no delete)
+     /db/memory/review (对 confirm / 错 wrong = disabled / 合并 merge; 改 is /db/memory) /db/extract/switch {on}
+     /db/extract/run {day?} (ask the memory worker to run that day now; it still checks the switch and caps)
 GET  /realtime/context (ear: 围观 realtime voice session's context block + owner face names; mind/realtime.py)
 GET  /chat/turns /chat/state; POST /chat/heard /chat/stage (ear: a speech onset in chat, the page's dots) (ear: one sentence heard while hello is in chat; chat v0, mind/chat.py)
 GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/robot (ear: hello's /mouth closed)
@@ -26,7 +30,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from . import fusion, prompts, segments, settings as settings_mod, speak
+from . import fusion, memory_extract, prompts, segments, settings as settings_mod, speak
 from .settings_store import MODELS, SettingsConflict
 from . import speech_settings
 from .memory import MemoryStore, MemoryConflict
@@ -266,7 +270,17 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         offset, limit = 0 if offset is None else offset, 20 if limit is None else limit
         if path == '/db/memories':
             return lib_call(lambda: lib.memories(one('kind'), one('person'), one('topic'), one('q'),
-                                                 _int(q, 'from', False), _int(q, 'to', False), offset, limit))
+                                                 _int(q, 'from', False), _int(q, 'to', False), offset, limit,
+                                                 lane=one('lane') or 'live'))
+        if path == '/db/changes':
+            return lib_call(lambda: lib.changes(one('lane') or 'live', offset, limit))
+        if path == '/db/sources':
+            mid = one('id')
+            if not isinstance(mid, str) or not re.fullmatch(r'e_[a-f0-9]{12}', mid):
+                raise BadRequest('invalid id')
+            return lib_call(lambda: lib.sources(mid))
+        if path == '/db/extract':
+            return memory_extract.status(db, store, current_settings()[0], int(time.time() * 1000))
         return lib_call(lambda: lib.knowledge(one('kind'), one('person'), one('q'), offset, limit))
 
     def lib_post(path, body):
@@ -288,7 +302,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
 
     def get(path, q):
         if path.startswith('/db/'):
-            if path not in ('/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item'):
+            if path not in ('/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item',
+                            '/db/changes', '/db/sources', '/db/extract'):
                 raise NotFound('not found')
             return lib_get(path, q)
         if path == '/speech/settings':
@@ -456,6 +471,30 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         now = int(time.time() * 1000)
         if path in DB_POST:
             return lib_post(path, body)
+        if path == '/db/memory/review':
+            if set(body) - {'id', 'expected_version', 'action', 'into', 'reason'}:
+                raise BadRequest('unexpected fields')
+            if not isinstance(body.get('reason', ''), str):
+                raise BadRequest('reason must be text')
+            mid = body.get('id')
+            if not isinstance(mid, str) or not re.fullmatch(r'e_[a-f0-9]{12}', mid):
+                raise BadRequest('invalid id')
+            return lib_call(lambda: Library(db).review(mid, body.get('expected_version'), body.get('action'), now_ms=now,
+                                                       into=body.get('into'), reason=body.get('reason', '')))
+        if path == '/db/extract/switch':
+            try:
+                on = memory_extract.set_switch(db, body.get('on'), now)
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+            return memory_extract.status(db, store, current_settings()[0], now) | {'on': on}
+        if path == '/db/extract/run':
+            if set(body) - {'day'}:
+                raise BadRequest('unexpected fields')
+            try:
+                req = memory_extract.request_run(db, current_settings()[0], now, body.get('day'))
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+            return {**memory_extract.status(db, store, current_settings()[0], now), 'requested': req}
         if path == '/speech/settings':
             ss = ctx.get('settings_store')
             if not ss or type(body.get('expected_version')) is not int or set(body)-{'speech','memory','expected_version','note'}:
@@ -772,6 +811,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             url = urlsplit(self.path)
             if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
                                 '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
+                                '/db/memory/review', '/db/extract/switch', '/db/extract/run',
                                 '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard', '/chat/stage'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats", "/mode/seq"):
                     self._send(405, {"error": "read only"})

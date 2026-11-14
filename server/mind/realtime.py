@@ -21,7 +21,7 @@ Parts are cached (TTL_S) so the ear's 60 s refresh and the scene_now tool cost a
 import collections
 import time
 
-from . import settings as settings_mod, speech_settings
+from . import recall, settings as settings_mod, speech_settings
 from .chat import MAX_MEMORIES
 from .library import Library
 
@@ -104,7 +104,7 @@ class RealtimeContext:
         chat = self.chat
         scene = self._part('scene', lambda: chat._load_scene(now)) if chat else None
         notes = self._part('notes', lambda: chat._load_notes(now)) if chat else None
-        memories = (self._part('memories', lambda: chat._load_memories(now)) if chat else None) or []
+        memories = recall.plain((self._part('memories', lambda: chat._load_memories(now)) if chat else None) or [], crowd=True)
         faces = self._part('faces', lambda: visible_faces(self.db, now)) or []
         eye = self._part('eye', lambda: latest_eye(self.db, now))
         cards = self._part('cards', lambda: face_cards(self.db)) or {}

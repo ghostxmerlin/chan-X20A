@@ -359,3 +359,19 @@ test('local demo with the stand-in hello: loopback only, its own token, info / t
  assert.deepEqual(sent.map(x=>[x[0],x[1],x[2]]),[['/v1/info','Bearer h','GET'],['/v1/telemetry','Bearer h','GET'],['/v1/control','Bearer h','POST']]);
  assert.deepEqual(JSON.parse(sent[2][3]),{target:'mode',input:'select',value:{mode:'idle'}});
 });
+
+// ---- long-term memory phase A: 最近变化 / 记忆整理 paths ----
+test('memory phase A paths pass the proxy and the local server; lane replay is allowed', async t=>{
+ for(const p of ['/db/changes?lane=replay&offset=0&limit=20','/db/changes?lane=live','/db/sources?id=e_0123456789ab','/db/extract'])
+  assert.equal(MindProxy.check(p),p);
+ for(const p of ['/db/changes?lane=other','/db/sources?id=%24ne','/db/extract?x=1'])assert.equal(MindProxy.check(p),null);
+ const seen=[],proxy=new MindProxy({ssh:'h',token:'k',socketPath:SOCK,prepareFn:()=>{},spawnFn:fakeSsh(),requestFn:okFetch(seen)});
+ for(const p of ['/db/memory/review','/db/extract/switch','/db/extract/run'])assert.equal((await proxy.post(p,'{}')).status,200);
+ const calls=[],mind={get:async p=>{calls.push(p);return {status:200,body:'{}'};},post:async(p)=>{calls.push(p);return {status:200,body:'{}'};},stop(){}};
+ const server=createMonitorServer(new Monitor({binding:{address:'http://127.0.0.1:8080',token:'b'.repeat(32)}}),undefined,mind);
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const url=`http://127.0.0.1:${server.address().port}`;
+ for(const p of ['/db/changes','/db/sources?id=e_0123456789ab','/db/extract'])assert.equal((await fetch(url+'/api/mind'+p)).status,200,p);
+ for(const p of ['/db/memory/review','/db/extract/switch','/db/extract/run'])
+  assert.equal((await fetch(url+'/api/mind'+p,{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{}'})).status,200,p);
+});

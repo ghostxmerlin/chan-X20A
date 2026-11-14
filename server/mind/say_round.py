@@ -9,7 +9,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from . import say_prompts as P, speech_settings
+from . import recall, say_prompts as P, speech_settings
 from .model_calls import run_json
 from .say_moment import signature
 from .speech_context import norm
@@ -143,6 +143,10 @@ def write_round(env, store, s, roles, ctx, now_ms, *, chat=None, trigger=None, m
            'checks': [], 'plays': [], 'state': 'ready', 'run_ids': run_ids,
            'timings': {'write_ms': write_ms, 'judge_ms': judge_ms}, 'cost_usd': cost}
     store.db['say_rounds'].insert_one(dict(doc))
+    try:
+        recall.note_uses(store.db, ctx.get('memories'), 'talk', now_ms, rid)   # the talk show's 3-day memory cooldown
+    except Exception:                    # noqa: BLE001 - a missing use record never fails a written round
+        pass
     return doc
 
 

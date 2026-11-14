@@ -24,8 +24,9 @@ replaced and waited-out sentences stay in the history as heard. An empty model r
 is said. The daily runaway guard (budget_usd_per_day, mind_runs) stops chat calls too (budget).
 
 Context (refreshed part by part when its TTL ran out: while idle, and at turn time within ~100 ms): the latest scene
-(summary, topic, sound), the latest conversation notes, MemoryStore.recall (8, of which at most 3 that share words with
-the sentence go in), hello's persona (config/roles deadpan, 无限's delivery), the recognised speaker's library card and
+(summary, topic, sound), the latest conversation notes, the recall pool (recall.py: MemoryStore.recall 8 habits + up to
+300 library memories, long-term memory phase A; at most 3 that share words with the sentence go in, the speaker's own
+first, with how they may be used: child / others' words), hello's persona (config/roles deadpan, 无限's delivery), the recognised speaker's library card and
 active notes (links.voice_names), and the last chat turns (chat_turns).
 
 Streaming (chat v1, owner 2026-11-14 "做流式合成"; speech.chat.stream, default on): once a turn is picked up and hello
@@ -48,9 +49,8 @@ import threading
 import time
 import uuid
 
-from . import llm, selfvoice, settings as settings_mod, speak, speech_settings
+from . import llm, recall, selfvoice, settings as settings_mod, speak, speech_settings
 from .library import Library
-from .memory import MemoryStore
 from .store import LANE
 
 ROLE = 'deadpan'                     # 无限's delivery (config/roles/deadpan.json, voice wuxian)
@@ -67,9 +67,7 @@ SCENE_FRESH_MS = 4 * 60_000
 NOTES_FRESH_MS = 10 * 60_000
 TTL_MS = {'persona': 300_000, 'scene': 20_000, 'notes': 30_000, 'people': 120_000, 'memories': 120_000,
           'cost': 60_000}
-# Two-character words too common to make a memory "related" (review M4).
-STOP_BIGRAMS = set('什么 一个 我们 你们 他们 今天 明天 昨天 这个 那个 怎么 没有 就是 不是 可以 现在 还是 知道 觉得 时候 '
-                   '一下 一点 自己 然后 因为 所以 但是 如果 已经 还有 这样 那样 哪里 为什 真的 好的 是不 不要 要不'.split())
+STOP_BIGRAMS = recall.STOP_BIGRAMS  # two-character words too common to make a memory "related" (review M4)
 REFRESH_BUDGET_MS = 100
 IDLE_WAIT_S = 10
 NOT_VOICE_MARGIN_DB = 3              # band none counts only below near_db + 3 (2026-11-08..10 robot recordings, impl-report)
@@ -188,16 +186,13 @@ def split_first(text):
     return text, ''
 
 
-def _bigrams(text):
-    n = _norm(text)
-    return {n[i:i + 2] for i in range(len(n) - 1)} | ({n} if len(n) == 1 else set())
+_bigrams = recall.bigrams
 
 
-def related_memories(statements, text, limit=MAX_MEMORIES):
-    """At most `limit` remembered statements that share a word (two characters) with the sentence, best first."""
-    words = _bigrams(text) - STOP_BIGRAMS
-    scored = [(len(words & _bigrams(m)), -i, m) for i, m in enumerate(statements)]
-    return [m for score, _, m in sorted(scored, reverse=True) if score > 0][:limit]
+def related_memories(statements, text, limit=MAX_MEMORIES, person_id=None):
+    """At most `limit` remembered items (pool dicts or plain statements) that share a word (two characters) with the
+    sentence, best first; among those, the speaker's own (about / said by person_id) first."""
+    return recall.related(statements, text, limit=limit, person_id=person_id)
 
 
 def messages(ctx, item, history, cfg, who):
@@ -228,9 +223,9 @@ def messages(ctx, item, history, cfg, who):
             bg.append(f'声音：{sc["sound"]}')
     if ctx.get('notes'):
         bg.append(f'对话纪要：{ctx["notes"]}')
-    mem = related_memories(ctx.get('memories') or [], item['text'])
+    mem = related_memories(ctx.get('memories') or [], item['text'], person_id=(ctx.get('person') or {}).get('person_id'))
     if mem:
-        bg.append('你记得（只在相关时提）：' + '；'.join(mem))
+        bg.append('你记得（只在相关时提）：' + '；'.join(recall.prompt_text(m) for m in mem))
     person = ctx.get('person')
     if person:
         p = f'说话的人：{person["display"]}'
@@ -793,10 +788,8 @@ class Chat:
         return f'{conv.get("title") or ""}：{conv.get("notes") or ""}'[:400]
 
     def _load_memories(self, now_ms):
-        if not (self.settings_fn().get('memory') or {}).get('apply', True):
-            return []
-        scope = speech_settings.scope(self.settings_fn())['id']
-        return [m['statement'] for m in MemoryStore(self.db).recall(scope, now_ms, limit=RECALL) if m.get('statement')]
+        """The recall pool (habit memories, then library memories); [] when memory.apply is off."""
+        return recall.load_pool(self.db, self.settings_fn(), now_ms, habit_limit=RECALL)
 
     def _load_people(self, now_ms):
         """voice name -> {person_id, display, notes (active, up to 6), tease} from the library (links.voice_names)."""

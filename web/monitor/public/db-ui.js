@@ -1,5 +1,7 @@
 // hello 库 (/db.html): the owner adds, edits, disables / re-enables, reads the history of and restores
 // people cards, people notes, memories and knowledge (server/mind/library.py, reached as /api/mind/db/*).
+// 最近变化 (long-term memory phase A): the memories the daily 记忆整理 extracted, with their sources and 对 / 错 / 改 /
+// 合并 (错 disables, never deletes; 改 writes the owner's version; 合并 sets merged_into), plus the 记忆整理 switch.
 // One module in four parts: constants & helpers · model · html (strings only, stored text always via esc) · mount.
 // No imports: tests load this file from a data: URL, where absolute imports do not resolve.
 
@@ -7,7 +9,7 @@
 export const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const copy=x=>x===undefined?undefined:JSON.parse(JSON.stringify(x));
 const CONFLICT='已被改过，请刷新后重试';
-const NOTICE='这些内容只在服务器数据库里，不进仓库；现在没有任何提示在读它们。没有删除，只能停用。';
+const NOTICE='这些内容只在服务器数据库里，不进仓库。对话和脱口秀会读在用的记忆（低置信的不读）。没有删除，只能停用。';
 const COLL={people_cards:{key:'person_id',path:'/db/person',title:'人物卡'},people_notes:{key:'note_id',path:'/db/person/note',title:'人物条目'},
  memory_items:{key:'memory_id',path:'/db/memory',title:'记忆'},knowledge_items:{key:'kid',path:'/db/knowledge',title:'知识'}};
 // Page-writable fields, mirroring library.py _card / _note / _memory / _knowledge (and its restore table).
@@ -26,8 +28,14 @@ const NOTE_KIND={trait:'性格',fact:'稳定事实',preference:'喜好',boundary
 const MEM_KIND={event:'发生过的事',told:'被告诉的情况',feeling:'心事'};
 const KNOW_KIND={place:'地点',work:'工作背景、项目',commitment:'长期任务',life:'生活中的事',term:'行话',self:'hello 自己',other:'其他'};
 const STATUS={confirmed:'在用',active:'在用',retired:'已退场',disabled:'已停用',stale:'已过时',candidate:'候选',proposed:'提议中',merged:'已合并'};
-const ORIGIN={owner:'主人写的',fused:'融合',import:'导入'};
+const ORIGIN={owner:'主人写的',fused:'融合',import:'导入',extracted:'自动提取'};
 const SOURCE={owner:'主人写的',settings_import:'从设置导入',m12_name:'M12 名字',conversation:'对话',companion:'陪伴',rule:'规则',extracted:'自动提取'};
+const CONF={high:'清楚',mid:'一般',low:'低置信：不进提示'};
+const ROLE={about:'说的是',speaker:'说话的',present:'在场',mentioned:'提到'};
+const SENS={child:'孩子：不开玩笑、不照原话说',others_said:'别人说的：只提意思',private:'隐私'};
+const LANE={live:'正式',replay:'试跑（replay，不进提示）'};
+const JOB={running:'进行中',done:'完成',partial:'做了一部分',stopped:'停了',error:'出错，稍后重试',pending:'等着做'};
+const WHY={switch_off:'记忆整理关着',mind_off:'情景关着',learning_off:'长期记忆学习关着',capped:'到了花费上限',budget:'今天的模型预算用完',no_model:'没有模型'};
 const EXISTING={candidate:'待积累',known:'已认识',review:'待复核',disabled:'已停用'};
 const FIXED_SUBJECTS={owner:'主人',hello:'hello',room:'房间'};
 const ID='(?:owner|[pnek]_[a-f0-9]{12})';
@@ -80,7 +88,7 @@ export function buildFields(c,v,base=null){
 /** '#person=p_…' etc. -> {view, id?, c?}; anything unknown is the people list. */
 export function parseHash(h){
  let s=String(h||'').replace(/^#/,'');try{s=decodeURIComponent(s);}catch{return {view:'people'};}
- if(['people','memories','knowledge','existing','voice'].includes(s))return {view:s};
+ if(['changes','people','memories','knowledge','existing','voice'].includes(s))return {view:s};
  let m=new RegExp(`^person=(owner|p_[a-f0-9]{12})$`).exec(s);if(m)return {view:'person',id:m[1]};
  m=new RegExp(`^item=(people_cards|people_notes|memory_items|knowledge_items):(${ID})$`).exec(s);if(m)return {view:'item',c:m[1],id:m[2]};
  return {view:'people'};
@@ -106,6 +114,13 @@ export class LibraryModel{
  knowledge(f={}){return this.read('knowledge','/db/knowledge?'+query(f,['kind','person','q']));}
  item(c,id){return this.read('item',`/db/item?c=${encodeURIComponent(c)}&id=${encodeURIComponent(id)}`);}
  existing(){return this.read('existing','/memories?offset=0&limit=10');}
+ changes(f={}){const p=new URLSearchParams({lane:f.lane==='replay'?'replay':'live',offset:String(f.offset||0),limit:'20'});return this.read('changes','/db/changes?'+p);}
+ sources(id){return this.request('/db/sources?id='+encodeURIComponent(id));}
+ extract(){return this.read('extract','/db/extract');}
+ /** 对 confirm / 错 wrong / 合并 merge: one owner version of the current one. */
+ review(doc,action,{into,reason}={}){const b={id:doc.memory_id,expected_version:doc.version,action};if(into)b.into=into;if(reason)b.reason=String(reason).slice(0,200);return this.request('/db/memory/review',b);}
+ extractSwitch(on){return this.request('/db/extract/switch',{on:!!on});}
+ extractRun(){return this.request('/db/extract/run',{});}
  async choices(){
   const seq=this.seq.choices=(this.seq.choices||0)+1;
   const [p,k]=await Promise.all([this.request('/db/people'),this.request('/db/knowledge?offset=0&limit=100')]);
@@ -178,7 +193,7 @@ function bodyOf(c,d,o){
  if(c==='people_notes')return `<p><span class="tag">${esc(NOTE_KIND[d.kind]||d.kind)}</span> ${esc(d.text)}</p>`+meta(c,d,d.origin?esc(ORIGIN[d.origin]||d.origin):'');
  if(c==='memory_items'){
   const topics=topicList(o,d.topics);
-  return `<p><span class="tag">${esc(MEM_KIND[d.kind]||d.kind)}</span> <b>${esc(d.title)}</b></p><p>${esc(d.statement)}</p>`+
+  return `<p><span class="tag">${esc(MEM_KIND[d.kind]||d.kind)}</span> <b>${esc(d.title)}</b>${d.confidence==='low'?' <span class="tag warn">'+esc(CONF.low)+'</span>':''}</p><p>${esc(d.statement)}</p>`+
    meta(c,d,`${whenLabel(d.when)} · 涉及：${nameList(o,d.subjects)}${topics?' · 知识：'+topics:''} · 来源：${esc(SOURCE[d.source?.kind]||d.source?.kind||'—')}`);
  }
  return `<p><span class="tag">${esc(KNOW_KIND[d.kind]||d.kind)}</span> <b>${esc(d.name)}</b>${d.aliases?.length?' · 也叫 '+d.aliases.map(esc).join('、'):''}${d.heard_as?.length?' · 常被听成 '+d.heard_as.map(esc).join('、'):''}</p>`+
@@ -302,6 +317,59 @@ function itemHtml(c,item,o){
  const back=c==='people_cards'?`#person=${head.person_id}`:c==='people_notes'?`#person=${head.person_id}`:c==='memory_items'?'#memories':'#knowledge';
  return `<p><a href="${esc(back)}">← 返回</a></p><h2>${COLL[c].title}的历史</h2>${row(c,head,bodyOf(c,head,o),{...o,noHistory:true})}${historyHtml(item,{...o,c})}`;
 }
+// ---- 最近变化: extracted memories, their sources, 对 / 错 / 改 / 合并, and the 记忆整理 panel ----
+const money=x=>'$'+(Number(x)||0).toFixed(3);
+function peopleLabel(o,people){
+ const m=names(o);
+ return (people||[]).map(p=>`${esc(ROLE[p.role]||p.role)} ${esc(p.id==='unknown'?(p.name_text?'认不出的「'+p.name_text+'」':'认不出的人'):m[p.id]||p.id)}`).join('、')||'—';
+}
+function sourceLine(x){
+ const at=typeof x.at==='number'?esc(localTime(x.at)):'';
+ if(x.missing)return `<li>${esc(x.kind)} · 找不到了</li>`;
+ if(x.error)return `<li>${esc(x.kind)} · 读不出来</li>`;
+ const where=x.session?` <span class="alt">录音 ${esc(x.session)}${Array.isArray(x.pos)?' @'+esc(x.pos[0])+'–'+esc(x.pos[1]):''}</span>`:'';
+ return `<li><span class="tag">${esc(x.kind)}</span> ${at}${x.title?' <b>'+esc(x.title)+'</b>':''}${x.text?' '+esc(x.text):''}${x.reply?' <span class="alt">hello 答：'+esc(x.reply)+'</span>':''}${x.speaker?' <span class="alt">（'+esc(x.speaker)+'）</span>':''}${where}</li>`;
+}
+export function sourcesHtml(data){
+ if(!data)return '';
+ if(data==='loading')return '<p class="alt">读取出处…</p>';
+ if(data.error)return `<p class="error">出处读取失败：${esc(data.error)}</p>`;
+ const rows=data.sources||[];
+ return `<ul class="db-sources">${rows.map(sourceLine).join('')||'<li class="alt">没有出处</li>'}${data.more?`<li class="alt">还有 ${esc(data.more)} 处</li>`:''}</ul>`;
+}
+function changeRow(d,o,items){
+ const c='memory_items',id=d.memory_id,key=`${c}:${id}`;
+ if(o.editing===key)return `<article class="db-item" data-c="${c}" data-id="${esc(id)}">${editForm(c,d,o)}</article>`;
+ const off=d.status!=='active',others=(items||[]).filter(x=>x.memory_id!==id&&x.status!=='merged');
+ const into=others.length?`<div class="db-form db-merge" data-form="merge:${esc(id)}"><select name="into" aria-label="并到哪一条">${others.map(x=>`<option value="${esc(x.memory_id)}">${esc(x.title)}（${esc(x.day||'')}）</option>`).join('')}</select><button data-act="merge">合并</button></div>`:'';
+ const sens=(d.sensitivity||[]).map(f=>` <span class="tag">${esc(SENS[f]||f)}</span>`).join('');
+ const merged=d.status==='merged'?` · 并到了 ${esc((items||[]).find(x=>x.memory_id===d.merged_into)?.title||d.merged_into||'')}`:'';
+ const who=d.actor==='owner'?'主人改过（以后不再自动改）':d.origin==='extracted'?'自动提取':esc(ORIGIN[d.origin]||d.origin||'—');
+ return `<article class="db-item${off?' off':''}" data-c="${c}" data-id="${esc(id)}">`+
+  `<p><span class="tag">${esc(MEM_KIND[d.kind]||d.kind)}</span> <b>${esc(d.title)}</b>${d.confidence==='low'?' <span class="tag warn">'+esc(CONF.low)+'</span>':''}${sens}</p><p>${esc(d.statement)}</p>`+
+  `<p class="meta">${whenLabel(d.when)} · 置信：${esc(CONF[d.confidence]||d.confidence||'—')} · 重要：${esc(d.salience??'—')} · ${peopleLabel(o,d.people)}${d.emotion?.label?' · 心情：'+esc(d.emotion.label):''}</p>`+
+  `<p class="meta">${who} · 第 ${esc(d.version)} 版 · ${esc(localTime(d.changed_at))}${off?' · <b>'+esc(STATUS[d.status]||d.status)+'</b>':''}${merged}${d.owner_confirmed?' · 主人说对':''}</p>`+
+  `<div class="db-actions"><button data-act="sources">${o.sources?.[id]?'收起出处':'看出处（'+esc((d.derived_from||[]).length)+'）'}</button><button data-act="confirm">对</button><button data-act="wrong">错</button><button data-act="edit">改</button><button data-act="history">历史</button></div>`+
+  into+sourcesHtml(o.sources?.[id])+'</article>';
+}
+export function extractHtml(x){
+ if(!x)return '<section class="db-extract"><h3>记忆整理</h3><p class="alt">读取中…</p></section>';
+ if(x.error)return `<section class="db-extract"><h3>记忆整理</h3><p class="error">读取失败：${esc(x.error)}</p></section>`;
+ const blocks=[!x.mind_on&&'情景关着：每天的整理不跑',!x.learning&&'长期记忆学习关着：每天的整理不跑',!x.apply&&'长期记忆应用关着：对话和脱口秀不读记忆'].filter(Boolean);
+ const req=x.request?.state?` · 上次“现在整理”：${esc(x.request.day||'')} ${esc(JOB[x.request.state]||x.request.state)}`:'';
+ const jobs=(x.jobs||[]).map(j=>`<li>${esc(j.day)} · ${esc(LANE[j.lane]||j.lane)} · ${esc(JOB[j.state]||j.state)}${j.reason?'（'+esc(WHY[j.reason]||j.reason)+'）':''} · ${esc(j.chunks_done)}/${esc(j.chunks)} 块 · 新 ${esc(j.counts?.created??0)} 改 ${esc(j.counts?.updated??0)} 拦下 ${esc(j.counts?.blocked??0)} · ${money(j.cost_usd)}</li>`).join('');
+ return `<section class="db-extract"><h3>记忆整理</h3><label class="chk"><input type="checkbox" data-extract-switch${x.on?' checked':''}> 记忆整理：每天一次，从前一天的对话、纪要、情景段里整理出一件件的事（luna）</label>`+
+  `<p class="meta">今天花了 ${money(x.daily_spent_usd)} / 上限 ${money(x.daily_cap_usd)} · 回填花了 ${money(x.backfill_spent_usd)} / 上限 ${money(x.backfill_cap_usd)}${x.daily_since?' · 每天整理从 '+esc(x.daily_since)+' 起':''}${req}</p>`+
+  (blocks.length?`<p class="note">${blocks.map(esc).join('；')}</p>`:'')+
+  `<div class="db-actions"><button data-act="extract-run"${x.on?'':' disabled'}>现在整理今天</button></div>`+
+  (jobs?`<details><summary>最近的整理</summary><ul class="db-jobs">${jobs}</ul></details>`:'')+'</section>';
+}
+export function changesHtml(page,o={}){
+ const f=o.filters||{},items=page.items||[];
+ return extractHtml(o.extract)+`<section><div class="db-tools db-form" data-form="filters:changes"><h2>最近变化</h2><select data-filter="lane" name="lane" aria-label="哪条道">${opts(LANE,f.lane||'live')}</select></div>`+
+  `<p class="note">自动整理出来的记忆写进去就生效（低置信的不进提示）。对：以后不再自动改；错：停用（不删除）；改：存成主人的版本；合并：并到另一条。</p>`+
+  (items.length?items.map(d=>changeRow(d,o,items)).join(''):'<p class="alt">还没有自动整理出的记忆。</p>')+pager(page)+'</section>';
+}
 function existingHtml(page){
  return `<section><h2>现有日常记忆</h2><p class="note">只读，列前 10 条。编辑仍在观察台首页的「说话风格 / 场景 / 长期记忆」设置里。共 ${esc(page.total??0)} 条。</p>`+
   ((page.items||[]).length?page.items.map(m=>`<article class="db-item${m.status==='disabled'?' off':''}"><p><b>${esc(EXISTING[m.status]||m.status)}</b> · 第 ${esc(m.version)} 版</p><p>${esc(m.statement)}</p></article>`).join(''):'<p class="alt">还没有。</p>')+'</section>';
@@ -312,7 +380,7 @@ export function voiceLabelsHtml(o){
 }
 
 // ======================= mount =======================
-const TABS=[['people','人物'],['memories','记忆'],['knowledge','知识'],['existing','现有日常记忆'],['voice','声纹标注']];
+const TABS=[['changes','最近变化'],['people','人物'],['memories','记忆'],['knowledge','知识'],['existing','现有日常记忆'],['voice','声纹标注']];
 const TAB_OF={person:'people',people_cards:'people',people_notes:'people',memory_items:'memories',knowledge_items:'knowledge'};
 const CREATE={'new:card':'people_cards','new:memory':'memory_items','new:knowledge':'knowledge_items'};
 function readValues(box){
@@ -324,8 +392,8 @@ function readValues(box){
 }
 export function mount(root,model=new LibraryModel(),win=globalThis){
  const st={route:parseHash(win.location?.hash),seq:0,overview:null,overviewError:'',data:null,error:'',choices:null,msg:'',editing:null,
-  showOff:true,drafts:{},bulk:null,busy:false,filters:{memories:{kind:'',person:'',q:'',offset:0},knowledge:{kind:'',q:'',offset:0}}};
- const o=()=>({showOff:st.showOff,editing:st.editing,drafts:st.drafts,bulk:st.bulk,people:st.choices?.people||[],knowledge:st.choices?.knowledge||[],filters:st.filters[st.route.view]});
+  showOff:true,drafts:{},bulk:null,busy:false,extract:null,sources:{},filters:{memories:{kind:'',person:'',q:'',offset:0},knowledge:{kind:'',q:'',offset:0},changes:{lane:'live',offset:0}}};
+ const o=()=>({showOff:st.showOff,editing:st.editing,drafts:st.drafts,bulk:st.bulk,people:st.choices?.people||[],knowledge:st.choices?.knowledge||[],filters:st.filters[st.route.view],extract:st.extract,sources:st.sources});
  function view(){
   if(st.error)return `<p class="error">读取失败：${esc(st.error)}</p><div class="db-actions"><button data-act="reload">再试一次</button></div>`;
   const r=st.route,d=st.data;
@@ -336,6 +404,7 @@ export function mount(root,model=new LibraryModel(),win=globalThis){
   if(r.view==='memories')return memoriesHtml(d,o());
   if(r.view==='knowledge')return knowledgeHtml(d,o());
   if(r.view==='item')return itemHtml(r.c,d,o());
+  if(r.view==='changes')return changesHtml(d,o());
   return existingHtml(d);
  }
  function paint(){
@@ -348,6 +417,9 @@ export function mount(root,model=new LibraryModel(),win=globalThis){
   try{const r=await model.overview();if(r!==false){st.overview=r;st.overviewError='';}}catch(e){st.overviewError=e.message;}
   paint();
  }
+ async function loadExtract(){
+  try{const r=await model.extract();if(r!==false)st.extract=r;}catch(e){st.extract={error:e.message};}
+ }
  async function load(){
   const seq=++st.seq,r=st.route;st.data=null;st.error='';paint();
   let data,ch=false;
@@ -357,6 +429,7 @@ export function mount(root,model=new LibraryModel(),win=globalThis){
    else if(r.view==='memories')[data,ch]=await Promise.all([model.memories(st.filters.memories),model.choices()]);
    else if(r.view==='knowledge')[data,ch]=await Promise.all([model.knowledge(st.filters.knowledge),model.choices()]);
    else if(r.view==='item')[data,ch]=await Promise.all([model.item(r.c,r.id),model.choices()]);
+   else if(r.view==='changes'){[data,ch]=await Promise.all([model.changes(st.filters.changes),model.choices(),loadExtract()]);}
    else if(r.view==='existing')data=await model.existing();
    else data={};
   }catch(e){if(seq===st.seq){st.error=e.message;paint();}return;}
@@ -399,6 +472,14 @@ export function mount(root,model=new LibraryModel(),win=globalThis){
    write(async()=>{const r=await model.save(COLL[cc].path,buildFields(cc,values),{reason:values.reason});if(cc==='people_cards'&&r.person_id)win.location.hash='person='+r.person_id;return '加上了';},box.dataset.form);
   }
   else if(name==='bulk'&&box)write(async()=>{const r=await model.addNotes(st.route.id,values.kind,values.text);st.bulk={...r,kind:values.kind};return `存了 ${r.saved} 条${r.failed.length?`，${r.failed.length} 条没存上`:''}`;},box.dataset.form);
+  else if(name==='sources'&&doc){
+   if(st.sources[id]){delete st.sources[id];paint();return;}
+   st.sources[id]='loading';paint();
+   model.sources(id).then(r=>{st.sources[id]=r;paint();},e=>{st.sources[id]={error:e.message};paint();});
+  }
+  else if((name==='confirm'||name==='wrong')&&doc)write(async()=>{const r=await model.review(doc,name);return `${name==='confirm'?'已标为对':'已标为错（停用）'}，第 ${r.version} 版`;});
+  else if(name==='merge'&&doc&&values.into)write(async()=>{const r=await model.review(doc,'merge',{into:values.into});return `已合并，第 ${r.version} 版`;});
+  else if(name==='extract-run')write(async()=>{const r=await model.extractRun();st.extract=r;return `已请求整理 ${r.requested?.day||'今天'}，后台一会儿就跑（仍受开关和上限管）`;});
   else if(name==='restore'&&st.data?.versions?.[0]){
    const head=st.data.versions[0],ver=Number(b.dataset.version);
    write(async()=>{const r=await model.restore(COLL[c].path,id,head.version,ver);return `已回到第 ${ver} 版的内容（新的第 ${r.version} 版）`;});
@@ -410,6 +491,7 @@ export function mount(root,model=new LibraryModel(),win=globalThis){
  root.addEventListener('change',e=>{
   const t=e.target;
   if(t.matches?.('[data-show-off]')){st.showOff=t.checked;paint();return;}
+  if(t.matches?.('[data-extract-switch]')){const on=t.checked;write(async()=>{st.extract=await model.extractSwitch(on);return on?'记忆整理开了':'记忆整理关了：不再有整理的花费';});return;}
   const f=st.filters[st.route.view];
   if(t.dataset?.filter&&f){f[t.dataset.filter]=t.value;f.offset=0;load();return;}
   keep(t);

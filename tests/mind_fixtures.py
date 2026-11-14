@@ -43,8 +43,12 @@ def _match(doc, flt):
                 elif op == "$gt" and not value > arg: return False
                 elif op == "$lt" and not value < arg: return False
                 elif op == "$lte" and not value <= arg: return False
-                elif op == "$in" and value not in arg: return False
+                elif op == "$in" and not (any(v in arg for v in value) if isinstance(value, list) else value in arg):
+                    return False
                 elif op == "$ne" and value == arg: return False
+        elif isinstance(value, list) and not isinstance(cond, list):
+            if cond not in value:          # Mongo: a scalar matches an array field that contains it
+                return False
         elif value is _MISSING or value != cond:
             return False
     return True

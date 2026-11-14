@@ -46,5 +46,11 @@ input, select, textarea { font: inherit; color: var(--fg); background: var(--car
 .db-versions { padding-left: 20px; }
 .db-versions li { border-bottom: 1px solid var(--line); padding: 4px 0; }
 details { margin-top: 10px; }
+.tag.warn { background: #f3d9a4; color: #4a3500; }
+.db-extract { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; margin-top: 10px; }
+.db-merge { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.db-merge select { flex: 1 1 160px; }
+.db-sources, .db-jobs { margin: 6px 0; padding-left: 18px; font-size: 13px; }
+.db-sources li, .db-jobs li { margin: 2px 0; }
 details > summary { cursor: pointer; color: var(--muted); }
 @media (max-width: 640px) { .db-cols { grid-template-columns: 1fr; } main { padding: 0 12px 32px; } }

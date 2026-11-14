@@ -199,3 +199,50 @@ test('mind page and monitor home link to the library page',()=>{
  assert.match(page('mind.html'),/<a href="\/">← 观察台<\/a>\s*<a href="\/db.html">库<\/a>/);
  assert.match(page('index.html'),/href="\/mind.html"[^>]*>情景<\/a><a[^>]*href="\/db.html"[^>]*>库<\/a>/);
 });
+
+// ---- long-term memory phase A: 最近变化 ----
+const extracted={memory_id:'e_0123456789ab',kind:'told',title:'<b>t</b>',statement:'<script>x</script>',status:'active',version:2,actor:'worker',origin:'extracted',
+ confidence:'low',salience:2,sensitivity:['child','others_said'],people:[{id:'unknown',role:'speaker',name_text:'<i>n</i>'},{id:'owner',role:'about'}],
+ derived_from:[{c:'conversations',key:{cid:'c1'}}],day:'2026-11-12',changed_at:1,when:{type:'point',start_ms:1},emotion:{label:'<u>e</u>',basis:'said'}};
+const other={...extracted,memory_id:'e_ba9876543210',title:'<em>other</em>',confidence:'high',sensitivity:[]};
+test('changes view escapes everything and offers 对 / 错 / 改 / 合并 and sources',()=>{
+ const h=ui.changesHtml({items:[extracted,other],total:2,offset:0,limit:20},{filters:{lane:'live'},extract:{on:true,mind_on:true,learning:true,apply:true,daily_cap_usd:0.2,daily_spent_usd:0.01,backfill_cap_usd:2,backfill_spent_usd:0,jobs:[{day:'<x>',lane:'live',state:'done',chunks:1,chunks_done:1,counts:{created:1},cost_usd:0.001}]},
+  sources:{e_0123456789ab:{sources:[{ref:{},kind:'原话',text:'<img src=x onerror=alert(1)>',session:'<s>',pos:[1,2],at:1},{ref:{},kind:'对话纪要',missing:true}]}}});
+ for(const bad of [/<b>t/,/<script>/,/<i>n/,/<u>e/,/<img/,/<em>/,/<x>/,/<s>/,/<[^>]* on\w+=/])assert.doesNotMatch(h,bad);
+ for(const want of [/&lt;b&gt;t/,/&lt;script&gt;/,/data-act="confirm">对</,/data-act="wrong">错</,/data-act="edit">改</,/data-act="merge">合并</,/收起出处/,/低置信：不进提示/,/孩子/,/别人说的/,/找不到了/,/记忆整理/,/data-extract-switch checked/])assert.match(h,want);
+ assert.match(h,/<option value="e_ba9876543210">/);                       // merge target: the other item
+ assert.doesNotMatch(ui.changesHtml({items:[extracted],total:1},{extract:{on:false}}),/data-act="merge"/);   // nothing to merge into
+ assert.match(ui.extractHtml({on:false,mind_on:false,learning:true,apply:true,jobs:[]}),/情景关着/);
+ assert.match(ui.extractHtml({on:false,jobs:[]}),/data-act="extract-run" disabled/);
+ assert.equal(ui.parseHash('#changes').view,'changes');
+});
+test('review sends one owner action on the current version; switch and run go to their paths',async()=>{
+ const calls=[];const m=new ui.LibraryModel(async(p,b)=>{calls.push([p,b]);return {version:3};});
+ await m.review(extracted,'merge',{into:'e_ba9876543210'});await m.review(extracted,'wrong');
+ await m.extractSwitch(false);await m.extractRun();await m.changes({lane:'replay',offset:20});await m.sources('e_0123456789ab');
+ assert.deepEqual(calls[0],['/db/memory/review',{id:'e_0123456789ab',expected_version:2,action:'merge',into:'e_ba9876543210'}]);
+ assert.deepEqual(calls[1][1],{id:'e_0123456789ab',expected_version:2,action:'wrong'});
+ assert.deepEqual(calls[2],['/db/extract/switch',{on:false}]);assert.deepEqual(calls[3],['/db/extract/run',{}]);
+ assert.equal(calls[4][0],'/db/changes?lane=replay&offset=20&limit=20');assert.equal(calls[5][0],'/db/sources?id=e_0123456789ab');
+});
+test('the db page has no inline script or handler (CSP)',()=>{
+ const h=page('db.html');assert.doesNotMatch(h,/<script(?![^>]*src=)/);assert.doesNotMatch(h,/ on\w+=/);
+ assert.doesNotMatch(page('db-ui.js'),/innerHTML\s*=.*on\w+=|eval\(|new Function/);
+});
+test('changes tab: 错 posts one review, then re-reads; the switch posts on/off',async()=>{
+ const tick=()=>new Promise(r=>setTimeout(r,5));const posts=[];const rootL={};const root={innerHTML:'',addEventListener(e,f){rootL[e]=f;}};
+ const req=async(p,b)=>{if(b){posts.push([p,b]);return p==='/db/memory/review'?{version:3}:{on:b.on,jobs:[]};}
+  if(p==='/db/overview')return {collections:{},voice_labels:{total:0},existing:{}};
+  if(p.startsWith('/db/changes'))return {items:[extracted],total:1,offset:0,limit:20};
+  if(p==='/db/extract')return {on:true,mind_on:true,learning:true,apply:true,jobs:[]};
+  if(p==='/db/people')return {items:[]};if(p.startsWith('/db/knowledge'))return {items:[]};return {};};
+ await ui.mount(root,new ui.LibraryModel(req),{location:{hash:'#changes'},addEventListener(){}});
+ assert.match(root.innerHTML,/最近变化/);assert.match(root.innerHTML,/&lt;script&gt;/);
+ const art={dataset:{c:'memory_items',id:extracted.memory_id}};
+ rootL.click({target:{closest:s=>s==='button[data-act]'?{dataset:{act:'wrong'},disabled:false,closest:q=>q==='[data-c]'?art:null}:null}});
+ await tick();
+ assert.deepEqual(posts[0],['/db/memory/review',{id:extracted.memory_id,expected_version:2,action:'wrong'}]);
+ assert.match(root.innerHTML,/已标为错（停用），第 3 版/);
+ rootL.change({target:{matches:s=>s==='[data-extract-switch]',checked:false,dataset:{}}});await tick();
+ assert.deepEqual(posts[1],['/db/extract/switch',{on:false}]);
+});

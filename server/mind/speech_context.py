@@ -4,7 +4,7 @@ import re
 import statistics
 from collections import defaultdict
 
-from . import package, selfvoice, settings, speech_settings
+from . import package, recall, selfvoice, settings, speech_settings
 from .memory import MemoryStore, fingerprint
 from .records import Records
 
@@ -205,6 +205,13 @@ def build(db, store, s, now_ms):
             memories = [m for m in remembered if m['kind']!='routine' or (m.get('hour')==local.hour and m.get('day_type')==day_type)][:12]
         except Exception as e:
             warnings.append('memory_unavailable:'+type(e).__name__)
+        try:
+            # Long-term memory phase A: at most one library memory per round, related to what was just said,
+            # never a child / private one, 3-day cooldown (recall.pick_for_talk; uses noted when the round is written).
+            texts = [e['text'] for e in evidence if e.get('kind') in ('speech', 'notes') and e.get('text')]
+            memories = memories + recall.pick_for_talk(db, recall.library_rows(db), texts, now_ms) if texts else memories
+        except Exception as e:
+            warnings.append('library_memory_unavailable:'+type(e).__name__)
     ctx = {'scope':scope, 'environment':effective.get('environment',''), 'time':settings.local_label(now_ms,s['tz']),
            'profile':s['speech']['profiles'][scope['id']], 'scene':scene, 'evidence':evidence, 'memories':memories, 'recent':recent, 'warnings':warnings}
     ctx['fingerprint'] = fingerprint({**ctx, 'settings':s})

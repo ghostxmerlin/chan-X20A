@@ -5,7 +5,8 @@ import os
 import time
 import uuid
 
-from . import selfvoice, settings, speech_settings
+from . import memory_extract, selfvoice, settings, speech_settings
+from .library import Library
 from .memory import MemoryStore, WINDOW, fingerprint
 from .model_calls import BudgetExceeded, object_schema, run_json
 from .records import Records, SLACK_MS
@@ -243,9 +244,11 @@ def main():
     env={'base_url':hub.get('BASE_URL','https://aihubmix.com/v1'),'api_key':hub['API_KEY']} if hub.get('API_KEY') else None
     store=Store(db); store.ensure_indexes(); MemoryStore(db).ensure_indexes()
     db['mind_memory_jobs'].create_index([('kind',1),('lane',1),('scope_id',1),('window_ms',-1)])
+    Library(db).ensure_indexes()
     ss=SettingsStore(db,args.settings)
     selfvoice.load(args.clip_texts)
-    print('memory: worker ready (existing observations only)',flush=True)
+    print('memory: worker ready (existing observations only; daily extraction '+memory_extract.PROMPT_VERSION+')',flush=True)
+    last_extract=None
     while True:
         try:
             now=int(time.time()*1000)
@@ -255,6 +258,14 @@ def main():
                 print('memory: '+json.dumps(result,ensure_ascii=False),flush=True)
         except Exception as e:
             print('memory error: '+type(e).__name__,flush=True)
+        try:
+            # Long-term memory phase A (memory_extract.py): the daily / on-demand extraction, counts only in the log.
+            x=memory_extract.tick(db,store,ss,env,int(time.time()*1000))
+            if x.get('calls') or x['state']=='error' or (x['state']!=last_extract and x['state'] not in ('idle','room_busy')):
+                print('memory extract: '+json.dumps(x,ensure_ascii=False),flush=True)
+            last_extract=x['state']
+        except Exception as e:
+            print('memory extract error: '+type(e).__name__,flush=True)
         time.sleep(10)
 
 

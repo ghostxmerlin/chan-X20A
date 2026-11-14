@@ -27,7 +27,25 @@
 | `GET /db/item?c=&id=` | 任一条的版本历史（最多 50 版） |
 | `POST /db/person`、`/db/person/note`、`/db/memory`、`/db/knowledge` | 新建或修改：`{id?, expected_version?, fields, reason?}`；恢复旧版：`{id, expected_version, restore_version}`。`reason` 截到 200 字 |
 
-错误：格式不对 400，没有这条 404，版本已被改过 409。**没有删除接口，删除只由主人手动维护数据库。本期没有任何提示读取这些集合。** 设计见 `docs/superpowers/specs/2026-11-13-backend-people-knowledge-memory-design.md` 第 3 节。
+错误：格式不对 400，没有这条 404，版本已被改过 409。**没有删除接口，删除只由主人手动维护数据库。** 设计见 `docs/superpowers/specs/2026-11-13-backend-people-knowledge-memory-design.md` 第 3 节。
+
+### 长期记忆阶段 A（2026-11-14）
+
+评估和默认值见 `docs/superpowers/specs/2026-11-14-long-term-memory-assessment.md`。
+
+- **整理**（`memory_extract.py`，跑在 `soul-memory` 里）：每天一次，把前一天的纪要和纪要下的原话、没有纪要的原话、情景段、对话模式的轮次、主人打分交给 luna，抽出一件件的事写进 `memory_items`（`origin = extracted`，带出处、`extract_key`、人和角色、置信、重要程度、敏感标记）。不送听悟。写入即生效；低置信的只在页面上看得到。
+- **开关和上限**：库页面"最近变化"上的"记忆整理"开关（`hello.switches.memory_extract`，默认开）；每天的整理还要情景开着、长期记忆学习开着、当天整理花费不到 0.2 美元；回填一共不超过 2 美元。
+- **主人改过的不再动**：对 / 错（停用，不删）/ 改（主人版本）/ 合并（`merged_into`）都写一条主人版本，以后整理只记"拦下"。
+- **读**：`memory_recall` 是每条记忆当前版本的派生副本（可用 `python3 -m mind.memory_extract rebuild-recall` 重建）。对话模式和脱口秀用同一个回忆池（`recall.py`：现有日常记忆 + 库里的记忆）：对话每句最多 3 条；脱口秀每轮最多 1 条、不用孩子和隐私的、同一条 3 天内不再用。
+- **回填**：`python3 -m mind.memory_extract backfill --from 2026-11-07 --to 2026-11-14 [--dry-run] [--lane live --yes-live]`，默认写 `replay` 道，只打印数量和花费。
+
+| 方法 路径 | 说明 |
+| --- | --- |
+| `GET /db/changes?lane=&offset=&limit=` | 自动整理出的记忆（含主人后来的版本），按最近变化排 |
+| `GET /db/sources?id=` | 一条记忆的出处（纪要、原话和录音位置、情景段、对话轮次……） |
+| `GET /db/extract` | 记忆整理的开关、上限、花费、最近的任务 |
+| `POST /db/memory/review` | `{id, expected_version, action: confirm / wrong / merge, into?, reason?}` |
+| `POST /db/extract/switch`、`/db/extract/run` | `{on}`；`{day?}`（请后台现在整理这一天，默认今天，仍受开关和上限管） |
 
 ## 模式（第一步，1b：以 hello 为准）
 
