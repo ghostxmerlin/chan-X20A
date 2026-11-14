@@ -668,7 +668,8 @@ class ChatPushTest(MouthModeTest):
         self.assertEqual(body["voice"], {"p": 0.3, "band": "unclear", "acoustic_band": "unclear", "loud_db": 18.5})
         self.assertEqual(body["debug"]["server_ms"], 520)
         self.assertIsInstance(body["sent_at"], int)
-        self.assertTrue(all(n.startswith("mode-mind") for n in self.mind_threads), self.mind_threads)
+        # review M1: chat posts have their own pool, mode reports / inputs keep theirs
+        self.assertEqual({n.split("_")[0] for n in self.mind_threads}, {"mode-mind", "chat-mind"}, self.mind_threads)
         self.assertFalse(any("今天几号" in line for line in self.logs))
 
     async def test_outside_chat_nothing_is_sent(self):
@@ -716,16 +717,38 @@ class ChatPushTest(MouthModeTest):
             self.assertTrue(self.hub.chat_heard({**SPEECH, "id": "s-9"}, "s"))   # room again
         self.assertTrue(any("dropped" in line for line in self.logs))
 
-    async def test_mind_timeout_frees_the_slot(self):
-        self.mind_chat_delay = 1.5
+    async def test_mind_timeout_frees_the_slot_when_the_call_ends(self):
+        self.mind_chat_delay = 0.8
         self.hub.chat_timeout_s = 0.2
         async with self.robot() as ws:
             await self.handshake(ws)
             await self.in_mode(ws, "chat")
             self.hub.chat_heard(dict(SPEECH), "s")
             await asyncio.sleep(0.4)
+            self.assertTrue(any("not taken" in line for line in self.logs))   # gave up waiting after 0.2 s
+            self.assertEqual(self.hub.chat_inflight, 1)                         # but its thread still runs
+            for _ in range(100):
+                if self.hub.chat_inflight == 0:
+                    break
+                await asyncio.sleep(0.02)
             self.assertEqual(self.hub.chat_inflight, 0)
-        self.assertTrue(any("not taken" in line for line in self.logs))
+
+    async def test_a_hung_mind_on_chat_never_delays_mode_inputs(self):
+        self.mind_chat_delay = 1.5
+        self.hub.chat_timeout_s = 0.1
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+            for i in range(6):                                                  # more than the pools have threads
+                self.hub.chat_heard({**SPEECH, "id": f"s-{i}"}, "s")
+                await asyncio.sleep(0.15)
+            t0 = self._time.monotonic()
+            await ws.send(json.dumps({"type": "mode_input", "seq": 5, "age_ms": 0, "source": "asr", "input": "digit",
+                                      "value": 0}))
+            res = await self.recv_type(ws, "mode_result", timeout=1)
+            self.assertEqual((res["seq"], res["code"]), (5, "ok"))
+            self.assertLess(self._time.monotonic() - t0, 0.3)
+            self.assertLessEqual(self.hub.chat_inflight, 2)
 
     async def test_the_link_closing_forgets_its_mode(self):
         async with self.robot() as ws:

@@ -51,9 +51,10 @@ export function utterancesHtml(list,roles){
 }
 // Chat v0: the last chat turn (mind /chat/turns), heard -> reply, why it was skipped, and how long it took.
 const CHAT_SKIPS={not_chat:'不在对话模式',self:'hello 自己在出声',hello_voice:'是 hello 自己的声音',hello_speaking:'hello 正在说话',
- empty:'没听清',filler:'只有语气词',far_band:'太远（不像人声）',far_quiet:'太远（声音太小）',mouth_not_tts:'嘴不是 TTS',
+ empty:'没听清',filler:'只有语气词',not_voice:'不像人声，声音也小',far_quiet:'太远（声音太小）',mouth_not_tts:'嘴不是 TTS',
  no_model:'没配模型',no_tts:'没配 TTS',replaced:'被下一句顶掉',stale:'等太久，过期了',superseded:'想的时候又来了新的一句，回新的',
- empty_reply:'模型没写出话',llm_error:'模型出错',left_chat:'已离开对话',cancelled:'被叫停',no_mouth:'嘴没连上',tts_error:'合成出错'};
+ empty_reply:'模型没写出话',llm_error:'模型出错',left_chat:'已离开对话',cancelled:'被叫停',no_mouth:'嘴没连上',tts_error:'合成出错',
+ budget:'今天的模型预算用完了',error:'出错了'};
 const CHAT_STATES={queued:'排队中',thinking:'正在想',answered:'回了'};
 const secs=ms=>Number.isFinite(ms)?`${(ms/1000).toFixed(1)} 秒`:null;
 export function chatTurnHtml(t){

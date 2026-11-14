@@ -265,6 +265,16 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
         safety net for hello's reports (step 1b): outside talk 提前写 / 连续说 are off whatever effects came along
         (a report that lost its talk_leave on the way must not leave them spending)."""
         is_current = lambda: ms.seq() == new['seq']
+        # chat v0 first (review M2): leave() stops chat's speech, which must not cancel a round / talk_enter this same
+        # report starts below.
+        if chat is not None:                     # the worker lives exactly as long as the chat mode
+            try:
+                if new['mode'] == 'chat' and old['mode'] != 'chat':
+                    chat.enter(now)
+                elif old['mode'] == 'chat' and new['mode'] != 'chat':
+                    chat.leave(now)
+            except Exception as ex:           # noqa: BLE001 - logged; the mode change itself happened
+                log(f'mind mode: chat {new["mode"]}: {type(ex).__name__}: {str(ex)[:160]}', flush=True)
         for e in effects:
             try:
                 if e == 'stop_speech':
@@ -281,14 +291,6 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
                     say_worker.set_enabled(False, now)
             except Exception as ex:               # noqa: BLE001 - logged, the next effect still runs
                 log(f'mind mode: effect {e} failed: {type(ex).__name__}: {str(ex)[:160]}', flush=True)
-        if chat is not None:                     # chat v0: the worker lives exactly as long as the chat mode
-            try:
-                if new['mode'] == 'chat' and old['mode'] != 'chat':
-                    chat.enter(now)
-                elif old['mode'] == 'chat' and new['mode'] != 'chat':
-                    chat.leave(now)
-            except Exception as ex:           # noqa: BLE001 - logged; the mode change itself happened
-                log(f'mind mode: chat {new["mode"]}: {type(ex).__name__}: {str(ex)[:160]}', flush=True)
         on = (say_worker is not None and say_worker.enabled()) or (say_auto is not None and say_auto.enabled())
         if new['mode'] != 'talk' and on:
             log(f'mind mode: {new["mode"]} with 提前写 / 连续说 on (no talk_leave came): turned off', flush=True)

@@ -10,14 +10,18 @@ Gate (each skip is logged without the text and recorded with its reason):
   hello_voice     the text matches hello's own clips / recent lines (selfvoice.is_hello)
   hello_speaking  hello is speaking now (speak.speaking())
   empty / filler  no text, or only 嗯 / 啊 / um ...
-  far_band        the ear's voice band is far / none
   far_quiet       less than chat.near_db dB above the ear's floor (owner: answer everyone, but not far voices)
+  not_voice       voice band none (CED says not voice-like) and also quiet: below near_db + NOT_VOICE_MARGIN_DB. The
+                  ear has no distance band; band none alone is no reason (the robot mic scores clear speech low).
   mouth_not_tts   嘴 is not TTS (chat speaks only through soul-tts)
   no_model / no_tts  nothing configured to think or speak with
 One turn at a time: a sentence that arrives while hello is thinking replaces the waiting one (replaced); a waiting one
 older than STALE_MS is dropped (stale). When thinking ends and a newer sentence is already waiting, the reply is
 dropped once (superseded) so hello answers the newest; never twice in a row, so a talker who never pauses still gets
-answers. An empty model reply is a skip (empty_reply), nothing is said.
+answers. A chat line that is playing is never cut by the next reply: a sentence picked up while hello speaks waits for
+the line to end and is answered if it is still the newest and not stale, else skipped (hello_speaking). Dropped,
+replaced and waited-out sentences stay in the history as heard. An empty model reply is a skip (empty_reply), nothing
+is said. The daily runaway guard (budget_usd_per_day, mind_runs) stops chat calls too (budget).
 
 Context (refreshed part by part when its TTL ran out: while idle, and at turn time within ~100 ms): the latest scene
 (summary, topic, sound), the latest conversation notes, MemoryStore.recall (8, of which at most 3 that share words with
@@ -50,10 +54,15 @@ MAX_MEMORIES = 3                     # coordinator 2026-11-14: terra over-uses o
 HISTORY_MAX_AGE_MS = 3600_000
 SCENE_FRESH_MS = 4 * 60_000
 NOTES_FRESH_MS = 10 * 60_000
-TTL_MS = {'persona': 300_000, 'scene': 20_000, 'notes': 30_000, 'people': 120_000, 'memories': 120_000}
+TTL_MS = {'persona': 300_000, 'scene': 20_000, 'notes': 30_000, 'people': 120_000, 'memories': 120_000,
+          'cost': 60_000}
+# Two-character words too common to make a memory "related" (review M4).
+STOP_BIGRAMS = set('什么 一个 我们 你们 他们 今天 明天 昨天 这个 那个 怎么 没有 就是 不是 可以 现在 还是 知道 觉得 时候 '
+                   '一下 一点 自己 然后 因为 所以 但是 如果 已经 还有 这样 那样 哪里 为什 真的 好的 是不 不要 要不'.split())
 REFRESH_BUDGET_MS = 100
 IDLE_WAIT_S = 10
-FAR_BANDS = ('far', 'none')
+NOT_VOICE_MARGIN_DB = 3              # band none counts only below near_db + 3 (2026-11-08..10 robot recordings, impl-report)
+QUIET_POLL_S = 0.05
 FILLER_CHARS = set('嗯啊哦呃额唉哈嘿呀噢喔诶欸哎呢吧嘛哼呵唔')
 FILLER_WORDS = {'um', 'uh', 'umm', 'hmm', 'hm', 'mm', 'mhm', 'ah', 'oh', 'eh', 'er', 'ha', 'haha'}
 STATES = ('queued', 'thinking', 'answered', 'skipped', 'superseded')
@@ -125,10 +134,11 @@ def gate(item, cfg, *, mode, speaking, mouth):
         return 'hello_speaking'
     if is_filler(item['text']):
         return 'filler'
-    if item['voice'].get('band') in FAR_BANDS:
-        return 'far_band'
-    if item['loud_db'] is not None and item['loud_db'] < cfg['near_db']:
+    loud = item['loud_db']
+    if loud is not None and loud < cfg['near_db']:
         return 'far_quiet'
+    if item['voice'].get('band') == 'none' and loud is not None and loud < cfg['near_db'] + NOT_VOICE_MARGIN_DB:
+        return 'not_voice'
     if mouth != 'tts':
         return 'mouth_not_tts'
     return None
@@ -137,10 +147,10 @@ def gate(item, cfg, *, mode, speaking, mouth):
 def trim(text, max_chars):
     """One spoken reply: no stage directions, quotes, emoji or a leading name; cut at a sentence end within max_chars."""
     t = re.sub(r'[（(\[【][^）)\]】]*[）)\]】]', '', str(text or ''))
-    t = re.sub(r'[“”"\'「」『』*#`]', '', t)
+    t = re.sub(r'[“”"「」『』*#`]', '', t)
     t = re.sub(r'[\U0001F000-\U0001FAFF☀-➿]', '', t)
     t = re.sub(r'\s*\n+\s*', '，', t).strip(' ，,')
-    t = re.sub(r'^(hello|hello：|hello:)\s*[：:]?\s*', '', t, flags=re.I).strip()
+    t = re.sub(r'^hello\s*[：:]\s*', '', t, flags=re.I).strip()
     if len(t) <= max_chars:
         return t
     head = t[:max_chars]
@@ -158,7 +168,7 @@ def _bigrams(text):
 
 def related_memories(statements, text, limit=MAX_MEMORIES):
     """At most `limit` remembered statements that share a word (two characters) with the sentence, best first."""
-    words = _bigrams(text)
+    words = _bigrams(text) - STOP_BIGRAMS
     scored = [(len(words & _bigrams(m)), -i, m) for i, m in enumerate(statements)]
     return [m for score, _, m in sorted(scored, reverse=True) if score > 0][:limit]
 
@@ -237,6 +247,8 @@ class Chat:
         self.chat_fn = chat_fn or llm.chat
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.mono, self.log, self.threaded = mono, log, threaded
+        self.finish_async = threaded         # each spoken line's soul-tts status is awaited on its own thread
+        self._finishers = []
         self._cond = threading.Condition()
         self._rec_lock = threading.Lock()
         self._pending = None
@@ -333,7 +345,9 @@ class Chat:
             self._update(tid, state='skipped', skip='left_chat')
             return {'tid': tid, 'accepted': False, 'skip': 'left_chat'}
         if old:
-            self._update(old['tid'], state='skipped', skip='replaced')
+            self._history.append({'tid': old['tid'], 'heard': old['text'], 'reply': None,
+                                  'who': (self.person(s, old['speaker']) or {}).get('display')})
+            self._update(old['tid'], state='skipped', skip='replaced', heard_only=True)
             self.log(f'mind chat: skip replaced ({old["session"]} {old["id"]})', flush=True)
         return {'tid': tid, 'accepted': True, 'skip': None}
 
@@ -392,13 +406,25 @@ class Chat:
             return self._skip(item, 'left_chat')
         if wait_ms > STALE_MS:
             return self._skip(item, 'stale', **{'timings.wait_ms': wait_ms})
-        epoch = speak._EPOCH
         s = self.settings_fn()
+        if speak.speaking():                 # review I2: never cut a playing line; wait for it, bounded by STALE_MS
+            why = self._wait_quiet(item, gen)
+            if why:
+                if why == 'hello_speaking':
+                    self._history.append({'tid': item['tid'], 'heard': item['text'], 'reply': None,
+                                          'who': (self.person(s, item['speaker']) or {}).get('display')})
+                return self._skip(item, why, heard_only=why == 'hello_speaking',
+                                  **{'timings.wait_ms': int((self.mono() - item['received']) * 1000)})
+            wait_ms = int((self.mono() - item['received']) * 1000)
+        epoch = speak._EPOCH
         cfg = speech_settings.chat_config(s)
         t0 = self.mono()
         self._refresh(self.clock_ms(), budget_ms=REFRESH_BUDGET_MS)
         if not self._history_loaded:
             self._load_history(self.clock_ms())
+        cost = self._part('cost')
+        if cost is not None and cost >= (s.get('budget_usd_per_day') or 0):
+            return self._skip(item, 'budget', **{'timings.wait_ms': wait_ms})
         ctx = self.context(s, item)
         context_ms = int((self.mono() - t0) * 1000)
         hist = list(self._history)[-cfg['history_turns']:] if cfg['history_turns'] else []
@@ -419,8 +445,8 @@ class Chat:
             drop = newer and self._streak == 0
             self._streak = 1 if drop else 0
         if drop:
-            self._history.append({'heard': item['text'], 'reply': None, 'who': who})
-            return self._skip(item, 'superseded', reply=reply, **fields)
+            self._history.append({'tid': item['tid'], 'heard': item['text'], 'reply': None, 'who': who})
+            return self._skip(item, 'superseded', reply=reply, heard_only=True, **fields)
         try:
             uid, tts_id, submit_at = self.speak_line(reply, s, gen=gen, epoch=epoch, tid=item['tid'])
         except speak.NotConnected as e:
@@ -429,7 +455,7 @@ class Chat:
             return self._skip(item, why, reply=reply, **fields)
         except Exception as e:               # noqa: BLE001 - soul-tts trouble: recorded
             return self._skip(item, 'tts_error', reply=reply, error=type(e).__name__, **fields)
-        self._history.append({'heard': item['text'], 'reply': reply, 'who': who})
+        self._history.append({'tid': item['tid'], 'heard': item['text'], 'reply': reply, 'who': who})
         end_at = item.get('end_at')
         out = self._update(item['tid'], state='answered', skip=None, reply=reply, uid=uid, tts_id=tts_id,
                            **fields, **{'timings.submit_at': submit_at,
@@ -437,6 +463,19 @@ class Chat:
                                         'timings.received_to_submit_ms': submit_at - item['at']})
         self.log(f'mind chat: answered ({item["session"]} {item["id"]}) llm {run["llm_ms"]} ms', flush=True)
         return out
+
+    def _wait_quiet(self, item, gen):
+        """Wait until hello's line ends -> None, or why not: hello_speaking (a newer sentence came, or this one went
+        stale) / left_chat."""
+        deadline = item['received'] + STALE_MS / 1000
+        while speak.speaking():
+            with self._cond:
+                if not self._alive(gen):
+                    return 'left_chat'
+                if self._pending is not None or self.mono() >= deadline:
+                    return 'hello_speaking'
+                self._cond.wait(QUIET_POLL_S)
+        return None
 
     def _ask(self, cfg, msgs):
         """One plain-text model call (one retry after an early error) -> (reply text or '', run info)."""
@@ -494,11 +533,18 @@ class Chat:
                                           'at': submit_at, 'state': 'sent', 'pipeline': 'chat',
                                           'scope_id': speech_settings.scope(s)['id'], 'tts_submit_at': submit_at,
                                           'instruction': opts.get('instruction'), 'chat_tid': tid})
-        if self.threaded:
-            threading.Thread(target=self._finish, args=(uid, tts_id, tid), daemon=True).start()
+        if self.finish_async:
+            t = threading.Thread(target=self._finish, args=(uid, tts_id, tid), name='mind-chat-finish', daemon=True)
+            t.start()
+            self._finishers = [x for x in self._finishers if x.is_alive()] + [t]
         else:
             self._finish(uid, tts_id, tid)
         return uid, tts_id, submit_at
+
+    def _finish_wait(self, timeout=5):
+        """Tests: wait for the finish threads of the lines said so far."""
+        for t in list(self._finishers):
+            t.join(timeout)
 
     def _finish(self, uid, tts_id, tid):
         selfvoice.refresh_spoken(self.db, self.clock_ms())     # her own reply counts as her voice from now on
@@ -541,17 +587,23 @@ class Chat:
         self._history_loaded = True
         try:
             rows = list(self.db['chat_turns'].find({'at': {'$gte': now_ms - HISTORY_MAX_AGE_MS},
-                                                    'state': {'$in': ['answered', 'superseded']}})
+                                                    '$or': [{'state': 'answered'}, {'heard_only': True}]})
                         .sort('at', -1).limit(self._history.maxlen))
         except Exception as e:               # noqa: BLE001
             self.log(f'mind chat: history unavailable: {type(e).__name__}', flush=True)
             return
         people = self._part('people') or {}
+        since_enter = list(self._history)            # heard after entering, before this load: keep, newest last
+        known = {h.get('tid') for h in since_enter}
         self._history.clear()
         for r in reversed(rows):
+            if r.get('tid') in known:
+                continue
             name = (r.get('speaker') or {}).get('name') if (r.get('speaker') or {}).get('band') == 'known' else None
-            self._history.append({'heard': r.get('text') or '', 'reply': r.get('reply') if r.get('state') == 'answered'
-                                  else None, 'who': (people.get(name) or {}).get('display') if name else None})
+            self._history.append({'tid': r.get('tid'), 'heard': r.get('text') or '',
+                                  'reply': r.get('reply') if r.get('state') == 'answered' else None,
+                                  'who': (people.get(name) or {}).get('display') if name else None})
+        self._history.extend(since_enter)
 
     # ---- context ----
     def _part(self, name):
@@ -561,7 +613,7 @@ class Chat:
     def _refresh(self, now_ms, budget_ms=REFRESH_BUDGET_MS):
         """Refresh the parts whose TTL ran out, oldest need first, until budget_ms is spent (None: all)."""
         t0 = self.mono()
-        for name in ('persona', 'scene', 'notes', 'people', 'memories'):
+        for name in ('cost', 'persona', 'scene', 'notes', 'people', 'memories'):
             got = self._ctx.get(name)
             if got and self.mono() - got[0] < TTL_MS[name] / 1000:
                 continue
@@ -575,6 +627,9 @@ class Chat:
                     self._ctx[name] = (self.mono(), got[1])
                 continue
             self._ctx[name] = (self.mono(), value)
+
+    def _load_cost(self, now_ms):
+        return self.store.cost_today(self.settings_fn()['tz'], now_ms)
 
     def _load_persona(self, now_ms):
         return dict((self.roles_fn() or {}).get(ROLE) or FALLBACK_ROLE)

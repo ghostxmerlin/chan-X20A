@@ -40,6 +40,8 @@ test('the last chat turn: heard -> reply, latency, model, cost',()=>{
 test('a skipped turn says why; nothing is shown without a turn',()=>{
  assert.match(say.chatTurnHtml({at:1,text:'嗯',state:'skipped',skip:'filler'}),/→ <span class="muted">（只有语气词）<\/span>/);
  assert.match(say.chatTurnHtml({at:1,text:'远处',state:'skipped',skip:'far_quiet'}),/太远（声音太小）/);
+ assert.match(say.chatTurnHtml({at:1,text:'噪声',state:'skipped',skip:'not_voice'}),/不像人声/);
+ assert.match(say.chatTurnHtml({at:1,text:'x',state:'skipped',skip:'budget'}),/今天的模型预算/);
  assert.match(say.chatTurnHtml({at:1,text:'x',state:'skipped',skip:'new_reason'}),/new_reason/);
  assert.equal(say.chatTurnHtml(null),'');assert.equal(say.chatTurnHtml(undefined),'');
 });

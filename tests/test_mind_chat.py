@@ -39,6 +39,9 @@ class Tts:
         return []
 
     def status(self, uid, wait=0):
+        gate = getattr(self, 'playing', None)
+        if gate is not None:
+            gate.wait(5)                                  # the line is playing until the test releases it
         return {'state': 'done', 'created': time.time(), 'timings_s': {'first_accepted': 0.5, 'first_sound': 0.7, 'done': 2.0}}
 
 
@@ -113,9 +116,12 @@ class GateTest(ChatBase):
             ('empty', heard(text='  。')),
             ('filler', heard(text='嗯嗯啊')),
             ('filler', heard(text='Um.')),
-            ('far_band', heard(voice={'p': 0.1, 'band': 'none', 'loud_db': 30.0})),
-            ('far_band', heard(voice={'p': 0.5, 'band': 'far', 'loud_db': 30.0})),
-            ('far_quiet', heard(loud_db=8.0, voice={'p': 0.5, 'band': 'voice', 'loud_db': 8.0})),
+            ('not_voice', heard(loud_db=7.0, voice={'p': 0.1, 'band': 'none', 'loud_db': 7.0})),
+            ('far_quiet', heard(loud_db=4.0, voice={'p': 0.5, 'band': 'voice', 'loud_db': 4.0})),
+            ('far_quiet', heard(loud_db=4.0, voice={'p': 0.1, 'band': 'none', 'loud_db': 4.0})),
+            (None, heard(loud_db=9.0, voice={'p': 0.1, 'band': 'none', 'loud_db': 9.0})),      # none but loud: answered
+            (None, heard(loud_db=5.5, voice={'p': 0.3, 'band': 'unclear', 'loud_db': 5.5})),   # quiet robot mic, unclear
+            (None, heard(loud_db=30.0, voice={'p': 0.1, 'band': 'none', 'loud_db': 30.0})),
         ]
         for n, (reason, body) in enumerate(cases, start=1):
             body['id'] = f's-{100 + n}'
@@ -143,6 +149,15 @@ class GateTest(ChatBase):
         self.ss.save(s, 'test', expected_version=v)
         self.assertEqual(self.skip_of(heard(n=1)), 'far_quiet')           # 20 dB above the floor < 25
         self.assertEqual(self.skip_of(heard(n=2, loud_db=None, voice={'p': 0.5, 'band': 'voice', 'loud_db': None})), None)
+
+    def test_not_voice_margin_follows_near_db(self):
+        s, v = self.ss.current()
+        s = copy.deepcopy(s)
+        s['speech']['chat']['near_db'] = 10
+        self.ss.save(s, 'test', expected_version=v)
+        none = lambda n, loud: heard(n=n, loud_db=loud, voice={'p': 0.1, 'band': 'none', 'loud_db': loud})
+        self.assertEqual(self.skip_of(none(1, 12.5)), 'not_voice')     # 10 + 3
+        self.assertIsNone(self.skip_of(none(2, 13.5)))
 
     def test_unknown_floor_is_not_far(self):
         self.assertIsNone(self.skip_of(heard(loud_db=None, voice={'p': 0.5, 'band': 'unclear', 'loud_db': None})))
@@ -224,6 +239,16 @@ class TurnTest(ChatBase):
         self.assertEqual((self.turn(tid)['state'], self.turn(tid)['skip']), ('skipped', 'empty_reply'))
         self.assertEqual(self.tts.said, [])
 
+    def test_the_daily_budget_guard_stops_chat_calls(self):
+        s, v = self.ss.current()
+        s = copy.deepcopy(s)
+        s['budget_usd_per_day'] = 0.5
+        self.ss.save(s, 'test', expected_version=v)
+        self.db.add('mind_runs', {'at': self.now[0] - 1000, 'cost_usd': 0.6, 'step': 'fusion'})
+        tid = self.chat.heard(heard())['tid']
+        self.chat.process_once()
+        self.assertEqual((self.turn(tid)['skip'], self.model.bodies), ('budget', []))
+
     def test_model_error_retries_once_then_skips(self):
         self.model.error = 'HTTP 500: x'
         tid = self.chat.heard(heard())['tid']
@@ -256,14 +281,59 @@ class TurnTest(ChatBase):
         self.assertIn('先问一个问题吧', last_user)                    # the dropped one still counts as heard
         self.assertIn('不对我换个问题', last_user)
 
-    def test_never_dropped_twice_in_a_row(self):
+    def playing_tts(self):
+        """soul-tts lines really play: status() blocks until released, on the finish thread (as live)."""
+        self.tts.playing = threading.Event()
+        self.chat.finish_async = True
+        self.addCleanup(self.tts.playing.set)
+
+    def three_segments(self):
+        """One utterance split in three: 1 is dropped for 2, 2 is spoken although 3 waits (never twice in a row)."""
         self.chat.heard(heard(n=1, text='第一句话说完'))
         self.model.during = lambda: self.chat.heard(heard(n=2, text='第二句话说完'))
         self.chat.process_once()
-        self.model.during = lambda: self.chat.heard(heard(n=3, text='第三句话说完'))
-        out = self.chat.process_once()
-        self.assertEqual(out['state'], 'answered')                     # second one is answered although 3 waits
+        holder = {}
+        self.model.during = lambda: holder.update(c=self.chat.heard(heard(n=3, text='第三句话说完'))['tid'])
         self.assertEqual(self.chat.process_once()['state'], 'answered')
+        return holder['c']
+
+    def test_never_dropped_twice_in_a_row(self):
+        c = self.three_segments()
+        self.assertEqual(self.chat.process_once()['state'], 'answered')
+        self.assertEqual(self.turn(c)['state'], 'answered')
+
+    def test_a_waiting_sentence_never_cuts_the_playing_reply(self):
+        self.playing_tts()
+        c = self.three_segments()
+        self.assertTrue(speak.speaking())                              # the second reply is playing
+        done = threading.Event()
+        threading.Thread(target=lambda: (self.chat.process_once(), done.set()), daemon=True).start()
+        time.sleep(0.3)
+        self.assertEqual(len(self.tts.said), 1)                        # waits: the playing line is not cut
+        self.assertFalse(done.is_set())
+        self.tts.playing.set()                                         # the line ends
+        self.assertTrue(done.wait(3))
+        self.assertEqual(self.turn(c)['state'], 'answered')
+        self.assertEqual(len(self.tts.said), 2)
+
+    def test_a_sentence_that_waits_too_long_behind_the_reply_is_skipped(self):
+        self.playing_tts()
+        c = self.three_segments()
+        threading.Timer(0.2, lambda: self.mono.__setitem__(0, self.mono[0] + 6)).start()
+        self.chat.process_once()
+        row = self.turn(c)
+        self.assertEqual((row['state'], row['skip'], len(self.tts.said)), ('skipped', 'hello_speaking', 1))
+        self.tts.playing.set()
+        self.chat._finish_wait()
+        self.chat.heard(heard(n=4, text='第四句话说完'))
+        self.chat.process_once()
+        self.assertIn('第三句话说完', self.model.bodies[-1]['messages'][-1]['content'])   # it still counts as heard
+
+    def test_a_replaced_sentence_still_counts_as_heard(self):
+        self.chat.heard(heard('先说半句', n=1))
+        self.chat.heard(heard('再说后半句', n=2))
+        self.chat.process_once()
+        self.assertEqual(self.model.bodies[-1]['messages'][-1]['content'], '先说半句\n再说后半句')
 
     def test_history_goes_into_the_next_turn(self):
         self.chat.heard(heard('你叫什么名字', n=1))
@@ -395,6 +465,8 @@ class ContextTest(ChatBase):
         mems = [f'午饭第{i}条记忆' for i in range(6)]
         self.assertEqual(len(chat_mod.related_memories(mems, '午饭吃什么')), 3)
         self.assertEqual(chat_mod.related_memories(mems, '开会'), [])
+        self.assertEqual(chat_mod.related_memories(['今天下午三点开会', '我们一个周末去爬山'], '今天我们吃什么'), [])
+        self.assertEqual(chat_mod.related_memories(['今天下午三点开会'], '下午几点开会'), ['今天下午三点开会'])
 
     def test_unknown_speaker_has_no_card_and_owner_falls_back_to_settings(self):
         self.add_person()
@@ -436,10 +508,10 @@ class ContextTest(ChatBase):
 class SettingsTest(unittest.TestCase):
     def test_defaults_and_validation(self):
         s = settings_mod.load(None)
-        self.assertEqual(speech_settings.chat_config(s), {'model': 'gpt-6.1-terra', 'near_db': 12, 'max_chars': 60,
+        self.assertEqual(speech_settings.chat_config(s), {'model': 'gpt-6.1-terra', 'near_db': 5, 'max_chars': 60,
                                                           'history_turns': 8})
         self.assertEqual(validate(s), [])
-        for bad in ({'model': ''}, {'model': 'a b'}, {'model': 3}, {'near_db': -1}, {'near_db': True},
+        for bad in ({'model': ''}, {'model': 'a b'}, {'model': 'gpt-6.1-terra\n'}, {'model': 3}, {'near_db': -1}, {'near_db': True},
                     {'max_chars': 10}, {'max_chars': 60.5}, {'history_turns': 21}, {'other': 1}):
             t = copy.deepcopy(s)
             t['speech']['chat'] = {**t['speech']['chat'], **bad}
@@ -455,6 +527,7 @@ class SettingsTest(unittest.TestCase):
 class Unit(unittest.TestCase):
     def test_trim(self):
         self.assertEqual(chat_mod.trim('hello：你好呀！', 60), '你好呀！')
+        self.assertEqual(chat_mod.trim("Hello，I'm here.", 60), "Hello，I'm here.")
         self.assertEqual(chat_mod.trim('好的。' + '啊' * 80, 20), '好的。' + '啊' * 17 + '。')
         self.assertEqual(chat_mod.trim('第一句很长很长很长。第二句也很长很长很长很长', 15), '第一句很长很长很长。')
 
@@ -513,6 +586,27 @@ class HookAndApiTest(unittest.TestCase):
         self.report('idle', 'pause')
         self.assertFalse(self.chat.active())
         self.assertGreater(self.tts.stops, stops)
+
+    def test_leaving_chat_runs_before_the_other_effects(self):
+        order = []
+        self.tts.stop = lambda: order.append('stop') or []
+
+        class FakeChat:
+            mode_fn = None
+
+            def enter(self, now):
+                order.append('enter')
+
+            def leave(self, now):
+                order.append('leave')
+        ms, _, _ = runner.wire_modes(FakeDB(), Store(FakeDB()), settings_store=self.ss, tts=self.tts, say_worker=None,
+                                     say_auto=None, say_round_fn=None, log=lambda *a, **k: None, chat=FakeChat())
+        rep = lambda seq, mode, inp: ms.report({'seq': seq, 'mode': mode, 'dir': None, 'host': None, 'return_to': None,
+                                                'by': 'asr', 'input': inp, 'effects': ['stop_speech']}, boot='b2', conn=1)
+        rep(1, 'chat', 'play')
+        order.clear()
+        rep(2, 'talk', 'forward')                                    # effects: stop_speech (+ talk_enter in live)
+        self.assertEqual(order, ['leave', 'stop'])
 
     def test_settings_over_chat_stops_chat_and_close_comes_back(self):
         self.report('chat', 'play')

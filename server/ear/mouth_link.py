@@ -39,9 +39,10 @@ mind. None of this goes to soul-tts, and nothing about the mode is pushed down a
 Chat v0 (2026-11-14): the relay remembers hello's mode from the reports as they arrive (robot_mode; cleared when the link
 that reported it closes). While it is `chat`, the ear's end_speech calls chat_heard(ev, session) for every sentence
 with text: a non-blocking POST mind /chat/heard {text, lang, emotion, event, speaker, voice, loud_db (above the ear's
-floor), self, session, id, pos, t, dur, debug, sent_at} on the same pool. At most chat_max_inflight posts at a time
-(more: dropped and logged); a post waits chat_timeout_s at most; no retry (a late sentence is no use). The text is never
-logged.
+floor), self, session, id, pos, t, dur, debug, sent_at} on its own small pool (chat_max_inflight threads, so a hung
+mind can never take the mode pool's threads). At most chat_max_inflight posts at a time: a slot frees only when its call
+has really ended (more: dropped and logged); the ear stops waiting after chat_timeout_s; no retry (a late sentence is
+no use). The text is never logged.
 mind is asked on the relay's own small thread pool (never the default executor, which tingwu and switches use).
 Writers: several tasks send() to the robot socket (the upstream loop, input results). websockets writes each whole
 message atomically, so that is safe; never use fragmented sends (async iterators) on the robot ws.
@@ -139,6 +140,7 @@ class ModeRelay:
         self._bg = set()
         self.robot_mode, self._mode_conn = None, None      # hello's mode as last reported, and which link said it
         self.chat_inflight, self.chat_max_inflight, self.chat_timeout_s = 0, chat_max_inflight, chat_timeout_s
+        self._chat_pool = concurrent.futures.ThreadPoolExecutor(max_workers=chat_max_inflight, thread_name_prefix="chat-mind")
         self.chat_sent = self.chat_dropped = 0
 
     # ---- chat v0 ----
@@ -169,13 +171,25 @@ class ModeRelay:
         return True
 
     async def _post_heard(self, body):
+        loop = asyncio.get_running_loop()
         try:
-            status, reply = await self.ask("POST", "/chat/heard", body, timeout=self.chat_timeout_s)
-        finally:
+            fut = loop.run_in_executor(self._chat_pool, self.call, "POST", "/chat/heard", body, self.chat_timeout_s + 1)
+        except RuntimeError:                         # pool shut down (ear stopping)
             self.chat_inflight -= 1
+            return
+        fut.add_done_callback(self._chat_done)      # the slot frees when the call has really ended (review M1)
+        try:
+            status, reply = await asyncio.wait_for(asyncio.shield(fut), self.chat_timeout_s)
+        except asyncio.TimeoutError:
+            status, reply = None, {}
         if status != 200:
             log(f"chat: sentence {_ascii(body.get('id'), 16)} not taken by mind ({status} "
                 f"{_ascii(reply.get('error'), 60)})", flush=True)
+
+    def _chat_done(self, fut):
+        self.chat_inflight -= 1
+        if not fut.cancelled():
+            fut.exception()                          # retrieved: a failed call is already answered as 503
 
     async def ask(self, method, path, body=None, timeout=None):
         """(status, reply) from mind, or (None, {}) when it does not answer within timeout. Runs on the relay's own
@@ -192,6 +206,7 @@ class ModeRelay:
     def close(self):
         """Let the pool go (shutdown / tests); calls still running finish on their own."""
         self._pool.shutdown(wait=False, cancel_futures=True)
+        self._chat_pool.shutdown(wait=False, cancel_futures=True)
 
     def spawn(self, coro):
         task = asyncio.create_task(coro)
