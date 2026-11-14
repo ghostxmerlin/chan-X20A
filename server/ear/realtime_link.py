@@ -163,6 +163,9 @@ def beep_pcm(rng=random):
     return bytes(out)
 
 
+BEEP = beep_pcm(random.Random(7))                   # = the owner's sample beep1.wav
+
+
 def greet_text(call, kind="long", said=(), word=None):
     """Owner greeting event (owner 2026-11-14): one long, named, always-new greeting per long_greet_s; a re-recognition
     inside that window gets a short hello. said: hello's last long greetings (memory only), so it does not repeat."""
@@ -1032,7 +1035,7 @@ class RealtimeHub:
     def _beep(self, now):
         """A short hello as two local chirps: played like a reply (same /mouth stream path), no model, no cost."""
         rid = f"beep{next(self._beeps)}"
-        pcm = beep_pcm(self.rng)
+        pcm = BEEP                                     # owner: "都差不多啊，随便用一个吧" — one fixed beep (sample 1)
         self._turns[rid] = {"kind": "greet_beep", "speech_end": None, "heard_chars": None, "rid": rid,
                             "session": self.session_no, "response_at": now, "first_delta": now, "sound_at": None,
                             "reply_chars": 0, "audio_ms": len(pcm) * 1000 // (SR_OUT * 2), "usage": None,
