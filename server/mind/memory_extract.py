@@ -53,7 +53,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo
 
-from . import selfvoice, settings as settings_mod, speech_settings
+from . import place, selfvoice, settings as settings_mod, speech_settings
 from .library import EMOTIONS, ROLES, SENSITIVITY, Library, LibraryConflict, _fp, extract_key
 from .model_calls import BudgetExceeded, object_schema, run_json
 
@@ -98,7 +98,7 @@ ITEM = object_schema({
     'emotion': {'type': 'string', 'enum': ['', *EMOTIONS]}})
 SCHEMA = object_schema({'items': {'type': 'array', 'items': ITEM}})
 
-SYSTEM = f'''你是桌面宠物机器人 hello 的记忆整理员。hello 放在主人的办公桌上，一直听着看着。下面是某一天的材料：对话纪要和纪要下面的原话、没有纪要的原话、情景段摘要、有人直接和 hello 说的话、主人给 hello 的打分。从里面挑出值得以后再提起的“一件件的事”，写成长期记忆。
+SYSTEM = f'''你是宠物机器人 hello 的记忆整理员。hello 跟在主人身边，一直听着看着（主人常带它走：办公室、家里、车上、饭店、户外都有可能，“这一天的地点”写着当天在哪）。下面是某一天的材料：对话纪要和纪要下面的原话、没有纪要的原话、情景段摘要、有人直接和 hello 说的话、主人给 hello 的打分。从里面挑出值得以后再提起的“一件件的事”，写成长期记忆。
 【挑什么】发生过的事（event）、有人说起或告诉 hello 的情况（told）、表达出来的心情心事（feeling）。工作背景、项目和长期任务的进展、计划和约定、去了哪、要做什么、生活里的事，都可以。寒暄、试麦、逗 hello、听不清的零散词句不记。一段对话可以一条都没有，也可以有两三条。最多 {MAX_ITEMS} 条，没有就空数组。
 【每条】
 - title：20 字以内。statement：120 字以内，写清谁、什么时候（相对这一天）、在哪、发生了什么。用转述，不照抄原话。
@@ -307,7 +307,11 @@ def gather(db, s, day):
     for b in blocks:
         b.pop('code', None), b.pop('n', None)
         b['fp'] = _fp([PROMPT_VERSION, MODEL, table, b['lines'], {k: v['ref'] for k, v in b['refs'].items()}])[:32]
-    return {'day': day, 'blocks': blocks, 'people': table}
+    try:                                       # where hello was that day (mind/place.py; not part of any block's fp)
+        places = place.day_lines(db, lo, hi, tz)
+    except Exception:                          # noqa: BLE001 - the material goes on without it
+        places = []
+    return {'day': day, 'blocks': blocks, 'people': table, 'places': places}
 
 
 def _sentences(block, docs, parent, bcode, voice, table, tz):
@@ -390,7 +394,8 @@ def messages(s, material, chunk, known):
     lo, _ = day_range(day, tz)
     weekday = '一二三四五六日'[datetime.date.fromisoformat(day).weekday()]
     env = (speech_settings.effective(s).get('environment') or '').strip()
-    L = [f'日期：{day}（星期{weekday}）' + (f'；环境：{env[:300]}' if env else '')]
+    L = [f'日期：{day}（星期{weekday}）' + (f'；{place.ENV_LABEL}：{env[:300]}' if env else '')]
+    L.append('这一天的地点：' + ('；'.join(material.get('places') or []) or '没人设过（不知道在哪，不要假定是办公室）'))
     L.append('【人物表】')
     L += [f"{p['id']} {p['display']}" + (f"（也叫 {'、'.join(p['aliases'][:4])}）" if p.get('aliases') else '') for p in material['people']]
     L.append('【已有记忆】（编号 日期 标题：内容）')

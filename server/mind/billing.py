@@ -2,9 +2,9 @@
 
 Owner 2026-11-14 evening (verbatim): "计费开关是这样，启动默认全开，我就使用网页单点开关，或asr9 asr0来整体开关。其他奇怪的设定都
 取消。" So billing is NOT a gate any more. It is only the last whole action:
-  on   = preset 9's server half: 听悟 / 识别 / 纪要 / 情景 on (+ 围观 realtime, except at mind start), 嘴 -> TTS, 提前写 + 连续说 on when the mirrored mode is talk.
+  on   = preset 9's server half: 听悟 / 识别 / 纪要 / 情景 on (+ 围观 realtime; mind start leaves it as stored), 嘴 -> TTS, 提前写 + 连续说 on when the mirrored mode is talk.
   off  = preset 0's server half: 听悟 / 识别 / 纪要 / 情景 / 围观 realtime off, 连续说 / 提前写 off, stop what hello is saying.
-Every mind start is on (runner.wire_modes runs on('boot')); nothing is kept across a restart. Single switches always
+A mind start changes no switch (owner 2026-11-15; hello's power-on sends 9 itself since collector-0.4.96). Single switches always
 work whatever billing shows; speech is held only by the mode (only_talk), never by billing. Turning things off tries
 every step and returns the failed step names (logged) instead of raising.
 
@@ -26,10 +26,13 @@ from .mode_table import PRESETS
 from .modes import SOURCES, result
 
 PAID_SWITCHES = ('tingwu', 'eye', 'notes')     # 听悟, 识别, 纪要; 情景 is set_mind
-# 围观 realtime voice session (spike 2026-11-14, ear/realtime_link.py; runs only while hello reports crowd). Default OFF:
-# 0 turns it off, 9 turns it on, but mind's own start (preset 9 with source 'boot') turns it OFF instead, so a restart
-# never leaves the per-minute paid voice session armed.
+# 围观 realtime voice session (spike 2026-11-14, ear/realtime_link.py; runs only while hello reports crowd).
+# 0 turns it off, 9 turns it on. Owner 2026-11-15: mind's own start (preset 9 with source 'boot') leaves it as it was
+# (the stored hello.switches value), so a mind restart neither arms nor drops 围观.
 REALTIME = 'realtime'
+# collector-0.4.96 (owner 2026-11-15): hello does the robot half of its own 0 / 9 (hearing listen, camera, M12
+# detection), so a digit from hello answers ok like the page; only other sources still answer senses_on_page.
+HELLO_SOURCES = ('asr', 'quick', 'select', 'touch')
 
 
 def _log(msg):
@@ -131,9 +134,9 @@ def _billing_on(b, source, now_ms, out):
 
 
 def _paid_senses_on(b, source, now_ms, out):
+    keep = () if source == 'boot' else ((REALTIME, lambda: b.ctx.set_switch(REALTIME, True)),)   # boot: as stored
     out['failed'] += b._run_all('senses on', [*((n, lambda n=n: b.ctx.set_switch(n, True)) for n in PAID_SWITCHES),
-                                              (REALTIME, lambda: b.ctx.set_switch(REALTIME, source != 'boot')),
-                                              ('mind', lambda: b.ctx.set_mind(True))])
+                                              *keep, ('mind', lambda: b.ctx.set_mind(True))])
     return None, None
 
 
@@ -152,7 +155,15 @@ def _talk_on(b, source, now_ms, out):
     return None, None
 
 
-ACTIONS = {'billing_off': _billing_off, 'billing_on': _billing_on, 'paid_senses_on': _paid_senses_on,
+def _realtime_toggle(b, source, now_ms, out):
+    """Preset 1: 围观闭嘴 / 开口 = the realtime switch flips (off closes the session at once, ear/realtime_link.py)."""
+    on = not b.ctx.switch_on(REALTIME)
+    failed = b._run_all('realtime toggle', [(REALTIME, lambda: b.ctx.set_switch(REALTIME, on))])
+    out['failed'] += failed
+    return None, ('MEET ON' if on else 'MEET QUIET') if not failed else None
+
+
+ACTIONS = {'realtime_toggle': _realtime_toggle, 'billing_off': _billing_off, 'billing_on': _billing_on, 'paid_senses_on': _paid_senses_on,
            'mouth_tts': _mouth_tts, 'talk_on': _talk_on}
 
 
@@ -160,8 +171,8 @@ def apply_preset(n, billing, *, source, now_ms):
     """Run preset n's server half -> {result: {code, toast}, robot: {hearing?, vision?}} (+ failed: [step names]
     when some step did not take; the toast then says 'PRESET N: K FAILED').
 
-    robot is the preset's robot half, always returned; only the page carries it out, so a preset with a robot half
-    sent from anywhere but the page (hello's digit word) answers senses_on_page after doing the server half. 1-8 are
+    robot is the preset's robot half, always returned; the page and hello (HELLO_SOURCES, its own digit word, since
+    collector-0.4.96) carry it out, any other source answers senses_on_page after doing the server half. 1-8 are
     undefined_preset here (4-8 are mode selects hello does itself, 1-3 empty). Toasts: ok = 'PRESET N' (+ ': detail'),
     else the code's own toast. Stops at the first refused step.
     """
@@ -186,7 +197,7 @@ def apply_preset(n, billing, *, source, now_ms):
             details.append(detail)
     if out['failed']:
         details.insert(0, f"{len(out['failed'])} FAILED")
-    if robot and source != 'page':
+    if robot and source not in ('page', *HELLO_SOURCES):
         return done(result('senses_on_page', f'PRESET {n}: {details[0]}, USE PAGE' if out['failed'] else None))
     toast = f'PRESET {n}' + (': ' + ', '.join(details) if details else '')
     return done(result('ok', toast[:32]))

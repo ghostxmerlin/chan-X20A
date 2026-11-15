@@ -776,6 +776,25 @@ class ContextTest(ChatBase):
         self.assertTrue(row['person_id'].startswith('p_'))
         self.assertLess(row['timings']['context_ms'], 1000)
 
+    def test_burst_looks_of_the_last_three_minutes_are_in_the_context(self):
+        for at, text in ((self.now[0] - 200_000, '太旧的一张'), (self.now[0] - 20_000, '桌上有一杯咖啡'),
+                         (self.now[0] - 5_000, '主人举着一本书')):
+            self.db.add('vision_looks', {'kind': 'look', 'lid': f'b1-{at}', 'burst_id': 'b1', 'at': at, 'text': text})
+        self.db.add('vision_looks', {'kind': 'look', 'lid': 'b1-x', 'burst_id': 'b1', 'at': self.now[0] - 1_000,
+                                     'text': None, 'error': 'HTTP 500'})
+        self.db.add('vision_looks', {'kind': 'burst', 'lid': 'b1-end', 'burst_id': 'b1', 'at': self.now[0] - 3_000})
+        self.chat.heard(heard('你刚才看到什么了'))
+        self.chat.process_once()
+        system = self.model.bodies[0]['messages'][0]['content']
+        line = next(x for x in system.splitlines() if x.startswith('仔细看到的'))
+        self.assertLess(line.index('主人举着一本书'), line.index('桌上有一杯咖啡'))       # newest first
+        self.assertNotIn('太旧的一张', system)
+
+    def test_no_looks_no_line(self):
+        self.chat.heard(heard('你好呀'))
+        self.chat.process_once()
+        self.assertNotIn('仔细看到的', self.model.bodies[0]['messages'][0]['content'])
+
     def test_at_most_three_related_memories(self):
         mems = [f'午饭第{i}条记忆' for i in range(6)]
         self.assertEqual(len(chat_mod.related_memories(mems, '午饭吃什么')), 3)
@@ -866,6 +885,7 @@ class HookAndApiTest(unittest.TestCase):
         self.chat = chat_mod.Chat(self.db, self.store, settings_fn=lambda: self.ss.current()[0],
                                   roles_fn=lambda: speak.load_roles(str(ROOT / 'config/roles')), tts=self.tts, env=ENV,
                                   chat_fn=self.model, log=lambda *a, **k: None, threaded=False)
+        self.db['switches'].insert_one({'_id': 'mouth', 'mode': 'tts'})       # as stored (a mind start changes nothing)
         self.ms, self.billing, _ = runner.wire_modes(self.db, self.store, settings_store=self.ss, tts=self.tts,
                                                      say_worker=None, say_auto=None, say_round_fn=None,
                                                      log=lambda *a, **k: None, chat=self.chat)

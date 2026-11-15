@@ -5,7 +5,7 @@ and this minute, from the least to the most changing.
 """
 import json
 
-from . import settings as settings_mod
+from . import place, settings as settings_mod
 
 CONFIDENCE = {"type": "string", "enum": ["high", "mid", "low"]}
 ANSWER = {"type": "object", "additionalProperties": False, "required": ["text", "confidence"],
@@ -31,10 +31,12 @@ RULE_CODES = {"rule:owner", "rule:coverage", "rule:time", "rule:place", "rule:se
 # v3: positive, most-likely wording (v2) + the eye result e1 as the main visual evidence, shorter output.
 # 2026-11-14 (owner: "地点以你点的为准"): an owner-reported place wins over what the picture looks like;
 # offline replay of 11:30-11:34 that day: 5/5 minutes said 家里 (before: 0/5).
-V3_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
+# 2026-11-15 (owner: "地点要搞对，删除所有可能钉死的地方"): no default place any more (unknown unless someone set or said
+# it, mind/place.py); the environment text is background, not where hello is; never compare the picture to a place.
+V3_SYSTEM = """你是宠物机器人 hello 的感知整理者。每分钟你收到 hello 这一分钟的感知（已由规则程序整理好），写出此刻的情景：我是谁、我在哪、旁边的人在干什么。你只描述，不提建议，不替 hello 说话，不编故事。
 
 【怎么写】
-- 用正向的话说出最可能的情况，再用把握高低表示有多确定。例如：主人在画面里、又有打字声 → “主人大概在桌前工作（在打字）”，把握中；画面里没人、也没人说话 → “附近大概没人”，把握中；有人来回说话 → “旁边有人在聊天”；音乐声 → “有人在放音乐”。
+- 用正向的话说出最可能的情况，再用把握高低表示有多确定。例如：主人在画面里、又有打字声 → “主人大概在打字工作”，把握中；画面里没人、也没人说话 → “附近大概没人”，把握中；有人来回说话 → “旁边有人在聊天”；音乐声 → “有人在放音乐”。
 - 不要写否定式、免责式的句子，例如“无法确认……”“不能据此判断……”“画面外看不到……”“没有提供……”。感官的局限你心里有数就行，用把握的高低体现，不要写进条目。真正缺的关键信息只写进 want_to_know，一句话。
 - 证据弱就用“可能”“大概”，把握标 low；证据多、互相印证就标 high。
 - 情景要全面，按维度写：people 人（谁在、远近）、activity 在做什么、sound_scene 声音环境、vision 画面、self hello 自身、time_place 时间地点、topic 话题、contradiction 矛盾。话题只是其中一项，活动不等于在说什么；有语言以外的证据时必须引用（e 视觉识别、v 脸、a 声音事件、rule: 规则行）。几句话不等于几个人。
@@ -57,8 +59,10 @@ V3_SYSTEM = """你是桌面宠物机器人 hello 的感知整理者。每分钟�
 - summary 不超过 20 个字。changes 写这一分钟变了什么（没变留空）。
 
 【地点】
-- rule:place 写着“主人报告”时，地点就是主人说的那个地方，以此为准：where_am_i 和 time_place 照它写，把握 high，evidence 引用 rule:place。画面看起来像别的地方（例如像办公室工位）也不改地点；画面只描述看到了什么（书桌、书架、白墙），不要拿画面去判断是办公室还是家。
-- 没有主人报告时，地点按 rule:place 写（Wi-Fi 或默认值），画面可以帮着判断。
+- hello 常被主人带着走（办公室、家里、车上、饭店、户外都有可能），没有固定的地方。
+- rule:place 写着“以此为准”时，地点就是那里：where_am_i 和 time_place 照它写，把握 high，evidence 引用 rule:place。画面看起来像别的地方也不改地点；画面只描述看到了什么（桌子、书架、白墙、车窗、树），不要拿画面去跟某个地方比较，不写“这不是某某地方”。
+- rule:place 是“不知道”时，不要假定在办公室或桌上：where_am_i 按画面和声音写最可能的地方（例如“大概在车里”“像在饭店”“在室外”），把握 low 或 mid，引用 e1；看不出就写“不知道在哪”，把握 low。
+- 背景资料写的是主人平时的情况，不代表 hello 现在在那里。
 
 【画面】
 - e1 是视觉识别：另一个模型看过这一分钟的画面后写的结果（几个人、谁、在哪、在做什么、环境）。画面以 e1 为主要依据：people、activity、vision 条目引用 e1，basis 可以是 seen；M12 的脸记录只用来补充名字。
@@ -113,9 +117,9 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
     tz, people, src = s["tz"], s.get("people", []), s["sources"]
     owner = {**s["owner"], "display": settings_mod.owner_name(s, pkg["minute"])}
     system = VERSIONS[version]["system"]
-    L = ["【设置】", f"关于我：{s['self_facts']}", f"默认地点：{s['place']['default']}", f"主人：{owner['display']}"]
+    L = ["【设置】", f"关于我：{place.self_facts(s)}", f"主人：{owner['display']}"]
     if (s.get("environment") or "").strip():
-        L.append(f"环境：{s['environment'].strip()}")
+        L.append(f"{place.ENV_LABEL}：{s['environment'].strip()}")
     if people:
         L.append("认识的人：" + "、".join(p["display"] for p in people))
     L.append("")
@@ -139,11 +143,14 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
     L.append(f"rule:time {st['time']['label']}，星期{st['time']['weekday']}，{'工作时段' if st['time']['work_hours'] else '非工作时段'}")
     pl = st["place"]
     if pl.get("label") and pl.get("source") == "owner_report":
-        L.append(f"rule:place 地点：{pl['label']}（主人报告，{_hhmm(pl['at'], tz)}，以此为准）")
+        by = place.BY_TEXT.get(pl.get("by") or "page", place.BY_TEXT["page"])
+        L.append(f"rule:place 地点：{pl['label']}（{by}，{_hhmm(pl['at'], tz)}，以此为准）")
     elif pl.get("label"):
         L.append(f"rule:place 地点：{pl['label']}（来自 Wi-Fi）")
+    elif pl.get("source") == "owner_report":
+        L.append(f"rule:place 地点：不知道（{_hhmm(pl['at'], tz)} 设成了未知；不要假定在办公室或桌上）")
     else:
-        L.append(f"rule:place 地点：{s['place']['default']}（默认，没有报告也没有 Wi-Fi 数据）")
+        L.append("rule:place 地点：不知道（没人告诉过；不要假定在办公室或桌上）")
     L.append(f"rule:coverage 感官覆盖：听觉 {cov['hearing_s']} 秒，视觉 {cov['vision_s']} 秒，M12 {cov['m12_s']} 秒{'（估计）' if cov['estimated'] else ''}")
     L.append(f"rule:owner 主人状态（规则）：{STATE_TEXT.get(st['owner']['state'], st['owner']['state'])}——{st['owner']['why']}")
     L.append(f"rule:self hello 这一分钟自己出声 {len(pkg['self_speech'])} 次")
@@ -174,7 +181,8 @@ def render(version, s, pkg, strong, prev_scene, segments, neighbours):
         r = eye["result"]
         who = "；".join("·".join(x for x in (p.get("who"), p.get("where"), p.get("doing")) if x) for p in r.get("people", []))
         L.append(f"{eye['code']} 视觉识别（{eye['frames']} 张画面）：{r.get('people_count', 0)} 人" + (f"；{who}" if who else "") +
-                 f"；活动：{r.get('activity', '')}；环境：{r.get('scene', '')}；变化：{r.get('changes') or '—'}")
+                 f"；活动：{r.get('activity', '')}；环境：{r.get('scene', '')}" +
+                 (f"；看着像：{r['place_seen']}" if r.get('place_seen') else '') + f"；变化：{r.get('changes') or '—'}")
         named = sorted({_display(f["name"], owner, people) for f in pkg["faces"] if f["name"]})
         unknown = sum(1 for f in pkg["faces"] if not f["name"])
         L.append(f"M12：{'认出 ' + '、'.join(named) if named else '没认出名字'}；未认出的脸 {unknown} 张；人形 {pkg['persons']['seconds']} 秒")

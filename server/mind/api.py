@@ -5,6 +5,8 @@ scenes. Sentence text only leaves through this API; nothing is logged.
 
 GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes /roles /utterances /voices
 POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voice/try
+GET  /place; POST /place {label: text | null, source: page | robot} /place/choices {choices} | {add} | {remove}
+     /place/told {text, source: crowd | chat} (where hello is now, mind/place.py; spec 2026-11-15-place-contract.md)
 POST /say/round /say/play /signal /say/prefetch /say/auto (talk show; 连续说 state is in GET /say/stats under auto)
 GET  /db/overview /db/people /db/person /db/memories /db/knowledge /db/item (library, read only)
      /db/changes (extracted memories, latest change first; lane live / replay) /db/sources (one memory's sources)
@@ -13,6 +15,7 @@ POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only v
      /db/memory/review (对 confirm / 错 wrong = disabled / 合并 merge; 改 is /db/memory) /db/extract/switch {on}
      /db/extract/run {day?} (ask the memory worker to run that day now; it still checks the switch and caps)
 GET  /realtime/context (ear: 围观 realtime voice session's context block + owner face names; mind/realtime.py)
+GET  /looks?limit= /looks/frame?lid= (page: 视觉爆发 looks, bursts, running; one look's photo as jpeg_b64)
 GET  /chat/turns /chat/state; POST /chat/heard /chat/stage (ear: a speech onset in chat, the page's dots) (ear: one sentence heard while hello is in chat; chat v0, mind/chat.py)
 GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/robot (ear: hello's /mouth closed)
      /mode/input (ear: hello's digits 0 / 9) /mode (page: billing only) /preset (modes step 1b: hello owns the mode,
@@ -30,7 +33,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from . import fusion, memory_extract, prompts, segments, settings as settings_mod, speak
+from . import fusion, memory_extract, place, prompts, segments, settings as settings_mod, speak
 from .settings_store import MODELS, SettingsConflict
 from . import speech_settings
 from .memory import MemoryStore, MemoryConflict
@@ -217,6 +220,44 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         return modes().apply(body["input"], body.get("value"), source=body["source"], device=body["device"],
                              boot=body["boot"], dev_seq=body["seq"], age_ms=body["age_ms"], sid=None)
 
+    def _read_jpeg(rel):
+        """A frame file under recordings_root (realpath-checked) -> base64 text, or None."""
+        root = ctx.get("recordings_root")
+        if not root or not isinstance(rel, str) or not rel:
+            return None
+        base = os.path.realpath(root)
+        full = os.path.realpath(os.path.join(base, rel))
+        if not full.startswith(base + os.sep) or not os.path.isfile(full):
+            return None
+        with open(full, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+
+    def looks(limit):
+        """视觉爆发 (ear vision_burst.py) for the page: the newest looks (no photos: /looks/frame), the last bursts, and
+        whether one is running now (its newest look under 15 s old and no end row yet)."""
+        rows = list(db["vision_looks"].find({"kind": "look"}, {"_id": 0, "usage": 0}).sort("at", -1).limit(limit))
+        bursts = list(db["vision_looks"].find({"kind": "burst"}, {"_id": 0}).sort("at", -1).limit(5))
+        now = int(time.time() * 1000)
+        running = None
+        if rows and now - (rows[0].get("at") or 0) < 15_000 and \
+                not any(b.get("burst_id") == rows[0].get("burst_id") for b in bursts):
+            bid = rows[0].get("burst_id")
+            mine = [r for r in rows if r.get("burst_id") == bid]
+            running = {"burst_id": bid, "looks": len(mine), "since": min(r.get("at") or now for r in mine),
+                       "last_at": rows[0].get("at")}
+        keep = ("lid", "burst_id", "at", "seq", "snap_id", "text", "error", "latency_ms", "snap_ms", "bytes", "cost_usd")
+        return {"running": running, "bursts": bursts,
+                "looks": [{k: r.get(k) for k in keep} | {"has_frame": bool(r.get("path"))} for r in rows]}
+
+    def look_frame(lid):
+        if not lid or len(lid) > 80:
+            raise BadRequest("lid required")
+        doc = db["vision_looks"].find_one({"kind": "look", "lid": lid}, {"path": 1, "at": 1})
+        if not doc:
+            raise NotFound("no such look")
+        b64 = _read_jpeg(doc.get("path"))
+        return {"lid": lid, "at": doc.get("at"), "jpeg_b64": b64, "missing": b64 is None}
+
     def latest_frame():
         """Newest body-camera frame the ear stored (hello.frames + the file under recordings/)."""
         doc = db["frames"].find_one({}, sort=[("at", -1)])
@@ -384,6 +425,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return names()
         if path == "/prompts":
             return {"versions": prompts.OFFERED, "models": list(MODELS)}
+        if path == "/place":
+            return place.state(db)
         if path == "/labels":
             lo, hi = _range(q)
             return list(db["mind_labels"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("at", 1))
@@ -452,6 +495,10 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if not chat:
                 raise Conflict('chat is not configured here')
             return chat.state()
+        if path == '/looks':
+            return looks(max(1, min(_int(q, 'limit', required=False) or 40, 200)))
+        if path == '/looks/frame':
+            return look_frame((q.get('lid') or [''])[0])
         if path == '/chat/turns':
             chat = ctx.get('chat')
             if not chat:
@@ -721,11 +768,26 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             db["mind_labels"].insert_one({"lane": LANE, "kind": "mark", "mark": body["kind"], "at": now, "note": _str(body.get("note"), 300)})
             return {"ok": True, "at": now}
         if path == "/place":
-            label = body.get("label")
-            if not isinstance(label, str) or not (1 <= len(label.strip()) <= 40):
-                raise BadRequest("label: 1–40 characters")
-            db["mind_labels"].insert_one({"lane": LANE, "kind": "place", "label": label.strip(), "at": now})
-            return {"ok": True, "at": now}
+            # where hello is now (mind/place.py): label text (1-40) or null = unknown; source page (default) / robot
+            # (the ear forwards hello's info-page pick: must be one of the common choices). voice is /place/told only.
+            if set(body) - {"label", "source"} or "label" not in body or body.get("source", "page") not in ("page", "robot"):
+                raise BadRequest("label (1–40 characters, or null for unknown) and source page / robot")
+            try:
+                st = place.set_current(db, body["label"], body.get("source", "page"), now, lane=LANE)
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+            return {"ok": True, "at": now, **st}
+        if path == "/place/choices":
+            try:
+                return place.edit_choices(db, body, now)
+            except ValueError as e:
+                raise BadRequest(str(e)) from None
+        if path == "/place/told":
+            # the ear's crowd transcripts (and tests): a sentence that may say where we are (local rule, no model)
+            if set(body) - {"text", "source"} or not isinstance(body.get("text"), str) or len(body["text"]) > 512 \
+                    or body.get("source") not in ("crowd", "chat"):
+                raise BadRequest("text (up to 512 characters) and source crowd / chat required")
+            return place.told(db, body["text"], body["source"], now)
         if path == "/label":
             minute = body.get("minute")
             if not isinstance(minute, int) or body.get("verdict") not in VERDICTS or body.get("field") not in FIELDS:
@@ -809,7 +871,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(401, {"error": "bad token"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
+            if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/place/choices", "/place/told", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
                                 '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
                                 '/db/memory/review', '/db/extract/switch', '/db/extract/run',
                                 '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard', '/chat/stage'):

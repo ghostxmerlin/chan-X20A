@@ -50,6 +50,7 @@ import tingwu_switch
 import mouth_link
 import mouth_mode
 import realtime_link
+import vision_burst
 import sound_kinds
 import hearing_protocol as hp
 
@@ -678,6 +679,11 @@ class Ear:
               "debug": {"vad_wait_ms": ms(t_pop - arr_mono), "queue_ms": ms(t0 - t_q), "spk_ms": ms(t1 - t0),
                         "asr_ms": ms(t2 - t1), "tag_ms": ms(t3 - t2), "server_ms": ms(time.monotonic() - t_pop)}}
         self.post(ev)
+        if self.realtime is not None and self.device_profile and text:
+            try:                       # 围观: the ear's own words for the 「嗯」 rescue, burst words and 闭嘴
+                self.realtime.local_heard(text)
+            except Exception as error:     # noqa: BLE001 - never costs a sentence
+                print(f"realtime: local heard failed: {type(error).__name__}", flush=True)
         if self.chat is not None and self.device_profile and text:
             try:                       # chat v0: never waits; the relay's pool posts it to mind
                 self.chat.chat_heard(ev, self.session)
@@ -932,7 +938,8 @@ def main():
                          "realtime switch is on (default off) and hello is in crowd")
     ap.add_argument("--realtime-voices", default=os.environ.get("SOUL_RT_VOICES", os.path.expanduser("~/soul-tts/soul_tts/voices.json")),
                     help="soul-tts voices.json that holds the cloned voice (private; the id is never logged)")
-    ap.add_argument("--realtime-voice", default=os.environ.get("SOUL_RT_VOICE", "yy01"), help="soul-tts voice key")
+    # owner 2026-11-15: 围观 speaks in Mandy (mm01, clone of 11-14) with a Shandong accent (PERSONA); was yy01
+    ap.add_argument("--realtime-voice", default=os.environ.get("SOUL_RT_VOICE", "mm01"), help="soul-tts voice key")
     ap.add_argument("--realtime-silence-ms", type=int, default=realtime_link.Config.silence_ms,
                     help="server VAD silence that ends a turn (crowd: longer than DashScope's 800 ms)")
     ap.add_argument("--realtime-vad-threshold", type=float, default=realtime_link.Config.vad_threshold)
@@ -996,7 +1003,8 @@ def main():
     vision_no = [0]
     signal_active = set()
     signal_post = signal_link.mind_poster(token_value)
-    mode_hub = mouth_link.ModeRelay(mouth_link.mind_client(token_value))   # hello's mode reports -> mind (step 1b)
+    # hello's mode reports -> mind (step 1b); place frames for the robot's info page every 5 s (2026-11-15)
+    mode_hub = mouth_link.ModeRelay(mouth_link.mind_client(token_value), place_poll_s=5.0)
     rt_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("realtime")) if database else (lambda: None))
     rt_hub = None
     if a.realtime == "on":
@@ -1004,10 +1012,16 @@ def main():
         if secrets.get("DASHSCOPE_API_KEY") and rt_voice:
             cfg = realtime_link.Config()
             cfg.silence_ms, cfg.vad_threshold = a.realtime_silence_ms, a.realtime_vad_threshold
+            fillers = realtime_link.load_fillers(os.path.expanduser(f"~/soul-spike/fillers/{a.realtime_voice}"))
             rt_hub = realtime_link.RealtimeHub(key=secrets["DASHSCOPE_API_KEY"], voice=rt_voice, modes=mode_hub,
                                                call=mouth_link.mind_client(token_value), switch=rt_switch, db=database,
-                                               cfg=cfg)
+                                               cfg=cfg, fillers=fillers)
+            print(f"realtime (围观): {len(fillers)} look fillers", flush=True)
     print(f"realtime (围观): {'ready, follows the switch' if rt_hub else 'off (no key, no voice or --realtime off)'}", flush=True)
+    burst = None                                   # 视觉爆发 (2026-11-15): "注意看" in crowd, only with the realtime hub
+    if rt_hub is not None:
+        burst = vision_burst.VisionBurst(rt_hub, vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]), db=database)
+        rt_hub.burst = burst
 
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
@@ -1024,7 +1038,7 @@ def main():
             peer = ws.remote_address
             print(f"+ {peer} mouth m{mouth_no[0]}", flush=True)
             link = mouth_link.MouthLink(ws, upstream_url=mouth_link.UPSTREAM, token=token_value, conn=mouth_no[0],
-                                        modes=mode_hub, realtime=rt_hub)
+                                        modes=mode_hub, realtime=rt_hub, burst=burst)
             try:
                 why = await link.run()
             finally:
@@ -1054,7 +1068,8 @@ def main():
             print(f"+ {peer} vision v{vision_no[0]}", flush=True)
             try:
                 link = await vision_link.serve_link(ws, database, vision_no[0], f"{peer[0]}:{peer[1]}", rec_root,
-                                                    on_event=rt_hub.on_vision if rt_hub else None)
+                                                    on_event=rt_hub.on_vision if rt_hub else None,
+                                                    on_frame=burst.on_frame if burst else None)
             finally:
                 vision_active.discard(ws)
             print(f"- {peer} vision v{vision_no[0]}: {link.events} events, {link.frames} frames ({link.session})", flush=True)
@@ -1101,6 +1116,8 @@ def main():
                 await asyncio.Future()
             finally:
                 watcher.cancel()
+                if burst is not None:
+                    await burst.shutdown()
                 if rt_hub is not None:
                     await rt_hub.shutdown()
                 mode_hub.close()

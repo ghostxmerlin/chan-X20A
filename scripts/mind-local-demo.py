@@ -211,6 +211,7 @@ def build(settings_timeout_s=300, clock_ms=lambda: int(time.time() * 1000)):
                          log=lambda *a, **k: None)
     ms, billing, gate = runner.wire_modes(db, store, settings_store=ss, tts=None, say_worker=worker, say_auto=auto,
                                           say_round_fn=None, clock_ms=clock_ms, chat=chat)
+    billing.on('boot', clock_ms())     # the demo starts as hello's power-on 9 (a real mind start changes no switch)
     worker.mode_fn = auto.mode_fn = lambda: ms.current()['mode']
     hello = FakeHello(ms, settings_timeout_ms=int(settings_timeout_s * 1000), clock_ms=clock_ms)
     ctx = {'settings_store': ss, 'say_worker': worker, 'say_auto': auto, 'mode_store': ms, 'billing': billing,

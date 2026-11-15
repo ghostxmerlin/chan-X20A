@@ -174,7 +174,7 @@ class Store:
                                                                                {"cost_usd": 1}))
 
     def place_at(self, ms):
-        """The owner's latest place report at or before ms (phase 1: reported on the page, not Wi-Fi)."""
+        """The latest place report at or before ms (page, robot or voice; label None = unknown; mind/place.py)."""
         for d in self.db["mind_labels"].find({"kind": "place", "at": {"$lte": ms}}, {"_id": 0}).sort("at", -1).limit(1):
             return d
         return None

@@ -50,6 +50,14 @@ M12Snapshot m12_snapshot();
 using M12Callback = void (*)(const M12Reply& reply, const char* err, void* context);
 int32_t m12_request(M12Op op, const M12RequestArgs& args, M12Callback callback = nullptr, void* context = nullptr);
 const char* m12_request_error(int32_t code);
+// Crowd tap look (2026-11-15, owner: 围观点击要最大程度捕获人脸、属性和识别). Non-blocking, from any task: the M12
+// task asks who for every face in view without a name (largest first, one at a time), sends face_attrs again for
+// the faces in view and waits for missing attributes, then waits until those vision events left the queue for the
+// uplink, and calls done(token) on the M12 task (no M12 lock held) at most M12WhoPolicy::kLookUs (0.8 s) later;
+// at once when detection is off or the M12 is offline. A newer look finishes the older one first.
+using M12LookDone = void (*)(uint32_t token);
+void m12_look(uint32_t token, M12LookDone done);   // lock-free: atomics only
+bool m12_look_active();                             // a look is asked or running (the uplink holds frames)
 // Vision change events (face/person found, named, attrs, unknown, lost; vision on/off; M12
 // online/offline), oldest first, each with a sequence number. The vision uplink peeks, sends,
 // then commits what was sent; meanwhile the newest 64 wait here (older ones dropped, counted).

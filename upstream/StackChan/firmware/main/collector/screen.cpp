@@ -6,10 +6,12 @@
 #include "remote_gestures.h"
 #include "home_touch.h"
 #include "ui_pages.h"
+#include "burst_indicator.h"   // 0.5.00: count text and time bar only (pure)
 #include "ui_font_blob.h"   // choose() only: pure, no IDF (the font itself comes in through screen_set_cjk_font)
 #include "eyes/view.h"
 #include <cstdio>
 #include <cstdlib>
+#include <new>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
@@ -90,14 +92,41 @@ const lv_font_t *cjk16 = nullptr, *cjk24 = nullptr;
 uint32_t toast_until_ms = 0;
 bool toast_shown = false;
 constexpr uint32_t kToastMs = 2000;
-// Chat stage dots (0.4.93): three circles at the home page's top left, clear of the top-right badge and the bottom
-// toast; 16 px each, 8 px apart, so they read at arm's length. Small LVGL objects, only while in chat.
-lv_obj_t* chat_dots[3] = {};
-int chat_dots_lit = -2;
-bool chat_dots_grey = false;
-uint32_t chat_dots_color = 0;
-constexpr int kDotPx = 16, kDotGap = 8, kDotX = 10, kDotY = 8;
+// 0.4.98 home top row (top_row.h): one object drawn by top_row_draw, from x kRowX to kRowGap before the badge, as
+// tall as the badge. Left: the chat / crowd stage blocks (0.4.93 dots, same semantics), M12 lens / person / face and
+// the recognised name; right: Wi-Fi bars and the battery. One LVGL object only (internal RAM, as the badge); what it
+// shows is a small state block in PSRAM. screen_update() / screen_update_chat_dots() invalidate it only on change.
+constexpr int kBadgePadHor = 4, kBadgePadVer = 1, kRowX = 6, kRowGap = 6;
+static_assert(top::kRowH == 17 + 2 * kBadgePadVer, "top row = badge height (collector_mono_15 line height + padding)");
 constexpr uint32_t kDotDim = 0x5A5A5A, kDotGrey = 0x8C8C8C;
+constexpr uint32_t kTopDim = 0x4A4A4A, kLens = 0x20B8C8, kOffline = 0xA03030, kHot = 0xFFBF40, kSeen = 0x79FF97;
+constexpr uint32_t kNameInk = 0xFFBF40, kBolt = 0xFFD84A, kBatOk = 0x79FF97, kBatMid = 0xFFBF40, kBatLow = 0xFF3838;
+constexpr uint32_t kBurst = 0xFF5AD8, kBurstInk = 0xFFFFFF;   // 0.5.00 burst group: eye + time bar, look count
+struct TopState {
+    bool stage = false, grey = false;    // stage blocks shown (chat / crowd); grey = the skip flash
+    int8_t lit = -1;                     // -1 none, 0 / 1 / 2 listen / think / speak
+    uint32_t color = 0;                  // the mode's colour
+    top::Vision vision;
+    int wifi = -2;                       // top::wifi_bars(); -2 = nothing yet
+    top::Battery battery;
+    int badge_w = -1;
+    // Worked out on change (top_dirty), only drawn by top_row_draw. Also the draw buffers: lv_draw_label keeps
+    // the text pointer until the frame is rendered.
+    char pct[12] = "--";
+    int pct_w = 0;
+    char name[top::kNameBytes + 1] = ""; // the part of the name that fits, "" = none
+    const lv_font_t* name_font = nullptr;
+    // 0.5.00 视觉爆发 indicator (burst_indicator.h, screen_update_burst): the group's count text and time bar fill.
+    bool burst = false;
+    uint32_t looks = 0;
+    int left_s = 0, total_s = 1;
+    char count[8] = "";
+    int count_w = 0;
+    int group_w = 0;                     // decided by top_dirty: the full group, or the eye alone beside a long name
+    int burst_fill = 0;                  // filled px of the time bar (0 .. group_w)
+};
+lv_obj_t* top_row = nullptr;
+TopState* top_state = nullptr;
 // 0.4.94 quick settings (swipe down) and mode picker (swipe up), ui_pages.h: small LVGL objects (internal RAM),
 // built when the page opens and deleted when it closes. Requests wait here until the LVGL timer takes them.
 lv_obj_t *quick_page = nullptr, *quick_volume = nullptr, *quick_net[2] = {}, *quick_last = nullptr, *quick_hear = nullptr;
@@ -528,6 +557,183 @@ void update_icon(IconKind kind, bool valid, int value = 0)
     lv_obj_invalidate(icon.obj);
 }
 
+// ---- 0.4.98 home top row (top_row.h) ----
+int glyph_w(const lv_font_t* f, uint32_t cp) { return int(lv_font_get_glyph_width(f, cp, 0)); }
+// The CJK font when it is loaded and has every character of the name (never empty boxes); else nullptr.
+const lv_font_t* top_name_cjk(const char* name)
+{
+    if (!cjk16) return nullptr;
+    const bool covers = top::all_chars(name, [](uint32_t cp) {
+        lv_font_glyph_dsc_t g;
+        return lv_font_get_glyph_dsc(cjk16, &g, cp, 0) && !g.is_placeholder;
+    });
+    return covers ? cjk16 : nullptr;
+}
+void top_text(lv_layer_t* layer, const lv_area_t& row, int x, int w, const char* text, const lv_font_t* font,
+              uint32_t color)
+{
+    lv_draw_label_dsc_t d;
+    lv_draw_label_dsc_init(&d);
+    d.font = font;
+    d.color = lv_color_hex(color);
+    d.text = text;
+    const int y = row.y1 + (top::kRowH - int(font->line_height)) / 2;
+    const lv_area_t a = {row.x1 + x, y, row.x1 + x + w - 1, y + int(font->line_height) - 1};
+    lv_draw_label(layer, &d, &a);
+}
+void top_row_draw(lv_event_t* event)
+{
+    if (!top_state) return;
+    auto& st = *top_state;
+    auto* layer = lv_event_get_layer(event);
+    lv_area_t row;
+    lv_obj_get_coords(top_row, &row);
+    const top::Vision& v = st.vision;
+    const bool on = v.power == top::VisionPower::On;
+    const int pct_w = st.pct_w;
+    const top::Layout l = top::layout(lv_area_get_width(&row), st.stage, on, pct_w, st.battery.charging,
+                                      st.burst ? st.group_w : 0);
+    constexpr int H = top::kRowH;
+    // Stage blocks: unlit = grey outline, lit = filled in the mode's colour, skip = all filled grey.
+    if (l.blocks >= 0)
+        for (int i = 0; i < 3; ++i) {
+            const bool lit = st.grey || i == st.lit;
+            const uint32_t c = st.grey ? kDotGrey : lit ? st.color : kDotDim;
+            draw_rect(layer, row, l.blocks + i * (top::kBlockW + top::kBlockGap), 0, top::kBlockW, H, c, 0, lit, 2);
+        }
+    // M12 lens: red ring offline, grey off (standby), amber too hot, cyan with a pupil while detecting.
+    const int ly = (H - top::kLensPx) / 2;
+    const uint32_t ring = on ? kLens : v.power == top::VisionPower::Hot ? kHot :
+                          v.power == top::VisionPower::Off ? kTopDim : kOffline;
+    draw_rect(layer, row, l.lens, ly, top::kLensPx, top::kLensPx, ring, LV_RADIUS_CIRCLE, false, 2);
+    if (on) {
+        draw_rect(layer, row, l.lens + 5, ly + 5, 5, 5, kLens, LV_RADIUS_CIRCLE);
+        // Person (head + shoulders) and face box (two eyes): green when seen, grey when not.
+        const uint32_t pc = v.person ? kSeen : kTopDim, fc = v.face ? kSeen : kTopDim;
+        draw_rect(layer, row, l.person + 3, 2, 6, 6, pc, LV_RADIUS_CIRCLE);
+        draw_rect(layer, row, l.person, 9, top::kPersonW, 7, pc, 3);
+        draw_rect(layer, row, l.face, 2, top::kFaceW, 14, fc, 2, false, 2);
+        draw_rect(layer, row, l.face + 4, 6, 2, 2, fc);
+        draw_rect(layer, row, l.face + 8, 6, 2, 2, fc);
+    }
+    // The recognised name, already cut to its room (top_dirty).
+    if (st.name[0] && st.name_font) top_text(layer, row, l.name, l.name_w, st.name, st.name_font, kNameInk);
+    // 0.5.00 vision burst: a pink eye (almond outline, pupil), the look count in white, and under both a 2 px time
+    // bar draining from the right (dim track behind it).
+    if (l.burst >= 0) {
+        const int ex = l.burst, ey = (H - top::kTimeBarH - top::kEyeH) / 2;
+        static const lv_point_t outer[] = {{0, 5}, {4, 1}, {8, 0}, {9, 0}, {13, 1}, {17, 5}, {13, 10}, {9, 11}, {8, 11}, {4, 10}};
+        static const lv_point_t inner[] = {{3, 5}, {5, 3}, {8, 2}, {9, 2}, {12, 3}, {14, 5}, {12, 8}, {9, 9}, {8, 9}, {5, 8}};
+        const lv_area_t eo = {row.x1 + ex, row.y1 + ey, row.x2, row.y2};
+        draw_polygon(layer, eo, outer, 10, kBurst);
+        draw_polygon(layer, eo, inner, 10, kInk);
+        draw_rect(layer, row, ex + 6, ey + 3, 5, 5, kBurst, LV_RADIUS_CIRCLE);
+        if (l.burst_w > top::kEyeW)
+            top_text(layer, row, ex + top::kEyeW + top::kEyeGap, st.count_w, st.count, &collector_mono_15, kBurstInk);
+        draw_rect(layer, row, l.burst, H - top::kTimeBarH, l.burst_w, top::kTimeBarH, kTopDim);
+        if (st.burst_fill > 0) draw_rect(layer, row, l.burst, H - top::kTimeBarH, st.burst_fill, top::kTimeBarH, kBurst);
+    }
+    // Wi-Fi: four rising bars (green; one bar amber; all muted = connected, signal unknown); off = grey + red x.
+    const int bars = st.wifi;
+    const uint32_t lit = bars == 0 ? kMuted : bars == 1 ? kBatMid : kSeen;
+    const int by = (H + top::kBarsH) / 2;          // bottom line
+    for (int i = 0; i < top::kWifiBars; ++i) {
+        const int h = 4 + i * (top::kBarsH - 4) / (top::kWifiBars - 1);
+        draw_rect(layer, row, l.wifi + i * (top::kBarW + top::kBarGap), by - h, top::kBarW, h,
+                  bars == 0 || i < bars ? lit : kTopDim);
+    }
+    if (bars < 0) {
+        static const lv_point_t a[] = {{0, 0}, {6, 6}}, b[] = {{6, 0}, {0, 6}};
+        const lv_area_t o = {row.x1 + l.wifi, row.y1 + 2, row.x2, row.y2};
+        draw_stroke(layer, o, a, 2, 2, kBatLow);
+        draw_stroke(layer, o, b, 2, 2, kBatLow);
+    }
+    // Battery: % digits, a bolt while charging, the body with its fill and the nub; grey "--" when unknown.
+    const auto& bat = st.battery;
+    const bool known = bat.percent >= 0;
+    const uint32_t c = bat.level == top::BatteryLevel::Low ? kBatLow : bat.level == top::BatteryLevel::Mid ? kBatMid :
+                       bat.level == top::BatteryLevel::Ok ? kBatOk : kTopDim;
+    top_text(layer, row, l.pct, pct_w, st.pct, &collector_mono_15, known ? c : kMuted);
+    if (l.bolt >= 0) {
+        static const lv_point_t bolt[] = {{5, 0}, {0, 8}, {3, 8}, {2, 14}, {8, 5}, {5, 5}};
+        const lv_area_t o = {row.x1 + l.bolt, row.y1 + 2, row.x2, row.y2};
+        draw_polygon(layer, o, bolt, 6, kBolt);
+    }
+    const int bty = (H - top::kBatH) / 2;
+    draw_rect(layer, row, l.battery, bty, top::kBatW, top::kBatH, c, 2, false, 1);
+    draw_rect(layer, row, l.battery + top::kBatW, bty + (top::kBatH - 5) / 2, top::kBatNub, 5, c, 1);
+    if (const int w = top::battery_fill(bat, top::kBatW - 4)) draw_rect(layer, row, l.battery + 2, bty + 2, w, top::kBatH - 4, c, 1);
+}
+// The row ends kRowGap before the badge (44 px = "TALK" until the first screen_update_mode).
+int top_width() { return 320 - kRowX - kRowGap - (top_state->badge_w >= 0 ? top_state->badge_w : 44); }
+// After any change to what the row shows (or its width, or the CJK font): the % text and the part of the name that
+// fits in its room, cut between characters (CJK font only with every glyph, else "known"); then one invalidation.
+void top_dirty()
+{
+    if (!top_row) return;
+    auto& st = *top_state;
+    if (st.battery.percent >= 0) std::snprintf(st.pct, sizeof st.pct, "%d", st.battery.percent);
+    else std::snprintf(st.pct, sizeof st.pct, "--");
+    st.pct_w = top::text_width(st.pct, [](uint32_t cp) { return glyph_w(&collector_mono_15, cp); });
+    const top::Vision& v = st.vision;
+    const bool on = v.power == top::VisionPower::On;
+    // The name's font and text first (they do not depend on the layout): the burst group gives way to it (0.5.00).
+    const lv_font_t* f = nullptr;
+    const char* text = nullptr;
+    if (on && v.known()) {
+        const lv_font_t* cjk = top_name_cjk(v.name);
+        const auto how = top::name_font(v.name, cjk != nullptr);
+        f = how == top::NameFont::Cjk ? cjk : &collector_mono_15;
+        text = how == top::NameFont::Stand ? top::kKnownStandIn : v.name;
+    }
+    st.group_w = 0;
+    if (st.burst) {
+        const int name_px = text ? top::text_width(text, [f](uint32_t cp) { return glyph_w(f, cp); }) : 0;
+        st.group_w = top::burst_fit(top_width(), st.stage, on, st.pct_w, st.battery.charging, st.count_w, name_px);
+    }
+    burst::View bv;
+    bv.on = st.burst; bv.left_s = st.left_s; bv.total_s = st.total_s;
+    st.burst_fill = burst::bar_fill(bv, st.group_w);
+    const top::Layout l = top::layout(top_width(), st.stage, on, st.pct_w, st.battery.charging, st.group_w);
+    st.name[0] = 0;
+    st.name_font = nullptr;
+    if (text && l.name_w > 0) {
+        const size_t n = top::fit_prefix(text, l.name_w, [f](uint32_t cp) { return glyph_w(f, cp); });
+        std::snprintf(st.name, sizeof st.name, "%.*s", int(n), text);
+        st.name_font = f;
+    }
+    lv_obj_invalidate(top_row);
+}
+void create_top_row()
+{
+    if (!top_state) {
+#ifdef ESP_PLATFORM
+        void* m = heap_caps_calloc(1, sizeof(TopState), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+        void* m = std::calloc(1, sizeof(TopState));
+#endif
+        if (!m) return;                  // no row (the home page works as before)
+        top_state = new (m) TopState();
+    } else *top_state = TopState{};
+    top_row = lv_obj_create(home);
+    lv_obj_remove_style_all(top_row);
+    lv_obj_set_pos(top_row, kRowX, 0);
+    lv_obj_set_size(top_row, top_width(), top::kRowH);   // set again from the badge (screen_update_mode)
+    lv_obj_remove_flag(top_row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(top_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(top_row, top_row_draw, LV_EVENT_DRAW_POST, nullptr);
+}
+void render_top_row(const ScreenStatus& s)
+{
+    if (!top_row) return;
+    auto& st = *top_state;
+    const int wifi = top::wifi_bars(s.wifi_connected && s.ip && s.ip[0], s.rssi_valid, s.rssi);
+    const auto battery = top::battery_from(s.power_valid, s.battery_percent, s.charging);
+    if (s.vision == st.vision && wifi == st.wifi && battery == st.battery) return;
+    st.vision = s.vision; st.wifi = wifi; st.battery = battery;
+    top_dirty();
+}
+
 }
 void screen_create(lv_obj_t* parent)
 {
@@ -564,6 +770,7 @@ void screen_create(lv_obj_t* parent)
     reaction_overlay = box(home, 30, 0, 260, 240, kInk);
     lv_obj_add_event_cb(reaction_overlay, reaction_draw, LV_EVENT_DRAW_POST, nullptr);
     lv_obj_add_flag(reaction_overlay, LV_OBJ_FLAG_HIDDEN);
+    create_top_row();                    // above the eyes and the reaction overlay
 #ifdef ESP_PLATFORM
     lv_display_add_event_cb(screen_display, reaction_refresh, LV_EVENT_RENDER_START, nullptr);
     lv_display_add_event_cb(screen_display, reaction_refresh, LV_EVENT_RENDER_READY, nullptr);
@@ -718,8 +925,8 @@ void screen_create(lv_obj_t* parent)
     mode_badge = label(top, 0, 0, "TALK", kInk);
     lv_obj_set_style_bg_color(mode_badge, lv_color_hex(0xE040A0), 0);
     lv_obj_set_style_bg_opa(mode_badge, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(mode_badge, 4, 0);
-    lv_obj_set_style_pad_ver(mode_badge, 1, 0);
+    lv_obj_set_style_pad_hor(mode_badge, kBadgePadHor, 0);
+    lv_obj_set_style_pad_ver(mode_badge, kBadgePadVer, 0);
     lv_obj_align(mode_badge, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_remove_flag(mode_badge, LV_OBJ_FLAG_CLICKABLE);
     mode_toast = label(top, 0, 0, "", kSignal);
@@ -853,6 +1060,7 @@ void screen_update(const ScreenStatus& s)
         return;
     }
     status_pending = false;
+    render_top_row(s);
     function_flags = s.function_flags & (ScreenFunctionTracking | ScreenFunctionListening |
                                          ScreenFunctionSpeaking | ScreenFunctionRecognition);
     update_ribbon();
@@ -1345,12 +1553,23 @@ void screen_update_mode(const char* text, uint32_t color, bool online)
     set_text(mode_badge, buf);
     lv_obj_set_style_bg_color(mode_badge, lv_color_hex(bg), 0);
     lv_obj_set_style_text_color(mode_badge, lv_color_hex(ink_for(bg)), 0);
+    // 0.4.98: the home top row ends kRowGap before the badge, whatever its label's width.
+    if (top_row) {
+        lv_obj_update_layout(mode_badge);
+        const int w = lv_obj_get_width(mode_badge);
+        if (w != top_state->badge_w) {
+            top_state->badge_w = w;
+            lv_obj_set_width(top_row, top_width());
+            top_dirty();
+        }
+    }
 }
 void screen_set_cjk_font(const lv_font_t* small, const lv_font_t* large)
 {
     if (small == cjk16 && large == cjk24) return;
     cjk16 = small; cjk24 = large;
     render_summary_words();
+    if (top_row && top_state->vision.known()) top_dirty();   // a Chinese name waiting on the font ("known" until now)
     // The quick / picker pages are built in one font: an open one is built again (same page, nothing else changes).
     if (quick_page) { close_quick(); open_quick(); }
     if (picker_page) { close_picker(); open_picker(); }
@@ -1365,35 +1584,45 @@ void screen_show_toast(const char* text, uint32_t now_ms)
 }
 void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color)
 {
-    if (!home) return;
+    // 0.4.98: the blocks are drawn by the top row (top_row_draw); a change only invalidates it.
+    if (!top_row) return;
+    auto& st = *top_state;
     if (!visible) {
-        for (auto*& d : chat_dots) if (d) { lv_obj_delete(d); d = nullptr; }
-        chat_dots_lit = -2;
+        if (st.stage) { st.stage = false; top_dirty(); }
         return;
     }
-    if (!chat_dots[0]) {
-        for (int i = 0; i < 3; ++i) {
-            auto* d = lv_obj_create(home);
-            lv_obj_remove_style_all(d);
-            lv_obj_set_pos(d, kDotX + i * (kDotPx + kDotGap), kDotY);
-            lv_obj_set_size(d, kDotPx, kDotPx);
-            lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
-            lv_obj_set_style_border_width(d, 2, 0);
-            lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_remove_flag(d, LV_OBJ_FLAG_SCROLLABLE);
-            chat_dots[i] = d;
-        }
-        chat_dots_lit = -2;
+    const int8_t l = static_cast<int8_t>(lit >= 0 && lit <= 2 ? lit : -1);
+    if (st.stage && l == st.lit && grey == st.grey && color == st.color) return;
+    st.stage = true; st.lit = l; st.grey = grey; st.color = color;
+    top_dirty();
+}
+const char* screen_top_name() { return top_state ? top_state->name : ""; }
+void screen_update_burst(bool on, uint32_t looks, int left_s, int total_s)
+{
+    // 0.5.00: drawn by the top row (top_row_draw). A new count re-runs the layout (top_dirty); otherwise only a change
+    // of the bar's filled pixels invalidates the row (every few seconds, not every tick).
+    if (!top_row) return;
+    auto& st = *top_state;
+    if (!on) {
+        if (st.burst) { st.burst = false; top_dirty(); }
+        return;
     }
-    if (lit == chat_dots_lit && grey == chat_dots_grey && color == chat_dots_color) return;
-    for (int i = 0; i < 3; ++i) {
-        const bool on = grey || i == lit;
-        const uint32_t c = grey ? kDotGrey : on ? color : kDotDim;
-        lv_obj_set_style_border_color(chat_dots[i], lv_color_hex(c), 0);
-        lv_obj_set_style_bg_color(chat_dots[i], lv_color_hex(c), 0);
-        lv_obj_set_style_bg_opa(chat_dots[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    char count[sizeof st.count];
+    burst::count_text(looks, count, sizeof count);
+    st.left_s = left_s; st.total_s = total_s;
+    if (!st.burst || looks != st.looks || std::strcmp(count, st.count)) {
+        st.burst = true; st.looks = looks;
+        std::snprintf(st.count, sizeof st.count, "%s", count);
+        st.count_w = top::text_width(count, [](uint32_t cp) { return glyph_w(&collector_mono_15, cp); });
+        top_dirty();
+        return;
     }
-    chat_dots_lit = lit; chat_dots_grey = grey; chat_dots_color = color;
+    burst::View v;
+    v.on = true; v.left_s = left_s; v.total_s = total_s;
+    const int fill = burst::bar_fill(v, st.group_w);
+    if (fill == st.burst_fill) return;
+    st.burst_fill = fill;
+    lv_obj_invalidate(top_row);
 }
 void screen_update_mode_state(uint8_t mode, uint8_t dir)
 {

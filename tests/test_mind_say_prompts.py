@@ -61,7 +61,7 @@ class SayPromptsTest(unittest.TestCase):
         c = ctx([heard('很早的话', 200000), heard('写之前的话', 40000), heard('写之后的新话', 3000)])
         user = P.check_messages(c, T0, [{'text': '候选一'}, {'text': '候选二'}], since_ms=T0 - 20000)[1]['content']
         before, after = user.split('写完之后新听到的话')
-        self.assertIn('写的时候屋里在说的', before)
+        self.assertIn('写的时候旁边在说的', before)
         self.assertIn('写之前的话', before)
         self.assertNotIn('很早的话', user)             # only the 90 s before the round was written
         self.assertIn('写之后的新话', after)

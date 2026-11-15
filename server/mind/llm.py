@@ -5,7 +5,8 @@ import urllib.error
 import urllib.request
 
 PRICES = {"gpt-6-luna": (0.1, 0.5), "gpt-6.1-terra": (1.0, 5.0),   # USD per million tokens, list price
-          "claude-haiku-5-5": (0.1, 0.5)}                     # eye (aihubmix list, 2026-11-11)
+          "claude-haiku-5-5": (0.1, 0.5),                     # eye until 2026-11-15 (aihubmix list, 2026-11-11)
+          "qwen3.8-flash": (0.1126, 0.380025)}                # eye since 2026-11-15 (aihubmix list price; DashScope direct)
 
 
 def cost_usd(model, usage):

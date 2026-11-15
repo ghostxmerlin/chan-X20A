@@ -190,15 +190,126 @@ int main()
         w.answered(5, "busy", 600000);                                       // backoff doubles
         assert(w.next(d, 600000 + M12WhoPolicy::kFirstBackoffUs) == -1 && w.next(d, 600000 + 2 * M12WhoPolicy::kFirstBackoffUs) == 5);
         w.sent(5, 2000000);
-        w.answered(5, nullptr, 2000000);                                     // answered (name or null): never again
-        assert(w.next(d, 9000000) == -1 && w.asked(5) && w.busy() == 2);
+        w.answered(5, nullptr, 2000000);                                     // answered null: one ask used
+        assert(w.asked(5) && w.asks(5) == 1 && w.busy() == 2 && w.asks(6) == 0);
         auto d2 = parse(R"({"f":2,"num":1,"face":[{"x":1,"y":1,"w":50,"h":50,"prob":0.9,"id":7}]})").det;
-        assert(w.next(d2, 9000000) == 7);
-        w.sent(7, 9000000);
-        w.answered(7, "standby", 9000000);
-        assert(w.next(d2, 9000001) == -1 && w.next(d2, 9000000 + M12WhoPolicy::kWaitUs) == 7);
+        assert(w.next(d2, 2000001) == 7);                                    // a new face first
+        w.sent(7, 2000001);
+        w.answered(7, "standby", 2000002);
+        assert(w.next(d2, 2000003) == -1 && w.next(d2, 2000002 + M12WhoPolicy::kWaitUs) == 7);
         w.sent(7, 0); w.answered(7, "client_timeout", 0);
-        assert(w.next(d2, 99000000) == -1);
+        assert(w.asks(7) == 1);
+    }
+    // --- 2026-11-15 owner: 最多再问 5 次，无间隔询问 ---
+    {
+        auto line = [](int x, int w, int id) {
+            std::string j = R"({"f":1,"num":1,"face":[{"x":)" + std::to_string(x) + R"(,"y":100,"w":)" + std::to_string(w) +
+                            R"(,"h":)" + std::to_string(w) + R"(,"prob":0.9,"id":)" + std::to_string(id) + "}]}";
+            return parse(j).det;
+        };
+        M12WhoPolicy w;
+        auto f = line(200, 100, 9);
+        int64_t t = 0;
+        for (int ask = 1; ask <= 1 + M12WhoPolicy::kReasks; ++ask) {         // 6 asks, each right after the answer
+            assert(w.next(f, t) == 9);
+            w.sent(9, t);
+            assert(w.next(f, t + 1) == -1);                                  // still one in flight
+            t += 220000;
+            w.answered(9, ask % 2 ? nullptr : "noface", t);
+            assert(w.asks(9) == ask);
+        }
+        assert(w.next(f, t) == -1 && w.next(f, t + 60000000) == -1 && w.reasks() == 5);   // never a seventh
+        // no re-ask for a face under 48 px; it still gets its first ask
+        M12WhoPolicy s;
+        auto tiny = line(200, 47, 4);
+        assert(s.next(tiny, 0) == 4); s.sent(4, 0); s.answered(4, nullptr, 1);
+        assert(s.next(tiny, 2) == -1 && s.next(line(200, 48, 4), 3) == 4);
+        // a name closes a track at once
+        M12WhoPolicy n;
+        auto g = line(100, 120, 3);
+        assert(n.next(g, 0) == 3);
+        n.sent(3, 0); n.answered(3, nullptr, 0, true);
+        assert(n.next(g, 1) == -1 && n.asks(3) == 1);
+        // a new face's first ask goes before any re-ask; re-asks: fewest asks first, then the larger face
+        M12WhoPolicy q;
+        auto two = parse(R"({"f":1,"num":2,"face":[{"x":1,"y":1,"w":60,"h":60,"prob":0.9,"id":1},{"x":300,"y":1,"w":90,"h":90,"prob":0.9,"id":2}]})").det;
+        assert(q.next(two, 0) == 2); q.sent(2, 0); q.answered(2, nullptr, 1);
+        assert(q.next(two, 2) == 1); q.sent(1, 2); q.answered(1, nullptr, 3);    // first ask of 1 before re-ask of 2
+        assert(q.next(two, 4) == 2); q.sent(2, 4); q.answered(2, nullptr, 5);    // both 1 ask: the larger
+        assert(q.next(two, 6) == 1);                                            // 1 has fewer asks now
+        // busy still backs off a re-ask
+        q.sent(1, 6); q.answered(1, "busy", 7);
+        assert(q.next(two, 8) == -1 && q.next(two, 7 + M12WhoPolicy::kFirstBackoffUs) >= 0);
+        // reset in place: everything forgotten
+        q.reset();
+        assert(q.asks(1) == 0 && q.asks(2) == 0 && q.busy() == 0 && q.inflight() == -1 && q.next(two, 0) == 2);
+    }
+    // --- 2026-11-15 crowd tap look: every unnamed face now, largest first, then settled ---
+    {
+        constexpr int64_t S = 1000000;
+        M12WhoPolicy w;
+        auto three = parse(R"({"f":1,"num":3,"face":[{"x":1,"y":1,"w":50,"h":50,"prob":0.9,"id":1,"gender":"m","age_group":"adult"},)"
+                           R"({"x":200,"y":1,"w":90,"h":90,"prob":0.9,"id":2,"gender":"f","age_group":"young"},)"
+                           R"({"x":400,"y":1,"w":70,"h":70,"prob":0.9,"id":3,"gender":"m","age_group":"child","name":"person-a"}]})").det;
+        // both unnamed were already asked to the end (6 asks): no automatic ask now
+        for (int k = 0; k < 6; ++k) for (int id : {2, 1}) { assert(w.next(three, 0) == id); w.sent(id, 0); w.answered(id, nullptr, 0); }
+        assert(w.next(three, 0) == -1);
+        w.look(three, 1 * S - 100000, 1 * S);                                 // line 0.1 s old: in view
+        assert(w.look_active(1 * S) && !w.look_settled(three, 1 * S, true));
+        assert(w.next(three, 1 * S) == 2);                                    // largest unnamed first
+        w.sent(2, 1 * S);
+        assert(w.next(three, 1 * S + 1) == -1);                               // still one in flight
+        w.answered(2, nullptr, 1 * S + 200000);
+        assert(w.next(three, 1 * S + 200000) == 1);
+        w.sent(1, 1 * S + 200000);
+        w.answered(1, nullptr, 1 * S + 400000, true);                         // named: wait for the name on a line
+        assert(!w.look_settled(three, 1 * S + 400000, true));
+        auto named = parse(R"({"f":2,"num":3,"face":[{"x":1,"y":1,"w":50,"h":50,"prob":0.9,"id":1,"gender":"m","age_group":"adult","name":"person-b"},)"
+                           R"({"x":200,"y":1,"w":90,"h":90,"prob":0.9,"id":2,"gender":"f","age_group":"young"},)"
+                           R"({"x":400,"y":1,"w":70,"h":70,"prob":0.9,"id":3,"gender":"m","age_group":"child","name":"person-a"}]})").det;
+        assert(w.look_settled(named, 1 * S + 450000, true));
+        assert(w.asks(2) == 6 && w.look_extra() == 2);                       // look asks are extra
+        w.look_end();
+        assert(!w.look_active(1 * S + 500000) && w.look_settled(named, 1 * S + 500000, true));
+        // a stale line (> 0.3 s) gives the look no targets
+        M12WhoPolicy st;
+        auto fresh = parse(R"({"f":6,"num":1,"face":[{"x":1,"y":1,"w":80,"h":80,"prob":0.9,"id":20,"gender":"m"}]})").det;
+        st.next(fresh, 0); st.sent(20, 0); st.answered(20, nullptr, 0);
+        for (int k = 0; k < 5; ++k) { st.next(fresh, 0); st.sent(20, 0); st.answered(20, nullptr, 0); }
+        st.look(fresh, 0, M12WhoPolicy::kLookLineUs + 1);
+        assert(st.next(fresh, M12WhoPolicy::kLookLineUs + 1) == -1 && st.look_settled(fresh, M12WhoPolicy::kLookLineUs + 1, true));
+        // attributes: a face without gender keeps the look open (when attributes are on), until the deadline
+        M12WhoPolicy a;
+        auto bare = parse(R"({"f":3,"num":1,"face":[{"x":1,"y":1,"w":80,"h":80,"prob":0.9,"id":8,"name":"person-a"}]})").det;
+        a.look(bare, 0, 0);
+        assert(a.next(bare, 0) == -1);                                         // named: nothing to ask
+        assert(!a.look_settled(bare, 100000, true) && a.look_settled(bare, 100000, false));
+        assert(a.look_settled(bare, M12WhoPolicy::kLookUs, true));            // 0.8 s: done whatever is missing
+        // a target that left the view counts as done; busy backoff is kept during a look
+        M12WhoPolicy b;
+        auto one = parse(R"({"f":4,"num":1,"face":[{"x":1,"y":1,"w":80,"h":80,"prob":0.9,"id":4,"gender":"f"}]})").det;
+        b.look(one, 0, 0);
+        assert(b.next(one, 0) == 4);
+        b.sent(4, 0); b.answered(4, "busy", 10000);
+        assert(b.next(one, 20000) == -1 && b.next(one, 10000 + M12WhoPolicy::kFirstBackoffUs) == 4);
+        assert(b.asks(4) == 0);                                                // busy is not an ask
+        auto gone = parse(R"({"f":5,"num":0,"face":[]})").det;
+        assert(b.look_settled(gone, 600000, true));
+    }
+    // --- crowd tap: the tracker sends face_attrs again for faces seen within 0.5 s ---
+    {
+        M12ChangeTracker tr;
+        std::vector<M12VisionEvent> ev;
+        auto emit = [&](const M12VisionEvent& e) { ev.push_back(e); };
+        tr.detection(parse(R"({"f":1,"num":2,"face":[{"x":10,"y":10,"w":100,"h":120,"prob":0.95,"id":4,"gender":"f","age_group":"adult"},)"
+                           R"({"x":300,"y":10,"w":60,"h":60,"prob":0.9,"id":5}]})").det, 0, emit);
+        tr.detection(parse(R"({"f":2,"num":1,"face":[{"x":20,"y":12,"w":110,"h":130,"prob":0.95,"id":4,"gender":"f","age_group":"adult"}]})").det, 400000, emit);
+        ev.clear();
+        assert(tr.refresh(800000, emit) == 1);                                 // 5 has no attributes; 4 seen 0.4 s ago
+        assert(ev.size() == 1 && ev[0].kind == M12VisionKind::face_attrs && ev[0].face == 4 && ev[0].w == 110 && ev[0].gender == 'f');
+        assert(ev[0].age_group == M12AgeGroup::adult);
+        ev.clear();
+        assert(tr.refresh(1000000, emit) == 0 && ev.empty());                  // older than 0.5 s: not "in view" now
     }
     // --- tracking target ---
     {

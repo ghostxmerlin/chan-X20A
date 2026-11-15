@@ -10,12 +10,21 @@ import json
 import os
 import time
 
-from . import llm, speech_settings, settings as settings_mod
+from . import llm, place, speech_settings, settings as settings_mod
 
 CHAT = llm.chat                       # injectable in tests
-EYE_MODEL = "claude-haiku-5-5"
-EYE_PROMPT = "eye-v4"            # v4: forced tool call (aihubmix stopped honouring json_schema for haiku, 2026-11-11 ~15:00)
+# 2026-11-15 bake-off (owner chose it): qwen3.8-flash direct on DashScope, thinking off: most accurate on people / place,
+# p50 4.8 s / p90 6 s (haiku via aihubmix: 5.6 / 35 s), about 55 % of haiku's cost. .private/vision-bake-20261115/.
+EYE_MODEL = "qwen3.8-flash"
+EYE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+EYE_EXTRA = {"enable_thinking": False}
+EYE_PROMPT = "eye-v6"            # v6: no guessing the owner (owner: 宁可叫不出名字，也不要叫错)
+# history: v4 = forced tool call (aihubmix stopped honouring json_schema for haiku, 2026-11-11 ~15:00);
+# v5 (2026-11-15, owner: no pinned place): no assumed office / desk; place_seen = what kind of place the picture looks like
+# (same call, a few more output tokens), used by mind/place.py to let hello ask when it looks like somewhere else.
 MIN_MS = 60_000
+LOOKS_MS = 3 * 60_000            # 视觉爆发 looks (ear vision_burst.py, hello.vision_looks) used while this fresh ...
+LOOKS_N = 5                      # ... at most this many, newest first
 MAX_FRAMES = 6
 MAX_EVENTS = 40
 BACKOFF_MIN = [1, 2, 5, 10]
@@ -29,23 +38,45 @@ EYE_SCHEMA = {"type": "object", "additionalProperties": False,
                                                         "properties": {"who": {"type": "string"}, "where": {"type": "string"},
                                                                        "doing": {"type": "string"}}}},
                   "activity": {"type": "string"}, "scene": {"type": "string"}, "changes": {"type": "string"},
+                  "place_seen": {"type": "string"},
                   "confidence": {"type": "string", "enum": ["high", "mid", "low"]}}}
+EYE_SCHEMA["required"].insert(5, "place_seen")
+CHECKED = [k for k in EYE_SCHEMA["required"] if k != "place_seen"]     # an answer without place_seen is still usable
 
-SYSTEM = ("你是桌面宠物机器人 hello 的视觉整理者。hello 放在主人的办公桌上，机身摄像头 320×240，头会转向看到的脸，"
+SYSTEM = ("你是宠物机器人 hello 的视觉整理者。hello 个头很小，主人常带着它走：可能在办公室、家里、车上、饭店、户外，"
+          "没有固定的地方。机身摄像头 320×240，头会转向看到的脸，"
           "所以画面只是 hello 正看着的方向。你根据这一分钟按时间排列的几张画面和 M12 人脸模块的记录，写出画面里有几个人、"
           "各是谁、在哪、在做什么、画面环境，以及这一分钟里的变化。\n"
-          "- M12 认出的名字可信，写成给出的称呼。坐在桌前、离镜头近、M12 没认出的人，最可能就是主人："
-          "who 写“很可能是主人（称呼）”，把握放低一档；其他没认出的人写“未认出的人”。年龄、性别不可靠，不要写。\n"
+          "- 只写看到的东西，不要假定 hello 在某个地方，也不要拿画面跟某个地方比较（不写“这不是办公室”“不像工位”这类话）。"
+          "place_seen 写画面看起来像什么地方，2–8 个字，例如 办公室、家里客厅、车里、饭店、室外街边、湖边；看不出就写 看不出。\n"
+          "- M12 认出的名字可信，写成给出的称呼。M12 没认出的人一律写“未认出的人”，不要猜是谁"
+          "（宁可不叫名字，也不要叫错）。年龄、性别不可靠，不要写。\n"
           "- 每个看到的人在 people 里写一条，条数等于 people_count；activity 和 scene 都要写成完整的一句话。\n"
           "- M12 的“人形”是人体检测，近处的人也算在里面，人形数不代表另外还有人。人数以画面为准。\n"
           "- 画面只在有变化时才拍，所以几张之间可能隔了几十秒。\n"
           "- 用最可能的正向说法，不要堆否定句；拿不准就把 confidence 调低。只描述，不提建议。\n"
           "只输出一个 JSON 对象，不要代码块，字段名一字不改：people_count（整数）、people（数组，每项 who、where、doing）、"
-          "activity、scene、changes、confidence（high / mid / low）。")
+          "activity、scene、changes、place_seen、confidence（high / mid / low）。")
 
 
 def _hms(ms, tz):
     return settings_mod.local_time(ms, tz).strftime("%H:%M:%S")
+
+
+def recent_looks(db, now_ms, window_ms=LOOKS_MS, n=LOOKS_N):
+    """视觉爆发 (2026-11-15): the ear's recognised snap photos of the last window_ms, newest first: [(at ms, text)].
+    One small read of hello.vision_looks (kind look); a failed look (no text) is left out."""
+    rows = db["vision_looks"].find({"kind": "look", "at": {"$gte": now_ms - window_ms, "$lte": now_ms + 5_000}},
+                                   {"_id": 0, "at": 1, "text": 1}).sort("at", -1).limit(n * 2)
+    out = [(r["at"], r["text"].strip()) for r in rows if isinstance(r.get("text"), str) and r["text"].strip()]
+    return out[:n]
+
+
+def looks_line(looks, tz):
+    """[(at, text)] -> '注视：HH:MM:SS text；…' (newest first), or None. The ear's realtime instructions read this prefix."""
+    if not looks:
+        return None
+    return "注视：" + "；".join(f"{_hms(at, tz)} {str(text)[:120]}" for at, text in looks)
 
 
 def _inside(root, rel):
@@ -122,7 +153,7 @@ def _parse(resp):
         return None, f"not valid JSON: {e}"
     if not isinstance(out, dict):
         return None, "not a JSON object"
-    missing = [k for k in EYE_SCHEMA["required"] if k not in out]
+    missing = [k for k in CHECKED if k not in out]
     if missing:
         return None, f"JSON missing fields: {', '.join(missing)}"
     # strict json_schema still lets a hollow answer through (seen live 2026-11-11 12:28: count 1, people [], scene "x")
@@ -142,16 +173,15 @@ def messages_for(s, minute_ms, inputs, prev):
         prev = None
     owner = settings_mod.owner_name(s, minute_ms)
     env_text = (s.get("environment") or "").strip()
-    lines = ([f"环境：{env_text}"] if env_text else []) + [f"时间：{settings_mod.local_label(minute_ms, s['tz'])}；主人的称呼：{owner}",
+    lines = ([f"{place.ENV_LABEL}：{env_text}"] if env_text else []) + [f"时间：{settings_mod.local_label(minute_ms, s['tz'])}；主人的称呼：{owner}",
              "M12 人脸模块这一分钟的记录：", *(inputs["events"] or ["（没有事件）"])]
     if prev and prev.get("result"):
         r = prev["result"]
         lines.append(f"上一次的视觉结果（{_hms(prev['minute'], s['tz'])}）：{r.get('people_count')} 人；{r.get('activity', '')}")
-    lines.append(f"下面是这一分钟按时间顺序的 {len(inputs['frames'])} 张画面（画面有变化时才拍，最多每 10 秒一张）。")
+    lines.append(f"下面是这一分钟按时间顺序的 {len(inputs['frames'])} 张画面（画面有变化时才拍，最多每秒一张，这里挑了其中几张）。")
     content = [{"type": "text", "text": "\n".join(lines)}] + [
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + f["b64"]}} for f in inputs["frames"]]
-    system = SYSTEM if speech_settings.scope(s)['id']=='office' else SYSTEM.replace('主人的办公桌上','主人身边')
-    return [{"role": "system", "content": system}, {"role": "user", "content": content}]
+    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": content}]
 
 
 def _state(db):
@@ -187,7 +217,7 @@ def run_minute(env, store, s, minute_ms, recordings_root, now_ms=None):
     messages = messages_for(s, minute_ms, inputs, prev)
     # a forced tool call, not response_format: via aihubmix, haiku ignores json_schema (2026-11-11 probe: 3/3 fenced,
     # thinking on) but returns the exact schema as tool arguments (3/3, ~3 s, no thinking, ~40 % fewer tokens)
-    body = {"model": EYE_MODEL, "messages": messages, "temperature": 0, "max_tokens": 1200,
+    body = {"model": EYE_MODEL, "messages": messages, "temperature": 0, "max_tokens": 1200, **EYE_EXTRA,
             "tools": [{"type": "function", "function": {"name": "eye", "description": "这一分钟画面的视觉结果",
                                                         "parameters": EYE_SCHEMA}}],
             "tool_choice": {"type": "function", "function": {"name": "eye"}}}

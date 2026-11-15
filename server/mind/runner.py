@@ -41,8 +41,9 @@ def process_minute(records, store, minute_ms, s, now_ms):
     pkg = package.build(window, minute_ms, s, lookback)
     st = strong.evaluate(pkg, lookback, minute_ms, s, now_ms)
     report = store.place_at(end - 1)
-    if report:
-        st["place"] = {"label": report["label"], "source": "owner_report", "at": report["at"]}
+    if report:                                   # label None: set to unknown (place.py); by: robot / voice (page: none)
+        st["place"] = {"label": report.get("label"), "source": "owner_report", "at": report["at"],
+                       **({"by": report["by"]} if report.get("by") else {})}
     return "written" if store.put(LANE, minute_ms, pkg, st) is not None else "same"
 
 
@@ -307,10 +308,10 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
         if ms.current()['mode'] == 'chat':
             chat.enter(clock_ms())               # mind restarted while hello was chatting
 
-    # Owner 2026-11-14 evening: "启动默认全开" = every mind start runs preset 9's server half (提前写 / 连续说 only when
-    # the mirrored mode is talk). Billing is never read back from the database.
-    failed = billing.on('boot', clock_ms())
-    log(f'mind mode: start = 全开 (preset 9){" FAILED: " + ", ".join(failed) if failed else ""}', flush=True)
+    # Owner 2026-11-14 evening "启动默认全开" is hello's power-on: since collector-0.4.96 the robot sends 9 itself at
+    # power-on. Owner 2026-11-15 ("重启后保持原来的状态"): mind's own start (a deploy, a crash) changes no switch; 听悟 /
+    # 识别 / 纪要 / 情景 / 围观 / 嘴 stay as stored. billing.on('boot') still keeps 围观 as stored if anything calls it.
+    log('mind mode: start keeps every switch as it was', flush=True)
     return ms, billing, gate
 
 

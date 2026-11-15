@@ -23,7 +23,15 @@ namespace collector::mouth {
 //   effects since the last report mind actually got, so a switch made while offline still turns talk's
 //   prefetch off / on. Reports not sent when the link drops are dropped: that sync report replaces them.
 // - Digits 0 and 9 (all paid off / on) are mind's: they go up as {"type":"mode_input",...} (C1 wire) and mind's
-//   {"type":"mode_result"} brings the toast. No other input is sent to mind as an input.
+//   {"type":"mode_result"} brings the toast.
+// - 0.4.98 (owner 2026-11-15, 能让hello在围观模式中闭嘴): digit 1 is mind's too (preset 1 = toggle the 围观 realtime
+//   switch), and in crowd a double tap sends digit 1 (source as given, e.g. touch). The shared rules table is
+//   unchanged (there 1 = no_action, crowd double tap = not_implemented): the session routes them before the rules.
+//   Digit 1 is a toggle: offline it is not kept for later (toast OFFLINE), and it never runs the robot-half senses
+//   hook (that is 0 / 9 only, mouth_link.cpp). No other input is sent to mind as an input.
+// - 0.4.98 (owner 2026-11-15): crowd's tap (look) is held up to look_hold (set_look_hold, 0.8 s on the robot) so the
+//   M12 can ask who / refresh attributes first (m12_look); release_look() lets it go earlier. Any later input lets it
+//   go at once (never delayed behind a look), and the digit mode_inputs are never held.
 // - Settings closes itself after 5 minutes without any input (the robot's clock).
 // - 0.4.93: {"type":"chat_stage","stage":"listen|think|skip","at_ms":..} (<= 200 B) is kept for the chat dots
 //   (chat_stage.h) only while the mode is chat; leaving chat clears it. at_ms (server clock) is not used: the
@@ -32,7 +40,9 @@ namespace collector::mouth {
 // One text message from the ear. TooLong (over the 1600 B /mouth limit) and Bad (not complete JSON, or not an
 // object) leave doc cleared: a partly filled document is never read. Other = a type the robot ignores (an old
 // ear's {"type":"mode"} snapshot is one of them now).
-enum class Text : uint8_t { TooLong, Bad, Hello, TtsStart, TtsEnd, TtsStop, ModeResult, ChatStage, Other };
+// 0.4.99: Snap = the ear's {"type":"snap","id"} (vision burst, vision_snap.h; its own 200 B limit is checked there).
+// 0.5.00: Burst = the ear's {"type":"burst","on",..} (the burst indicator, burst_indicator.h; its 200 B limit there).
+enum class Text : uint8_t { TooLong, Bad, Hello, TtsStart, TtsEnd, TtsStop, ModeResult, ChatStage, Snap, Burst, Other };
 inline Text read_text(const char* data, size_t n, ArduinoJson::JsonDocument& doc)
 {
     doc.clear();
@@ -44,7 +54,8 @@ inline Text read_text(const char* data, size_t n, ArduinoJson::JsonDocument& doc
     const char* type = doc["type"] | "";
     static constexpr struct { const char* name; Text kind; } kTypes[] = {
         {"hello", Text::Hello}, {"tts.start", Text::TtsStart}, {"tts.end", Text::TtsEnd}, {"tts.stop", Text::TtsStop},
-        {"mode_result", Text::ModeResult}, {"chat_stage", Text::ChatStage}};
+        {"mode_result", Text::ModeResult}, {"chat_stage", Text::ChatStage}, {"snap", Text::Snap},
+        {"burst", Text::Burst}};
     for (const auto& t : kTypes) if (!std::strcmp(type, t.name)) return t.kind;
     return Text::Other;
 }
@@ -85,7 +96,12 @@ struct Applied {
     uint32_t input_seq = 0;         // its mode_input seq, 0 = not queued (offline)
     bool changed = false;           // the mode state changed
     bool reported = false;          // a mode_report was queued for mind
+    bool look = false;              // 0.4.98: crowd's tap, its report held (look_token) until release_look or timeout
+    uint32_t look_token = 0;        // the held report's seq
 };
+
+// The modes that show the stage dots: chat (0.4.93) and crowd (0.4.97, owner 2026-11-15: 围观 like chat).
+inline bool dots_mode(modes::rules::Mode m) { return m == modes::rules::Mode::Chat || m == modes::rules::Mode::Crowd; }
 
 class ModeSession {
 public:
@@ -100,11 +116,18 @@ public:
     ModeSession& operator=(const ModeSession&) = delete;
 
     // Once, at power-on: the boot input on the default state (talk). Its report goes out with the first link.
-    void boot(int64_t now_us)
+    // collector-0.4.96 (owner 2026-11-15, field data collection): `start` is the mode hello powers up in (crowd on
+    // the robot; the rules' boot input stays talk, as mind's modes.py), and `preset` (0 / 9, -1 = none) is the
+    // first pending digit (see pending_): sent to mind behind the boot report of the first link (source quick, as
+    // the quick page's 全开) and resent until mind answers ok, so a power-on is 全开 on the server too and 围观
+    // works without a computer.
+    void boot(int64_t now_us, modes::rules::Mode start = modes::rules::Mode::Talk, int preset = -1)
     {
         const Outcome o = modes::rules::transition(state_, Input::Boot, Value{}, false);
         state_ = o.state; since_us_ = last_input_us_ = now_us;
+        if (start != modes::rules::Mode::None && start != state_.mode) state_ = modes::rules::detail::plain(start);
         std::strcpy(by_, "boot");
+        if (preset == 0 || preset == 9) { pend(int8_t(preset), now_us); pending_.power_on = true; }
         ++seq_; ++version_;
     }
 
@@ -118,9 +141,28 @@ public:
             return a;
         }
         last_input_us_ = now_us;
+        if (hold_seq_) { hold_seq_ = 0; ++look_overtaken_; }   // a held look goes now: no input waits behind it
+        // 0.4.98: digit 1 (preset 1, the 围观 realtime toggle) and crowd's double tap are mind's digit 1.
+        if ((in == Input::Digit && v.digit == kToggleDigit) || (in == Input::DoubleTap && state_.mode == modes::rules::Mode::Crowd)) {
+            a.to_mind = true;
+            // review 2026-11-15: the owner's latest action wins over the power-on preset still owed to mind (a 0 / 9
+            // said offline by the owner stays owed: a toggle says nothing about paid senses on / off).
+            if (pending_.power_on) pending_ = Pending{};
+            if (online_) {
+                a.input_seq = queue_.push(now_us, source, "digit", kToggleDigit);
+                if (a.input_seq) { digits_[digits_at_] = {a.input_seq, int8_t(kToggleDigit)}; digits_at_ = (digits_at_ + 1) % kDigitsKept; }
+                toast("PRESET 1");
+            } else {
+                ++offline_inputs_;                   // a toggle: replaying it later could switch it the wrong way
+                toast("OFFLINE");
+            }
+            std::snprintf(a.out.toast, sizeof a.out.toast, "%s", toast_);
+            return a;
+        }
         if (in == Input::Digit && (v.digit == 0 || v.digit == 9)) {
             a.to_mind = true;
             a.out.state = state_;
+            pending_ = Pending{};                    // the newest 0 / 9 wins over a pending one (review 2026-11-15)
             if (online_) {
                 a.input_seq = queue_.push(now_us, source, "digit", v.digit);
                 if (a.input_seq) { digits_[digits_at_] = {a.input_seq, int8_t(v.digit)}; digits_at_ = (digits_at_ + 1) % kDigitsKept; }
@@ -129,7 +171,8 @@ public:
                 toast(t);
             } else {
                 ++offline_inputs_;
-                toast("OFFLINE");
+                pend(int8_t(v.digit), now_us);       // 0.4.96: sent when the link is up (robot half is done now)
+                toast(v.digit == 9 ? "OFFLINE: 9 WHEN ONLINE" : "OFFLINE: 0 WHEN ONLINE");
             }
             std::snprintf(a.out.toast, sizeof a.out.toast, "%s", toast_);
             return a;
@@ -150,6 +193,14 @@ public:
                 ++seq_;
                 push(report(seq_, source, in, true, a.out.effects, a.out.n_effects), a.out);
                 a.reported = true;
+                // 0.4.98 crowd's tap: held so the greeting gets fresh faces (released by release_look or the clock).
+                const bool look = in == Input::Tap && accepted && !a.changed && !a.out.n_effects &&
+                                  modes::rules::def(state_.mode).tap_in.look;
+                if (look && look_hold_us_ > 0 && reports_n_ && reports_[reports_n_ - 1].seq == seq_) {
+                    hold_seq_ = seq_; hold_until_us_ = now_us + look_hold_us_;
+                    a.look = true; a.look_token = seq_;
+                    ++look_holds_;
+                }
             } else {
                 if (a.changed) ++seq_;          // the link report sends the state; effect-only inputs are lost
                 ++offline_reports_;
@@ -169,9 +220,9 @@ public:
     }
 
     // The ear's hello was accepted: reports and digits go up from now on, the current state first.
-    void link_up()
+    void link_up(int64_t now_us = 0)
     {
-        reports_n_ = 0; inflight_ok_ = false;
+        reports_n_ = 0; inflight_ok_ = false; hold_seq_ = 0;
         queue_.clear();
         clear_chat();                   // no chat dot survives a reconnect (review Minor 1)
         if (!online_) { online_ = true; ++version_; }
@@ -179,16 +230,29 @@ public:
         const uint8_t n = mode_change(boot_sent_ ? sent_state_ : State{modes::rules::Mode::None}, fx);
         ++seq_;
         push(report(seq_, boot_sent_ ? by_ : "boot", Input::Boot, !boot_sent_, fx, n), Outcome{});
+        // The pending digit (power-on 9, or a 0 / 9 said offline) goes right behind the boot report.
+        if (pending_.digit >= 0) { pending_.seq = 0; pending_.due_us = now_us; queue_pending(now_us); }
     }
     // /mouth is gone: unsent reports and queued digits are dropped (the next link sends the state again).
     void link_down()
     {
-        reports_n_ = 0; inflight_ok_ = false;
+        reports_n_ = 0; inflight_ok_ = false; hold_seq_ = 0;
         queue_.clear();
         clear_chat();                   // the badge says OFF: no chat dot stays lit (review Minor 1)
         if (online_) { online_ = false; ++version_; }
     }
     bool online() const { return online_; }
+
+    // 0.4.98: how long crowd's tap report may wait for the look (0 = not held; the robot sets 0.8 s).
+    void set_look_hold(int64_t us) { look_hold_us_ = us > 0 ? us : 0; }
+    // The look for `token` is done: its report may go now. false when it already went (time, a later input, link).
+    bool release_look(uint32_t token)
+    {
+        if (!hold_seq_ || hold_seq_ != token) return false;
+        hold_seq_ = 0; ++look_released_;
+        return true;
+    }
+    bool holding_look() const { return hold_seq_ != 0; }
 
     // {"type":"mode_result",...} for a digit: its toast. false = malformed (dropped) or before hello.
     // 0.4.94: also which digit (0 / 9) it answers, from the last few sent, for the quick page's "last:" line.
@@ -200,6 +264,10 @@ public:
         result_ = r; have_result_ = true; ++results_; ++version_;
         result_digit_ = -1; result_at_us_ = now_us;
         for (const SentDigit& d : digits_) if (d.seq && d.seq == r.seq) result_digit_ = d.digit;
+        if (pending_.seq && r.seq == pending_.seq) {
+            if (!std::strcmp(r.code, "ok")) pending_ = Pending{};                   // mind did it: done
+            else { pending_.seq = 0; pending_.due_us = now_us + kPendingRetryUs; }  // busy / stale / mind down: again
+        }
         if (r.toast[0]) toast(r.toast);
         return true;
     }
@@ -211,7 +279,7 @@ public:
         if (bytes > chat::kMessageMax || !o["stage"].is<const char*>() || !chat::stage_from(o["stage"].as<const char*>(), st)) {
             ++chat_bad_; return false;
         }
-        if (state_.mode != modes::rules::Mode::Chat) { ++chat_dropped_; return false; }
+        if (!dots_mode(state_.mode)) { ++chat_dropped_; return false; }
         chat_.on_stage(st, now_us);
         ++chat_stages_; ++version_;
         return true;
@@ -220,7 +288,7 @@ public:
     // tts.start on /mouth (0.4.93 chat dots): when the speech really began, in chat only (review Minor 4).
     void on_speech_start(int64_t now_us)
     {
-        if (state_.mode != modes::rules::Mode::Chat) return;
+        if (!dots_mode(state_.mode)) return;
         chat_.on_speech_start(now_us);
         ++version_;
     }
@@ -231,7 +299,19 @@ public:
     {
         seq = 0;
         if (!online_) return Out::None;
-        while (reports_n_) {
+        last_now_us_ = now_us;
+        // The pending digit: no answer 10 s after it went, or a non-ok answer (on_result set due): send it again.
+        if (pending_.digit >= 0 && pending_.seq && pending_.sent_us && now_us - pending_.sent_us > kPendingRetryUs)
+            pending_.seq = 0;
+        if (pending_.digit >= 0 && !pending_.seq && now_us >= pending_.due_us) queue_pending(now_us);
+        // 0.4.98: crowd's held tap report (and anything behind it) waits until release_look or the hold ends.
+        if (hold_seq_) {
+            bool queued = false;
+            for (size_t i = 0; i < reports_n_; ++i) queued = queued || reports_[i].seq == hold_seq_;
+            if (!queued) hold_seq_ = 0;
+            else if (now_us >= hold_until_us_) { hold_seq_ = 0; ++look_timeouts_; }
+        }
+        while (reports_n_ && !(hold_seq_ && reports_[0].seq == hold_seq_)) {   // reports before the held one go
             if (report_line(reports_[0], out)) { inflight_ = reports_[0]; inflight_ok_ = true; seq = inflight_.seq; return Out::Report; }
             pop_report(); ++reports_dropped_;      // cannot happen (bounded words); never stall the queue
         }
@@ -257,6 +337,7 @@ public:
             if (reports_n_ && reports_[0].seq == seq) pop_report();
         } else if (kind == Out::Input && queue_.front() && queue_.front()->seq == seq) {
             queue_.pop(); ++inputs_sent_;
+            if (pending_.seq && seq == pending_.seq) pending_.sent_us = last_now_us_;
         }
     }
 
@@ -270,6 +351,8 @@ public:
     }
     uint32_t version() const { return version_; }
     const State& state() const { return state_; }
+    // The 0 / 9 still owed to mind (-1 = none): the power-on 9 or one said offline, until mind answers ok.
+    int pending_digit() const { return pending_.digit; }
 
     // Telemetry / info: mode (the web page's mode bar reads it).
     void json(ArduinoJson::JsonObject out, int64_t now_us) const
@@ -288,6 +371,9 @@ public:
         out["inputs_sent"] = inputs_sent_; out["inputs_queued"] = queue_.size();
         out["inputs_dropped"] = queue_.dropped() + unsendable_; out["inputs_offline"] = offline_inputs_;
         out["results"] = results_; out["bad_results"] = bad_results_; out["ignored"] = ignored_;
+        auto lk = out["look_hold"].to<ArduinoJson::JsonObject>();
+        lk["ms"] = look_hold_us_ / 1000; lk["held"] = look_holds_; lk["released"] = look_released_;
+        lk["timeouts"] = look_timeouts_; lk["overtaken"] = look_overtaken_; lk["holding"] = hold_seq_ != 0;
         if (have_result_) {
             auto r = out["last_result"].to<ArduinoJson::JsonObject>();
             r["seq"] = result_.seq; r["code"] = static_cast<const char*>(result_.code); r["toast"] = static_cast<const char*>(result_.toast);
@@ -325,6 +411,7 @@ private:
     {
         if (reports_n_ < kReportCap) { reports_[reports_n_++] = r; return; }
         reports_dropped_ += uint32_t(reports_n_);
+        hold_seq_ = 0;                          // a collapsed queue sends at once
         Report c = r;
         // The boot report (always first after a link_up) may be among the dropped ones: then this one is it.
         const bool boot_done = boot_sent_ || (inflight_ok_ && inflight_.boot);
@@ -396,6 +483,28 @@ private:
     int64_t since_us_ = 0, last_input_us_ = 0;
     uint32_t seq_ = 0, version_ = 0;
     bool online_ = false, boot_sent_ = false;
+    // 0.4.96 (review 2026-11-15): the ear posts a mode_input to mind once, so the digit hello owes mind is kept here
+    // until mind answers ok for its seq; no answer in 10 s or another code (busy, stale, mind down) sends it again
+    // with a new seq, at most kPendingTries times (a repeated 9 / 0 is harmless). Any new 0 / 9 replaces it.
+    static constexpr int64_t kPendingRetryUs = 10 * 1000000LL;
+    static constexpr uint8_t kPendingTries = 30;
+    struct Pending { int8_t digit = -1; uint32_t seq = 0; int64_t due_us = 0, sent_us = 0; uint8_t tries = 0; bool power_on = false; };
+    Pending pending_{};
+    int64_t last_now_us_ = 0;
+    void pend(int8_t digit, int64_t now_us) { pending_ = Pending{}; pending_.digit = digit; pending_.due_us = now_us; }
+    void queue_pending(int64_t now_us)
+    {
+        if (pending_.tries >= kPendingTries) { pending_ = Pending{}; return; }   // give up: say the digit again
+        pending_.seq = queue_.push(now_us, "quick", "digit", pending_.digit);
+        pending_.sent_us = 0;
+        if (!pending_.seq) return;
+        ++pending_.tries;
+        digits_[digits_at_] = {pending_.seq, pending_.digit}; digits_at_ = (digits_at_ + 1) % kDigitsKept;
+    }
+    static constexpr int kToggleDigit = 1;
+    int64_t look_hold_us_ = 0, hold_until_us_ = 0;
+    uint32_t hold_seq_ = 0;                 // the held look report's seq, 0 = none
+    uint32_t look_holds_ = 0, look_released_ = 0, look_timeouts_ = 0, look_overtaken_ = 0;
     State sent_state_{};
     Report reports_[kReportCap];
     size_t reports_n_ = 0;

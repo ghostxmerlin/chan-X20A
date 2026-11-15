@@ -11,6 +11,8 @@ Collections (one document per thing; `session` = the recording folder name, e.g.
             (session, t_us, event, face, person)
   tingwu    听悟 realtime sentences (kind "sentence", final only) and the diarized result after
             the session (kind "paragraph", speaker); unique (session, kind, n)
+  vision_looks  视觉爆发 (2026-11-15): kind "look" = one snap photo recognised (text, latency, usage, cost_usd,
+            burst_id, frame path), kind "burst" = one burst's summary (reason, counts, cost); unique lid
 Audio stays in the recording files (never deleted); the database stores paths and positions.
 
 Writes go through one background thread with a bounded queue: the ear never waits on the
@@ -66,6 +68,8 @@ def open_db(uri):
     db.frames.create_index([("at", ASCENDING)])
     db.realtime_turns.create_index([("tid", ASCENDING)], unique=True)
     db.realtime_turns.create_index([("at", ASCENDING)])
+    db.vision_looks.create_index([("lid", ASCENDING)], unique=True)
+    db.vision_looks.create_index([("kind", ASCENDING), ("at", ASCENDING)])
     return db
 
 
@@ -117,6 +121,10 @@ class HelloDB:
     def realtime_turn(self, doc):
         """One 围观 realtime response (timings, transcript lengths, usage, cost; never text)."""
         self._put("upsert", "realtime_turns", {"tid": doc["tid"]}, doc)
+
+    def vision_look(self, doc):
+        """One 视觉爆发 row (vision_burst.py): kind look (one recognised snap photo) or kind burst (the summary)."""
+        self._put("upsert", "vision_looks", {"lid": doc["lid"]}, doc)
 
     def frame(self, doc):
         """One body-camera frame index row (the JPEG itself is a file under recordings/frames/)."""

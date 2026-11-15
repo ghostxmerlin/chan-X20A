@@ -69,3 +69,10 @@ dialog fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 8px
 .topic{margin:6px 0;padding:6px 10px;border-left:3px solid #3b7dd8;background:rgba(59,125,216,.08)}
 .convs{list-style:none;padding:0;margin:0}.convs li{padding:4px 0;border-bottom:1px solid rgba(128,128,128,.2)}.convs .t{display:inline-block;min-width:8em;color:#888}
 
+#mind-burst .burst-on{color:#2e9d4f;font-weight:600}
+#mind-burst ol.looks{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:8px;max-height:640px;overflow:auto}
+#mind-burst ol.looks li{display:grid;grid-template-columns:160px 1fr;gap:10px;align-items:start;border-top:1px solid #333;padding-top:8px}
+#mind-burst ol.looks img{display:block;width:160px;height:120px;object-fit:contain;background:#000;border-radius:4px}
+#mind-burst ol.looks p{margin:4px 0 0}
+#mind-burst .nophoto{width:160px;height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed #555;border-radius:4px}
+@media (max-width:640px){#mind-burst ol.looks li{grid-template-columns:1fr}#mind-burst ol.looks img{width:100%;max-width:320px;height:auto;aspect-ratio:4/3}}

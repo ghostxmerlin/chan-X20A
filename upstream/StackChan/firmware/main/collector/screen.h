@@ -2,6 +2,7 @@
 #pragma once
 #include <lvgl.h>
 #include <cstdint>
+#include "top_row.h"
 
 namespace collector {
 enum ScreenFunction : uint8_t {
@@ -44,6 +45,9 @@ struct ScreenStatus {
     bool rssi_valid = false;
     int rssi = 0;
     int volume = -1;
+    // 0.4.98 home top row (top_row.h): M12 vision, sampled from m12_snapshot() before the LVGL lock (held there).
+    // Wi-Fi bars come from wifi_connected / ip / rssi above, the battery from power_valid / battery_percent / charging.
+    top::Vision vision;
 };
 enum class ScreenReaction { None, Heart, Reject };
 // All calls run under the display's LVGL lock (or on the LVGL timer task).
@@ -106,9 +110,18 @@ void screen_update_mode(const char* label, uint32_t color, bool online);
 void screen_set_cjk_font(const lv_font_t* small, const lv_font_t* large);
 // A short ASCII line at the bottom for 2 s (the mode's toast). Empty text shows nothing.
 void screen_show_toast(const char* text, uint32_t now_ms);
-// 0.4.93 chat stage dots (chat_stage.h), home page top left: visible only in chat; lit = -1 none, 0 / 1 / 2 =
-// listen / think / speak in `color`; grey = all three grey (skip). Created when shown, deleted when hidden.
+// 0.4.93 chat stage dots (chat_stage.h), home page top row, left: visible only in chat / crowd; lit = -1 none,
+// 0 / 1 / 2 = listen / think / speak in `color`; grey = all three grey (skip).
+// 0.4.98: drawn as three narrow blocks as tall as the mode badge (same semantics and timing) by the home top row, one
+// drawn object (no objects created or deleted). The rest of the row (M12 vision, the recognised name, Wi-Fi, battery)
+// follows screen_update(); the row is invalidated only when what it shows changes.
 void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color);
+// The part of the recognised name the top row draws ("" none; "known" when it cannot be drawn). For host previews.
+const char* screen_top_name();
+// 0.5.00 视觉爆发 indicator (burst_indicator.h): the home top row's burst group between the name and the Wi-Fi bars,
+// an eye, the look count and a 2 px time bar (left_s / total_s). on = false hides it. Call every LVGL tick with the
+// tracker's view; the row is invalidated only when the count or the bar's filled pixels change.
+void screen_update_burst(bool on, uint32_t looks, int left_s, int total_s);
 
 // 0.4.94 global swipes (ui_pages.h): on home in every mode, down = quick settings, up = mode picker, left = summary;
 // each page closes with the opposite swipe, its "< Back" title, or (quick / picker) 30 s without a touch. Those two are

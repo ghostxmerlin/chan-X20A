@@ -4,7 +4,7 @@ import re
 import statistics
 from collections import defaultdict
 
-from . import package, recall, selfvoice, settings, speech_settings
+from . import package, place, recall, selfvoice, settings, speech_settings
 from .memory import MemoryStore, fingerprint
 from .records import Records
 
@@ -212,7 +212,12 @@ def build(db, store, s, now_ms):
             memories = memories + recall.pick_for_talk(db, recall.library_rows(db), texts, now_ms) if texts else memories
         except Exception as e:
             warnings.append('library_memory_unavailable:'+type(e).__name__)
-    ctx = {'scope':scope, 'environment':effective.get('environment',''), 'time':settings.local_label(now_ms,s['tz']),
+    try:                                         # where hello is now (mind/place.py): the place line, or unknown
+        where = place.line(place.current(db, now_ms), s['tz'])
+    except Exception as e:
+        where = place.UNKNOWN_TEXT
+        warnings.append('place_unavailable:'+type(e).__name__)
+    ctx = {'scope':scope, 'place':where, 'environment':effective.get('environment',''), 'time':settings.local_label(now_ms,s['tz']),
            'profile':s['speech']['profiles'][scope['id']], 'scene':scene, 'evidence':evidence, 'memories':memories, 'recent':recent, 'warnings':warnings}
     ctx['fingerprint'] = fingerprint({**ctx, 'settings':s})
     return ctx

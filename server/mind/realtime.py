@@ -5,11 +5,15 @@ reports `crowd`. It fetches this block when the session opens and every ~60 s an
 instructions. Nothing here calls a model or costs money; it only reads what mind already has.
 
 The block (plain Chinese text, at most MAX_CHARS):
-  现在 / 环境         the local time, the environment text (as chat)
+  现在 / 地点 / 背景资料  the local time, where hello is now (mind/place.py: the place or unknown, plus at most once per
+                      10 min 【可以问地点】 when unknown or the picture looks like another kind of place), the environment
+                      text as background (as chat)
   此刻的情景 / 在聊 / 声音   the latest scene (chat._load_scene: summary, topic, sound; fresh within 4 min)
   对话纪要            the latest conversation notes (chat._load_notes)
   看到的人            who the M12 named in the last VISIBLE_MS (a later face_lost drops that face) and the latest eye
                       minute (people / activity, fresh within EYE_FRESH_MS)
+  注视                视觉爆发 looks (the ear's vision_burst.py, hello.vision_looks) of the last 3 min, newest first
+                      (the ear shows its own in-memory looks instead when it has them)
   最近的情景 / 最近的纪要  the last RECENT_MS of scenes (one line per change, at most RECENT_LINES, HH:MM) and the last
                       RECENT_NOTES conversation notes of RECENT_NOTES_MS (owner 2026-11-14: recent questions go to these first)
   你记得              at most 3 remembered statements (MemoryStore.recall, best first)
@@ -23,7 +27,7 @@ Parts are cached (TTL_S) so the ear's 60 s refresh and the scene_now tool cost a
 import collections
 import time
 
-from . import recall, settings as settings_mod, speech_settings
+from . import eye as eye_mod, notes as notes_mod, place, recall, settings as settings_mod, speech_settings
 from .chat import LANE as SCENE_LANE, MAX_MEMORIES
 from .library import Library
 
@@ -147,17 +151,26 @@ class RealtimeContext:
         memories = recall.plain((self._part('memories', lambda: chat._load_memories(now)) if chat else None) or [], crowd=True)
         faces = self._part('faces', lambda: visible_faces(self.db, now)) or []
         eye = self._part('eye', lambda: latest_eye(self.db, now))
+        try:                                   # 视觉爆发: fresh each block (one small read; a look comes every ~2 s)
+            looks = eye_mod.recent_looks(self.db, now)
+        except Exception:                      # noqa: BLE001 - a missing part is left out, never an error
+            looks = []
         lane = SCENE_LANE
         since = speech_settings.scope(s).get('since')
         timeline = self._part(f'timeline:{since}', lambda: recent_scenes(self.db, lane, now, s['tz'], since)) or []
         past = self._part(f'past_notes:{since}', lambda: recent_notes(self.db, since, now, s['tz'])) or []
+        topics = self._part('topics', lambda: notes_mod.topic_timeline(self.db, now, s['tz'])) or []
         cards = self._part('cards', lambda: face_cards(self.db)) or {}
         others = {n: p.get('display') for p in s.get('people') or [] for n in p.get('face_names') or [] if p.get('display')}
 
         L = [f'现在：{settings_mod.local_label(now, s["tz"])}']
+        try:                                   # fresh each block (the ear asks every ~30 s); the ask line ≤ 1 per 10 min
+            L += place.prompt_lines(self.db, s, now, ask=True)
+        except Exception:                      # noqa: BLE001 - a missing part is left out, never an error
+            pass
         env = (speech_settings.effective(s).get('environment') or '').strip()
         if env:
-            L.append(f'环境：{env[:300]}')
+            L.append(f'{place.ENV_LABEL}：{env[:300]}')
         if scene:
             if scene.get('doing') or scene.get('summary'):
                 L.append(f'此刻的情景：{scene.get("doing") or ""}（{scene.get("summary") or ""}）')
@@ -185,8 +198,12 @@ class RealtimeContext:
                                  eye.get('changes') and f'这一分钟的变化：{eye["changes"]}') if x]
             if parts:
                 L.append('画面：' + '。'.join(str(x).strip('。 ')[:160] for x in parts) + '。')
+        if looks:
+            L.append(eye_mod.looks_line(looks, s['tz']))
         if timeline:
             L.append('最近的情景（半小时内，按时间）：' + '；'.join(timeline))
+        if topics:
+            L.append('最近半小时聊过（每 5 分钟一条，按时间）：' + '；'.join(topics))
         if past:
             L.append('最近的纪要（新的在前）：' + '；'.join(past))
         if memories:

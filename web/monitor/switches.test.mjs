@@ -134,6 +134,18 @@ test('notes switch toggles and counts in the cost line', ()=>{
  assert.deepEqual(sw.toggleRequest('notes',r,NOTES(true,true)),{kind:'switch',body:{name:'notes',on:false}});
  assert.equal(sw.switchView(r,true,{enabled:false},NOTES(false,false)).cost,'现在不花钱');
 });
+const MEET=(on,running,{available=true}={})=>({tingwu:{on:false},tingwu_status:{running:[],available:true,stale:false,at:fresh},
+ realtime:{on},realtime_status:{running:running?['rt3']:[],available,stale:false,at:fresh}});
+test('围观 switch (2026-11-15): its own toggle, quiet when off, counted while a session runs', ()=>{
+ const r=robot({listen:true,hstate:'listening'});
+ const v=sw.switchView(r,true,{enabled:false},MEET(true,true));
+ assert.equal(v.meet.on,true);assert.match(v.meet.detail,/正在对话/);assert.match(v.cost,/围观对话/);
+ assert.deepEqual(sw.toggleRequest('meet',r,MEET(true,false)),{kind:'switch',body:{name:'realtime',on:false}});
+ assert.deepEqual(sw.toggleRequest('meet',r,MEET(false,false)),{kind:'switch',body:{name:'realtime',on:true}});
+ assert.match(sw.switchView(r,true,{enabled:false},MEET(false,false)).meet.detail,/闭嘴/);
+ assert.match(sw.switchView(r,true,{enabled:false},MEET(true,false)).meet.detail,/待命/);
+ assert.equal(sw.switchView(r,true,{enabled:false},null).meet.known,false);
+});
 test('stale notes status says unknown', ()=>{
  const v=sw.switchView(robot({listen:true}),true,{enabled:false},NOTES(true,true,{stale:true}));
  assert.match(v.cost,/纪要状态未知/);assert.equal(v.notes.known,true);

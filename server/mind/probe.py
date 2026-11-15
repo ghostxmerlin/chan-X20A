@@ -21,7 +21,7 @@ MODES = ["json_schema", "tools", "json_object", "plain"]
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["owner_present", "activity", "people_count"],
           "properties": {"owner_present": {"type": "string", "enum": ["yes", "no", "unknown"]},
                          "activity": {"type": "string"}, "people_count": {"type": "integer"}}}
-SYSTEM = "你在帮一个桌面机器人整理它对周围的感知。只根据给出的内容回答，不确定就答 unknown。"
+SYSTEM = "你在帮一个小机器人整理它对周围的感知。只根据给出的内容回答，不确定就答 unknown。"
 TASK = "根据下面这一分钟的感知内容，回答：主人在不在（owner_present: yes/no/unknown）、旁边的人在做什么（activity，一句中文）、看到或听到大约几个人（people_count）。"
 IMAGE_TASK = "这是机器人摄像头拍的一张低分辨率照片。回答：画面里有没有人（owner_present 填 unknown，因为你不认识主人）、在做什么（activity）、几个人（people_count）。"
 

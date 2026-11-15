@@ -2,7 +2,8 @@
 #pragma once
 // Body-camera change detection for the vision uplink (plan 2026-11-11-camera-upload, Task 1).
 // A 16×12 luma signature per frame; the uplink sends a frame when it differs enough from the last
-// one it sent and at least 10 s have passed, plus the first frame after every connect. No IDF here.
+// one it sent and at least 1 s has passed (owner 2026-11-15: 如果图像有变化，那就每秒传一张; was 10 s), plus the first
+// frame after every connect. Nothing while the picture stays the same. No IDF here.
 #include "face_pixels.h"
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +16,7 @@ constexpr int kThumbW = 16, kThumbH = 12;
 // shadow 3–4 cells, a person moving at the desk 5–26, someone leaving or arriving 144–170.
 constexpr int kFrameChangeCells = 6;
 constexpr int kCellChange = 30;
-constexpr int64_t kFrameMinGapUs = 10000000;      // at most one frame per 10 s
+constexpr int64_t kFrameMinGapUs = 1000000;       // at most one frame per second (0.4.98; was 10 s)
 
 struct FrameThumb {
     bool valid = false;
@@ -75,6 +76,13 @@ inline int frame_changed_cells(const FrameThumb& a, const FrameThumb& b)
 inline bool frame_should_send(bool have_last, int changed, int64_t since_last_us)
 {
     return !have_last || (since_last_us >= kFrameMinGapUs && changed >= kFrameChangeCells);
+}
+
+// 0.4.98 (review 2026-11-15): a frame may go only when no M12 vision event is waiting and no crowd-tap look runs,
+// so a frame send (up to 3 s) never delays the events. A closed gate skips the frame (the next pass takes the newest).
+inline bool frame_gate_open(size_t vision_events_pending, bool look_active)
+{
+    return vision_events_pending == 0 && !look_active;
 }
 
 // A frame send that failed (slow uplink, socket closed) holds frames for 60 s, so a link that cannot

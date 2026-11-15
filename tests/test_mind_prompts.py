@@ -36,7 +36,7 @@ class PromptsTest(unittest.TestCase):
 
     def test_v3_asks_for_positive_likely_statements(self):
         sys_text = render("v3", S, self.pkg, self.strong, None, [], {})[0]["content"]
-        for phrase in ("用正向的话说出最可能的情况", "大概在桌前工作", "附近大概没人", "不要写否定式", "总共不超过 6 条",
+        for phrase in ("用正向的话说出最可能的情况", "大概在打字工作", "附近大概没人", "不要写否定式", "总共不超过 6 条",
                        "规则算出的主人状态是底稿", "有语言以外的证据时必须引用",
                        "who_am_i 写 hello 自己", "有人说话时写 topic"):
             self.assertIn(phrase, sys_text)
@@ -46,7 +46,8 @@ class PromptsTest(unittest.TestCase):
         for code in ("rule:owner", "rule:coverage", "rule:time", "rule:place", "rule:self", "s1", "a1", "v1"):
             self.assertIn(code, u)
         self.assertTrue(RULE_CODES >= {"rule:owner", "rule:coverage"})
-        self.assertIn(S["place"]["default"], u)
+        self.assertIn("rule:place 地点：不知道（没人告诉过；不要假定在办公室或桌上）", u)   # 2026-11-15: no default place
+        self.assertNotIn("默认地点", u)
         self.assertIn(S["self_facts"], u)
         self.assertIn("今天下午开会", u)
         self.assertNotIn("voice_names", u)
@@ -60,8 +61,7 @@ class PromptsTest(unittest.TestCase):
     def test_reported_place_in_the_prompt(self):
         st = copy.deepcopy(self.strong); st["place"] = {"label": "办公室", "source": "owner_report", "at": T0 - 3600_000}
         u = render("v3", S, self.pkg, st, None, [], {})[1]["content"]
-        self.assertIn("rule:place 地点：办公室（主人报告", u)
-        self.assertRegex(u, r"rule:place 地点：办公室（主人报告，\d\d:\d\d，以此为准）")   # owner 2026-11-14: the report wins
+        self.assertRegex(u, r"rule:place 地点：办公室（主人在网页上设的，\d\d:\d\d，以此为准）")   # owner 2026-11-14: the report wins
         from mind import prompts as P
         self.assertIn("【地点】", P.V3_SYSTEM)
         self.assertIn("以此为准", P.V3_SYSTEM)
@@ -138,7 +138,7 @@ class PromptsTest(unittest.TestCase):
         import copy
         s2 = copy.deepcopy(S); s2["environment"] = "公司做指纹识别芯片；右边是冰箱和微波炉。"
         u = render("v3", s2, self.pkg, self.strong, None, [], {})[1]["content"]
-        self.assertIn("环境：公司做指纹识别芯片；右边是冰箱和微波炉。", u)
+        self.assertIn("背景资料（主人平时的情况和常用词，只作背景，不代表 hello 现在在那里）：公司做指纹识别芯片；右边是冰箱和微波炉。", u)
         self.assertNotIn("环境：", render("v3", S, self.pkg, self.strong, None, [], {})[1]["content"])
 
     def test_prompt_shows_c1_and_asks_topic_to_cite_it(self):

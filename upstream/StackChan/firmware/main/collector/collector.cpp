@@ -10,6 +10,7 @@
 #include "hearing.h"
 #include "vision_uplink.h"
 #include "mouth_link.h"
+#include "burst_indicator.h"
 #include "camera_frames.h"
 #include "interaction.h"
 #include "eyes/eyes.h"
@@ -169,6 +170,12 @@ bool wifi_status_dirty = false;
 // 0.4.94 quick settings page: volume and hearing go to the main loop, which may take service locks and write NVS
 // (the LVGL timer must not: SD/media paths take the display lock the other way). -1 = nothing asked.
 std::atomic<int> quick_volume_request{-1}, quick_hearing_request{-1};
+// 0.4.96 (owner 2026-11-15): the robot half of 0 / 9 (and of the power-on 9), as the page's tiers 关 / 听悟+识别:
+// hearing listen (the uplink the ear's 听悟 and 围观 realtime run on), the body camera (saved, as the page's switch)
+// and M12 detection (interaction "vision", which never touches tracking). mouth::mode_apply queues it from any task;
+// the main loop does it (NVS write on the main task's internal stack). 1 = on, 0 = off, -1 = nothing.
+std::atomic<int> senses_request{-1};
+void queue_senses(bool on) { senses_request = on ? 1 : 0; }
 std::atomic<uint32_t> quick_hearing_refused{0};   // +1 when hearing could not start (no ear configured)
 void wifi_json(JsonObject target);
 void control_info_json(JsonObject target);
@@ -1770,6 +1777,14 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                             (listening.requested ? ScreenFunctionListening : 0) |
                             (playback_busy() ? ScreenFunctionSpeaking : 0) |
                             (modes.recognition ? ScreenFunctionRecognition : 0);
+    {
+        // 0.4.98 home top row: M12 vision (on / person / face / recognised name), held 1 s against missed frames
+        // (top_row.h). The hold lives in PSRAM (made once); the snapshot is a stack copy, as elsewhere on this task.
+        static top::VisionHold* hold = nullptr;
+        if (!hold) if (void* m = heap_caps_calloc(1, sizeof(top::VisionHold), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) hold = new (m) top::VisionHold();
+        const auto raw = top::vision_from(m12_snapshot(), now);
+        status.vision = hold ? hold->tick(raw, now) : raw;
+    }
     auto display = static_cast<StackChanAvatarDisplay*>(Board::GetInstance().GetDisplay());
     display->LvglLock();
     if (!screen_initialized) {
@@ -1849,14 +1864,33 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                     mode_seen = version; mode_drawn = true;
                     screen_update_mode(view.look.label, view.look.color, view.online);
                     screen_update_mode_state(static_cast<uint8_t>(view.state.mode), static_cast<uint8_t>(view.state.dir));
-                    if (view.have_result)
+                    if (view.have_result && view.result_digit != 1)   // 0.4.98: preset 1's answer is a toast only
                         screen_update_billing(view.result_digit, view.result.code, static_cast<uint32_t>(view.result_at_us / 1000));
                     if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
-                    if (cd) { cd->in_chat = view.state.mode == modes::rules::Mode::Chat; cd->color = view.look.color; cd->state = view.chat; }
+                    if (cd) { cd->in_chat = mouth::dots_mode(view.state.mode); cd->color = view.look.color; cd->state = view.chat; }
                 }
                 if (cd) {
                     const auto dots = cd->view.tick(cd->in_chat, cd->state, cd->in_chat && mouth::speaking(), now);
                     screen_update_chat_dots(dots.visible, dots.lit, dots.grey, cd->color);
+                }
+                // 0.5.00 视觉爆发 indicator (burst_indicator.h): the ear's latest burst word, polled lock free; the
+                // tracker (PSRAM, made once) runs the countdown and the safety timeout, the top row draws it.
+                static burst::Tracker* bt = nullptr;
+                if (!bt) if (void* m = heap_caps_calloc(1, sizeof(burst::Tracker), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) bt = new (m) burst::Tracker();
+                if (bt) {
+                    const auto event = bt->tick(mouth::burst_word(), now);
+                    const burst::View& bv = bt->view();
+                    char text[24];
+                    if (event == burst::Event::Started) {
+                        burst::start_toast(bv.left_s, text, sizeof text);
+                        screen_show_toast(text, static_cast<uint32_t>(now / 1000));
+                        ESP_LOGI(kTag, "burst on: %d s, %lu looks", bv.left_s, (unsigned long)bv.looks);
+                    } else if (event == burst::Event::Stopped) {
+                        burst::stop_toast(bt->stopped_looks(), text, sizeof text);
+                        screen_show_toast(text, static_cast<uint32_t>(now / 1000));
+                        ESP_LOGI(kTag, "burst off (%s): %lu looks", burst::why_name(bt->why()), (unsigned long)bt->stopped_looks());
+                    }
+                    screen_update_burst(bv.on, bv.looks, bv.left_s, bv.total_s);
                 }
             }
             static uint32_t reaction_seen = 0;
@@ -1986,6 +2020,14 @@ void run()
     ESP_LOGI(kTag, "MIC/CAMERA CAPTURE ON; speaker held in reset; standalone remote receiver enabled");
     hal_bridge::xiaozhi_board_init(); // Hardware only; does not initialize Application.
     remote_init();
+    // 0.4.96 power-on = 9 (owner 2026-11-15): hello's own senses on now (the main loop does it), mind's half with
+    // the first /mouth link (mouth::init); later 0 / 9 from ASR, the quick page or the web page come through the hook.
+    // Before asr_init, so a word said at once is never overridden by this power-on 9.
+    mouth::set_senses_hook(queue_senses);
+    // 0.4.98 (owner 2026-11-15): crowd's tap = look; the M12 task asks who / refreshes attributes, then lets the
+    // held mode_report go (m12_look only stores the request; never blocks the LVGL timer).
+    mouth::set_look_hook([](uint32_t token) { m12_look(token, mouth::mode_look_done); });
+    queue_senses(true);
     asr_init();
     m12_init();
     temperature_init();
@@ -2142,6 +2184,33 @@ void run()
             if (const int volume = quick_volume_request.exchange(-1); volume >= 0) playback_set_volume(volume, "screen");
             if (const int hearing = quick_hearing_request.exchange(-1); hearing >= 0 && !hearing::set_listening(hearing > 0))
                 ++quick_hearing_refused;
+        }
+        {
+            // 0.4.96: hello's own 0 / 9 (and power-on): its senses follow, whatever the page or the link is doing.
+            // M12 detection: interaction "vision" (a request the M12 task applies once the unit answers); it waits
+            // up to 40 s only for the M12 UART to be up.
+            static bool vision_want = false;
+            static int64_t vision_until = 0;
+            const int64_t t = esp_timer_get_time();
+            if (const int s = senses_request.exchange(-1); s >= 0) {
+                const bool on = s > 0;
+                const bool heard = hearing::set_listening(on);
+                const bool saved = save_camera_setting(on) == ESP_OK;
+                camera_enabled = on;
+                vision_want = on; vision_until = t + 40000000;
+                ESP_LOGI(kTag, "senses %s: hearing %s, camera %s", on ? "ON (9)" : "OFF (0)",
+                         heard ? "ok" : "refused (no backend)", saved ? "saved" : "not saved");
+            }
+            if (vision_until) {
+                if (!vision_want || m12_snapshot().valid) {
+                    const esp_err_t r = interaction::set_mode("vision", vision_want);
+                    ESP_LOGI(kTag, "senses: M12 detection %s (%s)", vision_want ? "on" : "off", esp_err_to_name(r));
+                    vision_until = 0;
+                } else if (t > vision_until) {
+                    ESP_LOGW(kTag, "senses: no M12 within 40 s, detection not turned on");
+                    vision_until = 0;
+                }
+            }
         }
         update_screen(ip, ssid, rssi_valid, rssi);
         const int64_t now = esp_timer_get_time();

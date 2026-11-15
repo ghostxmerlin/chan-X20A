@@ -39,12 +39,15 @@ int main()
     assert(frame_changed_cells(ta, tc) == 10);
     assert(frame_changed_cells(ta, bad) == 255);
     assert(kFrameChangeCells == 6 && kCellChange == 30);
-    // policy: first frame after connecting, 10 s gap, changed-cells threshold
+    // policy: first frame after connecting, 1 s gap when changed (0.4.98, owner 2026-11-15; was 10 s), threshold
     assert(frame_should_send(false, 0, 0));
-    assert(!frame_should_send(true, 30, 9999999));
-    assert(!frame_should_send(true, 5, 60000000));
-    assert(frame_should_send(true, 6, 10000000));
-    assert(kFrameMinGapUs == 10000000);
+    assert(!frame_should_send(true, 30, 999999));
+    assert(!frame_should_send(true, 5, 60000000));         // unchanged: nothing, however long
+    assert(frame_should_send(true, 6, 1000000));
+    assert(frame_should_send(true, 170, 1000000));
+    assert(kFrameMinGapUs == 1000000);
+    // 0.4.98 review: a frame only when no M12 event waits and no crowd-tap look runs
+    assert(frame_gate_open(0, false) && !frame_gate_open(1, false) && !frame_gate_open(0, true) && !frame_gate_open(3, true));
     // a failed frame send holds frames for 60 s (no reconnect storm); big messages get 3 s to send
     assert(kFrameFailHoldUs == 60000000);
     assert(frame_held(1000, 2000) && !frame_held(2000, 2000) && !frame_held(5, 0));

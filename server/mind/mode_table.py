@@ -156,14 +156,17 @@ _validate(MODES)
 # robot: the robot half, in the page's own tier names (switches-ui.js levelRequests / visionRequests). Only the page
 #   carries it out; a robot-sent 9 does the server half and answers senses_on_page. 9 = tingwu / recognize, the paid
 #   tiers, so the robot half keeps 听悟 / 识别 on (owner 4: 花费全开).
-PRESET_ACTIONS = ('billing_off', 'billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on')
+PRESET_ACTIONS = ('billing_off', 'billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on', 'realtime_toggle')
 ROBOT_HALF = {'hearing': ('local', 'tingwu'), 'vision': ('upload', 'recognize')}
 _PAID_SENSES = {'hearing': 'tingwu', 'vision': 'recognize'}
 _ON_HELLO = {4: 'IDLE', 5: '进围观', 6: '进陪伴', 7: '进中音英字', 8: '进英音中字'}    # hello's own selects
 
 PRESETS = {
     0: {'name': '花费全关', 'server': ('billing_off',), 'robot': {}},
-    **{n: {'name': '空', 'server': (), 'robot': {}} for n in (1, 2, 3)},
+    # 1 (owner 2026-11-15 "能让hello在围观模式中闭嘴"): the 围观 realtime switch flips (闭嘴 / 开口); hello sends it for
+    # its ASR 1 and for a double tap in crowd. 0 / 9 still set it with everything else.
+    1: {'name': '围观闭嘴/开口', 'server': ('realtime_toggle',), 'robot': {}},
+    **{n: {'name': '空', 'server': (), 'robot': {}} for n in (2, 3)},
     **{n: {'name': f'{name}（hello 自己切）', 'server': (), 'robot': {}} for n, name in _ON_HELLO.items()},
     9: {'name': '花费全开', 'server': ('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), 'robot': dict(_PAID_SENSES)},
 }

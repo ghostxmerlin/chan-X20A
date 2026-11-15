@@ -27,7 +27,11 @@ Context (refreshed part by part when its TTL ran out: while idle, and at turn ti
 (summary, topic, sound), the latest conversation notes, the recall pool (recall.py: MemoryStore.recall 8 habits + up to
 300 library memories, long-term memory phase A; at most 3 that share words with the sentence go in, the speaker's own
 first, with how they may be used: child / others' words), hello's persona (config/roles deadpan, 无限's delivery), the recognised speaker's library card and
-active notes (links.voice_names), and the last chat turns (chat_turns).
+active notes (links.voice_names), and the last chat turns (chat_turns). The place (mind/place.py, 2026-11-15) is read fresh
+each turn: the current place or unknown, and at most once per 10 min a line that lets hello ask where it is (unknown, or
+the picture looks like another kind of place). A sentence said to hello that says where we are ("我们现在在饭店") sets
+the place first (place.told, a local rule; no model call). 视觉爆发 (2026-11-15): the ear's burst looks of the last 3 min
+(hello.vision_looks, eye.recent_looks) are read fresh each turn too and go in as one 仔细看到的 line, newest first.
 
 Streaming (chat v1, owner 2026-11-14 "做流式合成"; speech.chat.stream, default on): once a turn is picked up and hello
 is quiet, a soul-tts line is opened at once (TtsHttp.begin, no text yet), so soul-tts starts its synthesis task while
@@ -49,7 +53,7 @@ import threading
 import time
 import uuid
 
-from . import llm, recall, selfvoice, settings as settings_mod, speak, speech_settings
+from . import eye as eye_mod, llm, place, recall, selfvoice, settings as settings_mod, speak, speech_settings
 from .library import Library
 from .store import LANE
 
@@ -65,7 +69,7 @@ MAX_MEMORIES = 3                     # coordinator 2026-11-14: terra over-uses o
 HISTORY_MAX_AGE_MS = 3600_000
 SCENE_FRESH_MS = 4 * 60_000
 NOTES_FRESH_MS = 10 * 60_000
-TTL_MS = {'persona': 300_000, 'scene': 20_000, 'notes': 30_000, 'people': 120_000, 'memories': 120_000,
+TTL_MS = {'persona': 300_000, 'scene': 20_000, 'notes': 30_000, 'topics': 30_000, 'people': 120_000, 'memories': 120_000,
           'cost': 60_000}
 STOP_BIGRAMS = recall.STOP_BIGRAMS  # two-character words too common to make a memory "related" (review M4)
 REFRESH_BUDGET_MS = 100
@@ -79,6 +83,7 @@ FILLER_WORDS = {'um', 'uh', 'umm', 'hmm', 'hm', 'mm', 'mhm', 'ah', 'oh', 'eh', '
 STATES = ('queued', 'thinking', 'answered', 'skipped', 'superseded')
 LISTEN_SHOW_MS = 20_000              # the page shows listening this long after an onset without a sentence
 SKIP_SHOW_MS = 1_500
+TOLD_OK = (None, 'hello_speaking', 'mouth_not_tts', 'no_model', 'no_tts')   # gate results whose text may set the place
 
 
 def _num(v):
@@ -198,21 +203,23 @@ def related_memories(statements, text, limit=MAX_MEMORIES, person_id=None):
 def messages(ctx, item, history, cfg, who):
     """The prompt: hello's persona + rules + context in the system message, recent turns, then the sentence."""
     role = ctx.get('persona') or {}
-    L = [ctx.get('self_facts') or '我叫 hello，是放在办公桌上的桌面宠物机器人。']
+    L = [ctx.get('self_facts') or '我叫 hello，是主人的宠物机器人，主人常带着我走。']
     if role.get('persona'):
         L.append('【性格】' + role['persona'])
     L.append('【现在是对话模式】有人在跟你说话，你直接回答他。')
     L.append('【要求】\n' + '\n'.join('- ' + r for r in (
-        f'用一两句口语回答，最多 {cfg["max_chars"]} 字，越短越好；像桌宠，有自己的脾气，可以带一点冷幽默。',
+        f'用一两句口语回答，最多 {cfg["max_chars"]} 字，越短越好；像宠物，有自己的脾气，可以带一点冷幽默。',
         '只输出要说出口的话：不加引号、括号、动作描写和表情符号，不说“作为AI”“我是语言模型”。',
         '不给医疗、健康、用药方面的建议；纪要或记忆里提到身体情况，也不要劝人看医生、注意身体。',
         '听不清、没头没尾，就简短反问一句；不确定的事不要编。',
+        '你在哪看背景里的“现在的地点”；不知道就别假定在办公室或桌上。只有背景里有【可以问地点】时，才可以顺口问一句在哪儿。',
         '下面的背景只在和这句话有关时才用，不要硬扯，不要每句都提同一件事。')))
     bg = []
     if ctx.get('time'):
         bg.append(f'现在：{ctx["time"]}')
+    bg.extend(ctx.get('place') or [])
     if ctx.get('environment'):
-        bg.append(f'环境：{ctx["environment"][:600]}')
+        bg.append(f'{place.ENV_LABEL}：{ctx["environment"][:600]}')
     sc = ctx.get('scene')
     if sc:
         if sc.get('doing') or sc.get('summary'):
@@ -223,6 +230,10 @@ def messages(ctx, item, history, cfg, who):
             bg.append(f'声音：{sc["sound"]}')
     if ctx.get('notes'):
         bg.append(f'对话纪要：{ctx["notes"]}')
+    if ctx.get('looks'):                      # 视觉爆发: what hello looked at closely in the last 3 min
+        bg.append('仔细看到的（主人让你注意看，最近 3 分钟，新的在前）：' + ctx['looks'][len('注视：'):])
+    if ctx.get('topics'):
+        bg.append('最近半小时聊过（每 5 分钟一条，按时间）：' + '；'.join(ctx['topics']))
     pid = (ctx.get('person') or {}).get('person_id')
     pool = [m for m in ctx.get('memories') or [] if recall.chat_ok(m, pid)]     # private: the owner only (fail closed)
     mem = related_memories(pool, item['text'], person_id=pid)
@@ -358,6 +369,8 @@ class Chat:
             self.db['chat_turns'].insert_one(dict(doc))
         except Exception as e:               # noqa: BLE001 - a record failing never stops the turn
             self.log(f'mind chat: record failed: {type(e).__name__}', flush=True)
+        if reason in TOLD_OK:                # said to hello by someone near (not hello's own voice, not far / filler)
+            self._told(item, now)
         if reason:
             self._skip_at = now
             self.log(f'mind chat: skip {reason} ({item["session"]} {item["id"]})', flush=True)
@@ -746,7 +759,7 @@ class Chat:
         got = self._ctx.get(name)
         return got[1] if got else None
 
-    def _refresh(self, now_ms, budget_ms=REFRESH_BUDGET_MS, names=('cost', 'persona', 'scene', 'notes', 'people',
+    def _refresh(self, now_ms, budget_ms=REFRESH_BUDGET_MS, names=('cost', 'persona', 'scene', 'notes', 'topics', 'people',
                                                                  'memories')):
         """Refresh the parts whose TTL ran out, oldest need first, until budget_ms is spent (None: all)."""
         t0 = self.mono()
@@ -779,6 +792,11 @@ class Chat:
         said = lambda dim: [e.get('text') for e in sc.get('entries') or [] if e.get('dimension') == dim and e.get('text')]
         return {'doing': (sc.get('people_doing') or {}).get('text') or '', 'summary': sc.get('summary') or '',
                 'topic': said('topic')[:2], 'sound': '；'.join(said('sound_scene')[:1]), 'minute': row['minute']}
+
+    def _load_topics(self, now_ms):
+        """The last half hour of conversation notes, one per 5 minutes (notes.topic_timeline)."""
+        from . import notes as notes_mod
+        return notes_mod.topic_timeline(self.db, now_ms, self.settings_fn()['tz'])
 
     def _load_notes(self, now_ms):
         since = speech_settings.scope(self.settings_fn())['since']
@@ -825,10 +843,37 @@ class Chat:
     def context(self, s, item):
         eff = speech_settings.effective(s)
         now = self.clock_ms()
-        return {'self_facts': s.get('self_facts'), 'environment': (eff.get('environment') or '').strip(),
+        return {'self_facts': place.self_facts(s), 'environment': (eff.get('environment') or '').strip(),
                 'time': settings_mod.local_label(now, s['tz']), 'persona': self._part('persona'),
-                'scene': self._part('scene'), 'notes': self._part('notes'), 'memories': self._part('memories') or [],
+                'place': self._place(s, now), 'looks': self._looks(s, now),
+                'scene': self._part('scene'), 'notes': self._part('notes'), 'topics': self._part('topics') or [],
+                'memories': self._part('memories') or [],
                 'person': self.person(s, item['speaker'])}
+
+    def _place(self, s, now_ms):
+        """The place line (+ at most one ask line per place.ASK_GAP_MS), read fresh each turn: a few small reads."""
+        try:
+            return place.prompt_lines(self.db, s, now_ms, ask=True)
+        except Exception as e:               # noqa: BLE001 - no place line rather than no answer
+            self.log(f'mind chat: place unavailable: {type(e).__name__}', flush=True)
+            return []
+
+    def _looks(self, s, now_ms):
+        """视觉爆发 looks of the last 3 min as one line (eye.looks_line), read fresh each turn: one small read."""
+        try:
+            return eye_mod.looks_line(eye_mod.recent_looks(self.db, now_ms), s['tz'])
+        except Exception as e:               # noqa: BLE001 - no looks line rather than no answer
+            self.log(f'mind chat: looks unavailable: {type(e).__name__}', flush=True)
+            return None
+
+    def _told(self, item, now_ms):
+        """A sentence said to hello in chat that says where we are sets the place (place.told; local rule, no model)."""
+        try:
+            got = place.told(self.db, item['text'], 'chat', now_ms)
+            if got['changed']:
+                self.log('mind chat: place set by voice', flush=True)
+        except Exception as e:               # noqa: BLE001 - the turn goes on
+            self.log(f'mind chat: place update failed: {type(e).__name__}', flush=True)
 
     # ---- the page ----
     def note_stage(self, stage, at_ms=None):

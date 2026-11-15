@@ -145,9 +145,7 @@ def effective(s):
     p = speech['profiles'][profile]
     if p.get('environment') is not None:
         out['environment'] = p['environment']
-    if profile != 'office':
-        out['place'] = {**out.get('place', {}), 'default': {'home': '家里', 'friends': '朋友聚会'}[profile]}
-    return out
+    return out          # the profile no longer implies a place (2026-11-15): mind/place.py is the one source
 
 
 def role_config(role, s):

@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 
-from . import llm, notes, settings as settings_mod
+from . import llm, notes, place, settings as settings_mod
 from . import attention, speech_context, scene_speech, speech_settings, say_moment, say_prompts
 from . import say_round as rounds
 from .records import Records
@@ -89,6 +89,7 @@ def context(db, store, s, now_ms):
     mine = [u['text'] for u in db['utterances'].find({'at':{'$gte':scope['since']}}, {'_id':0}).sort('at',-1).limit(100)
             if u.get('scope_id','office')==scope['id'] and u.get('role')!='try'][:5]
     return {"environment": (s.get("environment") or "").strip(),
+            "place": place.line(place.current(db, now_ms), s["tz"]),
             "time": settings_mod.local_label(now_ms, s["tz"]),
             "doing": (sc.get("people_doing") or {}).get("text") if fresh_scene else None,
             "summary": sc.get("summary") if fresh_scene else None,
@@ -115,8 +116,10 @@ def _messages(role, ctx):
               f"\n- 只输出一句要说出口的话（JSON 的 text），不超过 {MAX_CHARS} 字，不加引号、括号、动作描写。"
               "\n- 说的内容要和此刻的情景有关；不要重复自己最近说过的话。")
     L = []
+    if ctx.get("place"):
+        L.append(ctx["place"])
     if ctx["environment"]:
-        L.append(f"环境：{ctx['environment']}")
+        L.append(f"{place.ENV_LABEL}：{ctx['environment']}")
     L.append(f"现在：{ctx['time']}")
     if ctx["doing"]:
         L.append(f"此刻的情景：{ctx['doing']}（{ctx['summary'] or ''}）")

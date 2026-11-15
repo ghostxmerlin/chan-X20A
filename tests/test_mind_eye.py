@@ -77,13 +77,13 @@ class EyeTest(unittest.TestCase):
         self.assertIn("认出 主人", self.text(call))
         self.assertNotIn("远处", self.text(call) + call["messages"][0]["content"])
         self.assertEqual(call["tool_choice"]["function"]["name"], "eye")
-        self.assertEqual(call["model"], "claude-haiku-5-5")
+        self.assertEqual((call["model"], call.get("enable_thinking")), ("qwen3.8-flash", False))   # 2026-11-15 switch
         self.assertEqual((rec["source"], rec["result"]["activity"], len(rec["frames"])), ("model", "主人在桌前喝水", 3))
         self.assertNotIn("b64", json.dumps(rec["frames"]))
         self.assertEqual(self.db.count("eye_minutes"), 1)
         run = self.db["mind_runs"].docs[0]
         usage = {"prompt_tokens": 1000, "completion_tokens": 200}
-        self.assertEqual((run["step"], run["cost_usd"]), ("eye", llm.cost_usd("claude-haiku-5-5", usage)))
+        self.assertEqual((run["step"], run["cost_usd"]), ("eye", llm.cost_usd("qwen3.8-flash", usage)))
 
     def test_more_than_six_frames_are_thinned_to_six(self):
         for i in range(9):
@@ -128,12 +128,12 @@ class EyeTest(unittest.TestCase):
         self.assertEqual((len(self.fake.calls), rec["source"]), (2, "model"))
         self.assertIn("people_count", self.fake.calls[1]["messages"][-1]["content"])
 
-    def test_prompt_says_an_unrecognised_face_at_the_desk_is_likely_the_owner(self):
+    def test_prompt_never_guesses_the_owner(self):
         self.frame(T0 + 1000, 1)
         self.fake.reply_next(eye_json())
         self.run_at()
         system = self.fake.calls[0]["messages"][0]["content"]
-        self.assertIn("很可能是主人", system)
+        self.assertNotIn("很可能是主人", system); self.assertIn("未认出的人", system)   # owner: 宁可叫不出名字
 
     def test_eye_uses_a_forced_tool_call(self):
         # live 2026-11-11: haiku via aihubmix ignores response_format json_schema (3/3 fenced, thinking on)
@@ -176,7 +176,7 @@ class EyeTest(unittest.TestCase):
         s2 = copy.deepcopy(S); s2["environment"] = "右边是冰箱和微波炉，同事常来热饭。"
         self.frame(T0 + 1000, 1)
         self.run_at(s=s2)
-        self.assertIn("环境：右边是冰箱和微波炉，同事常来热饭。", self.text(self.fake.calls[0]))
+        self.assertIn("背景资料（主人平时的情况和常用词，只作背景，不代表 hello 现在在那里）：右边是冰箱和微波炉，同事常来热饭。", self.text(self.fake.calls[0]))
 
     def test_budget_reached_records_budget_without_calling(self):
         import copy

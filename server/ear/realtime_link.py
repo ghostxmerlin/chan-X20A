@@ -31,7 +31,9 @@ stream is dropped at once (the robot's tts.start replaces it), the response is c
 stream or greeting starts while soul-tts has a stream the robot has not reported finished.
 
 Context (persona + mind's GET /realtime/context block) goes in with session.update instructions at open and every
-CONTEXT_S. Owner greeting: VisionLink hands every M12 event to on_vision(); FaceView tracks which faces are in view.
+CONTEXT_S. Place (2026-11-15): the block says where hello is now (or unknown) and, at most once per 10 min, lets hello ask;
+a heard sentence with 在 / 到 / 这里 goes to mind POST /place/told (mind's local rule decides; no model), and a changed
+place re-sends the instructions at once. Owner greeting: VisionLink hands every M12 event to on_vision(); FaceView tracks which faces are in view.
 When the owner (mind's owner.face_names) appears after AWAY_S unseen while in crowd, or is in view when a session opens,
 a "[事件] 主人（<call>）出现在你面前了" user text item + response.create goes in; queued while hello sounds, dropped after
 GREET_MAX_AGE_S, never twice within AWAY_S. The call name comes from mind at run time and is never logged.
@@ -49,7 +51,16 @@ Turn-taking v0 (owner: "可能很多人说话，有很多打断。所以我们�
 this model (interrupt_response / create_response are dropped from the echoed session, measured 2026-11-14), so the hub
 never lets speech cut a reply: no audio goes up from response.created until the robot reported the reply done plus
 GUARD_S, it never sends response.cancel for speech, greetings wait for quiet; server VAD threshold 0.6 and silence
-1000 ms (defaults 0.5 / 800). Who is talking to hello (addressing) comes later.
+1000 ms (defaults 0.5 / 800).
+Addressing v0 (2026-11-15, a TV drama answered ~100 times): the persona says to answer only 「嗯」 when nobody is talking
+to hello (TV, others chatting, fragments); the reply gate (reply_verdict) holds a speech reply's audio until its
+transcript shows it is not 「嗯」, not a didn't-hear question and not a word-for-word repeat, else the reply never plays
+(realtime_turns state muted_quiet / muted_unclear / muted_repeat; it is still billed, ~0.004 CNY). A spoken 闭嘴 (is_hush)
+turns the 围观 switch off through mind's POST /switches; hello's "一" turns it on again.
+视觉爆发 (2026-11-15, vision_burst.py): every input transcription also goes to burst.heard() ("注意看" starts a 2 min
+photo-by-photo look, "别看了" stops it). Each look comes back through add_look(); the last LOOKS_KEEP within LOOKS_S are
+in 【你的眼睛】 as 注视（HH:MM:SS，N 秒前）：… (newest first) and the instructions are re-sent on a new look, at most once
+per LOOKS_PUSH_S. Without looks of its own (an ear restart), mind's 注视： line from the context block is used.
 Caps: one session at most MAX_SESSION_S, closed after IDLE_S without speech, and at most HOUR_CAP_S of open sessions in
 any hour; after a cap / idle close the next session opens only on the next speech onset (or an owner greeting).
 Records: one realtime_turns document per response (timings, transcript lengths only, token usage, cost estimate); the
@@ -62,6 +73,7 @@ import concurrent.futures
 import itertools
 import json
 import math
+import os
 import random
 import re
 import struct
@@ -84,22 +96,32 @@ STEP_S = 0.2
 log = print                                         # tests silence it
 
 PERSONA = (
-    "你是 hello，住在主人办公桌上的桌面宠物机器人，用小孩子的声音说话：活泼、好奇、爱凑热闹，有点小脾气。"
+    "你是 hello，主人的小宠物机器人，主人去哪常带着你（办公室、家里、车上、饭店、户外都有可能）。"
+    "你现在在哪，看背景里的“现在的地点”；写着不知道就别假定在办公室或桌上。"
+    "用小孩子的语气说话：活泼、好奇、爱凑热闹，有点小脾气。"
+    "说话用普通话。"
     "现在是围观模式：大家围着你看，跟你聊天，你就跟他们聊。\n"
     "【要求】\n"
     "- 每次用一两句口语短句回答，越短越好，像小朋友说话。\n"
     "- 只说要说出口的话：不加表情符号、括号和动作描写，不说“作为AI”。\n"
     "- 不给医疗、健康、用药方面的建议；背景里提到身体情况也不要劝人看医生。\n"
-    "- 听不清、没头没尾，就简短反问一句；不确定的事不要编。\n"
+    "- 先分清是不是在跟你说话：电视、手机、广播里的声音，别人之间在聊天，零碎几个字、没头没尾、听不清的，都不是跟你说的，"
+    "这时只回一个字「嗯」，别的什么都不说（这个「嗯」不会播出来）。不要问“你说啥”“没听清”“咋回事”。\n"
+    "- 有人叫你、问你问题、跟你打招呼、接着你刚才的话说，才是跟你说话，这时正常回答。不确定的事不要编。\n"
+    "- 不要重复自己：【刚才的对话】里是你最近说过的话，不要再说同样的句子，也不要用同样的开头和套路，每次都换新说法。\n"
+    "- 问到天气、新闻、比分这类要现查的事，可以联网查，查到了用一两句说结果；查不到就直说。\n"
     "- 背景只在跟话题有关时才用，不要硬扯，不要每句都提同一件事。\n"
+    "- 背景里有“【可以问地点】”这一行时，可以找个自然的时候问一句现在在哪儿，只问一次；没有这一行就不要问地点。"
+    "有人告诉你在哪了，就按他说的来。\n"
     "- 收到“[事件] 主人（名字）出现在你面前了，长招呼”时：用这个名字大声、热情地喊主人，开心地打招呼，"
     "再顺口说一句你看到的情景或想到的事，两三句。每次都换新说法，不要跟事件里列的“之前说过”的一样。\n"
     "- 收到“[事件] 主人又出现了，短招呼：只说「…」”时：刚才已经见过，只原样说「」里那个词，一个字都不多说，不喊名字。\n"
     "- 收到“[事件] 有人点了你一下，让你跟面前的人打招呼”时：按事件里说的称呼主动打招呼，嘴甜一点、热情一点；"
     "认识的人叫名字，不认识的就用事件给的称呼（美女、帅哥、小朋友、爷爷、奶奶）。只夸，不评论长相的缺点，不开人身玩笑。"
-    "事件说没看到人脸，就说“我看看……咦，没看到人呀”这样的话，再友好地问声好。\n"
+    "事件说没看到人脸，就自然地说一句没看到人（每次换个说法），再友好地问声好。\n"
     "- 你有眼睛：头上的摄像头和人脸识别，看到的都写在最后的【你的眼睛】里：人脸识别是实时认出的人，"
-    "摄像头照片识图是一分钟整理一次的画面（人在做什么、环境、变化）。有人问你能不能看见、看到了谁、看到了什么，"
+    "摄像头照片识图是一分钟整理一次的画面（人在做什么、环境、变化）；"
+    "“注视”是有人让你“注意看”之后你一张一张仔细看到的照片（新的在前，最准）。有人问你能不能看见、看到了谁、看到了什么，"
     "就把这两样合起来回答：谁在（认得的叫名字，不认得的说个大概），在做什么，周围什么样；"
     "两样都没有，就说现在没看清。不要说自己没有眼睛、看不见。\n"
     "- 有人问刚才、最近、今天早些时候发生了什么、聊了什么，先照背景里的“最近的情景”和“最近的纪要”回答，"
@@ -113,12 +135,151 @@ def strip_emoji(text):
     return _EMOJI.sub("", str(text or "")).strip()
 
 
-EYE_LINES = ("画面：", "看到的人（M12 认出）：")
+EYE_LINES = ("画面：", "看到的人（M12 认出）：", "注视：")
+LOOKS_KEEP = 5                                      # vision burst looks shown in 【你的眼睛】 ...
+LOOKS_S = 180                                       # ... while younger than this
+LOOKS_PUSH_S = 3.0                                  # a new look re-sends the instructions at most this often (review: was 1 s)
+TOLD_HINT = re.compile(r"在|到|这里|这儿")         # only these sentences may say where we are (mind decides)
+# Reply gate (owner 2026-11-15 "17:30-18:30 输出了好多无效的询问": a TV drama was on and meet answered ~100 of its lines,
+# mostly "俺可没听见恁说啥，别拿俺寻开心"). The persona has hello answer only 「嗯」 when nobody is talking to it; a speech
+# reply's audio is held until its transcript (which arrives 0.3-0.6 s before the audio, measured 2026-11-15) shows it is
+# not 「嗯」, not a "didn't hear you" question and not a word-for-word repeat of a recent reply; those never play.
+GATE_CHARS = 8                                      # decide once this many characters of the reply are in
+QUIET_CHARS = set("嗯唔")
+REPEAT_MIN_CHARS = 6                                # "你好呀" again is a greeting; only longer lines count as repeats
+UNCLEAR = re.compile(r"没听见|没听清|听不清|没听懂|听不懂|说啥|说什么呢|啥意思|什么意思|咋回事|怎么回事|听晕|听糊涂|"
+                     r"再说一遍|说慢点")
+# Spoken hush (owner said "别说话了" / "请你闭嘴" and meet kept talking): the 围观 switch goes off, as digit 1 does;
+# hello's "一" turns it on again. 闭嘴 anywhere, the others only as a short sentence of their own.
+HUSH_ANY = re.compile(r"闭嘴")
+HUSH_SHORT = re.compile(r"别说话|别说了|不要说话|不要说了|不许说话|安静点|安静一点|别吵")
+HUSH_SHORT_CHARS = 8
 
 
-def instructions(context_text=None, seen=None):
+def norm_text(text):
+    """Letters only (no emoji, punctuation, spaces), for comparing replies."""
+    return re.sub(r"[\W_]+", "", strip_emoji(text))
+
+
+def reply_verdict(text, done, recent=(), blind=False):
+    """The gate of one speech reply: None = wait for more text, "play", or why it must not play: "quiet" (only 嗯),
+    "unclear" (a didn't-hear question), "repeat" (word for word one of `recent`, normalised replies), "blind" (with
+    blind=True, i.e. no fresh look: 看不清 / 黑乎乎 ... said without any photo to go on)."""
+    t = norm_text(text)
+    if not t:
+        return "play" if done else None
+    if set(t) <= QUIET_CHARS:
+        return "quiet" if done else None
+    if len(t) < GATE_CHARS and not done:
+        return None
+    if UNCLEAR.search(t[:GATE_CHARS + 4]):
+        return "unclear"
+    if blind:
+        if BLIND.search(t[:BLIND_HOLD_CHARS + 8]):
+            return "blind"
+        if not done and len(t) < BLIND_HOLD_CHARS and "看" in t:
+            return None
+    for r in (recent if len(t) >= REPEAT_MIN_CHARS or not done else ()):
+        if len(r) < REPEAT_MIN_CHARS:
+            continue
+        if done and t == r:
+            return "repeat"
+        if not done and r.startswith(t):
+            return None
+    return "play"
+
+
+# Rescue (live 2026-11-15 evening: from audio the model said 「嗯」 to "你看看我手里拿的是什么东西", "Hello", "你看到了什么？"):
+# a muted 「嗯」 whose sentence (the model's transcript or the ear's own ASR) plainly talks to hello is asked again once,
+# as a text hint. TV lines rarely carry these cues (checked on the 17:30-18:20 drama clips).
+ADDRESS = re.compile(r"hello|哈喽|嗨|你好|你看|看看|看一下|注意看|看到|看见|你听|你怎么|你叫|你是谁|你知道|你觉得|你会|你能|"
+                     r"你在干|你在做|你喜欢|你想不想|小家伙|你说说")
+RESCUE_S = 5.0                                      # a muted 「嗯」 may be rescued this long after it
+FOLLOW_S = 20.0                                     # a question this soon after hello spoke is a follow-up to her
+QUESTION = re.compile(r"(吗|呢|么|啥|什么|多少|几|谁|哪)[？?。！!]*$|[？?]$")
+
+
+def is_question(text):
+    return bool(QUESTION.search(strip_emoji(text).strip()))
+
+
+def addressed(text):
+    t = norm_text(text).lower()
+    return bool(t) and bool(ADDRESS.search(t))
+
+
+def rescue_text(heard):
+    return f"（刚才这句是在跟你说话：「{str(heard)[:80]}」。直接回答它，不要只说「嗯」。）"
+
+
+# Look answers (owner 2026-11-15 evening: "你看看我手里拿的是什么" was answered at once with 看不清 / 全白 / 全黑 or a guess,
+# while the burst's photos showed the thing 2 s later; "你为什么在什么数据都没有的情况下就抢先回答了"): a look question
+# starts / extends the burst, the instant reply is muted, and the first look whose photo was taken after the question
+# goes in as a text item so hello answers from it. No such look within LOOK_WAIT_S: hello stays quiet. A blind reply
+# (看不清 / 黑乎乎 ...) never plays without a fresh look, whatever the question looked like.
+LOOK_ASK = re.compile(r"你看看|看看这|看看我|你看这|看一下|看一眼|注意看|仔细看|好好看看|看到了?什么|看见了?什么|看到我|看见我|"
+                      r"看得见|看得到|看到了吗|看见了吗|这是什么|这是啥|拿的是什么|拿的是啥|拿着什么|拿着啥|手里.{0,4}(什么|啥)")
+BLIND = re.compile(r"看不清|看不见|看不到|没看清|没看见|看不太清|看不出|黑乎乎|黑漆漆|一片黑|全黑|黑黑的|白茫茫|一片白|全白|"
+                   r"白白的|太模糊|模模糊糊|太暗")
+LOOK_WAIT_S = 8.0                                   # wait this long for a fresh look, then stay quiet
+FRESH_LOOK_S = 5.0                                  # a look this young is data: a blind reply may play then
+BLIND_HOLD_CHARS = 16                               # a reply that mentions 看 is judged after this many characters
+
+
+FILLER_MAX_S = 2.5                                  # "我看看哈" only this soon after the question (else it waits quietly)
+
+
+def load_fillers(folder):
+    """Pre-made "我看看哈" clips (owner 2026-11-15: say one while waiting for the look) in the meet voice:
+    <folder>/fillers.json {"sample_rate": 24000, "clips": [{"file", "text", "ms"}]} + raw PCM16 mono files.
+    -> [(text, pcm)], [] when missing or wrong (then hello just waits quietly)."""
+    try:
+        with open(os.path.join(folder, "fillers.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+        if meta.get("sample_rate") != SR_OUT:
+            return []
+        out = []
+        for c in meta.get("clips") or []:
+            with open(os.path.join(folder, os.path.basename(str(c["file"]))), "rb") as f:
+                pcm = f.read()
+            if pcm and len(pcm) % 2 == 0 and len(pcm) <= SR_OUT * 2 * 4:
+                out.append((str(c.get("text") or ""), pcm))
+        return out
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return []
+
+
+def is_look_ask(text):
+    return bool(LOOK_ASK.search(norm_text(text)))
+
+
+def look_answer_text(look, question):
+    return (f"（你刚刚仔细看了一眼，照片里是：{str(look)[:200]}）有人刚才问你：「{str(question)[:80]}」。"
+            "就照这张照片回答，一两句口语；照片里没有的不要编，看不清就说拿近一点。")
+
+
+def is_hush(text):
+    t = norm_text(text)
+    return bool(t) and (bool(HUSH_ANY.search(t)) or (len(t) <= HUSH_SHORT_CHARS and bool(HUSH_SHORT.search(t))))
+
+
+def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
+    """Vision burst looks [(at_ms, text)] -> 注视（HH:MM:SS，N 秒前）：… lines, newest first, only within window_s."""
+    out = []
+    for at, text in sorted(looks or [], key=lambda x: -x[0]):
+        ago = max(0, (now_ms - at) // 1000)
+        if ago > window_s or not text:
+            continue
+        out.append(f"注视（{time.strftime('%H:%M:%S', time.localtime(at / 1000))}，{ago} 秒前）：{text}")
+        if len(out) >= keep:
+            break
+    return out
+
+
+def instructions(context_text=None, seen=None, recent=None, looks=None):
     """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
-    where the voice model tended to miss them; owner 2026-11-14)."""
+    where the voice model tended to miss them; owner 2026-11-14). looks: look_lines() of the vision burst (else mind's
+    注视： line, if the context has one)."""
     rest, eye = [], {}
     for line in (context_text or "").splitlines():
         key = next((k for k in EYE_LINES if line.startswith(k)), None)
@@ -127,11 +288,24 @@ def instructions(context_text=None, seen=None):
         else:
             rest.append(line)
     out = PERSONA + ("\n\n【背景】\n" + "\n".join(rest) if rest else "")
+    # Anti-repeat (owner 2026-11-15 "meet 经常卡在重复的一句话"): hello's last replies, also across a session rotation.
+    pairs = [(h, r) for h, r in (recent or []) if r]
+    times = collections.Counter(norm_text(r) for _, r in pairs)
+    last = {norm_text(r): i for i, (_, r) in enumerate(pairs)}
+    lines = [f"- 有人说：{h or '（没听清）'} → 你说：{r}" + (f"（这句已经说过 {times[norm_text(r)]} 次，不许再说）"
+                                                     if times[norm_text(r)] > 1 else "")
+             for i, (h, r) in enumerate(pairs) if last[norm_text(r)] == i]   # a repeated reply once, the latest
+    if lines:
+        out += "\n\n【刚才的对话】（旧的在前；你说过的这些话不要再说，换新说法）\n" + "\n".join(lines)
     eyes = []
     if seen:
         eyes.append(f"人脸识别（实时）：{seen}")
     if eye.get("看到的人（M12 认出）："):
         eyes.append(f"人脸识别（最近 3 分钟认出过）：{eye['看到的人（M12 认出）：']}")
+    if looks:
+        eyes.extend(looks)
+    elif eye.get("注视："):
+        eyes.append(f"注视（最近 3 分钟，新的在前）：{eye['注视：']}")
     if eye.get("画面："):
         eyes.append(f"摄像头照片识图（大约一分钟前）：{eye['画面：']}")
     if eyes:
@@ -154,11 +328,17 @@ def seen_text(faces, names, owner_faces, owner_call):
     return f"眼前有 {len(faces)} 个人：" + "、".join(parts) + more + "。"
 
 
-def session_config(voice, instr, silence_ms=500, threshold=0.5):
-    return {"modalities": ["text", "audio"], "voice": voice, "instructions": instr,
-            "input_audio_format": "pcm", "output_audio_format": "pcm",
-            "input_audio_transcription": {"language": "zh"},
-            "turn_detection": {"type": "server_vad", "threshold": threshold, "silence_duration_ms": silence_ms}}
+def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False):
+    # search (owner 2026-11-15 "可以支持搜索吗"): DashScope's built-in web search; the model searches only when it needs
+    # to (strategy agent: measured 2026-11-15, "你好" no search 0.4 s, weather / news one search 3.5-4.5 s, ~1.9k more
+    # text input tokens plus the search fee).
+    cfg = {"modalities": ["text", "audio"], "voice": voice, "instructions": instr,
+           "input_audio_format": "pcm", "output_audio_format": "pcm",
+           "input_audio_transcription": {"language": "zh"},
+           "turn_detection": {"type": "server_vad", "threshold": threshold, "silence_duration_ms": silence_ms}}
+    if search:
+        cfg["enable_search"] = True
+    return cfg
 
 
 SHORT_WORDS = ("hi", "你好", "嗯哼？", "嘿")     # owner 2026-11-14: a short hello is one of these, or two beeps
@@ -397,7 +577,11 @@ class Config:
     in_queue = 120               # ~7 s of 60 ms packets while a session connects
     max_session_s = 600
     idle_s = 180
-    hour_cap_s = 1800
+    # The hourly cap was my own spike default (30 min of open sessions per hour), never the owner's; it silenced meet
+    # outdoors on 2026-11-15 at ~0.003 CNY a turn. Owner asked whose limit it was: now a full hour, i.e. no hourly cap;
+    # the 10 min session rotation and the 3 min idle close stay.
+    hour_cap_s = 3600
+    search = True
     context_s = 30
     context_timeout_s = 2.5
     open_timeout_s = 6
@@ -409,6 +593,8 @@ class Config:
     long_greet_s = 600           # at most one long named greeting per 10 min (owner); inside it: a short hello
     short_greet_min_s = 60       # short hellos at most this often
     greet_said_keep = 3          # last long greetings kept in memory so the next one differs
+    recent_keep = 8              # anti-repeat: hello's last replies (with what it heard) in the instructions
+    recent_s = 900               # ... while younger than this (also carried into the next session)
     greet_max_age_s = 10
     tap_cooldown_s = 3
     seen_min_s = 3                                     # live view re-sent at most this often
@@ -418,7 +604,7 @@ class Config:
 
 class RealtimeHub:
     def __init__(self, *, key, voice, modes, call, switch, db=None, connect=None, encoder_factory=None,
-                 cfg=None, clock=time.monotonic, wall_ms=None, rng=None):
+                 cfg=None, clock=time.monotonic, wall_ms=None, rng=None, fillers=None):
         if connect is None:
             connect = _direct_connect
         self.key, self.voice, self.modes, self.call, self.switch, self.db = key, voice, modes, call, switch, db
@@ -465,6 +651,7 @@ class RealtimeHub:
         self._last_greet = None                        # any owner greeting (long, short, tap on the owner)
         self._last_long = None                         # the last long named owner greeting
         self._said = collections.deque(maxlen=self.cfg.greet_said_keep)   # its texts: memory only, never logged
+        self._recent = collections.deque(maxlen=self.cfg.recent_keep)      # (at, heard, reply): memory only
         self._quiet_until = 0.0                        # no input / greeting right after hello finished speaking
         self._appear = None                            # (name, at): appeared before mind's owner names were known
         self._bg = set()
@@ -474,6 +661,19 @@ class RealtimeHub:
         self.on_transcript = None                      # offline tests only: (who, text without emoji); never logged
         self._local_end = None                         # when the ear's own VAD last said speech ended
         self._heard_turn = None                        # the last speech turn (its transcript may come late)
+        self._told_busy = False                        # a /place/told post in flight
+        self._hush_busy = False                        # a 闭嘴 switch-off post in flight
+        self._local_texts = collections.deque(maxlen=6)    # (clock, text) of the ear's own ASR: memory only
+        self._rescue = None                            # a muted 「嗯」 that may still be asked again
+        self._rescue_heard = None
+        self._cmd_last = {}                            # burst word -> when it was last handled
+        self._look_wait = None                         # a look question waiting for a fresh look
+        self.fillers = list(fillers or [])             # [(text, pcm 24 kHz)]: "我看看哈" while waiting (load_fillers)
+        self._filler_last = None
+        self._look_question = None
+        self.burst = None                              # vision_burst.VisionBurst (ear_server wires it)
+        self._looks = collections.deque(maxlen=LOOKS_KEEP)    # (at wall ms, text): memory only, never logged
+        self._looks_dirty, self._looks_sent_at = False, None
 
     # ---- conditions ----
     def link(self):
@@ -677,6 +877,9 @@ class RealtimeHub:
                     self._ctx_at = now
                     self.spawn(self._refresh_context())
                 self._push_seen(now)
+                self._push_looks(now)
+                self._try_rescue(now)
+                self._try_look_answer(now)
                 self._deliver_greet(now)
         if self._greet is not None and now - self._greet["at"] > self.cfg.greet_max_age_s:
             log("realtime: owner greeting dropped (too old)", flush=True)
@@ -746,7 +949,7 @@ class RealtimeHub:
             self._ws = ws
             await self._take_context(ctx_fut)
             await ws.send(json.dumps({"type": "session.update", "session": session_config(
-                self.voice, self._instructions(), self.cfg.silence_ms, self.cfg.vad_threshold)}))
+                self.voice, self._instructions(), self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search)}))
             self._ctx_at = self.clock()
             log(f"realtime: session {n} open ({why}), context {len(self.ctx.get('text') or '')} chars", flush=True)
             self.stats["sessions"] += 1
@@ -798,6 +1001,31 @@ class RealtimeHub:
         if await self._take_context(fut) == 200:
             self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
 
+    def _told(self, text):
+        """A heard sentence that may say where we are ("我们现在在饭店") goes to mind /place/told (a local rule there, no
+        model); when the place changed, the context is fetched again at once so the next reply knows it. At most one
+        post at a time; the text is never logged."""
+        if not text or self._told_busy or not TOLD_HINT.search(text):
+            return
+        self._told_busy = True
+        self.spawn(self._post_told(text[:300]))
+
+    async def _post_told(self, text):
+        loop = asyncio.get_running_loop()
+        try:
+            fut = loop.run_in_executor(self._pool, self.call, "POST", "/place/told", {"text": text, "source": "crowd"},
+                                       self.cfg.context_timeout_s)
+            status, reply = await asyncio.wait_for(fut, self.cfg.context_timeout_s + 0.5)
+        except Exception:                              # noqa: BLE001 - mind slow / down: the place stays
+            status, reply = None, {}
+        finally:
+            self._told_busy = False
+        if status == 200 and isinstance(reply, dict) and reply.get("changed"):
+            log("realtime: place set by voice", flush=True)
+            self.stats["place_told"] += 1
+            if self._ws is not None and self._ready.is_set():
+                await self._refresh_context()
+
     def _seen(self):
         owner = self.ctx.get("owner") or {}
         return seen_text(self.watch.recent(self.clock()), self.ctx.get("names") or {},
@@ -806,7 +1034,113 @@ class RealtimeHub:
     def _instructions(self):
         seen = self._seen()
         self._seen_sent, self._seen_at = seen, self.clock()
-        return instructions(self.ctx.get("text"), seen)
+        self._looks_dirty, self._looks_sent_at = False, self.clock()
+        return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()))
+
+    # ---- vision burst (vision_burst.py) ----
+    def add_look(self, text, at_ms, snapped=None):
+        """One recognised burst photo: kept in memory (last LOOKS_KEEP) and pushed with the instructions (debounced).
+        snapped: the burst clock when its photo was asked for (a pending look question takes only a later one)."""
+        if not text:
+            return
+        self._looks.append((at_ms, str(text)[:200]))
+        self._looks_dirty = True
+        w = self._look_wait
+        if w is not None and not w["sent"] and w.get("look") is None and snapped is not None and snapped >= w["mark"]:
+            w["look"] = str(text)[:200]
+            self._try_look_answer(self.clock())
+        self._push_looks(self.clock())
+
+    # ---- look questions (see LOOK_ASK) ----
+    def _start_look_wait(self, question, now):
+        w = self._look_wait
+        if w is not None and not w["sent"] and now <= w["deadline"]:
+            w["question"] = str(question)[:80]         # the same wait: keep its mark, take the newest wording
+            return
+        if self.burst is None or not self.active():
+            return
+        try:
+            mark = self.burst.ask("ask")
+        except Exception:                              # noqa: BLE001 - a burst never costs the session
+            log(f"realtime: look ask failed\n{traceback.format_exc().rstrip()}", flush=True)
+            mark = None
+        if mark is None:
+            return                                     # no burst can run (switch / crowd / link): reply as usual
+        self._look_wait = {"at": now, "mark": mark, "question": str(question)[:80], "deadline": now + LOOK_WAIT_S,
+                           "sent": False, "look": None, "filler": not self.fillers}
+        self.stats["look_asks"] += 1
+        log("realtime: look question: waiting for a fresh look", flush=True)
+        self._stage("think")
+        self._try_filler(now)
+
+    def _try_filler(self, now):
+        """One "我看看哈" per look question, at once when hello is quiet (no model, no cost); not when the look is
+        already in or the question is FILLER_MAX_S old."""
+        w = self._look_wait
+        if w is None or w["filler"] or w["sent"] or w["look"] is not None:
+            return
+        if now - w["at"] > FILLER_MAX_S:
+            w["filler"] = True
+            return
+        if self.output_busy() or self._sounding or self.link() is None:
+            return
+        w["filler"] = True
+        picks = [i for i in range(len(self.fillers)) if i != self._filler_last] or [0]
+        i = picks[self.rng.randrange(len(picks))]
+        self._filler_last = i
+        rid = f"filler{next(self._beeps)}"
+        pcm = self.fillers[i][1]
+        self._turns[rid] = {"kind": "look_filler", "speech_end": None, "heard_chars": None, "rid": rid,
+                            "session": self.session_no, "response_at": now, "first_delta": now, "sound_at": None,
+                            "reply_chars": len(self.fillers[i][0]), "reply": self.fillers[i][0],
+                            "audio_ms": len(pcm) * 1000 // (SR_OUT * 2), "usage": None, "at": self.wall_ms()}
+        self.stats["look_fillers"] += 1
+        log(f"realtime: session {self.session_no} look filler", flush=True)
+        self._out_put(("pcm", rid, pcm))
+        self._out_put(("end", rid, b""))
+
+    def _try_look_answer(self, now):
+        w = self._look_wait
+        if w is None or w["sent"]:
+            return
+        self._try_filler(now)
+        if w["look"] is None:
+            if now > w["deadline"]:
+                self._look_wait = None
+                self.stats["look_timeout"] += 1
+                log("realtime: no fresh look in time: hello stays quiet", flush=True)
+                self._stage("skip")
+            return
+        if self._ws is None or not self._ready.is_set() or self._resp is not None or self.output_busy():
+            return                                     # step() tries again (the deadline only guards the look itself)
+        w["sent"], self._look_question, self._next_kind = True, w["question"], "look_answer"
+        self._look_wait = None
+        self.stats["look_answers"] += 1
+        log(f"realtime: session {self.session_no} answering the look question from a fresh look", flush=True)
+        self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
+                                                                      "content": [{"type": "input_text",
+                                                                                   "text": look_answer_text(w["look"], w["question"])}]}})
+        self._send_soon({"type": "response.create"})
+
+    def _push_looks(self, now):
+        if not self._looks_dirty or self._ws is None or not self._ready.is_set():
+            return
+        if self._looks_sent_at is not None and now - self._looks_sent_at < LOOKS_PUSH_S:
+            return                                     # step() sends it once LOOKS_PUSH_S have passed
+        self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
+
+    def seen_for_look(self):
+        """The live M12 line for the burst's recognition prompt (names as hello calls them), or None."""
+        return self._seen() if self.ctx else None
+
+    def _recent_pairs(self):
+        now = self.clock()
+        out = []
+        for at, turn, reply in self._recent:
+            if now - at <= self.cfg.recent_s:
+                heard = turn.get("heard") if turn.get("kind") in ("speech", "rescue", "look_answer") else f"[{turn.get('kind')}]"
+                out.append(((heard or "")[:60], reply))
+        return out
 
     def _push_seen(self, now):
         """Re-send the instructions when what hello sees changed (≤ once per seen_min_s), so 'can you see me' is
@@ -870,6 +1204,7 @@ class RealtimeHub:
             recent = self._local_end if self._local_end is not None and now - self._local_end < 3 else None
             self._turn = self._heard_turn = {"kind": "speech", "speech_end": now, "heard_chars": None,
                                              "local_end": recent}
+            self._stage("think")
         elif t == "conversation.item.input_audio_transcription.completed":
             text = strip_emoji(e.get("transcript"))
             if self._heard_turn is not None:
@@ -877,6 +1212,7 @@ class RealtimeHub:
                 self._heard_turn["heard"] = text[:300]
             if self.on_transcript:
                 self.on_transcript("heard", text)
+            self._heard_text(text, now, told=True)
         elif t == "response.created":
             rid = str((e.get("response") or {}).get("id") or f"r{now}")
             self._resp = rid
@@ -884,7 +1220,13 @@ class RealtimeHub:
                 {"kind": self._next_kind, "speech_end": None, "heard_chars": None}
             self._next_kind, self._turn = "speech", None
             turn.update({"rid": rid, "session": n, "response_at": now, "first_delta": None, "sound_at": None,
-                         "reply_chars": 0, "audio_ms": 0, "usage": None, "at": self.wall_ms()})
+                         "reply_chars": 0, "audio_ms": 0, "usage": None, "at": self.wall_ms(),
+                         "gate": None if turn.get("kind") in ("speech", "rescue", "look_answer") else "play",
+                         "held": [], "tx": ""})
+            if turn.get("kind") == "rescue":
+                turn["heard"] = self._rescue_heard
+            elif turn.get("kind") == "look_answer":
+                turn["heard"] = self._look_question
             self._turns[rid] = turn
             if self.link() is None or self.link().tts_active:     # soul-tts is speaking: realtime yields
                 self._dropped.add(rid)
@@ -900,16 +1242,31 @@ class RealtimeHub:
                 return
             if turn is not None:
                 turn["audio_ms"] += len(pcm) * 1000 // (SR_OUT * 2)
-            if rid not in self._dropped:
+            if rid in self._dropped:
+                return
+            if turn is not None and turn.get("gate") is None:
+                turn["held"].append(pcm)               # the reply gate has not decided yet
+            else:
                 self._out_put(("pcm", rid, pcm))
+        elif t == "response.audio_transcript.delta":
+            turn = self._turns.get(self._resp)
+            if turn is not None:
+                turn["tx"] += str(e.get("delta") or "")
+                self._judge(self._resp, turn, False)
         elif t == "response.audio_transcript.done":
             turn = self._turns.get(self._resp)
             text = strip_emoji(e.get("transcript"))
             if turn is not None:
                 turn["reply_chars"] = len(text)
                 turn["reply"] = text[:400]
+                turn["tx"] = text
+                self._judge(self._resp, turn, True)
                 if turn.get("kind") == "greet" and text:
                     self._said.append(text[:80])
+                if text and turn.get("gate") == "play":
+                    self._recent.append((self.clock(), turn, text[:80]))   # heard is read later (it may come after)
+                    if self._ws is not None and self._ready.is_set():     # the next reply already knows it
+                        self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
             if self.on_transcript:
                 self.on_transcript("reply", text)
         elif t == "response.done":
@@ -918,11 +1275,152 @@ class RealtimeHub:
             turn = self._turns.get(rid)
             if turn is not None:
                 turn["usage"], turn["status"] = resp.get("usage"), resp.get("status")
+                self._judge(rid, turn, True)            # no transcript came: decided on what there is
             self._resp = None
             if rid in self._dropped or turn is None or not turn["audio_ms"]:
-                self._finish_turn(rid, "no_audio" if rid not in self._dropped else "yielded")
+                muted = turn.get("muted") if turn is not None else None
+                self._finish_turn(rid, muted or ("no_audio" if rid not in self._dropped else "yielded"))
+                self._try_rescue(now)                  # a muted 「嗯」 may be asked again right away
+                self._try_look_answer(now)
+                if self._look_wait is None and self._next_kind == "speech":
+                    self._stage("skip")                # (waiting for a look / an answer on its way: the dots stay)
             else:
                 self._out_put(("end", rid, b""))
+
+    def _judge(self, rid, turn, done):
+        """The reply gate (see reply_verdict): plays the held audio, or drops the reply for good."""
+        if turn.get("gate") is not None:
+            return
+        now = self.clock()
+        if turn.get("kind") == "speech":
+            asked = next((t for t in [turn.get("heard")] + [t for at, t in self._local_texts if now - at <= 3]
+                          if t and is_look_ask(t)), None)
+            if asked is not None:
+                self._start_look_wait(asked, now)
+            w = self._look_wait
+            if w is not None and not w["sent"] and now - w["at"] <= 4:
+                v = "wait_look"                        # the answer comes from the next fresh look
+                turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
+                self._dropped.add(rid)
+                self.stats["muted_wait_look"] += 1
+                log("realtime: reply muted (wait_look)", flush=True)
+                return
+        recent = [norm_text(r) for at, _, r in self._recent if now - at <= self.cfg.recent_s]
+        fresh = bool(self._looks) and self.wall_ms() - self._looks[-1][0] <= FRESH_LOOK_S * 1000
+        v = reply_verdict(turn.get("tx"), done, recent, blind=not fresh and turn.get("kind") != "look_answer")
+        if v is None:
+            return
+        turn["gate"], held, turn["held"] = v, turn["held"], []
+        if v == "play":
+            for pcm in held:
+                if rid not in self._dropped:
+                    self._out_put(("pcm", rid, pcm))
+            return
+        turn["muted"] = f"muted_{v}"
+        self._dropped.add(rid)
+        if v == "quiet" and turn.get("kind") == "speech":
+            end = turn.get("speech_end") or now
+            texts = [turn["heard"]] if turn.get("heard") else []
+            texts += [t for at, t in self._local_texts if end - 3 <= at <= now + 0.5]
+            self._rescue = {"at": now, "texts": texts, "sent": False}
+            self._try_rescue(now)
+        self.stats[f"muted_{v}"] += 1
+        log(f"realtime: reply muted ({v})", flush=True)
+
+    # ---- what was heard: the session's transcript and the ear's own ASR ----
+    def local_heard(self, text):
+        """Ear: a sentence of its own ASR (SenseVoice) at the speech end, on the event loop. Live, the session's own
+        transcript was often missing; this one feeds the 「嗯」 rescue, the burst words and 闭嘴 too. Never logged."""
+        if not text or not self.active() or not self.in_crowd():
+            return
+        now = self.clock()
+        self._local_texts.append((now, str(text)[:300]))
+        self._heard_text(str(text)[:300], now)
+
+    def _heard_text(self, text, now, told=False):
+        if is_look_ask(text):
+            self._start_look_wait(text, now)
+        r = self._rescue
+        if r is not None and not r["sent"] and now - r["at"] <= RESCUE_S:
+            r["texts"].append(text)
+            self._try_rescue(now)
+        if self.burst is not None:
+            key = self._burst_key(text)
+            if key and not (self._cmd_last.get(key, -1e9) > now - 4):    # both sources heard it: once
+                self._cmd_last[key] = now
+                try:
+                    self.burst.heard(text)
+                except Exception:                      # noqa: BLE001 - a burst never costs the session
+                    log(f"realtime: burst trigger failed\n{traceback.format_exc().rstrip()}", flush=True)
+        if told:
+            self._told(text)
+        if is_hush(text):
+            self._hush()
+
+    @staticmethod
+    def _burst_key(text):
+        import vision_burst                             # its words (it never imports this module)
+        stop, start = vision_burst.STOP_WORDS, vision_burst.START_WORDS
+        if any(w in text for w in stop):
+            return "burst_stop"
+        if any(w in text for w in start):
+            return "burst_start"
+        return None
+
+    def _try_rescue(self, now):
+        r = self._rescue
+        if r is None or r["sent"]:
+            return
+        if now - r["at"] > RESCUE_S or (self._last_speech is not None and self._last_speech > r["at"]):
+            self._rescue = None                        # too late, or someone is already talking again
+            return
+        follow = bool(self._recent) and now - self._recent[-1][0] <= FOLLOW_S      # hello just spoke
+        heard = next((t for t in r["texts"] if addressed(t) or (follow and is_question(t))), None)
+        if heard is not None and is_look_ask(heard):
+            self._start_look_wait(heard, now)
+        if heard is not None and self._look_wait is not None:
+            r["sent"] = True                           # a look question is answered from the next fresh look
+            return
+        if heard is None or self._ws is None or not self._ready.is_set() or self._resp is not None \
+                or self.output_busy():
+            return                                     # step() tries again
+        r["sent"], self._rescue_heard, self._next_kind = True, heard, "rescue"
+        self.stats["rescued"] += 1
+        log(f"realtime: session {self.session_no} muted 嗯 was addressed: asked again", flush=True)
+        self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
+                                                                      "content": [{"type": "input_text",
+                                                                                   "text": rescue_text(heard)}]}})
+        self._send_soon({"type": "response.create"})
+
+    def _hush(self):
+        """A spoken 闭嘴: the 围观 switch off through mind (the session closes when the switch reader sees it)."""
+        if self._hush_busy:
+            return
+        self._hush_busy = True
+        self.stats["hush"] += 1
+        log("realtime: hush heard, switching 围观 off", flush=True)
+        self.spawn(self._post_hush())
+
+    async def _post_hush(self):
+        loop = asyncio.get_running_loop()
+        try:
+            fut = loop.run_in_executor(self._pool, self.call, "POST", "/switches", {"name": "realtime", "on": False},
+                                       self.cfg.context_timeout_s)
+            status, _ = await asyncio.wait_for(fut, self.cfg.context_timeout_s + 0.5)
+        except Exception:                              # noqa: BLE001 - mind slow / down
+            status = None
+        finally:
+            self._hush_busy = False
+        if status != 200:
+            log(f"realtime: hush: switch off failed ({status})", flush=True)
+
+    def _stage(self, stage):
+        """Crowd's stage dots on the robot (via the mode relay); never costs the session."""
+        try:
+            if self.modes is not None and hasattr(self.modes, "crowd_stage"):
+                self.modes.crowd_stage(stage)
+        except Exception as error:                     # noqa: BLE001
+            log(f"realtime: stage {stage} failed: {type(error).__name__}", flush=True)
 
     def _out_put(self, item):
         try:

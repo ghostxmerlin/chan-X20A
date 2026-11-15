@@ -9,6 +9,8 @@ is online or vision events are waiting. Messages:
          + JPEG: one body-camera frame (collector-0.4.75+), saved under <recordings>/frames/<session>/
 Each connection is one row in hello.sessions (kind "vision", key "YYYYMMDD/HHMMSS-source-vN") and
 its events go to hello.vision (and, when given, to on_event: the 围观 realtime hub's face view, 2026-11-14).
+A stored frame goes to on_frame(head, jpeg, path, session) when given (视觉爆发 2026-11-15: a snap photo carries
+"snap":<id> in its header, also kept in hello.frames as `snap`).
 Nothing is answered except errors. A link silent for 60 s is closed.
 """
 import asyncio
@@ -19,6 +21,69 @@ import struct
 import time
 
 IDLE_TIMEOUT = 60
+# Name carry-over (owner 2026-11-15 "同一位置 2 秒内又冒出一张新脸，就沿用原来的名字。只改服务器"; and "宁可叫不出名字，也不要叫错").
+CARRY_US = 2_000_000          # a new face this soon after a named face was lost ...
+CARRY_DIST = 0.5              # ... with its box centre within this × the old box size ...
+CARRY_SIZE = (0.67, 1.5)      # ... and a box this much the same size (width ratio) gets the name
+
+
+class NameCarry:
+    """Per vision session. M12 sometimes ends a track when the head turns or the light changes and starts a new face id
+    at the same place, which is then asked `who` again at a bad moment and stays unknown. feed(event) -> a synthetic
+    face_named {carried: true, from_face} for such a new face, or None. Strict on purpose: exactly one recently lost
+    named face fits, no other new face competes for it, and the name is not on a face still in view. A real
+    face_named from the M12 for that face later simply overrides it (consumers keep the latest name per face)."""
+
+    def __init__(self):
+        self.named = {}               # face id -> (name, box) while in view
+        self.lost = []                # (t_us, name, box, face) of named faces that just left
+        self.fresh = {}               # new face id -> (t_us, box): found, not yet named
+
+    @staticmethod
+    def _fits(old, new):
+        try:
+            ox, oy, ow, oh = (float(v) for v in old)
+            nx, ny, nw, nh = (float(v) for v in new)
+        except (TypeError, ValueError):
+            return False
+        if ow <= 0 or oh <= 0 or nw <= 0:
+            return False
+        dist = ((ox + ow / 2 - nx - nw / 2) ** 2 + (oy + oh / 2 - ny - nh / 2) ** 2) ** 0.5
+        return dist <= CARRY_DIST * max(ow, oh) and CARRY_SIZE[0] <= nw / ow <= CARRY_SIZE[1]
+
+    def feed(self, e):
+        ev, face, t, box = e.get("event"), e.get("face"), e.get("t_us"), e.get("box")
+        if ev in ("vision_off", "m12_online", "vision_on"):
+            self.named.clear(); self.lost.clear(); self.fresh.clear()
+            return None
+        if not isinstance(t, int) or face is None:
+            return None
+        self.lost = [x for x in self.lost if 0 <= t - x[0] <= CARRY_US]
+        if ev == "face_named" and isinstance(e.get("name"), str):
+            self.named[face] = (e["name"], box)
+            self.fresh.pop(face, None)
+        elif ev == "face_lost":
+            self.fresh.pop(face, None)
+            got = self.named.pop(face, None)
+            if got:
+                self.lost.append((t, got[0], box if box else got[1], face))
+        elif ev == "face_found" and face not in self.named:
+            self.fresh[face] = (t, box)
+            fits = [x for x in self.lost if self._fits(x[2], box)]
+            if len(fits) != 1:
+                return None
+            lt, name, old_box, old_face = fits[0]
+            if name in (n for n, _ in self.named.values()):
+                return None
+            rivals = [f for f, (ft, fb) in self.fresh.items() if f != face and 0 <= t - ft <= CARRY_US and self._fits(old_box, fb)]
+            if rivals:
+                return None
+            self.lost.remove(fits[0])
+            self.named[face] = (name, box)
+            self.fresh.pop(face, None)
+            out = {k: e[k] for k in ("t_us", "f", "face", "box", "prob", "gender", "age", "age_group") if k in e}
+            return {**out, "type": "vision", "event": "face_named", "name": name, "carried": True, "from_face": old_face}
+        return None
 FRAME_MAGIC = b"SVF1"
 FRAME_HEAD_MAX = 512
 FRAME_MAX = 32768
@@ -35,14 +100,15 @@ def session_key(source, number, epoch=None):
 
 
 class VisionLink:
-    def __init__(self, db, number, peer, recordings_root=None, on_event=None):
+    def __init__(self, db, number, peer, recordings_root=None, on_event=None, on_frame=None):
         self.db, self.number, self.peer = db, number, peer
-        self.on_event = on_event
+        self.on_event, self.on_frame = on_event, on_frame
         self.recordings_root = recordings_root
         self.session = None
         self.events = 0
         self.frames = 0
         self.start_ms = int(time.time() * 1000)
+        self.carry = NameCarry()
 
     def on_text(self, text):
         """Handle one message; returns an error dict to send back, or None."""
@@ -66,14 +132,19 @@ class VisionLink:
                 return {"type": "error", "message": "hello first"}
             if not isinstance(msg.get("event"), str) or len(msg["event"]) > 32:
                 return {"type": "error", "message": "vision needs an event name"}
-            self.events += 1
-            if self.db is not None:
-                self.db.vision(self.session, msg, int(time.time() * 1000))
-            if self.on_event is not None:
-                try:
-                    self.on_event(msg)
-                except Exception as e:            # noqa: BLE001 - the hook never costs the link
-                    print(f"vision hook failed: {type(e).__name__}", flush=True)
+            try:
+                carried = self.carry.feed(msg)
+            except Exception:                     # noqa: BLE001 - carry-over is a bonus, never costs the event
+                carried = None
+            for m in (msg, carried) if carried else (msg,):
+                self.events += 1
+                if self.db is not None:
+                    self.db.vision(self.session, m, int(time.time() * 1000))
+                if self.on_event is not None:
+                    try:
+                        self.on_event(m)
+                    except Exception as e:        # noqa: BLE001 - the hook never costs the link
+                        print(f"vision hook failed: {type(e).__name__}", flush=True)
             return None
         if kind == "ping":
             return None
@@ -121,9 +192,17 @@ class VisionLink:
         num = lambda k: head.get(k) if isinstance(head.get(k), int) and not isinstance(head.get(k), bool) else None  # noqa: E731
         self.frames += 1
         if self.db is not None:
-            self.db.frame({"session": self.session, "seq": head["seq"], "t_us": head["t_us"], "at": received - wait_ms,
-                           "received": received, "path": rel, "bytes": len(jpeg), "w": num("w"), "h": num("h"),
-                           "diff": num("diff")})
+            doc = {"session": self.session, "seq": head["seq"], "t_us": head["t_us"], "at": received - wait_ms,
+                   "received": received, "path": rel, "bytes": len(jpeg), "w": num("w"), "h": num("h"),
+                   "diff": num("diff")}
+            if num("snap") is not None:
+                doc["snap"] = head["snap"]
+            self.db.frame(doc)
+        if self.on_frame is not None:
+            try:
+                self.on_frame(head, jpeg, rel, self.session)
+            except Exception as e:                # noqa: BLE001 - the hook never costs the link
+                print(f"vision frame hook failed: {type(e).__name__}", flush=True)
         return None
 
     def close(self):
@@ -132,8 +211,8 @@ class VisionLink:
                                                   "frames": self.frames})
 
 
-async def serve_link(ws, db, number, peer, recordings_root=None, on_event=None):
-    link = VisionLink(db, number, peer, recordings_root, on_event)
+async def serve_link(ws, db, number, peer, recordings_root=None, on_event=None, on_frame=None):
+    link = VisionLink(db, number, peer, recordings_root, on_event, on_frame)
     try:
         while True:
             try:

@@ -68,7 +68,10 @@ struct Shared {
     bool det_known = false, det = false, cfg_inflight = false;
     uint32_t confirmed_revision = UINT32_MAX;
     int32_t who_inflight = -1;
-    uint32_t who_busy = 0;
+    uint32_t who_busy = 0, who_reasks = 0;
+    // crowd tap look (2026-11-15): requested lock-free (look_* atomics below), run by the M12 task
+    uint32_t looks = 0, looks_idle = 0, look_settled = 0, look_late = 0, look_attrs = 0;
+    int64_t look_last_ms = -1;           // how long the last look took (tap to done)
     // vision change events for the server (state_mutex): oldest first, newest kept when full
     static constexpr size_t kVision = 64;
     M12ChangeTracker tracker;
@@ -84,6 +87,11 @@ Shared* shared = nullptr;
 std::mutex state_mutex, tx_mutex, request_mutex;
 std::atomic<uint32_t> mode_request{0}, view_request{0};
 std::atomic<bool> uart_ready{false};
+// Crowd tap look requests (review 2026-11-15): lock-free, so the LVGL timer / ASR / httpd never take state_mutex.
+// Internal RAM (S32C1I atomics do not work on PSRAM). look_busy: a look is running in the M12 task.
+std::atomic<M12LookDone> look_done_fn{nullptr};
+std::atomic<uint32_t> look_token{0};
+std::atomic<bool> look_requested{false}, look_busy{false};
 
 const char* function_name(M12Function f)
 {
@@ -238,15 +246,56 @@ void finish_request(const M12Pending& p, const M12Reply* reply, const char* err,
         }
     }
     if (p.op == M12Op::who && w.internal) {
-        who.answered(p.face, err, now);
+        who.answered(p.face, err, now, !err && r.has_name && r.name[0]);
         std::lock_guard<std::mutex> lock(state_mutex);
         shared->who_busy = who.busy();
+        shared->who_reasks = who.reasks();
     }
     if (err) ESP_LOGW(kTag, "%s #%ld: %s", m12_op_name(p.op), static_cast<long>(p.id), err);
     else if (p.op == M12Op::learn) ESP_LOGI(kTag, "learn #%ld ok, samples %d", static_cast<long>(p.id), r.samples);
     else if (p.op == M12Op::who) ESP_LOGI(kTag, "who #%ld face %ld: %s (sim %.2f)", static_cast<long>(p.id), static_cast<long>(r.face), r.name[0] ? "known" : "no match", r.sim);
     if (w.fn) w.fn(r, err, w.context);
     if (refresh_library) send_request(M12Op::faces, {}, 0, refresh_faces_cb, nullptr, false, true);
+}
+
+// One automatic who (first ask, re-ask or look) if the policy has one; only while detection is what we asked for.
+void ask_who(M12WhoPolicy& who, const M12Detection& d, bool want_det, int64_t now)
+{
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        if (!(shared->state.online && shared->det_known && shared->det && want_det)) return;
+    }
+    const int32_t face = who.next(d, now);
+    if (face < 0) return;
+    M12RequestArgs a;
+    a.face = face;
+    const int32_t id = send_request(M12Op::who, a, 0, nullptr, nullptr, false, true);
+    if (id < 0) { who.answered(face, "send", now); return; }
+    who.sent(face, now);
+    std::lock_guard<std::mutex> lock(state_mutex);
+    ++shared->who_sent;
+    shared->who_inflight = face;
+}
+
+// The crowd tap's look as the M12 task runs it: asking (who for the unnamed faces, attributes awaited), then
+// flushing (the vision events up to that moment reach the uplink), then done(token). kLookUs bounds the whole.
+struct LookRun {
+    uint32_t token = 0;                 // 0 = none
+    M12LookDone done = nullptr;
+    int64_t started_us = 0;
+    bool flushing = false;
+    uint32_t flush_through = 0;         // vision_total when asking ended
+};
+void finish_look(LookRun& run, int64_t now, bool settled)
+{
+    const LookRun r = run;
+    run = LookRun{};
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        if (settled) ++shared->look_settled; else ++shared->look_late;
+        shared->look_last_ms = (now - r.started_us) / 1000;
+    }
+    if (r.done) r.done(r.token);        // no M12 lock held: it takes the mode lock
 }
 
 void m12_task(void*)
@@ -258,13 +307,17 @@ void m12_task(void*)
     char* storage = static_cast<char*>(heap_caps_malloc(kM12MaxLine, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     void* message_memory = heap_caps_malloc(sizeof(M12Message), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     void* who_memory = heap_caps_malloc(sizeof(M12WhoPolicy), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!storage || !message_memory || !who_memory) {
+    void* latest_memory = heap_caps_malloc(sizeof(M12Detection), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!storage || !message_memory || !who_memory || !latest_memory) {
         ESP_LOGE(kTag, "PSRAM buffers unavailable");
         vTaskDeleteWithCaps(nullptr);
     }
     M12LineBuffer buffer(storage, kM12MaxLine);
     M12Message& msg = *new (message_memory) M12Message();
     M12WhoPolicy& who = *new (who_memory) M12WhoPolicy();
+    M12Detection& latest = *new (latest_memory) M12Detection();   // the last detection line (look, re-asks)
+    int64_t latest_us = 0;
+    LookRun look;
     ArduinoJson::JsonDocument doc(&psram_allocator);
     uart_ready = true;
     {
@@ -333,6 +386,52 @@ void m12_task(void*)
                 if (!want_det) who.reset();
             }
         }
+        // --- crowd tap look (2026-11-15) ---
+        {
+            LookRun started;
+            bool can = false, need_attrs = true;
+            if (look_requested.exchange(false, std::memory_order_acquire)) {
+                started.token = look_token.load(std::memory_order_relaxed);
+                started.done = look_done_fn.load(std::memory_order_relaxed);
+                started.started_us = now;
+            }
+            {
+                std::lock_guard<std::mutex> lock(state_mutex);
+                auto& s = shared->state;
+                if (started.token) {
+                    ++shared->looks;
+                    can = s.online && shared->det_known && shared->det && want_det && latest_us && now - latest_us < 1000000;
+                    if (can) shared->look_attrs += shared->tracker.refresh(now, vision_sink);
+                    else ++shared->looks_idle;
+                }
+                need_attrs = !shared->cfg.valid || shared->cfg.attr;
+            }
+            if (started.token) {
+                if (look.token) finish_look(look, now, false);         // a newer tap: the older one goes now
+                look = started;
+                if (can) who.look(latest, latest_us, now);
+                else finish_look(look, now, true);                    // nothing to look at: no wait
+            }
+            if (look.token && !look.flushing && (who.look_settled(latest, now, need_attrs) || now - look.started_us >= M12WhoPolicy::kLookUs)) {
+                who.look_end();
+                look.flushing = true;
+                std::lock_guard<std::mutex> lock(state_mutex);
+                look.flush_through = shared->vision_total;
+            }
+            if (look.token && look.flushing) {
+                bool flushed;
+                {
+                    std::lock_guard<std::mutex> lock(state_mutex);
+                    // removed from the queue (sent, or dropped when full) = vision_total - vision_count
+                    flushed = static_cast<int32_t>(shared->vision_total - static_cast<uint32_t>(shared->vision_count) - look.flush_through) >= 0;
+                }
+                if (flushed) finish_look(look, now, true);
+                else if (now - look.started_us >= M12WhoPolicy::kLookUs) finish_look(look, now, false);
+            }
+            // look targets go without waiting for the next line (only from a line younger than 0.3 s)
+            if (look.token && now - latest_us <= M12WhoPolicy::kLookLineUs) ask_who(who, latest, want_det, now);
+            look_busy.store(look.token != 0 || look_requested.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        }
         // --- periodic summary ---
         if (now - summary_us >= 60000000) {
             summary_us = now;
@@ -397,8 +496,6 @@ void m12_task(void*)
                 continue;
             }
             if (msg.kind == M12Kind::detection) {
-                bool ask = false;
-                int32_t face = -1;
                 {
                     std::lock_guard<std::mutex> lock(state_mutex);
                     auto& s = shared->state;
@@ -414,24 +511,10 @@ void m12_task(void*)
                     s.persons = msg.det.persons;
                     std::memcpy(s.person, msg.det.person, sizeof(s.person));
                     shared->tracker.detection(msg.det, rx_us, vision_sink);
-                    // ask who only while detection is what we asked for
-                    if (s.online && shared->det_known && shared->det && want_det) {
-                        face = who.next(msg.det, rx_us);
-                        ask = face >= 0;
-                    }
                 }
-                if (ask) {
-                    M12RequestArgs a;
-                    a.face = face;
-                    const int32_t id = send_request(M12Op::who, a, 0, nullptr, nullptr, false, true);
-                    if (id < 0) who.answered(face, "send", rx_us);
-                    else {
-                        who.sent(face, rx_us);
-                        std::lock_guard<std::mutex> lock(state_mutex);
-                        ++shared->who_sent;
-                        shared->who_inflight = face;
-                    }
-                }
+                std::memcpy(&latest, &msg.det, sizeof latest);
+                latest_us = rx_us;
+                ask_who(who, msg.det, want_det, rx_us);   // ask who only while detection is what we asked for
                 continue;
             }
             std::lock_guard<std::mutex> lock(state_mutex);
@@ -456,6 +539,18 @@ void m12_init()
 }
 
 void m12_wake() {}
+
+void m12_look(uint32_t token, M12LookDone done)
+{
+    if (!token) return;
+    if (!shared || !uart_ready.load()) { if (done) done(token); return; }
+    look_done_fn.store(done, std::memory_order_relaxed);
+    look_token.store(token, std::memory_order_relaxed);
+    look_busy.store(true, std::memory_order_relaxed);
+    look_requested.store(true, std::memory_order_release);
+}
+
+bool m12_look_active() { return look_busy.load(std::memory_order_relaxed); }
 
 void m12_set_view(bool on) { m12_set_mode(on ? M12Function::detect : M12Function::standby); }
 void m12_set_mode(M12Function mode)
@@ -620,6 +715,10 @@ void m12_json(ArduinoJson::JsonObject out)
     counters["replies"] = shared->replies; counters["errors"] = shared->errors; counters["timeouts"] = shared->timeouts;
     counters["unmatched"] = shared->unmatched; counters["cfg_sent"] = shared->cfg_sent; counters["who_sent"] = shared->who_sent;
     counters["who_busy"] = shared->who_busy; counters["offline_events"] = shared->offline_events; counters["restarts"] = shared->restarts;
+    counters["who_reasks"] = shared->who_reasks;
+    auto look = out["look"].to<ArduinoJson::JsonObject>();
+    look["taps"] = shared->looks; look["idle"] = shared->looks_idle; look["settled"] = shared->look_settled;
+    look["late"] = shared->look_late; look["attrs_resent"] = shared->look_attrs; look["last_ms"] = shared->look_last_ms;
 }
 
 void m12_info_json(ArduinoJson::JsonObject out)
@@ -643,7 +742,10 @@ void m12_info_json(ArduinoJson::JsonObject out)
     auto policy = out["policy"].to<ArduinoJson::JsonObject>();
     policy["boot"] = "standby (cfg det:false once the first heartbeat arrives; re-sent after an M12 restart)";
     policy["detect"] = "ASR turn on (face view), tracking or recognition mode";
-    policy["identify"] = "one who per new face id without a name; names then ride on detection lines";
+    policy["identify"] = "who per new face id without a name; still unknown: again as soon as answered, at most 5 "
+                         "more, faces >= 48 px wide; new faces first; a name only from a who answer";
+    policy["look"] = "crowd tap: who for every unnamed face in view (largest first) and face_attrs again, then the "
+                     "tap's mode_report (at most 0.8 s later)";
     policy["temperature"] = "hb.t shown and logged only; M12 pauses detection itself at 90 C (tier 3)";
 }
 } // namespace collector

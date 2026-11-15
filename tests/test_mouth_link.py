@@ -47,7 +47,7 @@ class MouthLinkTest(unittest.IsolatedAsyncioTestCase):
 
     def make_link(self, ws):
         return self.mouth_link.MouthLink(ws, upstream_url=self.up_url, token="device-token", retry_s=0.3,
-                                         connect=self.connect_override)
+                                         connect=self.connect_override, burst=getattr(self, "burst", None))
 
     def _skip(self, m):
         self.skipped.append(m)
@@ -153,6 +153,54 @@ class MouthLinkTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(self.upstream_text[0])["boot_id"], "b1")      # the robot's hello reached soul-tts
         self.assertEqual(self.upstream_text[0], json.dumps(ROBOT_HELLO))          # verbatim
         self.assertEqual(self.seen_headers, ["Bearer device-token"])
+
+    async def test_snap_result_goes_to_the_burst_never_to_soul_tts(self):
+        got = []
+
+        class Burst:
+            def on_snap_result(self, link, m):
+                got.append((link, m))
+        self.burst = Burst()
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await ws.send(json.dumps({"type": "snap_result", "id": 7, "ok": True, "seq": 12, "bytes": 100, "ms": 150}))
+            await ws.send(json.dumps({"type": "snap_result", "id": 8, "ok": False, "why": "busy"}))
+            await ws.send(json.dumps({"type": "tts.done", "stream": 3}))         # a report after it still reaches soul-tts
+            for _ in range(100):
+                if any("tts.done" in t for t in self.upstream_text):
+                    break
+                await asyncio.sleep(0.02)
+        self.assertEqual([m["id"] for _, m in got], [7, 8])
+        self.assertIs(got[0][0], self.links[-1])
+        self.assertTrue(any("tts.done" in t for t in self.upstream_text))
+        self.assertNotIn("snap_result", "".join(self.upstream_text))
+
+    async def test_snap_result_without_a_burst_is_dropped(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await ws.send(json.dumps({"type": "snap_result", "id": 7, "ok": False, "why": "camera_off"}))
+            await ws.send(json.dumps({"type": "tts.done", "stream": 3}))
+            for _ in range(100):
+                if any("tts.done" in t for t in self.upstream_text):
+                    break
+                await asyncio.sleep(0.02)
+        self.assertNotIn("snap_result", "".join(self.upstream_text))
+
+    async def test_a_burst_bug_never_ends_mouth(self):
+        class Burst:
+            def on_snap_result(self, link, m):
+                raise RuntimeError("burst bug")
+        self.burst = Burst()
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await ws.send(json.dumps({"type": "snap_result", "id": 1, "ok": True, "seq": 1}))
+            await ws.send(json.dumps({"type": "tts.done", "stream": 3}))
+            for _ in range(100):
+                if any("tts.done" in t for t in self.upstream_text):
+                    break
+                await asyncio.sleep(0.02)
+        self.assertTrue(any("tts.done" in t for t in self.upstream_text))
+        self.assertTrue(any("snap_result: unexpected error" in line for line in self.logs))
 
     async def test_ear_answers_hello_with_soul_tts_down(self):
         await self.stop_upstream()
@@ -347,7 +395,8 @@ class MouthModeTest(MouthLinkTest):
     def make_link(self, ws):
         self.conn_no += 1
         return self.mouth_link.MouthLink(ws, upstream_url=self.up_url, token="device-token", retry_s=0.3,
-                                         connect=self.connect_override, conn=self.conn_no, modes=self.hub)
+                                         connect=self.connect_override, conn=self.conn_no, modes=self.hub,
+                                         burst=getattr(self, "burst", None))
 
     def _skip(self, m):                       # mode results are expected here, not "unexpected"
         if isinstance(m, str) and json.loads(m).get("type") == "mode_result":
@@ -840,6 +889,28 @@ class ChatStageTest(ChatPushTest):
             await self.no_message(ws, "chat_stage", 0.3)
         self.assertEqual(self.mind_calls_to("/chat/stage"), [])
 
+    async def test_crowd_shows_dots_from_realtime(self):
+        # owner 2026-11-15: 围观 gets chat's dots. listen from the ear's onset (no mind post), think / skip only from
+        # realtime (crowd_stage); the ear's own "nothing heard" never sends skip in crowd.
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "crowd")
+            self.assertTrue(self.hub.chat_listen())
+            self.assertEqual((await self.stages(ws, 1))[0]["stage"], "listen")
+            self.assertFalse(self.hub.chat_nothing())
+            self.assertTrue(self.hub.crowd_stage("think"))
+            self.assertEqual((await self.stages(ws, 1))[0]["stage"], "think")
+            self.assertTrue(self.hub.crowd_stage("skip"))
+            self.assertEqual((await self.stages(ws, 1))[0]["stage"], "skip")
+        self.assertEqual(self.mind_calls_to("/chat/stage"), [])
+
+    async def test_crowd_stage_only_in_crowd(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.in_mode(ws, "chat")
+            self.assertFalse(self.hub.crowd_stage("think"))
+            await self.no_message(ws, "chat_stage", 0.3)
+
     async def test_the_robot_left_sends_nothing(self):
         async with self.robot() as ws:
             await self.handshake(ws)
@@ -850,6 +921,127 @@ class ChatStageTest(ChatPushTest):
 
 for _name in [n for n in dir(ChatPushTest) if n.startswith("test_")]:
     setattr(ChatStageTest, _name, None)          # only the stage tests here: the inherited ones already ran above
+
+
+@unittest.skipUnless(HAVE_WS, "needs websockets")
+class PlaceTest(MouthModeTest):
+    """Place (2026-11-15, docs/superpowers/specs/2026-11-15-place-contract.md): a place frame after each handshake and on
+    every change; the robot's place_select goes to mind POST /place {source: robot}, never to soul-tts."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.hub.close()
+        self.place_state = {"current": None, "by": None, "at": None, "choices": ["办公室", "家里", "车上", "饭店"], "rev": 0}
+        self.hub = self.mouth_link.ModeRelay(self.fake_mind, input_timeout_s=0.5, report_timeout_s=0.5,
+                                             report_retry_s=0.1, place_poll_s=0.2, place_timeout_s=0.5)
+
+    def fake_mind(self, method, path, body=None, timeout=5):
+        if path != "/place":
+            return super().fake_mind(method, path, body, timeout)
+        self.mind_calls.append((method, path, json.loads(json.dumps(body))))
+        if not self.mind_up:
+            return 503, {"error": "URLError"}
+        if method == "POST":
+            if body["label"] is not None and body["label"] not in self.place_state["choices"]:
+                return 400, {"error": "choice: not one of the common places"}
+            self.place_state.update(current=body["label"], by=body["source"], at=1794300000000)
+            return 200, {"ok": True, **self.place_state}
+        return 200, dict(self.place_state)
+
+    def _skip(self, m):
+        if isinstance(m, str) and json.loads(m).get("type") in ("mode_result", "place"):
+            return
+        self.skipped.append(m)
+
+    async def test_handshake_brings_the_place_in_utf8_within_the_limit(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            raw = await asyncio.wait_for(ws.recv(), 2)
+            self.assertIn("车上", raw)                                   # UTF-8, not \u escapes
+            self.assertLessEqual(len(raw.encode()), 1600)
+            frame = json.loads(raw)
+            self.assertEqual(frame, {"type": "place", "current": None, "by": None,
+                                     "choices": ["办公室", "家里", "车上", "饭店"], "at_ms": None})
+            await self.no_message(ws, "place", 0.5)                      # unchanged: not sent again
+
+    async def test_a_change_in_mind_is_pushed(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.recv_type(ws, "place")
+            self.place_state.update(current="湖边", by="voice", at=1794300000000)
+            frame = await self.recv_type(ws, "place", timeout=2)
+            self.assertEqual((frame["current"], frame["by"], frame["at_ms"]), ("湖边", "voice", 1794300000000))
+
+    async def test_select_goes_to_mind_and_every_link_gets_the_new_place(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.recv_type(ws, "place")
+            await ws.send(json.dumps({"type": "place_select", "seq": 3, "choice": "车上"}))
+            res = await self.recv_type(ws, "place_result")
+            self.assertEqual((res["seq"], res["code"], res["toast"]), (3, "ok", "PLACE SET"))
+            frame = await self.recv_type(ws, "place")
+            self.assertEqual((frame["current"], frame["by"]), ("车上", "robot"))
+            self.assertEqual(self.mind_calls_to("/place")[-1], {"label": "车上", "source": "robot"})
+            await ws.send(json.dumps({"type": "place_select", "seq": 4, "choice": None}))      # unknown
+            self.assertEqual((await self.recv_type(ws, "place_result"))["code"], "ok")
+            self.assertIsNone((await self.recv_type(ws, "place"))["current"])
+        await asyncio.wait_for(self.up_closed.wait(), 2)
+        self.assertNotIn("place_select", "".join(self.upstream_text))
+
+    async def test_bad_choice_and_mind_down(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.recv_type(ws, "place")
+            await ws.send(json.dumps({"type": "place_select", "seq": 5, "choice": "火星"}))
+            self.assertEqual((await self.recv_type(ws, "place_result"))["code"], "bad_choice")
+            await ws.send(json.dumps({"type": "place_select", "seq": 6, "choice": 7}))
+            self.assertEqual((await self.recv_type(ws, "place_result"))["code"], "bad_choice")
+            self.mind_up = False
+            await ws.send(json.dumps({"type": "place_select", "seq": 7, "choice": "家里"}))
+            res = await self.recv_type(ws, "place_result")
+            self.assertEqual((res["code"], res["toast"]), ("busy", "MIND OFFLINE"))
+            await ws.send(json.dumps({"type": "place_select", "choice": "家里"}))           # no seq: dropped
+            await self.no_message(ws, "place_result", 0.4)
+
+    async def test_audio_keeps_flowing_while_mind_is_slow(self):
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await self.recv_type(ws, "place")
+            orig = self.fake_mind
+            self.fake_mind = lambda *a, **k: (self._time.sleep(1.0), orig(*a, **k))[1]
+            self.hub.call = self.fake_mind
+            await ws.send(json.dumps({"type": "place_select", "seq": 8, "choice": "家里"}))
+            await ws.send(json.dumps({"type": "place_select", "seq": 9, "choice": "家里"}))   # one at a time per link
+            self.assertEqual((await self.recv_type(ws, "place_result"))["code"], "busy")
+            await self.upstream_send(b"SPK1audio")
+            self.assertEqual(await self.recv_binary(ws), b"SPK1audio")
+
+    async def test_no_boot_id_no_place(self):
+        async with self.robot() as ws:
+            await ws.send(json.dumps({**ROBOT_HELLO, "boot_id": None}))
+            await asyncio.wait_for(ws.recv(), 2)
+            await self.no_message(ws, "place", 0.5)
+
+
+for _name in [n for n in dir(MouthModeTest) if n.startswith("test_")]:
+    setattr(PlaceTest, _name, None)              # only the place tests here: the inherited ones already ran above
+
+
+class PlaceFrameTest(unittest.TestCase):
+    def test_limits(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server" / "ear"))
+        import mouth_link
+        st = {"current": "一个很长很长的地点名字" * 4, "by": "robot", "at": 1,
+              "choices": ["一二三四五六七八九", "a\nb", "", 3, "家里", "家里"] + [f"地点{i}" for i in range(12)]}
+        text = mouth_link.place_frame(st)
+        f = json.loads(text)
+        self.assertLessEqual(len(f["current"].encode()), mouth_link.PLACE_CURRENT_BYTES)
+        self.assertEqual(f["choices"][:3], ["一二三四五六七八", "ab", "家里"])
+        self.assertEqual(len(f["choices"]), mouth_link.PLACE_MAX_CHOICES)
+        self.assertTrue(all(len(c.encode()) <= 24 for c in f["choices"]))
+        self.assertLessEqual(len(text.encode()), 1600)
+        self.assertIsNone(mouth_link.place_frame({"current": "x"}))
+        self.assertIsNone(json.loads(mouth_link.place_frame({"choices": [], "by": "mind", "current": 5}))["by"])
 
 
 class EarHookTest(unittest.TestCase):

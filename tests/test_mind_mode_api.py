@@ -245,7 +245,7 @@ class NotFromHereTest(ModeApiBase):
     def test_presets(self):
         r = self.call('/preset', {'n': 9, 'source': 'page'})[1]
         self.assertEqual((r['robot'], r['result']['code']), ({'hearing': 'tingwu', 'vision': 'recognize'}, 'ok'))
-        self.assertEqual(self.call('/preset', {'n': 1, 'source': 'page'})[1]['result']['code'], 'undefined_preset')
+        self.assertEqual(self.call('/preset', {'n': 2, 'source': 'page'})[1]['result']['code'], 'undefined_preset')
         r = self.call('/preset', {'n': 0, 'source': 'page'})[1]
         self.assertEqual((r['robot'], r['snapshot']['billing']), ({}, False))
         self.assertEqual(self.call('/preset', {'n': 10})[0], 400)
@@ -258,27 +258,29 @@ class OwnerBillingTest(ModeApiBase):
     def sw(self):
         return self.call('/switches')[1]
 
-    def test_start_turns_everything_on(self):
+    def test_start_changes_no_switch(self):
+        # owner 2026-11-15 "重启后保持原来的状态": a mind start (deploy, crash) runs no preset; hello's power-on sends 9
         sw = self.sw()
-        self.assertEqual((sw['billing']['on'], sw['tingwu']['on'], sw['eye']['on'], sw['notes']['on'], sw['mouth']['mode'],
-                          self.store.enabled(), self.worker.enabled(), self.auto.enabled()),
-                         (True, True, True, True, 'tts', True, True, True))
-
-    def test_start_outside_talk_leaves_the_talk_show_off(self):
-        self.report('crowd', self.LEAVE, inp='select')
-        self.build()                                                       # restart while hello is in crowd
+        self.assertEqual((sw['tingwu']['on'], sw['eye']['on'], sw['notes']['on'], sw['realtime']['on']),
+                         (False, False, False, False))                      # fresh database: nothing was turned on
+        self.call('/preset', {'n': 9, 'source': 'page'})
+        self.db['switches'].update_one({'_id': 'realtime'}, {'$set': {'on': True}}, upsert=True)
+        self.build()                                                       # restart: all stays on
         sw = self.sw()
-        self.assertEqual((sw['tingwu']['on'], self.store.enabled(), self.worker.enabled(), self.auto.enabled()),
-                         (True, True, False, False))
+        self.assertEqual((sw['tingwu']['on'], sw['eye']['on'], sw['notes']['on'], sw['realtime']['on'],
+                          sw['mouth']['mode'], self.store.enabled()), (True, True, True, True, 'tts', True))
 
-    def test_billing_is_not_kept_across_a_restart(self):
+    def test_start_after_zero_keeps_everything_off(self):
+        self.call('/preset', {'n': 9, 'source': 'page'})
         self.call('/preset', {'n': 0, 'source': 'page'})
-        self.assertFalse(self.sw()['billing']['on'])
         self.build()
-        self.assertEqual((self.sw()['billing']['on'], self.sw()['tingwu']['on']), (True, True))
+        sw = self.sw()
+        self.assertEqual((sw['tingwu']['on'], sw['eye']['on'], sw['notes']['on'], sw['realtime']['on'],
+                          self.store.enabled(), self.worker.enabled(), self.auto.enabled()),
+                         (False, False, False, False, False, False, False))
         self.db['mode'].update_one({'_id': 'current'}, {'$set': {'billing': 'yes'}})     # old docs: ignored
         self.build()
-        self.assertTrue(self.sw()['billing']['on'])
+        self.assertTrue(self.sw()['billing']['on'])                         # the page label only; it gates nothing
 
     def test_zero_turns_everything_off_nine_back_on(self):
         r = self.call('/preset', {'n': 0, 'source': 'page'})[1]
@@ -413,7 +415,7 @@ class CarriedTest(ModeApiBase):
         self.call('/switches', {'name': 'billing', 'on': False})
         body = {'device': 'robot', 'boot': 'b1', 'seq': 7, 'age_ms': 0, 'source': 'asr', 'input': 'digit', 'value': 9}
         r1 = self.call('/mode/input', body)[1]
-        self.assertEqual((r1['result']['code'], self.call('/switches')[1]['tingwu']['on']), ('senses_on_page', True))
+        self.assertEqual((r1['result']['code'], self.call('/switches')[1]['tingwu']['on']), ('ok', True))
         self.call('/switches', {'name': 'tingwu', 'on': False})
         r2 = self.call('/mode/input', body)[1]
         self.assertEqual((r2.get('duplicate'), r2['result'], self.call('/switches')[1]['tingwu']['on']),

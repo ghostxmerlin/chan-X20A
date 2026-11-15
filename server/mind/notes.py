@@ -6,7 +6,7 @@ running conversation, and on its first update says whether it continues one from
 """
 import json
 
-from . import llm, package, prompts, selfvoice, speech_settings, settings as settings_mod
+from . import llm, package, place, prompts, selfvoice, speech_settings, settings as settings_mod
 
 GAP_MS = 60_000                  # no one spoke for a minute: the conversation is over (user 2026-11-11)
 CONTINUE_WINDOW_MS = 10 * 60_000  # the previous conversation is always a candidate within 10 minutes
@@ -68,14 +68,14 @@ NOTES_SCHEMA = {"type": "object", "additionalProperties": False,
                 "properties": {"continues": {"type": "string"}, "title": {"type": "string"}, "notes": {"type": "string"},
                                "confidence": {"type": "string", "enum": ["high", "mid", "low"]}}}
 
-NOTES_SYSTEM = """你是桌面宠物机器人 hello 的听觉笔记员。hello 放在办公桌上，一直听着周围的人说话（hello 自己的声音已经去掉了）。你为“一段对话”写纪要：一段对话是一串相隔不超过一分钟的话。
+NOTES_SYSTEM = """你是宠物机器人 hello 的听觉笔记员。hello 跟在主人身边（不一定在办公室），一直听着周围的人说话（hello 自己的声音已经去掉了）。你为“一段对话”写纪要：一段对话是一串相隔不超过一分钟的话。
 
 【写什么】
 - title：约 10 字的标题，说清是哪件事。
 - notes：约 50 字的纪要：谁在谈（认得出就写，认不出写“两人”“几位同事”）、谈的是什么、说到的要点或结论。要点多了就压缩旧的，保持约 50 字。
 - confidence：high / mid / low，按听到的内容有多清楚、多连贯来定。
 - 归纳不出主题（零散寒暄、只有一两个词、听不清）时，title 和 notes 都留空，不要硬凑。
-- 两个转写（SenseVoice 和听悟）常给出不同的字，可能是同一句话的两个版本；一致的部分才可信。远处的话常被听错，结合环境说明里的工作内容和常用词去理解。
+- 两个转写（SenseVoice 和听悟）常给出不同的字，可能是同一句话的两个版本；一致的部分才可信。远处的话常被听错，结合背景资料里的工作内容和常用词去理解（背景资料是主人平时的情况，不代表现在在那里）。
 
 【接续】
 - 新对话开始时会给你今天之前的几段对话（候选）。如果新的话明显是在接着其中某一段谈同一件事，continues 写那一段的编号，纪要接着那一段往下写（说明“又谈到……”）；不是接续就让 continues 留空。只能写候选里给出的编号。
@@ -90,6 +90,34 @@ def _hms(ms, tz):
 
 def _hm(ms, tz):
     return settings_mod.local_time(ms, tz).strftime("%H:%M")
+
+
+TOPICS_WINDOW_MS = 30 * 60_000  # owner 2026-11-15: hello needs "what we talked about in the last half hour", not only
+TOPICS_STEP_MS = 5 * 60_000      # the newest notes version (each version rewrites the running conversation in ~50 chars,
+TOPICS_CHARS = 70                # so a long, non-stop conversation keeps only its last ~10 minutes)
+
+
+def topic_timeline(db, now_ms, tz, window_ms=TOPICS_WINDOW_MS, step_ms=TOPICS_STEP_MS, chars=TOPICS_CHARS):
+    """The last window's conversation notes, one per step (the newest version in each step), oldest first, consecutive
+    repeats dropped: ['HH:MM title：notes', ...]. Read from conversation_versions, so it works inside one long conversation."""
+    lo = now_ms - window_ms
+    best = {}
+    for v in db["conversation_versions"].find({"at": {"$gte": lo, "$lte": now_ms}},
+                                              {"_id": 0, "at": 1, "title": 1, "notes": 1}):
+        if not (v.get("notes") or v.get("title")):
+            continue
+        b = (v["at"] - lo) // step_ms
+        if b not in best or v["at"] > best[b]["at"]:
+            best[b] = v
+    out, last = [], None
+    for b in sorted(best):
+        v = best[b]
+        key = (v.get("title") or "", v.get("notes") or "")
+        if key == last:
+            continue
+        last = key
+        out.append(f'{_hm(v["at"], tz)} {v.get("title") or ""}：{(v.get("notes") or "")[:chars]}')
+    return out
 
 
 def _bigrams(text):
@@ -127,7 +155,7 @@ def messages_for(s, conv, sentences, recent, cands, now_ms):
     owner = {**s["owner"], "display": settings_mod.owner_name(s, now_ms)}
     L = []
     if (s.get("environment") or "").strip():
-        L.append(f"环境：{s['environment'].strip()}")
+        L.append(f"{place.ENV_LABEL}：{s['environment'].strip()}")
     L.append(f"主人的称呼：{owner['display']}；现在：{settings_mod.local_label(now_ms, tz)}")
     if conv is None:
         L.append("【今天之前的对话（候选）】")

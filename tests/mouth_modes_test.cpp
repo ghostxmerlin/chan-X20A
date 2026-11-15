@@ -86,7 +86,9 @@ void text_frames()
         {kHello, Text::Hello}, {R"({"type":"tts.start","stream":3})", Text::TtsStart},
         {R"({"type":"tts.end","stream":3})", Text::TtsEnd}, {R"({"type":"tts.stop","stream":3})", Text::TtsStop},
         {R"({"type":"mode","seq":3,"mode":"chat"})", Text::Other},          // mind no longer pushes snapshots
-        {R"({"type":"mode_report","seq":1})", Text::Other}, {R"({"type":7})", Text::Other}, {R"({})", Text::Other}};
+        {R"({"type":"mode_report","seq":1})", Text::Other}, {R"({"type":7})", Text::Other}, {R"({})", Text::Other},
+        {R"({"type":"snap","id":7})", Text::Snap}, {R"({"type":"place","current":null})", Text::Other},
+        {R"({"type":"burst","on":false})", Text::Burst}};
     for (const auto& t : types) assert(read_text(t.text, std::strlen(t.text), doc) == t.kind);
 }
 
@@ -116,6 +118,75 @@ void boot_and_first_link()
     assert(o.in(Input::Play).changed && o.view().state.mode == Mode::Chat && !std::strcmp(o.view().toast, "CHAT"));
     o.feed(kHello);
     assert(o.drain() == report(3, "chat", "boot", "\"boot\"", "\"stop_speech\""));
+}
+
+// 0.4.96 power-on (owner 2026-11-15): hello starts in crowd (MEET) and owes mind a 9: it goes behind the boot report
+// of every link until mind answers ok for it (review 2026-11-15: the ear posts an input once, never again); no answer
+// in 10 s or a non-ok answer sends it again with a new seq; any newer 0 / 9 replaces it (offline: sent on the link).
+std::string digit_line(uint32_t seq, uint32_t age, int value, const char* source = "quick")
+{
+    char b[160];
+    std::snprintf(b, sizeof b, "{\"type\":\"mode_input\",\"seq\":%u,\"age_ms\":%u,\"source\":\"%s\",\"input\":\"digit\",\"value\":%d}\n",
+                  seq, age, source, value);
+    return b;
+}
+bool answer(Robot& r, uint32_t seq, const char* code, int64_t now)
+{
+    JsonDocument d;
+    char t[120];
+    std::snprintf(t, sizeof t, R"({"type":"mode_result","seq":%u,"code":"%s","toast":"PRESET 9"})", seq, code);
+    deserializeJson(d, t);
+    return r.s.on_result(d.as<JsonObjectConst>(), now);
+}
+void power_on_crowd_and_nine()
+{
+    Robot r(false);
+    r.s.boot(0, Mode::Crowd, 9);
+    ModeView v = r.view();
+    assert(v.state.mode == Mode::Crowd && !std::strcmp(v.look.label, "MEET") && !std::strcmp(v.by, "boot"));
+    assert(r.s.pending_digit() == 9 && r.drain().empty());
+    // First link lost before the send loop ran: still owed.
+    r.s.link_up(10 * kS);
+    r.s.link_down();
+    assert(r.s.pending_digit() == 9);
+    // Next link: boot report (crowd, only stop_speech: never talk_enter), then the 9 (source quick, fresh age).
+    r.s.link_up(20 * kS);
+    std::string out = r.drain(20 * kS + 300000);
+    std::string want = report(3, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(2, 300, 9);
+    if (out != want) std::printf("got:\n%swant:\n%s", out.c_str(), want.c_str());
+    assert(out == want && r.s.pending_digit() == 9);          // sent, not yet answered
+    // mind busy: again 10 s later (not before), with a new seq.
+    assert(answer(r, 2, "busy", 21 * kS) && r.s.pending_digit() == 9);
+    assert(r.drain(30 * kS).empty());
+    assert(r.drain(31 * kS + 1) == digit_line(3, 0, 9));
+    // No answer at all for 10 s: again.
+    assert(r.drain(41 * kS).empty());
+    assert(r.drain(41 * kS + 2) == digit_line(4, 0, 9));
+    // ok: done, and the answer still names the digit for the quick page.
+    assert(answer(r, 4, "ok", 42 * kS) && r.s.pending_digit() == -1 && r.view().result_digit == 9);
+    assert(r.drain(60 * kS).empty());
+    // Re-link: only the state, no second 9.
+    r.s.link_down(); r.s.link_up(70 * kS);
+    assert(r.drain(70 * kS) == report(4, "crowd", "boot", "null", ""));
+    // A digit 5 (crowd) at once: already there.
+    assert(r.digit(5).out.code == collector::modes::rules::Code::Already);
+
+    // The owner's 0 before the first link replaces the power-on 9 and goes up on the link instead.
+    Robot z(false);
+    z.s.boot(0, Mode::Crowd, 9);
+    const Applied a0 = z.digit(0, "asr", 1 * kS);
+    assert(a0.to_mind && !a0.input_seq && z.s.pending_digit() == 0 && !std::strcmp(z.view().toast, "OFFLINE: 0 WHEN ONLINE"));
+    z.s.link_up(5 * kS);
+    assert(z.drain(5 * kS) == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(1, 0, 0));
+    // Online, a 9 said while that 0 is unanswered replaces it: the late answer for the 0 changes nothing.
+    const Applied a9 = z.digit(9, "asr", 6 * kS);
+    assert(a9.input_seq == 2 && z.s.pending_digit() == -1);
+    assert(z.drain(6 * kS) == digit_line(2, 0, 9, "asr"));
+    assert(answer(z, 1, "busy", 7 * kS) && z.drain(30 * kS).empty());
+
+    // The default boot (tests, old callers) is unchanged: talk, nothing owed.
+    Robot t;
+    assert(t.view().state.mode == Mode::Talk && t.s.pending_digit() == -1);
 }
 
 void inputs_become_reports()
@@ -184,10 +255,14 @@ void links()
 
 void digits()
 {
+    // Offline, 0 / 9 cannot reach mind now: it is owed and goes up with the next link (0.4.96).
+    {
+        Robot o;
+        const Applied off = o.digit(9);
+        assert(off.to_mind && !off.input_seq && !std::strcmp(o.view().toast, "OFFLINE: 9 WHEN ONLINE") && o.s.pending_digit() == 9);
+    }
     Robot r;
-    // Offline, 0 / 9 cannot reach mind.
-    Applied a = r.digit(9);
-    assert(a.to_mind && !a.input_seq && !std::strcmp(r.view().toast, "OFFLINE"));
+    Applied a;
     r.feed(kHello);
     r.drain();
     // 0 goes to mind as mode_input; the state does not change; mind's toast replaces the local one.
@@ -233,7 +308,7 @@ void digits()
     for (int i = 0; i < 9; ++i) r.digit(9);
     JsonDocument t;
     r.s.json(t.to<JsonObject>(), 0);
-    assert(t["inputs_queued"] == 8 && t["inputs_dropped"] == 1 && t["inputs_offline"] == 1);
+    assert(t["inputs_queued"] == 8 && t["inputs_dropped"] == 1 && t["inputs_offline"] == 0);   // the offline 9 was robot o
 }
 
 void settings_timeout()
@@ -372,6 +447,21 @@ void chat_stages()
     r.in(Input::Pause);
     r.s.on_speech_start(12 * kS);
     assert(r.view().chat.speak_from_us == 0);
+    // 0.4.97 (owner 2026-11-15): crowd shows the dots too; switching chat <-> crowd starts them idle.
+    Robot c;
+    c.digit(5);                                                              // crowd
+    assert(c.view().state.mode == Mode::Crowd && collector::mouth::dots_mode(Mode::Crowd));
+    auto cstage = [&](const std::string& text, int64_t now) {
+        assert(read_text(text.data(), text.size(), c.doc) == Text::ChatStage);
+        return c.s.on_chat_stage(c.doc.as<JsonObjectConst>(), text.size(), now);
+    };
+    assert(cstage(listen, 13 * kS) && c.view().chat.stage == collector::chat::Stage::Listen);
+    assert(cstage(R"({"type":"chat_stage","stage":"think"})", 14 * kS) && c.view().chat.stage == collector::chat::Stage::Think);
+    c.s.on_speech_start(15 * kS);
+    assert(c.view().chat.speak_from_us == 15 * kS);
+    c.in(Input::Play);                                                       // crowd -> chat: cleared
+    assert(c.view().chat.stage == collector::chat::Stage::Idle && c.view().chat.speak_from_us == 0);
+    assert(!collector::mouth::dots_mode(Mode::Talk) && !collector::mouth::dots_mode(Mode::Idle));
 }
 
 // 0.4.93.1 (owner 2026-11-14, crowd realtime): a tap in crowd changes nothing and has no effect, but it is reported
@@ -389,19 +479,119 @@ void crowd_tap()
     a = r.in(Input::Tap, "touch", Value{}, true);                             // while speaking: still a look
     assert(a.reported && !a.out.n_effects && !std::strcmp(r.view().toast, "LOOK"));
     assert(r.drain() == report(4, "crowd", "touch", "\"tap\"", "") + report(5, "crowd", "touch", "\"tap\"", ""));
-    // Double tap in crowd is still not implemented: nothing for mind.
-    assert(!r.in(Input::DoubleTap, "touch").reported && !std::strcmp(r.view().toast, "NOT YET"));
+    // 0.4.98: a double tap in crowd is mind's digit 1 (preset 1: the 围观 realtime toggle), source touch; no report.
+    Applied dt = r.in(Input::DoubleTap, "touch");
+    assert(dt.to_mind && dt.input_seq && !dt.reported && !dt.changed && !std::strcmp(r.view().toast, "PRESET 1"));
+    assert(r.drain() == digit_line(dt.input_seq, 0, 1, "touch"));
     // Offline the look cannot reach the ear: OFFLINE, no report.
     r.s.link_down();
     assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "OFFLINE"));
 }
 
+// 0.4.98 (owner 2026-11-15, 能让hello在围观模式中闭嘴): digit 1 goes to mind like 0 / 9, but it is a toggle: offline it
+// is not owed for later (toast OFFLINE, nothing on the next link), and it never replaces a pending 0 / 9. Outside
+// crowd a double tap keeps its table meaning; digits 2 / 3 stay no_action.
+void digit_one()
+{
+    Robot r;
+    r.feed(kHello);
+    r.drain();
+    Applied a = r.digit(1, "asr", 1 * kS);
+    assert(a.to_mind && a.input_seq == 1 && !a.changed && !a.reported && !std::strcmp(r.view().toast, "PRESET 1"));
+    assert(r.drain(1 * kS) == digit_line(1, 0, 1, "asr"));
+    JsonDocument d;
+    deserializeJson(d, R"({"type":"mode_result","seq":1,"code":"ok","toast":"PRESET 1: MEET QUIET"})");
+    assert(r.s.on_result(d.as<JsonObjectConst>(), 2 * kS));
+    assert(r.view().result_digit == 1 && !std::strcmp(r.view().toast, "PRESET 1: MEET QUIET"));
+    // talk: a double tap is the table's prefetch_on, not a digit
+    Applied t = r.in(Input::DoubleTap, "touch");
+    assert(!t.to_mind && t.reported && t.out.has(collector::modes::rules::Effect::PrefetchOn));
+    assert(!r.digit(2).to_mind && !std::strcmp(r.view().toast, "NO ACTION"));
+    // offline: nothing owed; the owner's 1 drops the power-on 9 still owed (review 2026-11-15: latest action wins)
+    Robot o(false);
+    o.s.boot(0, Mode::Crowd, 9);
+    Applied off = o.digit(1, "asr", 1 * kS);
+    assert(off.to_mind && !off.input_seq && !std::strcmp(o.view().toast, "OFFLINE") && o.s.pending_digit() == -1);
+    Applied offd = o.in(Input::DoubleTap, "touch");
+    assert(offd.to_mind && !offd.input_seq && !std::strcmp(o.view().toast, "OFFLINE"));
+    o.feed(kHello);
+    assert(o.drain(0) == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\""));    // no 9, no 1
+    JsonDocument t2;
+    o.s.json(t2.to<JsonObject>(), 0);
+    assert(t2["inputs_offline"] == 2);
+    // online too: the power-on 9 not yet answered stops being retried once the owner says 1
+    Robot p(false);
+    p.s.boot(0, Mode::Crowd, 9);
+    p.feed(kHello);
+    assert(p.drain(0) == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(1, 0, 9));
+    p.in(Input::DoubleTap, "touch", Value{}, false, 1 * kS);
+    assert(p.s.pending_digit() == -1 && p.drain(1 * kS) == digit_line(2, 0, 1, "touch"));
+    assert(p.drain(30 * kS).empty());                                        // no 9 retry
+    // an owner's 0 said offline is not a power-on preset: a 1 leaves it owed
+    Robot z(false);
+    z.s.boot(0, Mode::Crowd, 9);
+    z.digit(0, "asr", 1 * kS);
+    z.digit(1, "asr", 2 * kS);
+    assert(z.s.pending_digit() == 0);
+}
+
+// 0.4.98 (owner 2026-11-15, 围观点击要最大程度捕获人脸): crowd's tap report waits (up to the hold) for the M12 look;
+// release_look lets it go at once; the hold running out lets it go too; any later input never waits behind it;
+// digits are never held; the report shape is the same.
+void look_hold()
+{
+    Robot r;
+    r.s.set_look_hold(800000);
+    r.feed(kHello);
+    r.drain();
+    r.digit(5, "asr", 0);                                                   // crowd
+    assert(r.drain() == report(3, "crowd", "asr", "\"digit\"", "\"stop_speech\",\"talk_leave\""));
+    Applied a = r.in(Input::Tap, "touch", Value{}, false, 10 * kS);
+    assert(a.look && a.look_token == 4 && a.reported && r.s.holding_look() && !std::strcmp(r.view().toast, "LOOK"));
+    assert(r.drain(10 * kS + 100000).empty());                              // held
+    assert(!r.s.release_look(3) && r.s.release_look(4) && !r.s.release_look(4));
+    assert(r.drain(10 * kS + 300000) == report(4, "crowd", "touch", "\"tap\"", ""));
+    // the hold runs out: it goes at 0.8 s
+    a = r.in(Input::Tap, "touch", Value{}, false, 20 * kS);
+    assert(a.look && r.drain(20 * kS + 799999).empty());
+    assert(r.drain(20 * kS + 800000) == report(5, "crowd", "touch", "\"tap\"", ""));
+    assert(!r.s.release_look(5));                                           // late answer: nothing
+    // a digit while held is never delayed, and the next word lets the held tap go first, in order
+    a = r.in(Input::Tap, "touch", Value{}, false, 30 * kS);
+    r.digit(9, "asr", 30 * kS);
+    assert(!r.s.holding_look());                                            // the 9 let the look go
+    assert(r.drain(30 * kS) == report(6, "crowd", "touch", "\"tap\"", "") + digit_line(1, 0, 9, "asr"));
+    a = r.in(Input::Tap, "touch", Value{}, false, 40 * kS);
+    Applied w = r.in(Input::Play, "asr", Value{}, false, 40 * kS + 1000);   // crowd -> chat
+    assert(w.changed && r.drain(40 * kS + 1000) == report(7, "crowd", "touch", "\"tap\"", "") + report(8, "chat", "asr", "\"play\"", "\"stop_speech\""));
+    // reports queued before the tap still go while it is held
+    r.digit(5, "asr", 50 * kS);                                             // back to crowd (not drained)
+    a = r.in(Input::Tap, "touch", Value{}, false, 50 * kS);
+    assert(a.look && r.drain(50 * kS) == report(9, "crowd", "asr", "\"digit\"", "\"stop_speech\""));
+    // the link drops: nothing is held (the next link reports the state)
+    r.s.link_down();
+    assert(!r.s.holding_look());
+    // offline taps are not looks; without set_look_hold nothing is held
+    assert(!r.in(Input::Tap, "touch").look);
+    Robot plain;
+    plain.feed(kHello); plain.drain();
+    plain.digit(5); plain.drain();
+    assert(!plain.in(Input::Tap, "touch").look && !plain.drain().empty());
+    JsonDocument t;
+    r.s.json(t.to<JsonObject>(), 0);
+    assert(t["look_hold"]["held"] == 5 && t["look_hold"]["released"] == 1 && t["look_hold"]["timeouts"] == 1);
+    assert(t["look_hold"]["overtaken"] == 2 && t["look_hold"]["ms"] == 800);
+}
+
 int main()
 {
     crowd_tap();
+    digit_one();
+    look_hold();
     chat_stages();
     text_frames();
     boot_and_first_link();
+    power_on_crowd_and_nine();
     inputs_become_reports();
     links();
     digits();

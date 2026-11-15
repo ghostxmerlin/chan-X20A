@@ -18,8 +18,8 @@ RETRY_FAILED_MS = 10 * MIN_MS
 SUMMARY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["title", "text", "confidence"],
                   "properties": {"title": {"type": "string"}, "text": {"type": "string"},
                                  "confidence": {"type": "string", "enum": ["high", "mid", "low"]}}}
-SYSTEM = ("你在整理桌面宠物机器人 hello 一段连续时间里的情景。给出这一段的标题（不超过 20 个字）和一两句总结："
-          "谁在、大概在做什么、环境怎样、有什么变化。用正向的话说出最可能的情况，例如“Dave 在桌前工作，旁边有人聊天”；"
+SYSTEM = ("你在整理宠物机器人 hello 一段连续时间里的情景。给出这一段的标题（不超过 20 个字）和一两句总结："
+          "谁在、大概在做什么、环境怎样、有什么变化。用正向的话说出最可能的情况，例如“Dave 在打字，旁边有人聊天”；"
           "不要写“无法判断”“无法确认”这类否定句，证据弱就用“可能”“大概”。只依据给出的每分钟情景，不编造。")
 
 

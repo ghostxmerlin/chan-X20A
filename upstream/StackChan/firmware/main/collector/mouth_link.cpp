@@ -1,9 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 #include "mouth_link.h"
+#include "burst_indicator.h"
 #include "mouth_liveness.h"
 #include "hearing.h"
 #include "hearing_socket.h"
 #include "psram_task.h"
+#include "vision_snap.h"
+#include "vision_uplink.h"
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -21,6 +24,7 @@ constexpr const char* kTag = "mouth";
 constexpr size_t kSlots = 168;               // 10 s of 60 ms frames: the server leads by at most 8 s
 constexpr size_t kOutbox = 16;
 constexpr int64_t kHelloUs = 5000000;
+constexpr int64_t kLookHoldUs = 800000;      // 0.4.98: crowd's tap report waits at most this for fresh faces
 using PacketRing = Ring<kSlots, kPacketMax>;
 
 std::mutex mutex;
@@ -47,6 +51,20 @@ std::mutex mode_mutex;
 ModeSession* modes_session = nullptr;
 std::atomic<uint32_t> mode_ver{0};
 void mode_publish_locked() { mode_ver.store(modes_session->version(), std::memory_order_release); }
+
+// 0.5.00 burst indicator: the latest burst frame as one word (burst_indicator.h). Only the /mouth task writes it (a
+// plain load + store is enough); the LVGL timer reads it. Internal RAM: an atomic (S32C1I does not work on PSRAM).
+std::atomic<uint32_t> burst_now{0};
+uint32_t burst_frames = 0;                   // accepted burst frames (under `mutex`, for json())
+void burst_publish(const burst::Frame& f, bool lost)
+{
+    burst_now.store(burst::publish(burst_now.load(std::memory_order_relaxed), f, lost), std::memory_order_release);
+}
+// The /mouth link dropped: an indicator that is on goes off (Why::Link); nothing is published when it is already off.
+void burst_link_down()
+{
+    if (burst::unpack(burst_now.load(std::memory_order_relaxed)).on) burst_publish(burst::Frame{}, true);
+}
 
 void set_state(const char* s, const std::string& err = {})
 {
@@ -92,6 +110,19 @@ void on_message(const char* data, size_t n, bool binary)
     if (kind == Text::Other) return;
     if (kind == Text::TooLong || kind == Text::Bad) { std::lock_guard<std::mutex> lock(mutex); ++bad_messages; return; }
     if (kind == Text::ModeResult) { on_mode_result(doc.as<ArduinoJson::JsonObjectConst>()); return; }
+    if (kind == Text::Snap) {               // 0.4.99 视觉爆发: hand it to the vision task (short locks only)
+        uint32_t id = 0;
+        if (!snap::parse(doc.as<ArduinoJson::JsonObjectConst>(), n, id)) { std::lock_guard<std::mutex> lock(mutex); ++bad_messages; return; }
+        vision_snap_request(id);
+        return;
+    }
+    if (kind == Text::Burst) {              // 0.5.00 视觉爆发 indicator: one word for the screen, nothing sent back
+        burst::Frame f;
+        const bool ok = burst::parse(doc.as<ArduinoJson::JsonObjectConst>(), n, f);
+        { std::lock_guard<std::mutex> lock(mutex); if (ok) ++burst_frames; else ++bad_messages; }
+        if (ok) burst_publish(f, false);
+        return;
+    }
     if (kind == Text::ChatStage) {          // 0.4.93 chat dots: state only; the screen task draws them
         std::lock_guard<std::mutex> lock(mode_mutex);
         if (modes_session && modes_session->on_chat_stage(doc.as<ArduinoJson::JsonObjectConst>(), n, esp_timer_get_time())) mode_publish_locked();
@@ -123,7 +154,7 @@ void on_message(const char* data, size_t n, bool binary)
     }
     if (handshake) {        // the ear's hello: the current mode goes up first, then every change
         std::lock_guard<std::mutex> lock(mode_mutex);
-        if (modes_session) { modes_session->link_up(); mode_publish_locked(); }
+        if (modes_session) { modes_session->link_up(esp_timer_get_time()); mode_publish_locked(); }
     }
 }
 
@@ -176,6 +207,19 @@ bool send_modes(hearing::HearingSocket& socket)
         std::lock_guard<std::mutex> lock(mode_mutex);
         modes_session->sent(kind, seq);
         mode_publish_locked();
+    }
+    return true;
+}
+
+// 0.4.99: the vision task's snap_result lines (and the 2 s deadline's timeouts), at most 4 a pass, sent without
+// any lock held. false = the send failed and the link is gone (the link drop resets the snap).
+bool send_snaps(hearing::HearingSocket& socket)
+{
+    for (int i = 0; i < 4; ++i) {
+        char line[snap::kLineMax];
+        size_t n = 0;
+        if (!vision_snap_take_result(line, sizeof line, n)) return true;
+        if (!socket.Send(line, n, false)) return false;
     }
     return true;
 }
@@ -238,6 +282,7 @@ void run(void*)
                 if (ok) { std::lock_guard<std::mutex> lock(mutex); ++reports_sent; }
             }
             if (ok) ok = send_modes(socket);
+            if (ok) ok = send_snaps(socket);
             const int64_t now = esp_timer_get_time();
             if (now - checked_us > 2000000) {    // backend changed or removed: reconnect
                 checked_us = now;
@@ -250,6 +295,8 @@ void run(void*)
         socket.Abort();
         { std::lock_guard<std::mutex> lock(mutex); drop_stream_locked(); }
         drop_modes();
+        vision_snap_link_down();
+        burst_link_down();
         if (!ok || !err.empty()) {
             { std::lock_guard<std::mutex> lock(mutex); ++failures; }
             set_state("retry", silent ? "silent" : err.empty() ? (ok ? "closed" : "hello") : err);
@@ -302,7 +349,10 @@ void init(const std::string& device_id, const std::string& boot_id)
     if (void* mem = heap_caps_calloc(1, sizeof(ModeSession), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) {
         std::lock_guard<std::mutex> lock(mode_mutex);
         modes_session = new (mem) ModeSession();      // never freed: lives as long as the link task
-        modes_session->boot(esp_timer_get_time());    // power-on: talk; its "boot" report waits for the first link
+        // power-on (0.4.96, owner 2026-11-15): 围观 (crowd), and 9 (全开) to mind behind the "boot" report of the
+        // first link; both wait for that link. The robot half of the 9 is the main loop's, at boot.
+        modes_session->boot(esp_timer_get_time(), modes::rules::Mode::Crowd, 9);
+        modes_session->set_look_hold(kLookHoldUs);   // 0.4.98: crowd's tap waits up to 0.8 s for the M12 look
         mode_publish_locked();
     } else {
         ESP_LOGE(kTag, "no memory for the mode session: modes off");
@@ -325,6 +375,19 @@ bool speaking_now()
 
 bool speaking() { return speaking_now(); }
 
+namespace {
+std::atomic<void (*)(bool)> senses_hook{nullptr};
+std::atomic<void (*)(uint32_t)> look_hook{nullptr};
+}
+void set_senses_hook(void (*hook)(bool on)) { senses_hook.store(hook); }
+void set_look_hook(void (*hook)(uint32_t token)) { look_hook.store(hook); }
+
+void mode_look_done(uint32_t token)
+{
+    std::lock_guard<std::mutex> lock(mode_mutex);
+    if (modes_session && modes_session->release_look(token)) mode_publish_locked();
+}
+
 Applied mode_apply(const char* source, modes::rules::Input input, const modes::rules::Value& value)
 {
     const bool speaking = speaking_now();       // the audio lock first, released before the mode lock
@@ -334,6 +397,14 @@ Applied mode_apply(const char* source, modes::rules::Input input, const modes::r
         if (!modes_session) { std::snprintf(a.out.toast, sizeof a.out.toast, "NO MODES"); a.out.code = modes::rules::Code::UnknownInput; return a; }
         a = modes_session->apply(esp_timer_get_time(), source, input, value, speaking);
         mode_publish_locked();
+    }
+    // 0.4.96: hello's own 0 / 9 also switch its own senses, online or not (the hook only queues for the main loop).
+    if (a.to_mind && (value.digit == 0 || value.digit == 9))
+        if (auto hook = senses_hook.load()) hook(value.digit == 9);
+    // 0.4.98: crowd's tap (look): the M12 asks who / refreshes attributes, then lets the held report go
+    // (mode_look_done); without a hook the report goes when the hold ends.
+    if (a.look) {
+        if (auto hook = look_hook.load()) hook(a.look_token);
     }
     // Logged after the lock: a backed-up console must not hold the /mouth task's hello / mode_result (review M3).
     if (a.changed) ESP_LOGI(kTag, "mode %s by %s (%s)", modes::rules::label(a.out.state), source, modes::rules::input_id(input));
@@ -369,6 +440,7 @@ void mode_json(ArduinoJson::JsonObject out)
 }
 
 uint32_t mode_version() { return mode_ver.load(std::memory_order_acquire); }
+uint32_t burst_word() { return burst_now.load(std::memory_order_acquire); }
 
 void json(ArduinoJson::JsonObject out)
 {
@@ -381,5 +453,8 @@ void json(ArduinoJson::JsonObject out)
     out["received"] = stream.received; out["stale"] = stream.stale; out["overflow"] = stream.overflow; out["too_big"] = stream.too_big;
     out["reports_sent"] = reports_sent; out["reports_dropped"] = reports_dropped; out["bad_messages"] = bad_messages;
     out["ring_bytes"] = int(kSlots * kPacketMax);
+    const burst::Word b = burst::unpack(burst_now.load(std::memory_order_acquire));
+    auto bo = out["burst"].to<ArduinoJson::JsonObject>();     // 0.5.00: the last burst frame as received
+    bo["on"] = b.on; bo["left_s"] = b.left_s; bo["looks"] = b.looks; bo["lost"] = b.lost; bo["frames"] = burst_frames;
 }
 }

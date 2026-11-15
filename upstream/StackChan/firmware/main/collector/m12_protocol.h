@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace collector {
@@ -374,29 +375,70 @@ private:
     int32_t next_ = 1;
 };
 
-// Automatic identification (m12d §4.3): a face id seen without a name gets at most one
-// {"do":"who","face":id}; afterwards the name rides on every detection line, so who is
-// never polled (each run pauses detection ~0.22 s). "busy" backs off and retries the
-// same id; standby/hot wait and retry; every other answer (name, null, noface, timeout,
-// error) closes that id. One who is in flight at a time.
+// Automatic identification (m12d §4.3). A face id seen without a name is asked {"do":"who","face":id} as soon as it
+// is seen (first ask, largest face first); afterwards a name rides on every detection line. Each who pauses
+// detection ~0.22 s.
+// - 2026-11-15 (owner: 没认出就再问; 最多再问 5 次，无间隔询问): a track that is still unknown is asked again as soon as
+//   its previous who was answered, at most kReasks more times (kReasks + 1 asks in all), only while the face is at
+//   least kReaskMinW wide. No interval, no global gap; first asks of new tracks always go before re-asks; among
+//   re-asks the track with the fewest asks goes first (then the larger face).
+// - A name only ever comes from a who answer (宁可叫不出名字，也不要叫错): no threshold is lowered, nothing is guessed.
+// - "busy" backs off and retries the same id; standby/hot/send wait and retry; every other answer (name, null,
+//   noface, timeout, error) counts as one ask; a name closes the track.
+// - look() (2026-11-15, crowd tap): every face in view without a name is asked now, largest first, ignoring the
+//   re-ask limit (still one in flight, busy backoff kept), until all answered or kLookUs passed. A look ask is the
+//   track's first ask when it had none; otherwise it does not use up the track's re-asks.
+// One who is in flight at a time.
 class M12WhoPolicy {
 public:
-    static constexpr size_t kRemembered = 32;
+    static constexpr size_t kTracks = 16;
     static constexpr int64_t kFirstBackoffUs = 500000, kMaxBackoffUs = 4000000, kWaitUs = 5000000;
-    int32_t next(const M12Detection& d, int64_t now) const
+    static constexpr uint8_t kReasks = 5;
+    static constexpr int16_t kReaskMinW = 48;            // of 640: smaller faces are not asked again
+    static constexpr int64_t kLookUs = 800000;
+    static constexpr int64_t kLookLineUs = 300000;       // look() ignores a line older than this
+
+    // The face id to ask now, or -1.
+    int32_t next(const M12Detection& d, int64_t now)
     {
+        pick_look_ = false;
         if (inflight_ >= 0 || now < hold_until_) return -1;
-        for (size_t i = 0; i < d.count; ++i) {
-            const auto& f = d.faces[i];
-            if (f.id >= 0 && !f.name[0] && !asked(f.id)) return f.id;
+        const M12Face* best = nullptr;
+        auto take = [&](const M12Face& f) { if (!best || area(f) > area(*best)) best = &f; };
+        if (look_active(now)) {
+            for (size_t i = 0; i < d.count; ++i) {
+                const auto& f = d.faces[i];
+                if (f.id >= 0 && !f.name[0] && look_pending(f.id)) take(f);
+            }
+            if (best) { pick_look_ = true; return best->id; }
         }
-        return -1;
+        for (size_t i = 0; i < d.count; ++i) {             // first asks
+            const auto& f = d.faces[i];
+            const Track* t = find(f.id);
+            if (f.id >= 0 && !f.name[0] && (!t || (!t->done && t->asks == 0))) take(f);
+        }
+        if (best) return best->id;
+        const Track* best_t = nullptr;
+        for (size_t i = 0; i < d.count; ++i) {             // re-asks: fewest asks first, then the larger face
+            const auto& f = d.faces[i];
+            const Track* t = find(f.id);
+            if (f.id < 0 || f.name[0] || !t || t->done || t->asks == 0 || t->asks > kReasks || f.w < kReaskMinW) continue;
+            if (!best || t->asks < best_t->asks || (t->asks == best_t->asks && area(f) > area(*best))) { best = &f; best_t = t; }
+        }
+        return best ? best->id : -1;
     }
-    void sent(int32_t face, int64_t) { inflight_ = face; }
-    // err: nullptr on success, else the m12d code or "client_timeout"/"send".
-    void answered(int32_t face, const char* err, int64_t now)
+    void sent(int32_t face, int64_t)
     {
-        if (face == inflight_) inflight_ = -1;
+        inflight_ = face;
+        sent_look_ = pick_look_;
+        pick_look_ = false;
+        if (!find(face)) add(face);
+    }
+    // err: nullptr on success, else the m12d code or "client_timeout"/"send". named: who answered a name.
+    void answered(int32_t face, const char* err, int64_t now, bool named = false)
+    {
+        const bool look_ask = sent_look_ && face == inflight_;
+        if (face == inflight_) { inflight_ = -1; sent_look_ = false; }
         if (err && !std::strcmp(err, "busy")) {
             backoff_ = backoff_ ? std::min(backoff_ * 2, kMaxBackoffUs) : kFirstBackoffUs;
             hold_until_ = now + backoff_;
@@ -408,30 +450,108 @@ public:
             return;
         }
         backoff_ = 0;
-        remember(face);
+        if (face < 0) return;
+        Track* t = find(face);
+        if (!t) t = add(face);
+        t->seen = ++clock_;
+        if (!look_ask || t->asks == 0) ++t->asks;
+        else ++look_extra_;
+        if (named || t->asks > kReasks) t->done = true;
+        if (t->asks > 1 && !look_ask) ++reasks_;
+        for (size_t i = 0; i < look_n_; ++i) if (look_[i].id == face) { look_[i].answered = true; look_[i].named = named; }
     }
-    void reset() { *this = M12WhoPolicy{}; }
-    bool asked(int32_t face) const
+    // Crowd tap: ask every face of `d` (the line received at line_us) without a name now. A line older than
+    // kLookLineUs is not "in view": no targets (the look then only waits for attributes / settles).
+    void look(const M12Detection& d, int64_t line_us, int64_t now)
     {
-        for (size_t i = 0; i < count_; ++i) if (ids_[i] == face) return true;
-        return false;
+        look_n_ = 0;
+        for (size_t i = 0; now - line_us <= kLookLineUs && i < d.count && look_n_ < kM12MaxFaces; ++i) {
+            const auto& f = d.faces[i];
+            if (f.id >= 0 && !f.name[0]) look_[look_n_++] = {f.id, false, false};
+        }
+        look_on_ = true;
+        look_until_ = now + kLookUs;
     }
+    // The look has what it came for: every target answered (a named one also shows its name on the line) or left
+    // the view, and (need_attrs) every face in view carries gender / age; or kLookUs passed. True when no look.
+    bool look_settled(const M12Detection& d, int64_t now, bool need_attrs) const
+    {
+        if (!look_on_ || now >= look_until_) return true;
+        for (size_t k = 0; k < look_n_; ++k) {
+            const M12Face* f = face_in(d, look_[k].id);
+            if (!f) continue;                                  // gone: nothing more to learn
+            if (!look_[k].answered && !f->name[0]) return false;
+            if (look_[k].named && !f->name[0]) return false;   // the name has not reached a detection line yet
+        }
+        if (need_attrs)
+            for (size_t i = 0; i < d.count; ++i) if (d.faces[i].id >= 0 && !d.faces[i].gender) return false;
+        return true;
+    }
+    void look_end() { look_on_ = false; look_n_ = 0; }
+    bool look_active(int64_t now) const { return look_on_ && now < look_until_; }
+    // In place (review 2026-11-15): no ~1 KB temporary on the M12 task's 8 KB stack.
+    void reset()
+    {
+        for (auto& t : tracks_) t = Track{};
+        look_n_ = 0;
+        look_on_ = pick_look_ = sent_look_ = false;
+        look_until_ = 0; inflight_ = -1; hold_until_ = 0; backoff_ = 0;
+        busy_ = reasks_ = look_extra_ = 0; clock_ = 0;
+    }
+    bool asked(int32_t face) const { const Track* t = find(face); return t && t->asks > 0; }
+    uint8_t asks(int32_t face) const { const Track* t = find(face); return t ? t->asks : 0; }
     int32_t inflight() const { return inflight_; }
     uint32_t busy() const { return busy_; }
+    uint32_t reasks() const { return reasks_; }
+    uint32_t look_extra() const { return look_extra_; }
 
 private:
-    void remember(int32_t face)
+    struct Track {
+        int32_t id = -1;
+        uint8_t asks = 0;                 // answered asks (busy / standby / send do not count)
+        bool done = false;                // named, or out of re-asks
+        uint32_t seen = 0;                // last answer (policy clock): the oldest track is replaced when full
+    };
+    struct LookTarget { int32_t id; bool answered, named; };
+    static int32_t area(const M12Face& f) { return int32_t(f.w) * f.h; }
+    static const M12Face* face_in(const M12Detection& d, int32_t id)
     {
-        if (face < 0 || asked(face)) return;
-        ids_[head_] = face;
-        head_ = (head_ + 1) % kRemembered;
-        count_ = std::min(count_ + 1, kRemembered);
+        for (size_t i = 0; i < d.count; ++i) if (d.faces[i].id == id) return &d.faces[i];
+        return nullptr;
     }
-    int32_t ids_[kRemembered] = {};
-    size_t head_ = 0, count_ = 0;
+    bool look_pending(int32_t id) const
+    {
+        for (size_t i = 0; i < look_n_; ++i) if (look_[i].id == id) return !look_[i].answered;
+        return false;
+    }
+    const Track* find(int32_t id) const
+    {
+        if (id < 0) return nullptr;
+        for (const auto& t : tracks_) if (t.id == id) return &t;
+        return nullptr;
+    }
+    Track* find(int32_t id) { return const_cast<Track*>(static_cast<const M12WhoPolicy*>(this)->find(id)); }
+    // A free slot, else the track answered longest ago (m12d ids count up; old ids do not come back).
+    Track* add(int32_t id)
+    {
+        Track* slot = nullptr;
+        for (auto& t : tracks_) {
+            if (t.id < 0) { slot = &t; break; }
+            if (!slot || t.seen < slot->seen) slot = &t;
+        }
+        *slot = Track{};
+        slot->id = id;
+        slot->seen = ++clock_;
+        return slot;
+    }
+    Track tracks_[kTracks];
+    LookTarget look_[kM12MaxFaces] = {};
+    size_t look_n_ = 0;
+    bool look_on_ = false, pick_look_ = false, sent_look_ = false;
+    int64_t look_until_ = 0;
     int32_t inflight_ = -1;
     int64_t hold_until_ = 0, backoff_ = 0;
-    uint32_t busy_ = 0;
+    uint32_t busy_ = 0, reasks_ = 0, look_extra_ = 0, clock_ = 0;
 };
 
 // What face tracking follows: the same face id as last time while it is in view, else
@@ -538,6 +658,22 @@ public:
     {
         for (auto& t : faces_) if (t.used) lose_face(t, now, reason, emit);
         for (auto& t : persons_) if (t.used) lose_person(t, now, reason, emit);
+    }
+    // Crowd tap (2026-11-15): the attributes of every face seen within kFreshUs go up again now (face_attrs with
+    // the latest box), so the greeting reads fresh boxes and attributes. Faces without attributes yet report them
+    // the moment they arrive, as always.
+    static constexpr int64_t kFreshUs = 500000;
+    template <typename Emit> size_t refresh(int64_t now, Emit emit)
+    {
+        size_t n = 0;
+        for (auto& t : faces_) {
+            if (!t.used || !t.gender || now - t.last_us > kFreshUs) continue;
+            auto e = face_event(M12VisionKind::face_attrs, t.face, t.f, now);
+            e.gender = t.gender; e.age_group = t.age_group;
+            emit(e);
+            ++n;
+        }
+        return n;
     }
     size_t faces_in_view() const { size_t n = 0; for (const auto& t : faces_) n += t.used; return n; }
     size_t persons_in_view() const { size_t n = 0; for (const auto& t : persons_) n += t.used; return n; }

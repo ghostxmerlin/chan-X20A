@@ -56,6 +56,16 @@ to the robot with send_from_realtime(); the robot's tts.* reports for those ids 
 tts_active holds the soul-tts streams the robot has not finished (start .. robot done / stopped / error, or soul-tts's
 stop); a soul-tts tts.start first calls realtime.yield_to_tts(link) (realtime yields), so the two never interleave.
 A mode_report with mode crowd and input tap is also handed to realtime.tap() (crowd: a tap = look and greet).
+Place (2026-11-15, spec docs/superpowers/specs/2026-11-15-place-contract.md; ModeRelay(place_poll_s=..)): after each
+/mouth handshake (links with a boot_id) the ear GETs mind /place and sends the robot {"type":"place","current":..,"by":..,
+"choices":[..],"at_ms":..} (UTF-8 strings, <= 1600 B: at most 8 choices of <= 24 B, current <= 48 B); while a robot is
+linked it asks mind again every place_poll_s (loopback, free) and pushes a frame only when it changed. The robot's
+{"type":"place_select","seq":N,"choice":<text|null = unknown>} goes to mind POST /place {label, source: robot} (never to
+soul-tts, one at a time per link, never awaited by the reader) and is answered {"type":"place_result","seq":N,"code":
+ok|bad_choice|busy,"toast":ASCII<=32}; on ok every link gets the new place frame. Older firmware ignores type place.
+视觉爆发 (2026-11-15, spec docs/superpowers/specs/2026-11-15-vision-burst-snap.md; MouthLink(burst=VisionBurst)): the
+burst sends {"type":"snap","id":N} with send_from_realtime(); the robot's {"type":"snap_result",...} goes to
+burst.on_snap_result(link, m) and never to soul-tts (dropped when there is no burst).
 Writers: several tasks send() to the robot socket (the upstream loop, input results). websockets writes each whole
 message atomically, so that is safe; never use fragmented sends (async iterators) on the robot ws.
 An unexpected error is logged with its traceback: in the mode path it is caught there and /mouth goes on; a task
@@ -86,6 +96,12 @@ REPORT_FIELDS = ("seq", "mode", "dir", "host", "return_to", "by", "input", "effe
 STAGE_DEBOUNCE_S = 0.3
 STAGE_INFLIGHT = 4
 RT_STREAM_BASE = 0x40000000                         # realtime's /mouth stream ids (soul-tts counts from 1)
+# Place (2026-11-15, spec docs/superpowers/specs/2026-11-15-place-contract.md): the robot's left-swipe info page.
+PLACE_MAX_CHOICES = 8
+PLACE_CHOICE_BYTES = 24                             # UTF-8 bytes per choice (8 CJK characters)
+PLACE_CURRENT_BYTES = 48                            # the current place in the frame (mind allows 40 characters)
+PLACE_FRAME_MAX = 1600                              # the robot's /mouth text limit (kMaxMessage)
+PLACE_BY = ("page", "robot", "voice")
 log = print                                         # tests silence it
 
 
@@ -100,6 +116,39 @@ def _is_int(v):
 
 def _ascii(text, n=32):
     return "".join(c for c in str(text or "") if 32 <= ord(c) < 127)[:n]
+
+
+def _utf8(text, n):
+    """Text without control characters, cut to at most n UTF-8 bytes on a character boundary."""
+    t = "".join(c for c in str(text) if ord(c) >= 32 and ord(c) != 127).strip()
+    return t.encode()[:n].decode("utf-8", "ignore")
+
+
+def place_frame(st):
+    """mind's GET /place (or a POST /place answer) -> the robot's place frame text, or None when it is not one.
+    {"type":"place","current":<text|null>,"by":<page|robot|voice|null>,"choices":[<text>...],"at_ms":<int|null>}:
+    compact JSON, UTF-8 strings (not \\u escapes), at most PLACE_FRAME_MAX bytes by construction."""
+    if not isinstance(st, dict) or not isinstance(st.get("choices"), list):
+        return None
+    choices = []
+    for c in st["choices"]:
+        c = _utf8(c, PLACE_CHOICE_BYTES) if isinstance(c, str) else ""
+        if c and c not in choices:
+            choices.append(c)
+    cur = _utf8(st["current"], PLACE_CURRENT_BYTES) if isinstance(st.get("current"), str) else ""
+    frame = {"type": "place", "current": cur or None, "by": st.get("by") if st.get("by") in PLACE_BY else None,
+             "choices": choices[:PLACE_MAX_CHOICES], "at_ms": st["at"] if _is_int(st.get("at")) else None}
+    text = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+    return text if len(text.encode()) <= PLACE_FRAME_MAX else None
+
+
+def _place_result(status, reply):
+    """mind's answer to the robot's pick -> {code, toast} (ASCII toast <= 32, like mode_result)."""
+    if status == 200:
+        return {"code": "ok", "toast": "PLACE SET"}
+    if status == 400:
+        return {"code": "bad_choice", "toast": "NOT IN LIST"}
+    return {"code": "busy", "toast": "MIND SLOW" if status is None else "MIND OFFLINE"}
 
 
 def mind_client(token, base=MIND):
@@ -147,7 +196,8 @@ class ModeRelay:
     call is mind_client(...) (or a test fake)."""
 
     def __init__(self, call, *, input_timeout_s=5.0, input_queue=8, report_queue=16, report_timeout_s=5.0,
-                 report_retry_s=2.0, post_timeout_s=10.0, chat_max_inflight=2, chat_timeout_s=3.0):
+                 report_retry_s=2.0, post_timeout_s=10.0, chat_max_inflight=2, chat_timeout_s=3.0,
+                 place_poll_s=None, place_timeout_s=3.0):
         self.call, self.input_timeout_s, self.input_queue = call, input_timeout_s, input_queue
         self.report_queue, self.report_timeout_s, self.report_retry_s = report_queue, report_timeout_s, report_retry_s
         self.post_timeout_s = post_timeout_s
@@ -160,6 +210,9 @@ class ModeRelay:
         self.chat_inflight, self.chat_max_inflight, self.chat_timeout_s = 0, chat_max_inflight, chat_timeout_s
         self._chat_pool = concurrent.futures.ThreadPoolExecutor(max_workers=chat_max_inflight, thread_name_prefix="chat-mind")
         self.chat_sent = self.chat_dropped = 0
+        self.place_poll_s, self.place_timeout_s = place_poll_s, place_timeout_s   # None: no place frames (tests)
+        self._place_frame = None                            # the last place frame text built from mind's answer
+        self._place_task = None
 
     # ---- chat v0 ----
     def note_report(self, m, conn):
@@ -174,12 +227,79 @@ class ModeRelay:
 
     def attach(self, link):
         self._links[link.conn] = link
+        if self.place_on():
+            self.spawn(self._place_hello(link))
+            if self._place_task is None or self._place_task.done():
+                self._place_task = self.spawn(self._place_poll())
+
+    # ---- place (2026-11-15): the robot's info page shows and sets where hello is ----
+    def place_on(self):
+        return self.place_poll_s is not None
+
+    async def _place_fetch(self):
+        status, reply = await self.ask("GET", "/place", None, timeout=self.place_timeout_s)
+        frame = place_frame(reply) if status == 200 else None
+        if frame is not None:
+            self._place_frame = frame
+        return frame
+
+    async def _place_send(self, link, frame):
+        if frame is None or getattr(link, "place_sent", None) == frame:
+            return
+        try:
+            await link.client.send(frame)
+            link.place_sent = frame
+        except Exception:                            # noqa: BLE001 - the robot left: its link ends by itself
+            pass
+
+    async def _place_push(self, frame):
+        for link in list(self._links.values()):
+            await self._place_send(link, frame)
+
+    async def _place_hello(self, link):
+        """Right after the /mouth handshake: the current place and the choices (mind away: the last known frame)."""
+        frame = await self._place_fetch()
+        await self._place_send(link, frame or self._place_frame)
+
+    async def _place_poll(self):
+        """While a robot is linked: ask mind every place_poll_s (loopback, free) and push a changed frame to every link."""
+        while self._links:
+            await asyncio.sleep(self.place_poll_s)
+            if not self._links:
+                break
+            frame = await self._place_fetch()
+            if frame is not None:
+                await self._place_push(frame)
+
+    async def place_select(self, link, m):
+        """The robot's {"type":"place_select","seq":N,"choice":<text|null>} -> POST mind /place {label, source:
+        robot}; answers {"type":"place_result","seq":N,"code","toast"} and, when it took, pushes the new place."""
+        seq, choice = m.get("seq"), m.get("choice")
+        if not _is_int(seq) or seq < 0:
+            log(f"mouth m{link.conn}: place_select without an integer seq, dropped", flush=True)
+            return
+        if choice is not None and not (isinstance(choice, str) and choice.strip()):
+            res, status, reply = {"code": "bad_choice", "toast": "BAD CHOICE"}, 400, {}
+        else:
+            status, reply = await self.ask("POST", "/place", {"label": choice, "source": "robot"},
+                                           timeout=self.place_timeout_s)
+            res = _place_result(status, reply)
+        try:
+            await link.client.send(json.dumps({"type": "place_result", "seq": seq, **res}))
+        except Exception:                            # noqa: BLE001 - the robot left
+            return
+        frame = place_frame(reply) if status == 200 else None
+        if frame is not None:
+            self._place_frame = frame
+            await self._place_push(frame)
+        elif status != 200 and self._place_frame is not None:
+            await self._place_send(link, self._place_frame)     # the robot shows what is really set
 
     # ---- stage indicator ----
     def send_stage(self, stage):
         """Queue one chat_stage frame to the robot (non-blocking). -> True if queued."""
         link = self._links.get(self._mode_conn)
-        if not self.in_chat() or link is None or self._stage_inflight >= STAGE_INFLIGHT:
+        if not self.in_stage_mode() or link is None or self._stage_inflight >= STAGE_INFLIGHT:
             return False
         msg = json.dumps({"type": "chat_stage", "stage": stage, "at_ms": int(time.time() * 1000)})
         self._stage_inflight += 1
@@ -197,12 +317,12 @@ class ModeRelay:
     def chat_listen(self):
         """A speech onset in chat (the ear never calls this while hello sounds) -> True if listen was sent."""
         now = time.monotonic()
-        if not self.in_chat() or now - self._last_listen < STAGE_DEBOUNCE_S:
+        if not self.in_stage_mode() or now - self._last_listen < STAGE_DEBOUNCE_S:
             return False
         if not self.send_stage("listen"):
             return False
         self._last_listen = now
-        if self.chat_inflight == 0:                  # the page's dots; never takes a slot a sentence may need
+        if self.in_chat() and self.chat_inflight == 0:                  # the page's dots; never takes a slot a sentence may need
             self.chat_inflight += 1
             self.spawn(self._post_stage({"stage": "listen", "at_ms": int(time.time() * 1000)}))
         return True
@@ -221,11 +341,21 @@ class ModeRelay:
             pass
 
     def chat_nothing(self):
-        """A speech end without text in chat: nothing to answer, the robot leaves listen."""
-        return self.send_stage("skip")
+        """A speech end without text in chat: nothing to answer, the robot leaves listen. (In crowd the realtime
+        session decides, so it sends think / skip itself: crowd_stage.)"""
+        return self.in_chat() and self.send_stage("skip")
+
+    def crowd_stage(self, stage):
+        """Crowd's dots (owner 2026-11-15: 围观 gets chat's stage dots): realtime_link sends think when its server VAD
+        ends a sentence and skip when a response brings no sound. Nothing outside crowd. -> True if queued."""
+        return self.robot_mode == "crowd" and self.send_stage(stage)
 
     def in_chat(self):
         return self.robot_mode == "chat"
+
+    def in_stage_mode(self):
+        """The modes that show the stage dots on the robot: chat, and crowd since collector-0.4.97."""
+        return self.robot_mode in ("chat", "crowd")
 
     def chat_heard(self, ev, session):
         """Call on the event loop with a speech end event: in chat, hand it to mind without waiting. -> True if sent."""
@@ -333,12 +463,14 @@ class _RobotGone(Exception):
 
 
 class MouthLink:
-    def __init__(self, client, *, upstream_url, token, connect=None, retry_s=5, conn=0, modes=None, realtime=None):
+    def __init__(self, client, *, upstream_url, token, connect=None, retry_s=5, conn=0, modes=None, realtime=None,
+                 burst=None):
         if connect is None:
             from websockets.asyncio.client import connect
         self.client, self.upstream_url, self.token, self.connect = client, upstream_url, token, connect
         self.retry_s, self.conn, self.modes = retry_s, conn, modes
         self.realtime = realtime
+        self.burst = burst                  # vision_burst.VisionBurst: the robot's snap_result goes there
         self.tts_active = set()             # soul-tts streams the robot has not reported finished
         self._modes_on = False              # mode messages are relayed (needs a boot_id)
         self._inputs = asyncio.Queue(maxsize=modes.input_queue) if modes is not None else None
@@ -350,6 +482,8 @@ class MouthLink:
         self.hello_text = None              # the robot's hello as received, replayed on every upstream dial
         self.playing = set()                # streams soul-tts started that are neither ended nor stopped
         self.upstream_drops = 0
+        self.place_sent = None              # the last place frame this robot got (unchanged frames are not re-sent)
+        self.place_busy = False             # one place_select at a time per link
         self._up = None
         self._lock = asyncio.Lock()         # robot reports wait while a fresh upstream is being greeted
 
@@ -433,6 +567,21 @@ class MouthLink:
     async def _from_robot(self):
         async for message in self.client:
             m = _parse(message)
+            if m is not None and m.get("type") == "snap_result":
+                if self.burst is not None:              # vision burst (2026-11-15): never for soul-tts
+                    try:
+                        self.burst.on_snap_result(self, m)
+                    except Exception:                   # noqa: BLE001 - a burst bug never ends /mouth
+                        _trace(f"mouth m{self.conn} snap_result")
+                continue
+            if m is not None and m.get("type") == "place_select":
+                if self._modes_on and self.modes.place_on():  # for mind, never for soul-tts; never awaited here
+                    if self.place_busy:
+                        await self._send_place_busy(m)
+                    else:
+                        self.place_busy = True
+                        self.modes.spawn(self._place_select(m))
+                continue
             if m is not None and m.get("type") in ("mode_input", "mode_report", "mode_applied"):
                 if self._modes_on:                      # for mind, never for soul-tts
                     try:
@@ -463,6 +612,21 @@ class MouthLink:
                     pass
                 except Exception:                       # noqa: BLE001
                     _trace(f"mouth m{self.conn} report to soul-tts")
+
+    async def _place_select(self, m):
+        try:
+            await self.modes.place_select(self, m)
+        finally:
+            self.place_busy = False
+
+    async def _send_place_busy(self, m):
+        if _is_int(m.get("seq")):
+            try:
+                await self.client.send(json.dumps({"type": "place_result", "seq": m["seq"], "code": "busy", "toast": "BUSY"}))
+            except ConnectionClosed:
+                raise
+            except Exception:                           # noqa: BLE001
+                pass
 
     async def send_from_realtime(self, message):
         """One whole message from the realtime hub to the robot -> False when the robot is gone."""

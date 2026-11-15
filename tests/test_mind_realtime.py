@@ -111,6 +111,15 @@ class ContextTest(Base):
         self.assertTrue(b['text'].startswith('现在：'))
         self.assertEqual((b['visible'], b['names']), ([], {'colleague_face': '同事甲'}))
 
+    def test_burst_looks_line_newest_first_within_three_minutes(self):
+        from mind import eye
+        for at, text in ((self.now - 190_000, '太旧'), (self.now - 30_000, '一个人在倒水'), (self.now - 2_000, '主人在笑')):
+            self.db['vision_looks'].insert_one({'kind': 'look', 'lid': str(at), 'at': at, 'text': text})
+        line = next(x for x in self.rc.block()['text'].splitlines() if x.startswith('注视：'))
+        self.assertLess(line.index('主人在笑'), line.index('一个人在倒水'))
+        self.assertNotIn('太旧', line)
+        self.assertEqual(len(eye.recent_looks(self.db, self.now, n=1)), 1)
+
     def test_old_faces_and_stale_scene_are_left_out(self):
         self.put_scene(self.now - 10 * 60_000)
         self.vision(self.now - rt.VISIBLE_MS - 1000, 'face_named', 1, 'boss_face')
@@ -157,7 +166,7 @@ class BillingRealtimeTest(unittest.TestCase):
         self.ctx = FakeCtx(mode='crowd')
         self.b = Billing(self.ctx)
 
-    def test_zero_turns_it_off_nine_on_and_mind_start_off(self):
+    def test_zero_off_nine_on_mind_start_keeps_it(self):
         self.ctx.realtime = True
         self.b.off('page', 1)
         self.assertFalse(self.ctx.realtime)
@@ -165,7 +174,10 @@ class BillingRealtimeTest(unittest.TestCase):
         self.assertTrue(self.ctx.realtime)
         apply_preset(9, self.b, source='asr', now_ms=3)
         self.assertTrue(self.ctx.realtime)
-        self.b.on('boot', 4)                                     # mind start = preset 9, but realtime stays off
+        self.b.on('boot', 4)                                     # mind start = preset 9; realtime kept as it was (on)
+        self.assertTrue(self.ctx.realtime)
+        self.b.off('page', 5)
+        self.b.on('boot', 6)                                     # ... and kept off when it was off
         self.assertFalse(self.ctx.realtime)
         self.assertTrue(self.ctx.tingwu)
 

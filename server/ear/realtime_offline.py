@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import realtime_link as rl  # noqa: E402
 from mouth_link import RT_STREAM_BASE  # noqa: E402
 
-CONTEXT = {"text": "现在：11-14 12:05\n此刻的情景：几个人围在办公桌旁边聊天（午饭前，大家在商量吃什么）\n"
+CONTEXT = {"text": "现在：11-14 12:05\n此刻的情景：几个人围在桌子旁边聊天（午饭前，大家在商量吃什么）\n"
                    "在聊：午饭 / 面条\n看到的人（M12 认出）：主人（老大）\n你记得（只在相关时提）：主人爱吃面",
            "owner": {"face_names": ["owner_face"], "call": "老大"}, "names": {"guest_face": "小王"}, "visible": []}
 

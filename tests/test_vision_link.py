@@ -120,6 +120,31 @@ class VisionFrameTest(unittest.TestCase):
             self.assertEqual(f.read(), JPEG)
         self.assertTrue(before - 500 - 5 <= doc["at"] <= doc["received"] - 500 + 5)     # waited 0.5 s on the robot
 
+    def test_a_snap_frame_goes_to_the_frame_hook_and_keeps_its_id(self):
+        got = []
+        link = vision_link.VisionLink(self.db, 5, "p", recordings_root=self.dir.name,
+                                      on_frame=lambda head, jpeg, path, session: got.append((head, jpeg, path, session)))
+        link.on_text(json.dumps({"type": "hello", "source": "stackchan-x"}))
+        head = json.dumps({"type": "frame", "seq": 9, "t_us": 2_000_000, "now_us": 2_100_000, "w": 320, "h": 240,
+                           "diff": 0, "bytes": len(JPEG), "snap": 17}).encode()
+        self.assertIsNone(link.on_binary(frame_msg(head=head)))
+        self.assertIsNone(link.on_binary(frame_msg(seq=10)))                     # an ordinary frame: hook too, no snap
+        self.assertEqual([(h.get("snap"), h["seq"]) for h, _, _, _ in got], [(17, 9), (None, 10)])
+        self.assertEqual(got[0][1], JPEG)
+        self.assertEqual(got[0][2], f"frames/{link.session}/2000000-9.jpg")
+        self.assertEqual(got[0][3], link.session)
+        docs = [c[1] for c in self.db.calls if c[0] == "frame"]
+        self.assertEqual(docs[0]["snap"], 17)
+        self.assertNotIn("snap", docs[1])
+
+    def test_a_failing_frame_hook_never_costs_the_frame(self):
+        def boom(*a):
+            raise RuntimeError("x")
+        link = vision_link.VisionLink(self.db, 6, "p", recordings_root=self.dir.name, on_frame=boom)
+        link.on_text(json.dumps({"type": "hello", "source": "stackchan-x"}))
+        self.assertIsNone(link.on_binary(frame_msg()))
+        self.assertEqual(link.frames, 1)
+
     def test_bad_frames_are_rejected_and_nothing_written(self):
         bad = [frame_msg(magic=b"XXXX"), frame_msg(head=b"{" + b" " * 600 + b"}"), frame_msg(head=b"not json"),
                frame_msg(head=json.dumps({"type": "frame", "seq": "../x", "t_us": 1, "now_us": 1}).encode()),
@@ -164,3 +189,67 @@ class VisionFrameTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NameCarryTest(unittest.TestCase):
+    """Owner 2026-11-15: a new face id at the same place within 2 s keeps the name; never a wrong name."""
+    def setUp(self):
+        self.c = vision_link.NameCarry()
+
+    def ev(self, event, face, t, box=(100, 100, 100, 120), **kw):
+        return self.c.feed({"type": "vision", "event": event, "face": face, "t_us": t, "box": list(box), **kw})
+
+    def test_new_id_at_the_same_place_keeps_the_name(self):
+        self.ev("face_found", 1, 0)
+        self.ev("face_named", 1, 400_000, name="owner")
+        self.ev("face_lost", 1, 5_000_000)
+        out = self.ev("face_found", 2, 5_800_000, box=(120, 95, 110, 125), gender="m")
+        self.assertEqual((out["event"], out["name"], out["face"], out["carried"], out["from_face"], out["gender"]),
+                         ("face_named", "owner", 2, True, 1, "m"))
+        self.ev("face_lost", 2, 9_000_000)                      # and it carries on again after that
+        self.assertEqual(self.ev("face_found", 3, 9_500_000)["name"], "owner")
+
+    def test_never_guesses(self):
+        self.ev("face_named", 1, 0, name="owner")
+        self.ev("face_lost", 1, 1_000_000)
+        self.assertIsNone(self.ev("face_found", 2, 3_100_000))                   # too late
+        self.ev("face_named", 3, 4_000_000, name="owner")
+        self.ev("face_lost", 3, 5_000_000)
+        self.assertIsNone(self.ev("face_found", 4, 5_500_000, box=(400, 100, 100, 120)))   # elsewhere
+        self.assertIsNone(self.ev("face_found", 5, 5_600_000, box=(100, 100, 40, 50)))     # much smaller
+        # Two named faces lost side by side: a new face fitting both gets nothing.
+        c = self.c = vision_link.NameCarry()
+        self.ev("face_named", 1, 0, name="a", box=(100, 100, 100, 120))
+        self.ev("face_named", 2, 0, name="b", box=(130, 100, 100, 120))
+        self.ev("face_lost", 1, 1_000_000, box=(100, 100, 100, 120))
+        self.ev("face_lost", 2, 1_000_000, box=(130, 100, 100, 120))
+        self.assertIsNone(self.ev("face_found", 3, 1_200_000, box=(115, 100, 100, 120)))
+        # The name is still on a face in view: no second copy.
+        c = self.c = vision_link.NameCarry()
+        self.ev("face_named", 1, 0, name="a")
+        self.ev("face_named", 2, 0, name="a", box=(300, 100, 100, 120))
+        self.ev("face_lost", 1, 1_000_000)
+        self.assertIsNone(self.ev("face_found", 3, 1_100_000))
+        # Two new faces compete for one lost name: only the first could have it, the second never.
+        c = self.c = vision_link.NameCarry()
+        self.ev("face_named", 1, 0, name="a")
+        self.ev("face_lost", 1, 1_000_000)
+        self.ev("face_found", 7, 1_050_000, box=(400, 300, 100, 120))           # unrelated, elsewhere
+        self.assertEqual(self.ev("face_found", 8, 1_100_000)["name"], "a")
+        self.ev("vision_off", None, 1_200_000)
+        self.ev("face_named", 1, 2_000_000, name="a")
+        self.ev("face_lost", 1, 3_000_000)
+        self.ev("face_found", 9, 3_100_000, box=(110, 100, 100, 120))
+        self.ev("face_lost", 9, 3_150_000)
+        # face 9 took it (carried) and was lost again: carrying from 9 is allowed, it is the same chain
+
+    def test_link_stores_the_carried_event_too(self):
+        db = FakeDB()
+        link = vision_link.VisionLink(db, 6, "p")
+        link.on_text(json.dumps({"type": "hello", "source": "stackchan-x"}))
+        for m in ({"event": "face_named", "face": 1, "t_us": 0, "box": [100, 100, 100, 120], "name": "a"},
+                  {"event": "face_lost", "face": 1, "t_us": 1_000_000, "box": [100, 100, 100, 120]},
+                  {"event": "face_found", "face": 2, "t_us": 1_500_000, "box": [105, 100, 100, 120]}):
+            link.on_text(json.dumps({"type": "vision", **m}))
+        stored = [c[2] for c in db.calls if c[0] == "vision"]
+        self.assertEqual([(e.get("event"), e.get("carried")) for e in stored][-2:], [("face_found", None), ("face_named", True)])

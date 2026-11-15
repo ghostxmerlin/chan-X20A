@@ -142,7 +142,7 @@ class UpdateTest(unittest.TestCase):
         s = copy.deepcopy(S); s["environment"] = "公司做指纹识别芯片。"
         self.fake.reply_next(notes_json())
         notes.update(ENV, self.store, s, None, [sent(T0)], T0 + MIN + 10_000)
-        self.assertIn("环境：公司做指纹识别芯片。", self.user_text())
+        self.assertIn("背景资料（主人平时的情况和常用词，只作背景，不代表 hello 现在在那里）：公司做指纹识别芯片。", self.user_text())
         system = self.fake.calls[0]["messages"][0]["content"]
         for phrase in ("约 50 字", "不要硬凑", "continues"):
             self.assertIn(phrase, system)

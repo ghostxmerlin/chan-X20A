@@ -9,9 +9,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-const PATHS=new Set(['/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item','/db/changes','/db/sources','/db/extract','/mode','/mode/seq','/chat/turns','/chat/state']);
+const PATHS=new Set(['/looks','/looks/frame','/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item','/db/changes','/db/sources','/db/extract','/mode','/mode/seq','/chat/turns','/chat/state']);
 const POST_PATHS=new Set(['/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try','/say/round','/say/play','/signal','/say/prefetch','/say/auto','/db/person','/db/person/note','/db/memory','/db/knowledge','/db/memory/review','/db/extract/switch','/db/extract/run','/mode','/preset']);   // not /mode/input, /mode/robot: ear only
-const PARAMS=new Set(['from','to','t','version','days','lane','offset','limit','status','id','uid','rid','kind','person','topic','q','c']);
+const PARAMS=new Set(['lid','from','to','t','version','days','lane','offset','limit','status','id','uid','rid','kind','person','topic','q','c']);
 const KINDS=new Set('owner regular visitor family unknown trait fact preference boundary relation event told feeling place work commitment life term self other'.split(' '));
 const DB_CARDS=new Set(['people_cards','people_notes','memory_items','knowledge_items']);
 const MAX_BODY=16384;
@@ -53,7 +53,7 @@ export class MindProxy {
   if(!pathAndQuery.startsWith('/')||!PATHS.has(url.pathname)||url.pathname!==pathAndQuery.split('?')[0])return null;
   for(const [k,v] of url.searchParams){
    if(!PARAMS.has(k))return null;
-   const valid=k==='lane'?['live','rerun','replay'].includes(v):k==='status'?['candidate','known','review','disabled'].includes(v):k==='id'?/^(m[a-f0-9]{24}|owner|[pnek]_[a-f0-9]{12})$/.test(v):k==='person'||k==='topic'?/^(owner|[pnek]_[a-f0-9]{12})$/.test(v):k==='kind'?KINDS.has(v):k==='c'?DB_CARDS.has(v):k==='q'?[...v].length>=1&&[...v].length<=40&&!/[\u0000-\u001f]/.test(v):k==='uid'?/^u[a-zA-Z0-9._-]{1,80}$/.test(v):k==='rid'?/^r[a-f0-9]{1,40}$/.test(v):/^\d{1,16}$/.test(v);
+   const valid=k==='lane'?['live','rerun','replay'].includes(v):k==='status'?['candidate','known','review','disabled'].includes(v):k==='id'?/^(m[a-f0-9]{24}|owner|[pnek]_[a-f0-9]{12})$/.test(v):k==='person'||k==='topic'?/^(owner|[pnek]_[a-f0-9]{12})$/.test(v):k==='kind'?KINDS.has(v):k==='c'?DB_CARDS.has(v):k==='q'?[...v].length>=1&&[...v].length<=40&&!/[\u0000-\u001f]/.test(v):k==='uid'?/^u[a-zA-Z0-9._-]{1,80}$/.test(v):k==='rid'?/^r[a-f0-9]{1,40}$/.test(v):k==='lid'?/^b\d{1,16}-\d{1,10}$/.test(v):/^\d{1,16}$/.test(v);
    if(!valid||url.searchParams.getAll(k).length!==1)return null;
   }
   return url.pathname+url.search;

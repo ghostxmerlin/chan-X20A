@@ -110,9 +110,18 @@ class BillingTest(unittest.TestCase):
         self.b.on('boot', 2)
         self.assertEqual((self.ctx.tingwu, self.ctx.mind, self.ctx.prefetch, self.ctx.auto), (True, True, False, False))
 
+    def test_one_flips_the_meet_switch(self):
+        # owner 2026-11-15: 1 = 围观闭嘴 / 开口 (hello's ASR 1 and a crowd double tap)
+        self.ctx.realtime = True
+        tingwu = self.ctx.tingwu
+        r = apply_preset(1, self.b, source='asr', now_ms=1)
+        self.assertEqual((r['result'], self.ctx.realtime), ({'code': 'ok', 'toast': 'PRESET 1: MEET QUIET'}, False))
+        r = apply_preset(1, self.b, source='quick', now_ms=2)
+        self.assertEqual((r['result']['toast'], self.ctx.realtime, self.ctx.tingwu), ('PRESET 1: MEET ON', True, tingwu))   # nothing else changes
+
     def test_one_to_eight_are_undefined_on_mind(self):
         # owner 2026-11-14 (step 1b): 4-8 are mode selects hello does itself, 1-3 are empty
-        for n in range(1, 9):
+        for n in range(2, 9):
             r = apply_preset(n, self.b, source='asr', now_ms=1)
             self.assertEqual((r['result']['code'], r['robot']), ('undefined_preset', {}), n)
         self.assertTrue(self.b.allowed())
@@ -154,7 +163,7 @@ class PresetDetailTest(unittest.TestCase):
         paid = {'hearing': 'tingwu', 'vision': 'recognize'}
         self.assertEqual(set(P), set(range(10)))
         self.assertEqual({n: (P[n]['server'], P[n]['robot']) for n in P},
-                         {0: (('billing_off',), {}), **{n: ((), {}) for n in range(1, 9)},
+                         {0: (('billing_off',), {}), 1: (('realtime_toggle',), {}), **{n: ((), {}) for n in range(2, 9)},
                           9: (('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), paid)})
         self.assertEqual(list(P), list(range(10)))
         self.assertTrue(all(isinstance(P[n]['name'], str) and P[n]['name'] for n in P))
@@ -173,11 +182,11 @@ class PresetDetailTest(unittest.TestCase):
         self.assertEqual(apply_preset(0, self.b, source='asr', now_ms=1), {'result': {'code': 'ok', 'toast': 'PRESET 0'},
                                                                          'robot': {}})
 
-    def test_robot_preset_nine_says_use_page_and_still_does_the_server_half(self):
+    def test_robot_preset_nine_is_ok_hello_does_its_own_half(self):
         self.b.off('page', 1)
         r = apply_preset(9, self.b, source='quick', now_ms=2)
         self.assertEqual((r['result']['code'], self.b.allowed(), self.ctx.tingwu, self.ctx.prefetch),
-                         ('senses_on_page', True, True, True))
+                         ('ok', True, True, True))
 
     def test_page_preset_nine_robot_half_keeps_the_paid_tiers(self):
         r = apply_preset(9, self.b, source='page', now_ms=1)
@@ -217,7 +226,7 @@ class StoreWiringTest(unittest.TestCase):
         n = len(self.ctx.calls)
         r2 = self.ms.apply('digit', 9, **kw)
         self.assertEqual((r1['result']['code'], r2.get('duplicate'), r2['result'], len(self.ctx.calls)),
-                         ('senses_on_page', True, r1['result'], n))
+                         ('ok', True, r1['result'], n))
         self.assertTrue(self.b.allowed())
 
     def test_preset_result_and_robot_half_come_back_through_apply(self):

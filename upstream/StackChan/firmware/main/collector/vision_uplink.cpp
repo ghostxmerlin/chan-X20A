@@ -5,14 +5,17 @@
 #include "hearing_socket.h"
 #include "m12_unit.h"
 #include "psram_task.h"
+#include "vision_snap.h"
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <algorithm>
 #include <cstring>
 #include <mutex>
+#include <new>
 
 namespace collector {
 namespace {
@@ -27,13 +30,19 @@ std::string state = "idle", last_error;
 bool connected = false;
 uint32_t connects = 0, failures = 0, sent = 0;
 int64_t connected_us = 0, last_sent_us = 0;
-// Camera frames (0.4.75): sent when the picture changed and 10 s passed, plus the first after connect.
+// Camera frames (0.4.75): sent when the picture changed and 1 s passed (0.4.98; was 10 s), plus the first after connect.
 constexpr size_t kFrameMax = 32768;          // whole binary message; larger frames are skipped
 uint32_t frames_sent = 0, frames_too_big = 0, frames_no_memory = 0;
 int last_frame_diff = -1;
 int64_t last_frame_us = 0;
 int64_t frames_hold_until_us = 0;           // after a failed frame send (frame_change.h kFrameFailHoldUs)
 uint32_t frames_failed = 0;
+uint32_t frames_deferred = 0;               // 0.4.98: passes that skipped a frame for queued M12 events / a look
+// 0.4.99 视觉爆发 snap (vision_snap.h): the slot lives in PSRAM behind its own lock (never held with `mutex`);
+// snap_wake (a binary semaphore, internal RAM) lets an accepted snap cut the task's 100 ms idle wait short.
+std::mutex snap_mutex;
+snap::Slot* snap_slot = nullptr;
+SemaphoreHandle_t snap_wake = nullptr;
 
 void set_state(const char* s, const std::string& err = {})
 {
@@ -74,12 +83,14 @@ bool wanted() { return m12_snapshot().online || m12_vision_pending() > 0 || came
 
 // "SVF1" + u16le header length + JSON header + JPEG, built in PSRAM. false only when the socket
 // failed; a frame that is too big or finds no memory is skipped (counted) and the link stays.
-bool send_frame(hearing::HearingSocket& socket, const CameraFrame& f, int diff, bool& sent_out)
+// A snap's frame (0.4.99) carries "snap":<id> in the header; snap_id < 0 = an ordinary frame.
+bool send_frame(hearing::HearingSocket& socket, const CameraFrame& f, int diff, bool& sent_out, int64_t snap_id = -1)
 {
     sent_out = false;
     ArduinoJson::JsonDocument head;
     head["type"] = "frame"; head["seq"] = f.seq; head["t_us"] = f.timestamp_us; head["now_us"] = esp_timer_get_time();
     head["w"] = f.width; head["h"] = f.height; head["diff"] = diff; head["bytes"] = f.length;
+    if (snap_id >= 0) head["snap"] = static_cast<uint32_t>(snap_id);
     std::string text;
     ArduinoJson::serializeJson(head, text);
     const size_t total = 6 + text.size() + f.length;
@@ -159,22 +170,53 @@ void run(void*)
                 }
             }
             bool frame_sent = false;
-            if (ok && camera_streaming() && !frame_held(esp_timer_get_time(), frames_hold_until_us)) {
+            // 0.4.98 (review 2026-11-15): M12 events first. A frame (up to 3 s to send) never goes while events
+            // are still queued or a crowd-tap look is running; it is skipped, not queued: the next pass takes the
+            // newest one. At most one frame per pass.
+            const bool look = m12_look_active();
+            const bool gate = frame_gate_open(m12_vision_pending(), look);
+            // 0.4.99 snap (视觉爆发): an accepted snap takes this pass's frame, behind the same gate (so after the
+            // events drained above), outside the change rule and the 1 s gap: the newest frame captured at or after
+            // the request. A frame too big / without memory: the next fresh one tries until the 2 s deadline.
+            snap::Ticket ticket;
+            bool snapping;
+            { std::lock_guard<std::mutex> lock(snap_mutex); snapping = snap_slot && snap_slot->waiting(esp_timer_get_time(), ticket); }
+            if (ok && !gate && (snapping || camera_streaming())) { std::lock_guard<std::mutex> lock(mutex); ++frames_deferred; }
+            const auto note_sent = [&](const CameraFrame& f, int diff) {
+                have_last = true; last_thumb = f.thumb; last_frame_sent_us = esp_timer_get_time();
+                std::lock_guard<std::mutex> lock(mutex);
+                ++frames_sent; last_frame_diff = diff; last_frame_us = last_frame_sent_us;
+            };
+            const auto note_failed = [&] {
+                std::lock_guard<std::mutex> lock(mutex);
+                frames_hold_until_us = esp_timer_get_time() + kFrameFailHoldUs; ++frames_failed;
+            };
+            if (ok && snapping && (!camera_streaming() || frame_held(esp_timer_get_time(), frames_hold_until_us))) {
+                std::lock_guard<std::mutex> lock(snap_mutex);    // camera switched off / frames held since the accept
+                snap_slot->failed(ticket, camera_streaming() ? snap::Why::NoUplink : snap::Why::CameraOff);
+            } else if (ok && snapping && gate) {
+                const auto frame = camera_latest_frame();
+                if (frame && frame->bytes && frame->length && snap::fresh(frame->timestamp_us, ticket.since_us)) {
+                    last_seen_seq = frame->seq;
+                    const int diff = frame_changed_cells(frame->thumb, last_thumb);
+                    ok = send_frame(socket, *frame, diff, frame_sent, ticket.id);
+                    {
+                        std::lock_guard<std::mutex> lock(snap_mutex);
+                        if (frame_sent) snap_slot->sent(ticket, esp_timer_get_time(), frame->seq, static_cast<uint32_t>(frame->length));
+                        else snap_slot->failed(ticket, snap::Why::NoUplink);   // also too big / no memory: fail now, not at 2 s
+                    }
+                    if (!ok) note_failed();
+                    if (frame_sent) note_sent(*frame, diff);
+                }
+            } else if (ok && gate && camera_streaming() && !frame_held(esp_timer_get_time(), frames_hold_until_us)) {
                 const auto frame = camera_latest_frame();
                 if (frame && frame->seq != last_seen_seq && frame->bytes && frame->length) {
                     last_seen_seq = frame->seq;
                     const int diff = frame_changed_cells(frame->thumb, last_thumb);   // reported as "diff" (cells)
                     if (frame_should_send(have_last, diff, esp_timer_get_time() - last_frame_sent_us)) {
                         ok = send_frame(socket, *frame, diff, frame_sent);
-                        if (!ok) {
-                            frames_hold_until_us = esp_timer_get_time() + kFrameFailHoldUs;
-                            std::lock_guard<std::mutex> lock(mutex); ++frames_failed;
-                        }
-                        if (frame_sent) {
-                            have_last = true; last_thumb = frame->thumb; last_frame_sent_us = esp_timer_get_time();
-                            std::lock_guard<std::mutex> lock(mutex);
-                            ++frames_sent; last_frame_diff = diff; last_frame_us = last_frame_sent_us;
-                        }
+                        if (!ok) note_failed();
+                        if (frame_sent) note_sent(*frame, diff);
                     }
                 }
             }
@@ -190,7 +232,10 @@ void run(void*)
             } else {
                 idle_since = 0;
             }
-            if (!n) vTaskDelay(pdMS_TO_TICKS(100));
+            if (!n) {   // a look waits for its events, a snap for a fresh frame: poll faster; a new snap wakes it
+                const TickType_t wait = pdMS_TO_TICKS(look || snapping ? 20 : 100);
+                if (snap_wake) xSemaphoreTake(snap_wake, wait); else vTaskDelay(wait);
+            }
         }
         const std::string err = ok && socket.IsConnected() ? std::string() : socket.Error();
         socket.Abort();
@@ -210,6 +255,14 @@ void run(void*)
 void vision_uplink_init(const std::string& device_id, const std::string& boot_id)
 {
     device = device_id; boot = boot_id;
+    // 0.4.99 snap: the slot in PSRAM (never freed); without it /mouth snaps are ignored (no answer: the ear times out).
+    if (void* mem = heap_caps_calloc(1, sizeof(snap::Slot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) {
+        std::lock_guard<std::mutex> lock(snap_mutex);
+        snap_slot = new (mem) snap::Slot();
+    } else {
+        ESP_LOGE(kTag, "no memory for the snap slot: snaps off");
+    }
+    snap_wake = xSemaphoreCreateBinary();   // a FreeRTOS sync object: internal RAM
     // Socket and JSON work only: no flash access, so the stack can live in PSRAM.
     if (create_psram_task(run, "vision_up", 8192, nullptr, 3) != pdPASS) {
         ESP_LOGE(kTag, "task create failed");
@@ -217,8 +270,52 @@ void vision_uplink_init(const std::string& device_id, const std::string& boot_id
     }
 }
 
+void vision_snap_request(uint32_t id)
+{
+    const int64_t now = esp_timer_get_time();
+    bool up;
+    { std::lock_guard<std::mutex> lock(mutex); up = connected && !frame_held(now, frames_hold_until_us); }
+    const bool camera = camera_streaming();
+    snap::Why why;
+    {
+        std::lock_guard<std::mutex> lock(snap_mutex);
+        if (!snap_slot) return;
+        why = snap_slot->request(id, now, camera, up);
+    }
+    if (why == snap::Why::None) { if (snap_wake) xSemaphoreGive(snap_wake); }
+    else ESP_LOGI(kTag, "snap %lu refused: %s", (unsigned long)id, snap::why_name(why));   // after the locks
+}
+
+bool vision_snap_take_result(char* line, size_t cap, size_t& n)
+{
+    snap::Result r;
+    {
+        std::lock_guard<std::mutex> lock(snap_mutex);
+        if (!snap_slot || !snap_slot->take(esp_timer_get_time(), r)) return false;
+    }
+    n = snap::result_line(r, line, cap);
+    return n > 0;
+}
+
+void vision_snap_link_down()
+{
+    std::lock_guard<std::mutex> lock(snap_mutex);
+    if (snap_slot) snap_slot->reset();
+}
+
 void vision_uplink_json(ArduinoJson::JsonObject out)
 {
+    snap::Counters sc;
+    bool have_snap = false, snap_busy = false;
+    {
+        std::lock_guard<std::mutex> lock(snap_mutex);
+        if (snap_slot) { sc = snap_slot->counters(); snap_busy = snap_slot->busy(); have_snap = true; }
+    }
+    if (have_snap) {
+        auto s = out["snap"].to<ArduinoJson::JsonObject>();
+        s["busy"] = snap_busy; s["accepted"] = sc.accepted; s["ok"] = sc.ok; s["refused"] = sc.refused;
+        s["timeouts"] = sc.timeouts; s["failed"] = sc.failed; s["late"] = sc.late; s["dropped"] = sc.dropped;
+    }
     std::lock_guard<std::mutex> lock(mutex);
     out["state"] = state; out["connected"] = connected;
     out["connects"] = connects; out["failures"] = failures; out["sent"] = sent;
@@ -226,7 +323,7 @@ void vision_uplink_json(ArduinoJson::JsonObject out)
     if (last_sent_us) out["last_sent_ms_ago"] = (esp_timer_get_time() - last_sent_us) / 1000;
     if (!last_error.empty()) out["last_error"] = last_error;
     out["frames_sent"] = frames_sent; out["frames_too_big"] = frames_too_big; out["frames_no_memory"] = frames_no_memory;
-    out["frames_failed"] = frames_failed;
+    out["frames_failed"] = frames_failed; out["frames_deferred"] = frames_deferred;
     if (frame_held(esp_timer_get_time(), frames_hold_until_us)) out["frames_held_ms"] = (frames_hold_until_us - esp_timer_get_time()) / 1000;
     if (last_frame_diff >= 0) out["last_frame_diff"] = last_frame_diff;
     if (last_frame_us) out["last_frame_age_ms"] = (esp_timer_get_time() - last_frame_us) / 1000;
