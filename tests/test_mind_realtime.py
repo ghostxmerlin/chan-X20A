@@ -131,6 +131,12 @@ class ContextTest(Base):
         self.vision(self.now - 4000, 'vision_off', None)
         self.assertEqual(rt.visible_faces(self.db, self.now), [])
 
+    def test_a_carried_name_is_not_a_recognition(self):
+        # security review + owner 2026-11-15: the ear's guessed (carried) name never counts as 认出
+        self.vision(self.now - 5000, 'face_carried', 2, 'boss_face')
+        self.assertEqual(rt.visible_faces(self.db, self.now), [])
+        self.assertNotIn('看到的人', self.rc.block()['text'])
+
     def test_memories_at_most_three(self):
         self.rc._cache['memories'] = (self.rc.mono(), ['a1', 'b2', 'c3', 'd4'])
         self.assertIn('你记得（只在相关时提）：a1；b2；c3\n', self.rc.block()['text'] + '\n')

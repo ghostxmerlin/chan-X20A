@@ -630,6 +630,18 @@ class LookAnswerTest(HubBase):
         self.assertEqual(self.link.texts()[0]["type"], "tts.start")
 
 
+class CarriedNameTest(unittest.TestCase):
+    """Security review 2026-11-15 + owner: a carried (guessed) name is display only; no owner greeting, no 【你的眼睛】 name."""
+    def test_face_carried_names_nobody(self):
+        import realtime_link as rl
+        fv = rl.FaceView(60)
+        fv.event({"event": "face_found", "face": 2, "box": [100, 100, 100, 120]}, 0.0)
+        self.assertIsNone(fv.event({"event": "face_carried", "face": 2, "name": "boss_face", "carried": True}, 0.5))
+        self.assertFalse(fv.present(["boss_face"], 0.6))
+        self.assertEqual([f["name"] for f in fv.recent(0.6)], [None])
+        self.assertEqual(fv.event({"event": "face_named", "face": 2, "name": "boss_face"}, 1.0), "boss_face")   # M12's own
+
+
 class YieldTest(HubBase):
     async def test_soul_tts_busy_cancels_the_response(self):
         ws = await self.open_ready()

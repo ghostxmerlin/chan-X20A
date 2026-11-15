@@ -205,7 +205,7 @@ class NameCarryTest(unittest.TestCase):
         self.ev("face_lost", 1, 5_000_000)
         out = self.ev("face_found", 2, 5_800_000, box=(120, 95, 110, 125), gender="m")
         self.assertEqual((out["event"], out["name"], out["face"], out["carried"], out["from_face"], out["gender"]),
-                         ("face_named", "owner", 2, True, 1, "m"))
+                         ("face_carried", "owner", 2, True, 1, "m"))
         self.ev("face_lost", 2, 9_000_000)                      # and it carries on again after that
         self.assertEqual(self.ev("face_found", 3, 9_500_000)["name"], "owner")
 
@@ -252,4 +252,4 @@ class NameCarryTest(unittest.TestCase):
                   {"event": "face_found", "face": 2, "t_us": 1_500_000, "box": [105, 100, 100, 120]}):
             link.on_text(json.dumps({"type": "vision", **m}))
         stored = [c[2] for c in db.calls if c[0] == "vision"]
-        self.assertEqual([(e.get("event"), e.get("carried")) for e in stored][-2:], [("face_found", None), ("face_named", True)])
+        self.assertEqual([(e.get("event"), e.get("carried")) for e in stored][-2:], [("face_found", None), ("face_carried", True)])

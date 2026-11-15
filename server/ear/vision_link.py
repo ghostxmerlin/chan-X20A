@@ -30,9 +30,12 @@ CARRY_SIZE = (0.67, 1.5)      # ... and a box this much the same size (width rat
 class NameCarry:
     """Per vision session. M12 sometimes ends a track when the head turns or the light changes and starts a new face id
     at the same place, which is then asked `who` again at a bad moment and stays unknown. feed(event) -> a synthetic
-    face_named {carried: true, from_face} for such a new face, or None. Strict on purpose: exactly one recently lost
-    named face fits, no other new face competes for it, and the name is not on a face still in view. A real
-    face_named from the M12 for that face later simply overrides it (consumers keep the latest name per face)."""
+    face_carried {name, carried: true, from_face} for such a new face, or None. Strict on purpose: exactly one recently
+    lost named face fits, no other new face competes for it, and the name is not on a face still in view.
+    Display only (owner 2026-11-15, after a security review: a guess must never be taken as a recognition, "宁可叫不出
+    名字，也不要叫错"): it is stored, but it is NOT a face_named, so nothing that keys on face_named (the meet owner
+    greeting and 【你的眼睛】, mind's 认出 / owner presence / scene) uses it. Only the M12's own face_named for that face
+    (its who re-ask) names it."""
 
     def __init__(self):
         self.named = {}               # face id -> (name, box) while in view
@@ -82,7 +85,7 @@ class NameCarry:
             self.named[face] = (name, box)
             self.fresh.pop(face, None)
             out = {k: e[k] for k in ("t_us", "f", "face", "box", "prob", "gender", "age", "age_group") if k in e}
-            return {**out, "type": "vision", "event": "face_named", "name": name, "carried": True, "from_face": old_face}
+            return {**out, "type": "vision", "event": "face_carried", "name": name, "carried": True, "from_face": old_face}
         return None
 FRAME_MAGIC = b"SVF1"
 FRAME_HEAD_MAX = 512
