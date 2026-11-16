@@ -158,7 +158,7 @@ def _match(doc, flt):
 class FakeDB:
     """Collections by name. Set .fail to an exception to make every write raise it, .delay_s to
     make every write slow, .poison[_id] = exception to make any write touching that _id raise it,
-    .after_write = f(op, collection, ids) to react to a write (e.g. go down after it).
+    .ping_fail = exception to make command("ping") raise it, .after_write = f(op, collection, ids) to react to a write (e.g. go down after it).
     .calls lists (op, collection, ...) for every write and create_index."""
 
     def __init__(self):
@@ -168,7 +168,13 @@ class FakeDB:
         self.delay_s = 0
         self.poison = {}
         self.after_write = None              # f(op, collection, ids) after each write that went through
+        self.ping_fail = None                # exception command("ping") raises (it ignores .fail: no write)
         self.lock = threading.RLock()
+
+    def command(self, name, *args, **kw):
+        if self.ping_fail is not None:
+            raise self.ping_fail
+        return {"ok": 1.0}
 
     def __getitem__(self, name):
         with self.lock:

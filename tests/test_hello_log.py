@@ -600,6 +600,132 @@ class HelloLogTest(unittest.TestCase):
         self.assertTrue(old.exists())
         self.assertEqual(logger.stats()["backlog_lines"], 1)
 
+    # ---- I1 (final review): failures that are not about one record never reject records
+
+    def assert_kept_then_shipped(self, logger, db, names, retry=lambda: None):
+        for _ in range(3):
+            self.assertFalse(logger.flush())
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (0, 0, len(names)))
+        retry()
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], names)
+
+    def test_bad_uri_on_connect_keeps_records(self):
+        import types
+
+        class InvalidURI(Exception):
+            pass
+
+        class ConfigurationError(Exception):
+            pass
+
+        for exc in (InvalidURI("Username and password must be escaped"), ConfigurationError("bad option")):
+            with self.subTest(exc=repr(exc)):
+                db, state = FakeDB(), {"exc": exc}
+
+                def client(uri, **kw):
+                    if state["exc"] is not None:
+                        raise state["exc"]
+                    return {"hello": db}
+
+                fake = types.ModuleType("pymongo")
+                fake.MongoClient = client
+                with patch.dict(sys.modules, {"pymongo": fake}):
+                    logger = hello_log.init("mind", db_uri="mongodb://u:p@ss@h/", spool_dir=temp_dir(),
+                                            clock_ms=lambda: T0, lifecycle=False)
+                    hello_log.emit("call.chat", sum="a")
+                    hello_log.emit("call.chat", sum="b")
+                    self.assert_kept_then_shipped(logger, db, ["a", "b"], lambda: state.update(exc=None))
+
+    def test_index_creation_failure_keeps_records(self):
+        class OperationFailure(Exception):
+            code = 67                                    # CannotCreateIndex
+
+        logger, db = capture_log("mind")
+        col = db["log_" + MONTH]
+
+        def refuse(keys, **kw):
+            raise OperationFailure("cannot create index")
+
+        col.create_index = refuse
+        hello_log.emit("call.chat", sum="a")
+        hello_log.emit("call.chat", sum="b")
+        self.assert_kept_then_shipped(logger, db, ["a", "b"], lambda: delattr(col, "create_index"))
+
+    def test_index_already_there_with_other_options_is_fine(self):
+        class OperationFailure(Exception):
+            code = 85                                    # IndexOptionsConflict: an index on these keys exists
+
+        logger, db = capture_log("mind")
+
+        def conflict(keys, **kw):
+            raise OperationFailure("index exists with different options")
+
+        db["log_" + MONTH].create_index = conflict
+        hello_log.emit("call.chat", sum="a")
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["a"])
+
+    def test_server_wide_failure_with_few_records_keeps_them(self):
+        class OperationFailure(Exception):
+            def __init__(self, msg, code):
+                super().__init__(msg)
+                self.code = code
+
+        # 14031 = OutOfDiskSpace; 99999 = a refusal we have no name for: neither rejects 2 records
+        for code in (14031, 99999):
+            with self.subTest(code=code):
+                logger, db = capture_log("mind")
+                db.fail = OperationFailure("server says no", code)
+                hello_log.emit("call.chat", sum="a")
+                hello_log.emit("call.chat", sum="b")
+                self.assert_kept_then_shipped(logger, db, ["a", "b"], lambda: setattr(db, "fail", None))
+
+    def test_db_wide_write_error_codes_are_not_rejections(self):
+        from log_fixtures import FakeBulkWriteError
+
+        logger, db = capture_log("mind")
+        db.poison[f"mind:{logger.run}:1"] = FakeBulkWriteError(
+            {"writeErrors": [{"index": 0, "code": 14031, "errmsg": "out of disk space"}], "writeConcernErrors": []})
+        hello_log.emit("call.chat", sum="a")
+        self.assert_kept_then_shipped(logger, db, ["a"], lambda: db.poison.clear())
+
+    def test_server_refused_poison_next_to_good_record_still_rejected(self):
+        class OperationFailure(Exception):
+            code = 2                                     # BadValue, for this one document only
+
+        logger, db = capture_log("mind")
+        db.poison[f"mind:{logger.run}:1"] = OperationFailure("bad value")
+        hello_log.emit("call.chat", sum="poison")
+        self.assertFalse(logger.flush())                 # alone: nothing proves the DB takes writes, it waits
+        self.assertEqual(logger.stats()["rejected"], 0)
+        hello_log.emit("call.chat", sum="good")          # e.g. the next svc.beat
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["good"])
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (1, 1, 0))
+
+    def test_lone_unencodable_record_waits_when_ping_fails(self):
+        class InvalidDocument(Exception):
+            pass
+
+        logger, db = capture_log("mind")
+        db.poison[f"mind:{logger.run}:1"] = InvalidDocument("cannot encode")
+        db.ping_fail = ConnectionError("no answer")
+        hello_log.emit("call.chat", sum="alone")
+        self.assertFalse(logger.flush())
+        self.assertEqual(logger.stats()["rejected"], 0)
+        db.ping_fail = None
+        self.assertTrue(logger.flush())
+        self.assertEqual(logger.stats()["rejected"], 1)
+
+    def test_free_sk_needs_a_word_boundary(self):
+        self.assertEqual(hello_log.redact("task-finished at mask-abcdefgh1234"), "task-finished at mask-abcdefgh1234")
+        self.assertEqual(hello_log.redact("x (sk-ABCDEFGH123) and:sk-ABCDEFGH123"), "x (sk-***) and:sk-***")
+        self.assertEqual(hello_log.redact("notBearer abcdefgh12345"), "notBearer abcdefgh12345")
+        self.assertEqual(hello_log.redact("h: Bearer abcdefgh12345"), "h: Bearer ***")
+
 
 class HelloLogLifecycleTest(unittest.TestCase):
     """Task 2: trace scopes, heartbeat, svc.start / svc.stop."""
@@ -680,7 +806,7 @@ class HelloLogLifecycleTest(unittest.TestCase):
         self.assertEqual(extra["counts"]["call.eye"], 2)
         self.assertEqual(extra["counts"]["heard.asr"], 1)
         self.assertEqual(extra["state"], {"eye": True, "mind": False})
-        for k in ("dropped", "spool_errors", "db_errors", "backlog_lines"):
+        for k in ("dropped", "rejected", "spool_errors", "db_errors", "backlog_lines"):
             self.assertEqual(extra[k], 0, k)
         # counts are per minute and the beat does not count itself; a failing state fn still beats
         hello_log.emit("call.eye", sum="4")

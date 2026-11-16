@@ -24,8 +24,9 @@ One daemon thread cleans each record (redaction, no images, size caps), appends 
 <svc>-YYYYMMDD.offset (its mtime = when it last advanced). Records queued while Mongo is slow still
 reach the spool between database operations. If Mongo is down or slow (5 s timeouts) the lines wait
 in the spool and are replayed later, also after a restart; replay is idempotent (duplicate _id =
-already shipped). A record Mongo keeps refusing while others go through is counted as rejected and
-skipped, so it cannot block the spool. If the spool folder is unwritable records go straight to
+already shipped). A record Mongo keeps refusing while others go through (or that cannot be encoded
+while Mongo answers a ping) is counted as rejected and skipped, so it cannot block the spool; any
+other failure (bad URI, index creation, disk full, auth, a refusal of everything) keeps everything. If the spool folder is unwritable records go straight to
 Mongo. A spool file is deleted 7 days after it was fully shipped. stdlib only; pymongo is imported
 when a real connection (or its UpdateOne) is first needed.
 """
@@ -76,8 +77,8 @@ _SECRET_SUFFIXES = ("token", "secret", "password", "passwd", "apikey", "accesske
 _SECRET_PAIRS = {("api", "key"), ("session", "token")}
 _NAME_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#@\s]+@")
-_FREE_SK = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
-_FREE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
+_FREE_SK = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}")          # not the end of task-finished
+_FREE_BEARER = re.compile(r"(?i)(?<![A-Za-z0-9])bearer\s+[A-Za-z0-9._~+/=-]{8,}")
 _URL_PARAM_NAME = re.compile(r"[?&;]([^=&#;?\s\"']+)=")
 _PARAM_END = re.compile(r"[&#;?\s\"']")
 _SECRET_PARAM_END = re.compile(r"[&#\s\"']")       # a secret value is masked through ; and ? too
@@ -88,6 +89,18 @@ _INT64 = 2 ** 63
 # errors that mean "the database is unreachable", not "this record is bad" (pymongo names, no import)
 _UNREACHABLE = {"ConnectionFailure", "AutoReconnect", "ServerSelectionTimeoutError", "NetworkTimeout",
                 "NotPrimaryError", "WaitQueueTimeoutError"}
+# server error codes that are about the database, never about one document (also inside writeErrors):
+# 6 HostUnreachable, 7 HostNotFound, 13 Unauthorized, 18 AuthenticationFailed, 24 LockTimeout, 46 LockBusy,
+# 50 MaxTimeMSExpired, 64 WriteConcernFailed, 89 NetworkTimeout, 91 ShutdownInProgress, 189 PrimarySteppedDown,
+# 262 ExceededTimeLimit, 9001 SocketException, 10107 NotWritablePrimary, 11600 InterruptedAtShutdown,
+# 11602 InterruptedDueToReplStateChange, 13435 NotPrimaryNoSecondaryOk, 13436 NotPrimaryOrSecondary,
+# 14031 OutOfDiskSpace
+_DB_WIDE_CODES = {6, 7, 13, 18, 24, 46, 50, 64, 89, 91, 189, 262, 9001, 10107, 11600, 11602, 13435, 13436, 14031}
+# errors raised on our side while encoding one record (bson / pymongo names, no import): that record is bad
+_RECORD_FAULTS = {"InvalidDocument", "InvalidStringData", "InvalidBSON", "DocumentTooLarge", "BSONError",
+                  "TypeError", "ValueError", "OverflowError", "UnicodeError", "RecursionError"}
+# create_index: an index on these keys is already there (other name / options) = good enough
+_INDEX_EXISTS_CODES = {68, 85, 86}
 
 
 class _NoDatabase(Exception):
@@ -253,13 +266,21 @@ def _is_dup(exc):
 
 
 def _unreachable(exc):
-    """Network / DB-down / auth (by error code) problems: everything waits, nothing is rejected."""
+    """Network / DB-down / auth / disk-full … (by class name or error code, never by message text)
+    problems: everything waits, nothing is rejected."""
     if isinstance(exc, (OSError, ImportError, _NoDatabase)):
         return True
     if any(c.__name__ in _UNREACHABLE for c in type(exc).__mro__):
         return True
-    # Unauthorized / AuthenticationFailed (OperationFailure codes); by code only, never by message text
-    return getattr(exc, "code", None) in (13, 18)
+    if getattr(exc, "code", None) in _DB_WIDE_CODES:
+        return True
+    errs = _write_errors(exc)
+    return bool(errs) and any(e.get("code") in _DB_WIDE_CODES for e in errs)
+
+
+def _record_fault(exc):
+    """The record itself could not be encoded (raised on our side): retrying it will never help."""
+    return any(c.__name__ in _RECORD_FAULTS for c in type(exc).__mro__)
 
 
 class _Upsert:
@@ -440,7 +461,7 @@ class Logger:
                     counts, self._counts = self._counts, {}
                 st = self.stats()
                 extra = {"counts": counts, "state": state}
-                for k in ("dropped", "spool_errors", "db_errors", "backlog_lines"):
+                for k in ("dropped", "rejected", "spool_errors", "db_errors", "backlog_lines"):
                     extra[k] = st[k]
                 self._put("svc.beat", {"extra": extra})
                 return True
@@ -738,10 +759,12 @@ class Logger:
         """Ship items in order. Returns (done, rejected, err): the first `done` items are in Mongo or
         rejected (`rejected` of them); err is set when shipping stopped and items[done:] must wait.
         The chunk is shipped whole first (SHIP_TRIES tries) unless split=True (it already failed that
-        often at this spool position). Then record by record: a record failing SHIP_TRIES times for a
-        non-network reason is rejected, even when it is alone; an unreachable database stops the pass
-        and never rejects anything; when the first REFUSE_ALL records all fail with the same error and
-        none goes through, the database is refusing everything (auth …) and everything waits."""
+        often at this spool position). Then record by record (SHIP_TRIES tries each). A record is
+        rejected only with proof that the database is taking writes and only this record is refused:
+        another write of the same pass went through, or the record could not be encoded on our side
+        and a `ping` answers right after. Otherwise (an unreachable database, a refusal of everything,
+        an error we cannot place) nothing is rejected and everything waits; the pass also stops early
+        when the first REFUSE_ALL records all fail alike and none goes through."""
         if not split:
             for attempt in range(SHIP_TRIES):
                 try:
@@ -764,18 +787,43 @@ class Logger:
             if err is None:
                 ok += 1
             elif _unreachable(err):
-                return self._settle(i, bad, refused, err)
+                return self._settle(i, bad, refused, err, ok)
             else:
-                bad.append((item, err))
-                if ok == 0 and len(bad) == REFUSE_ALL and len({type(e) for _, e in bad}) == 1:
-                    return 0, 0, err
-        return self._settle(len(items), bad, refused, None)
+                bad.append((i, item, err))
+                if ok == 0 and len(bad) == REFUSE_ALL and len({type(e) for _, _, e in bad}) == 1:
+                    return self._settle(i + 1, bad, refused, err, ok)
+        return self._settle(len(items), bad, refused, None, ok)
 
-    def _settle(self, done, bad, refused, err):
-        for (flow, _), exc in bad:
-            self._rejected += 1
-            log.info("hello_log: rejected %s after %d tries: %r", flow.get("_id"), SHIP_TRIES, exc)
+    def _settle(self, done, bad, refused, err, ok):
+        """Reject the failed records there is proof against (see _ship_chunk); the first one without
+        proof ends `done` (it and everything after it wait). With ok == 0 nothing before it went in."""
+        alive = None
+        for n, (i, (flow, _), exc) in enumerate(bad):
+            if ok == 0:
+                if alive is None and _record_fault(exc):
+                    alive = self._ping()
+                if not (_record_fault(exc) and alive):
+                    for _, (f, _), e in bad[:n]:
+                        self._reject(f, e)
+                    return i, n + refused, exc
+            self._reject(flow, exc)
         return done, len(bad) + refused, err
+
+    def _reject(self, flow, exc):
+        self._rejected += 1
+        log.info("hello_log: rejected %s after %d tries: %r", flow.get("_id"), SHIP_TRIES, exc)
+
+    def _ping(self):
+        """True when the database answers a ping right now (no write, bounded by the client's timeouts)."""
+        try:
+            db = self._get_db()
+            command = getattr(db, "command", None)
+            if command is None:
+                return False
+            command("ping")
+            return True
+        except Exception:
+            return False
 
     def _failed(self, exc):
         self._db_errors += 1
@@ -785,12 +833,17 @@ class Logger:
             log.info("hello_log: Mongo write failed, keeping records in the spool: %r", exc)
 
     def _get_db(self):
+        """The database; any failure to build the client (bad URI, missing pymongo …) is _NoDatabase:
+        it is never a reason to reject a record."""
         if self._db is None:
             if not self._uri:
                 raise _NoDatabase("no database configured")
-            from pymongo import MongoClient
-            self._db = MongoClient(self._uri, serverSelectionTimeoutMS=5000, socketTimeoutMS=5000,
-                                   connectTimeoutMS=5000)[DB_NAME]
+            try:
+                from pymongo import MongoClient
+                self._db = MongoClient(self._uri, serverSelectionTimeoutMS=5000, socketTimeoutMS=5000,
+                                       connectTimeoutMS=5000)[DB_NAME]
+            except Exception as exc:
+                raise _NoDatabase(f"connect: {type(exc).__name__}") from exc     # no URI text (secrets)
         return self._db
 
     def _ensure_indexes(self, db, month):
@@ -802,7 +855,12 @@ class Logger:
                  ([("at", -1)], {"name": "at_cost", "partialFilterExpression": {"cost": {"$exists": True}}})]
         for keys, kw in specs:
             self._between()
-            flows.create_index(keys, **kw)
+            try:
+                flows.create_index(keys, **kw)
+            except Exception as exc:
+                if getattr(exc, "code", None) in _INDEX_EXISTS_CODES:
+                    continue
+                raise _NoDatabase(f"create_index: {exc!r}"[:300]) from exc
         self._indexed.add(month)
 
     def _ship(self, items):
@@ -835,7 +893,7 @@ class Logger:
                 db["log_" + month].insert_many(flows, ordered=False)
             except Exception as exc:
                 errs = _write_errors(exc)
-                if errs is None:
+                if errs is None or _unreachable(exc):
                     raise
                 for e in errs:
                     if e.get("code") != 11000:      # the server refused this document; retrying won't help
