@@ -112,6 +112,8 @@ class HelloLogTest(unittest.TestCase):
         self.assertEqual(hello_log.redact("https://h/login?next=https://x/?token=y&keyword=看看"),
                          "https://h/login?next=https://x/?token=***&keyword=看看")
         self.assertEqual(hello_log.redact("https://h/s?keyword=看看"), "https://h/s?keyword=看看")
+        self.assertEqual(hello_log.redact("https://h/p?token=abc;def&x=1"), "https://h/p?token=***&x=1")
+        self.assertEqual(hello_log.redact("https://h/p?b=1&token=a?b#frag"), "https://h/p?b=1&token=***#frag")
 
     def test_auth_failure_keeps_records(self):
         class OperationFailure(Exception):
@@ -119,10 +121,14 @@ class HelloLogTest(unittest.TestCase):
                 super().__init__(msg)
                 self.code = code
 
-        for exc in (OperationFailure("bad auth", 18), OperationFailure("command insert requires auth", 13),
-                    RuntimeError("Authentication failed."), ValueError("user is not authorized on hello")):
+        for exc in (OperationFailure("bad auth", 18), OperationFailure("command insert requires auth", 13)):
             with self.subTest(exc=repr(exc)):
                 self.assertTrue(hello_log._unreachable(exc))
+        # by code only: document text echoed in a message must never stall the spool
+        for exc in (RuntimeError("Authentication failed."), ValueError("user is not authorized on hello"),
+                    OperationFailure("Document failed validation: not authorized", 121)):
+            with self.subTest(exc=repr(exc)):
+                self.assertFalse(hello_log._unreachable(exc))
         logger, db = capture_log("mind")
         db.fail = OperationFailure("Authentication failed.", 18)
         hello_log.emit("call.chat", sum="a")

@@ -59,7 +59,9 @@ _NAME_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#@\s]+@")
 _FREE_SK = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
 _FREE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
-_URL_PARAM = re.compile(r"([?&;])([^=&#;?\s\"']+)=([^&#;?\s\"']*)")
+_URL_PARAM_NAME = re.compile(r"[?&;]([^=&#;?\s\"']+)=")
+_PARAM_END = re.compile(r"[&#;?\s\"']")
+_SECRET_PARAM_END = re.compile(r"[&#\s\"']")       # a secret value is masked through ; and ? too
 _DATA_URL_WHOLE = re.compile(r"data:([\w.+-]+)/[\w.+-]+[;,]")
 _DATA_URL_INLINE = re.compile(r"data:([\w.+-]+)/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/=\r\n]*")
 _SPOOL_NAME = r"^{}-(\d{{8}})\.jsonl$"
@@ -121,7 +123,7 @@ def _clean_str(s, limit):
     if "base64," in s:
         s = _DATA_URL_INLINE.sub(lambda mm: _omitted(mm.group(0), mm.group(1)), s)
     if "=" in s:
-        s = _URL_PARAM.sub(_mask_param, s)
+        s = _mask_params(s)
     if "@" in s and "://" in s:
         s = _URL_USERINFO.sub(r"\1***@", s)
     if "sk-" in s:
@@ -132,8 +134,20 @@ def _clean_str(s, limit):
     return s
 
 
-def _mask_param(m):
-    return f"{m.group(1)}{m.group(2)}=***" if _secret_name(m.group(2)) else m.group(0)
+def _mask_params(s):
+    """URL query values whose parameter name is secret become '***'."""
+    out, i = [], 0
+    while True:
+        m = _URL_PARAM_NAME.search(s, i)
+        if not m:
+            break
+        secret = _secret_name(m.group(1))
+        end = (_SECRET_PARAM_END if secret else _PARAM_END).search(s, m.end())
+        stop = end.start() if end else len(s)
+        out.append(s[i:m.end()] + "***" if secret else s[i:stop])
+        i = stop
+    out.append(s[i:])
+    return "".join(out)
 
 
 def _secret_value(s):
@@ -220,18 +234,13 @@ def _is_dup(exc):
 
 
 def _unreachable(exc):
-    """Network / DB-down / auth problems: everything waits, nothing is rejected."""
+    """Network / DB-down / auth (by error code) problems: everything waits, nothing is rejected."""
     if isinstance(exc, (OSError, ImportError, _NoDatabase)):
         return True
     if any(c.__name__ in _UNREACHABLE for c in type(exc).__mro__):
         return True
-    if getattr(exc, "code", None) in (13, 18):      # Unauthorized, AuthenticationFailed
-        return True
-    try:
-        text = str(exc).lower()
-    except Exception:
-        return False
-    return "not authorized" in text or "authentication failed" in text
+    # Unauthorized / AuthenticationFailed (OperationFailure codes); by code only, never by message text
+    return getattr(exc, "code", None) in (13, 18)
 
 
 class _Upsert:
