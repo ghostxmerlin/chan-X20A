@@ -962,7 +962,7 @@ async def serve_hearing(ws, peer, number, ctx):
     print(f"+ {peer} {conn}", flush=True)
     t0 = ear_log.link_open("hearing", conn=conn, peer=peer)
     ear = ticker = None
-    why = "error"
+    why = "error"                                # the Ear failed with the socket still open
     try:
         ear = Ear(ctx.models, ws, ctx.ex)
         ear.link_conn = conn
@@ -981,8 +981,11 @@ async def serve_hearing(ws, peer, number, ctx):
                 await ear.on_audio(data)
             else:
                 await ear.on_text(data)
-        why = f"closed {getattr(ws, 'close_code', None)}"
+        why = "closed"
     finally:
+        code = getattr(ws, "close_code", None)
+        if code is not None:                     # a normal end, or a dropped link (1006): its close code either way
+            why = f"closed {code}"
         try:
             if ticker is not None:
                 ticker.cancel()

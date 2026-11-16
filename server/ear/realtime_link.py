@@ -102,7 +102,8 @@ PRICE_BASIS = "realtime_link.PRICE_CNY_PER_M 2026-11-14 (help.aliyun.com/zh/mode
 LOCAL_KINDS = ("look_filler", "greet_beep")         # played from local PCM: no model call, no call.realtime.turn
 FAILED_STATES = ("error", "stalled", "no_done", "robot_gone")
 # Which of the ear's own sentences belong to a server VAD turn (run log trace + the turn's "ear" words): those whose ASR
-# came in after the turn's speech_started, less SEG_EPS_S. A sentence's ASR always arrives after its own speech began;
+# came in after the turn's start, less SEG_EPS_S; the start is the earlier of the server's speech_started and the ear's
+# own onset of the speech whose audio the turn carries (_seg_onset). A sentence's ASR always arrives after its own speech began;
 # the margin covers speech_started being stamped when the event reaches us (server VAD detection + network lag behind
 # the real onset). The previous sentence's ASR comes ~0.4 s or more before the next turn's speech_started (server VAD
 # silence 1.0 s vs the ear's 0.4 s + ASR ~0.2 s; closer sentences are one server turn), so 0.3 s keeps them apart.
@@ -682,6 +683,7 @@ class RealtimeHub:
         self._told_busy = False                        # a /place/told post in flight
         self._hush_busy = False                        # a 闭嘴 switch-off post in flight
         self._local_texts = collections.deque(maxlen=6)    # (clock, text) of the ear's own ASR: memory only
+        self._claimed = collections.deque(maxlen=12)       # traces of the ear's sentences a turn already carries
         self._rescue = None                            # a muted 「嗯」 that may still be asked again
         self._rescue_heard = None
         self._cmd_last = {}                            # burst word -> when it was last handled
@@ -694,6 +696,7 @@ class RealtimeHub:
         self._looks_dirty, self._looks_sent_at = False, None
         self._local_traces = collections.deque(maxlen=6)  # (clock, trace) of the ear's own sentences (run log)
         self._seg_start = None                           # the server VAD's last speech_started (clock)
+        self._seg_onset = None                           # the ear's own onset of the speech the next server turn carries
         self._next_trace = self._next_prompt = None      # the trace / text item of the next non-speech response
 
     # ---- conditions ----
@@ -738,7 +741,8 @@ class RealtimeHub:
             self._preroll_bytes, self._was_speaking = 0, False
             return
         now = self.clock()
-        if speaking and not self._was_speaking and not sounding:
+        onset = speaking and not self._was_speaking and not sounding
+        if onset:
             self._onset(now)
         if self._was_speaking and not speaking:
             self._local_end = now
@@ -755,6 +759,8 @@ class RealtimeHub:
         if self.cfg.gate == "all" or now < self._send_until:
             if self.state == "closed":
                 return
+            if onset and self._seg_onset is None:      # this speech's audio goes up (or waits in _in while connecting)
+                self._seg_onset = now
             while self._preroll:
                 self._put(self._preroll.popleft())
             self._preroll_bytes = 0
@@ -935,6 +941,7 @@ class RealtimeHub:
         self._spans.append((self.opened_at, now))
         self.state, self.opened_at = "closed", None
         self._need_speech = need_speech
+        self._seg_start = self._seg_onset = None
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
@@ -1252,15 +1259,22 @@ class RealtimeHub:
         elif t == "input_audio_buffer.speech_stopped":
             self._speech_end = now
             recent = self._local_end if self._local_end is not None and now - self._local_end < 3 else None
-            start = self._seg_start if self._seg_start is not None and self._seg_start <= now else None
-            mine = (lambda at: at >= start - SEG_EPS_S) if start is not None else (lambda at: now - at < 3)  # noqa: E731
-            traces = list(self._local_traces) if start is not None else list(reversed(self._local_traces))
-            pick = next(((at, tr) for at, tr in traces if tr and mine(at)), (None, None))   # in the turn: its first
+            # the segment starts at the earlier of the server's speech_started and the ear's own onset of the speech whose
+            # audio it carries: right after a (re)connect the queued audio reaches the server in a burst, so its
+            # speech_started can come after the ear has already recognised a short first sentence ("你好")
+            marks = [m for m in (self._seg_start, self._seg_onset) if m is not None and m <= now]
+            start = min(marks) if marks else None
+            heard = [(at, text, tr) for (at, text), (_, tr) in zip(self._local_texts, self._local_traces)]
+            mine = [h for h in heard if (h[0] >= start - SEG_EPS_S if start is not None else now - h[0] < 3)]
+            if not mine:                               # no onset seen (it came while hello was busy): the last 3 s,
+                mine = [h for h in heard if now - h[0] < 3 and h[2] not in self._claimed]   # minus sentences
+            pick = next(((at, tr) for at, _, tr in mine if tr), (None, None))                # another turn took
+            self._claim(pick[1])
             self._turn = self._heard_turn = {"kind": "speech", "speech_end": now, "heard_chars": None,
                                              "local_end": recent, "start": start,
                                              "trace": pick[1], "trace_at": pick[0],
-                                             "ear": [t for at, t in self._local_texts if mine(at)]}
-            self._seg_start = None
+                                             "ear": [text for _, text, _ in mine]}
+            self._seg_start = self._seg_onset = None
             self._stage("think")
         elif t == "conversation.item.input_audio_transcription.completed":
             text = strip_emoji(e.get("transcript"))
@@ -1390,6 +1404,10 @@ class RealtimeHub:
         self.stats[f"muted_{v}"] += 1
         log(f"realtime: reply muted ({v})", flush=True)
 
+    def _claim(self, trace):
+        if trace and trace not in self._claimed:
+            self._claimed.append(trace)
+
     def _log_gate(self, rid, turn, v, done, **extra):
         """gate.realtime: one verdict per reply (emit only: this runs on the voice loop)."""
         if not turn.get("trace"):
@@ -1431,6 +1449,7 @@ class RealtimeHub:
                 and h["trace_at"] < h["start"] - SEG_EPS_S
             if trace and (not h.get("trace") or stale):
                 h["trace"], h["trace_at"] = trace, now
+            self._claim(trace)
         self._heard_text(str(text)[:300], now, trace=trace)
 
     def _heard_text(self, text, now, told=False, trace=None):

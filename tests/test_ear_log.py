@@ -407,6 +407,92 @@ class RealtimeLogTest(HubBase):
         self.assertNotIn("他们还没有学会如何成为", bodies(self.flows, turns[0])["input"])
         self.assertEqual([g["trace"] for g in self.flows("gate.realtime")], [ta, tb])
 
+    async def test_cold_open_first_sentence_keeps_its_trace(self):
+        # fix round 2: the session was closed (idle); the first sentence's audio waits in the queue while the session
+        # connects and reaches the server in a burst, so speech_started comes after the ear already recognised it
+        self.hub.close("idle")
+        self.t[0] = 999.5
+        self.speak(3)                                                   # the ear's onset: opens the session
+        self.assertEqual(self.hub.state, "connecting")
+        self.t[0] = 999.8
+        self.speak(1, speaking=False)
+        await trl.settle(20)
+        ws = self.wss[-1]
+        ws.push({"type": "session.updated", "session": {}})
+        await trl.settle()
+        self.t[0] = 1000.0
+        t = self.heard("你好呀")                                          # local ASR done before the server saw speech
+        self.t[0] = 1001.0
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        await trl.settle()
+        self.t[0] = 1001.3
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        await trl.settle()
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
+        await trl.settle(20)
+        turn = self.flows("call.realtime.turn")[-1]
+        self.assertEqual(turn["trace"], t)
+        self.assertIn("你好呀", bodies(self.flows, turn)["input"])
+
+    async def test_cold_open_without_an_onset_uses_unclaimed_sentences(self):
+        # the reviewer's repro: no ear onset known, speech_started 1 s after the ear's ASR; no other turn took that
+        # sentence, so the turn still gets it (round 1's two-sentence case: A's sentence is claimed by A's turn)
+        ws = await self.open_ready()
+        self.t[0] = 1000.0
+        t = self.heard("你好呀")
+        self.t[0] = 1001.0
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        await trl.settle()
+        self.t[0] = 1001.3
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        await trl.settle()
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
+        await trl.settle(20)
+        turn = self.flows("call.realtime.turn")[-1]
+        self.assertEqual(turn["trace"], t)
+        self.assertIn("你好呀", bodies(self.flows, turn)["input"])
+
+    async def test_two_sentences_with_onsets_keep_their_own_traces(self):
+        # round 1's case with the ear's own onsets fed too (they move each window start earlier, never into A)
+        ws = await self.open_ready()
+
+        async def at(when, e=None):
+            self.t[0] = when
+            if e:
+                ws.push(e)
+            await trl.settle()
+
+        async def quiet(rid):
+            ws.push({"type": "response.created", "response": {"id": rid}})
+            ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
+            ws.push({"type": "response.done", "response": {"id": rid, "status": "completed", "usage": {}}})
+            await trl.settle(20)
+        self.t[0] = 999.8
+        self.speak(2)
+        self.t[0] = 1000.6
+        self.speak(1, speaking=False)
+        await at(1000.0, {"type": "input_audio_buffer.speech_started"})
+        await at(1001.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1001.2
+        ta = self.heard("从农民到进城打工")
+        await quiet("rA")
+        self.t[0] = 1001.9
+        self.speak(2)
+        self.t[0] = 1002.6
+        self.speak(1, speaking=False)
+        await at(1002.0, {"type": "input_audio_buffer.speech_started"})
+        await at(1003.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1003.3
+        tb = self.heard("他们还没有学会如何成为")
+        await quiet("rB")
+        turns = self.flows("call.realtime.turn")
+        self.assertEqual([r["trace"] for r in turns], [ta, tb])
+        self.assertNotIn("从农民到进城打工", bodies(self.flows, turns[1])["input"])
+
     async def test_judge_look_wait_carries_the_turn_trace(self):
         # R16: a look question found by the gate (the burst was not there when the words came) shares the trace
         self.hub.fillers = [("我看看哈", trl.pcm24(100))]
@@ -514,6 +600,28 @@ class EarServerLogTest(unittest.IsolatedAsyncioTestCase):
         opens, closes = self.flows("link.open"), self.flows("link.close")
         self.assertEqual((len(opens), len(closes)), (1, 1))
         self.assertEqual((closes[0]["extra"]["conn"], closes[0]["extra"]["why"]), ("c7", "error"))
+
+    async def test_a_dropped_hearing_link_logs_its_close_code(self):
+        # fix round 2: a Wi-Fi drop ends the socket with an error (1006); link.close says "closed 1006", not "error"
+        executor = __import__("concurrent.futures").futures.ThreadPoolExecutor(1)
+        ctx = self.hearing_ctx(executor)
+
+        class Dropped(FakeHearingWS):
+            async def __anext__(self):
+                m = await self.q.get()
+                if m is None:
+                    self.close_code = 1006
+                    raise ConnectionResetError("no close frame")
+                return m
+        ws = Dropped()
+        with mock.patch.object(ear_server.so, "VoiceActivityDetector", return_value=SimpleNamespace(reset=lambda: None)):
+            task = asyncio.create_task(ear_server.serve_hearing(ws, ("10.0.0.8", 1), 3, ctx))
+            await asyncio.sleep(0.02)
+            ws.q.put_nowait(None)
+            with self.assertRaises(ConnectionResetError):
+                await task
+        executor.shutdown()
+        self.assertEqual(self.flows("link.close")[0]["extra"]["why"], "closed 1006")
 
     async def test_hearing_reconnect_overlap_keeps_hearing_on(self):
         executor = __import__("concurrent.futures").futures.ThreadPoolExecutor(1)
