@@ -72,21 +72,63 @@ class HelloLogTest(unittest.TestCase):
         self.assertEqual(out, {"api_key": "***", "nested": {"Authorization": "***"},
                                "url": "wss://h/p?token=***&x=1"})
         self.assertEqual(hello_log.redact({"u": "https://h/a?x=1&Key=s3cr3t"}), {"u": "https://h/a?x=1&Key=***"})
-        self.assertEqual(hello_log.redact({"api_keys": ["sk-a", "sk-b"], "Secret": {"value": "v", "n": 2}}),
-                         {"api_keys": ["***", "***"], "Secret": {"value": "***", "n": 2}})
+        src = {"keyword": "看看", "prompt_tokens": 12, "usage": {"input_tokens_details": {"cached": 1}},
+               "x-api-key": "abc", "note": "sk-zzzz1234", "h": "Bearer q"}
+        self.assertEqual(hello_log.redact(src),
+                         {"keyword": "看看", "prompt_tokens": 12, "usage": {"input_tokens_details": {"cached": 1}},
+                          "x-api-key": "***", "note": "***", "h": "***"})
+        self.assertEqual(hello_log.redact({"Access_Token": "t", "auth": "a", "passwd": "p", "tokens": "many",
+                                           "keys": ["k1", "sk-k2"], "Secret": {"value": "v", "n": 2},
+                                           "h2": "bearer Q", "token": 7}),
+                         {"Access_Token": "***", "auth": "***", "passwd": "***", "tokens": "many",
+                          "keys": ["k1", "***"], "Secret": {"value": "v", "n": 2}, "h2": "***", "token": 7})
         # provider usage counts stay numbers
         usage = {"prompt_tokens": 12, "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 0}}
         self.assertEqual(hello_log.redact({"usage": usage}), {"usage": usage})
 
     def test_redact_applies_to_flow_and_body(self):
         logger, db = capture_log("mind")
-        hello_log.emit("svc.start", args={"password": "p", "db_uri": "mongodb://h/?authSource=a&token=t"},
+        hello_log.emit("svc.start", args={"password": "p", "endpoint": "mongodb://h/?authSource=a&token=t"},
                        body={"input": {"secret": "s", "messages": ["hi"]}})
         self.assertTrue(logger.flush())
         f = db.flows(MONTH)[0]
-        self.assertEqual(f["args"], {"password": "***", "db_uri": "mongodb://h/?authSource=a&token=***"})
+        self.assertEqual(f["args"], {"password": "***", "endpoint": "mongodb://h/?authSource=a&token=***"})
         text = db.bodies(MONTH)[f["body"]["input"]]
         self.assertEqual(json.loads(text), {"secret": "***", "messages": ["hi"]})
+
+    def test_uri_userinfo_masked(self):
+        logger, db = capture_log("mind")
+        hello_log.emit("svc.start", args={"db_uri": "mongodb://u:p@h:27017/x", "url": "https://a:b@h/p"},
+                       ref={"session": "20261115/x-c1"},
+                       body={"input": "connect mongodb://u:p@h/x and mongodb+srv://u:p@c.h/y now"})
+        self.assertTrue(logger.flush())
+        f = db.flows(MONTH)[0]
+        self.assertEqual(f["args"], {"db_uri": "***", "url": "https://***@h/p"})
+        self.assertEqual(f["ref"], {"session": "20261115/x-c1"})
+        text = db.bodies(MONTH)[f["body"]["input"]]
+        self.assertEqual(text, "connect mongodb://***@h/x and mongodb+srv://***@c.h/y now")
+        self.assertEqual(hello_log.redact({"MONGO_URI": "m", "Cookie": "c", "credentials": "x", "dsn": "d",
+                                           "session_token": "t", "pwd": "p", "session": "20261115/x-c1"}),
+                         {"MONGO_URI": "***", "Cookie": "***", "credentials": "***", "dsn": "***",
+                          "session_token": "***", "pwd": "***", "session": "20261115/x-c1"})
+        for line in spool_lines(logger.spool_dir, "mind"):
+            self.assertNotIn(b"u:p", line)
+
+    def test_free_text_secret_patterns(self):
+        logger, db = capture_log("mind")
+        hello_log.emit("call.chat", sum="用 sk-ABCDEFGH123 调用",
+                       body={"input": "my key is sk-ABCDEFGH123 ok",
+                             "context": "Authorization: Bearer abcdefgh12345\nnext", "output": "a sk-short task"})
+        self.assertTrue(logger.flush())
+        f = db.flows(MONTH)[0]
+        bodies = db.bodies(MONTH)
+        self.assertEqual(bodies[f["body"]["input"]], "my key is sk-*** ok")
+        self.assertEqual(bodies[f["body"]["context"]], "Authorization: Bearer ***\nnext")
+        self.assertEqual(bodies[f["body"]["output"]], "a sk-short task")       # too short to be a key
+        self.assertEqual(f["sum"], "用 sk-*** 调用")
+        for line in spool_lines(logger.spool_dir, "mind"):
+            self.assertNotIn(b"ABCDEFGH123", line)
+            self.assertNotIn(b"abcdefgh12345", line)
 
     def test_key_fp(self):
         self.assertEqual(hello_log.key_fp("sk-xTVl1234567"), "sk-xTVl")

@@ -45,7 +45,11 @@ RESERVED = ("_id", "svc", "run", "seq")
 log = logging.getLogger("hello_log")
 _current = None
 _EPOCH_BJ = datetime(1970, 1, 1) + timedelta(hours=8)        # naive Beijing wall clock at epoch (no DST)
-_SENSITIVE = ("key", "token", "secret", "password", "authorization")
+_SENSITIVE_NAME = re.compile(r"(?i)(^|[_-])(api[_-]?key|key|token|access[_-]?token|secret|password|passwd|pwd"
+                             r"|authorization|auth|uri|dsn|cookie|credentials?|session[_-]?token)$")
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#@\s]+@")
+_FREE_SK = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
+_FREE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
 _URL_SECRET = re.compile(r"(?i)([?&;][^=&#\s\"']*(?:key|token|secret|password|authorization)[^=&#\s\"']*=)"
                          r"[^&#\s\"']*")
 _DATA_URL_WHOLE = re.compile(r"data:([\w.+-]+)/[\w.+-]+[;,]")
@@ -92,35 +96,39 @@ def _clean_str(s, limit):
         s = _DATA_URL_INLINE.sub(lambda mm: _omitted(mm.group(0), mm.group(1)), s)
     if "=" in s:
         s = _URL_SECRET.sub(r"\1***", s)
+    if "@" in s and "://" in s:
+        s = _URL_USERINFO.sub(r"\1***@", s)
+    if "sk-" in s:
+        s = _FREE_SK.sub("sk-***", s)
+    s = _FREE_BEARER.sub("Bearer ***", s)
     if limit and len(s) * 4 > limit:
         s = _cap(s, limit)
     return s
 
 
-def _sensitive(name):
-    low = name.lower()
-    return any(word in low for word in _SENSITIVE)
+def _secret_value(s):
+    return s.startswith("sk-") or s[:7].lower() == "bearer "
 
 
-def _clean(obj, limit=0, depth=0, masked=False):
+def _clean(obj, limit=0, depth=0):
     """JSON-safe copy: secrets masked, data: URLs and bytes replaced by a size note, odd objects as repr,
-    strings capped at `limit` bytes (0 = no cap). Under a sensitive name everything but numbers is '***'."""
+    strings capped at `limit` bytes (0 = no cap)."""
     if obj is None or isinstance(obj, (bool, float)):
         return obj
     if isinstance(obj, int):
         return obj if -_INT64 <= obj < _INT64 else str(obj)
-    if masked and not isinstance(obj, (dict, list, tuple)):
-        return "***"
     if isinstance(obj, str):
-        return _clean_str(obj, limit)
+        return "***" if _secret_value(obj) else _clean_str(obj, limit)
     if depth > 40:
         return "[too deep]"
     if isinstance(obj, dict):
-        return {(k if isinstance(k, str) else str(k)):
-                _clean(v, limit, depth + 1, masked or _sensitive(k if isinstance(k, str) else str(k)))
-                for k, v in obj.items()}
+        out = {}
+        for k, v in obj.items():
+            name = k if isinstance(k, str) else str(k)
+            out[name] = "***" if isinstance(v, str) and _SENSITIVE_NAME.search(name) else _clean(v, limit, depth + 1)
+        return out
     if isinstance(obj, (list, tuple)):
-        return [_clean(v, limit, depth + 1, masked) for v in obj]
+        return [_clean(v, limit, depth + 1) for v in obj]
     if isinstance(obj, (bytes, bytearray, memoryview)):
         return f"[bytes omitted, {len(bytes(obj))} bytes]"
     try:
@@ -131,8 +139,12 @@ def _clean(obj, limit=0, depth=0, masked=False):
 
 
 def redact(obj):
-    """Copy of obj with values under key/token/secret/password/authorization names (any case) as '***'
-    (numbers such as usage token counts stay), URL query secrets as '***', data: URLs omitted."""
+    """Copy of obj with secrets as '***': string values under names like api_key / x-api-key / token /
+    access_token / secret / password / authorization / auth / db_uri / dsn / cookie / credentials /
+    session_token (whole name or its last _/- part, any case), string values starting with 'sk-' or
+    'Bearer ', key/token-style URL query values and URL user:pass@. Inside any text, sk-… keys become
+    'sk-***' and 'Bearer <token>' becomes 'Bearer ***'. Other fields (keyword, prompt_tokens, session,
+    usage dicts, numbers) stay; dicts and lists are walked. data: URLs omitted."""
     return _clean(obj)
 
 
