@@ -149,7 +149,8 @@ def write_round(env, store, s, roles, ctx, now_ms, *, chat=None, trigger=None, m
                      'weak': bool(isinstance(out, dict) and out.get('weak')),
                      'error': err if not scores else None, 'run_id': judge_run},
            'checks': [], 'plays': [], 'state': 'ready', 'run_ids': run_ids,
-           'timings': {'write_ms': write_ms, 'judge_ms': judge_ms}, 'cost_usd': cost}
+           'timings': {'write_ms': write_ms, 'judge_ms': judge_ms}, 'cost_usd': cost,
+           'trace': round_trace}                 # the run log's trace: a line played later speaks on it (call.tts)
     store.db['say_rounds'].insert_one(dict(doc))
     try:
         recall.note_uses(store.db, ctx.get('memories'), 'talk', now_ms, rid)   # the talk show's 3-day memory cooldown

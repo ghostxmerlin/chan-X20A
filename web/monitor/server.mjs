@@ -19,7 +19,8 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/mind.html', ['mind.html', 'text/html; charset=utf-8']], ['/mind-ui.js', ['mind-ui.js', 'text/javascript; charset=utf-8']], ['/mind.css', ['mind.css', 'text/css; charset=utf-8']],
     ['/db.html', ['db.html', 'text/html; charset=utf-8']], ['/db-ui.js', ['db-ui.js', 'text/javascript; charset=utf-8']], ['/db.css', ['db.css', 'text/css; charset=utf-8']],
     ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/say-ui.js', ['say-ui.js', 'text/javascript; charset=utf-8']], ['/scene-ui.js', ['scene-ui.js', 'text/javascript; charset=utf-8']], ['/looks-ui.js', ['looks-ui.js', 'text/javascript; charset=utf-8']], ['/looks-ui-main.js', ['looks-ui-main.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']],
-    ['/mode-ui.js', ['mode-ui.js', 'text/javascript; charset=utf-8']], ['/mode.css', ['mode.css', 'text/css; charset=utf-8']]]);
+    ['/mode-ui.js', ['mode-ui.js', 'text/javascript; charset=utf-8']], ['/mode.css', ['mode.css', 'text/css; charset=utf-8']],
+    ['/log.html', ['log.html', 'text/html; charset=utf-8']], ['/log-ui.js', ['log-ui.js', 'text/javascript; charset=utf-8']], ['/log.css', ['log.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -82,7 +83,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain', '/say/rounds', '/say/stats', '/scenes', '/signals', '/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item', '/db/changes', '/db/sources', '/db/extract', '/mode', '/mode/seq', '/chat/turns', '/chat/state', '/looks', '/looks/frame'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain', '/say/rounds', '/say/stats', '/scenes', '/signals', '/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item', '/db/changes', '/db/sources', '/db/extract', '/mode', '/mode/seq', '/chat/turns', '/chat/state', '/looks', '/looks/frame', '/log', '/log/body', '/log/chain', '/log/ledger', '/log/gaps', '/log/last'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
       mind.get(sub + url.search).then(r => {
         res.writeHead(r.status, { 'Content-Type': r.status === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });

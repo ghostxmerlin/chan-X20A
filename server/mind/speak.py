@@ -18,6 +18,7 @@ from . import attention, speech_context, scene_speech, speech_settings, say_mome
 from . import say_round as rounds
 from .records import Records
 from .store import LANE
+from . import runlog
 from .runlog import hello_log, trace as log_trace
 
 CHAT = llm.chat
@@ -183,7 +184,8 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=N
     ctx = context(db, store, s, now_ms)
     body = {"model": MODEL, "messages": _messages(role, ctx), "temperature": 0.9, "max_tokens": 2000, "reasoning_effort": "low",
             "response_format": {"type": "json_schema", "json_schema": {"name": "say", "strict": True, "schema": SAY_SCHEMA}}}
-    with hello_log.scope("call.say.speak", trace=log_trace(),
+    trace = log_trace()                          # the writing call and the spoken line (soul-tts's call.tts) share it
+    with hello_log.scope("call.say.speak", trace=trace,
                          ref={"minute": settings_mod.minute_floor(now_ms), "role": role_id}):
         resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
     text = ""
@@ -200,7 +202,7 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=N
         raise RuntimeError(err or "没写出句子")
     voice = role["voice"]
     opts = {k: role[k] for k in ("instruction", "rate") if role.get(k) is not None}
-    with _ENQUEUE_LOCK:
+    with _ENQUEUE_LOCK, hello_log.scope(trace=trace):
         _check_pending(epoch,is_current)
         tts_id = tts.say(text, voice=voice, interrupt=True, **opts)
     uid = f"u{now_ms}"
@@ -216,6 +218,12 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=N
 
 
 def say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,settings_version=None):
+    with hello_log.scope(trace=log_trace()):     # the writing call(s) and soul-tts's call.tts share one trace
+        return _say(env, store, s, roles, role_id, tts, now_ms, wait=wait, is_current=is_current,
+                    settings_version=settings_version)
+
+
+def _say(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=None,settings_version=None):
     started = time.monotonic()
     epoch = _EPOCH
     role = speech_settings.role_config(roles[role_id], s)
@@ -287,7 +295,7 @@ def _speak_line(store, tts, r, key, now_ms, why, casting=None, epoch=None, is_cu
            'casting': cast, 'tts_submit_at': submit, 'why': why}
     store.db['utterances'].insert_one(dict(rec))
     try:
-        with _ENQUEUE_LOCK:
+        with _ENQUEUE_LOCK, hello_log.scope(trace=r.get('trace')):   # the round's trace (lines + judge), if it has one
             if epoch is not None:
                 _check_pending(epoch, is_current)           # a stop that landed after the last check still wins
             tts_id = tts.say(line['text'], voice=cast['voice'], interrupt=True,
@@ -593,8 +601,17 @@ class TtsHttp:
     def voices(self):
         return self._call("GET", "/v1/voices")
 
+    @staticmethod
+    def _traced(body):
+        """The run log's current trace as /v1/say's "trace", so soul-tts's call.tts joins the chain (docs/hello-log.md)."""
+        if "trace" not in body:
+            t = runlog.current_trace()
+            if t:
+                body["trace"] = t
+        return body
+
     def say(self, text, **kw):
-        return self._call("POST", "/v1/say", {"text": text, **kw})["id"]
+        return self._call("POST", "/v1/say", self._traced({"text": text, **kw}))["id"]
 
     def status(self, uid, wait=0):
         return self._call("GET", f"/v1/say/{uid}" + (f"?wait={wait:g}" if wait else ""), timeout=wait + 10)
@@ -603,7 +620,7 @@ class TtsHttp:
     # synthesis task (and the robot link) while the model is still thinking; text() / end() feed it, cancel() drops
     # it unspoken. Same ids and status as say().
     def begin(self, timeout=None, **kw):
-        return self._call("POST", "/v1/say", {"text": "", "stream": True, **kw}, timeout=timeout)["id"]
+        return self._call("POST", "/v1/say", self._traced({"text": "", "stream": True, **kw}), timeout=timeout)["id"]
 
     def text(self, uid, piece):
         """-> soul-tts's {id, state}: it takes text into a cancelled / failed line too, so the caller checks state."""

@@ -16,6 +16,9 @@ POST /db/person /db/person/note /db/memory /db/knowledge (library, append-only v
      /db/extract/run {day?} (ask the memory worker to run that day now; it still checks the switch and caps)
 GET  /realtime/context (ear: 围观 realtime voice session's context block + owner face names; mind/realtime.py)
 GET  /looks?limit= /looks/frame?lid= (page: 视觉爆发 looks, bursts, running; one look's photo as jpeg_b64)
+GET  /log?from&to&kind&svc&trace&cost&limit&before /log/body?at&id /log/chain?trace&at /log/ledger?day /log/gaps?from&to
+     /log/last (日志 page: the run/audit log through server/common/hello_log_query.py, read only; kind ending in "."
+     is a prefix; bodies only by id, one per /log/body; 503 when hello_log_query is not deployed; docs/hello-log.md)
 GET  /chat/turns /chat/state; POST /chat/heard /chat/stage (ear: a speech onset in chat, the page's dots) (ear: one sentence heard while hello is in chat; chat v0, mind/chat.py)
 GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/robot (ear: hello's /mouth closed)
      /mode/input (ear: hello's digits 0 / 9) /mode (page: billing only) /preset (modes step 1b: hello owns the mode,
@@ -43,6 +46,11 @@ from .store import LANE
 from . import owner_signals
 from .library import Library, LibraryConflict, COLLECTIONS, ID_RE
 from .modes import INPUTS as MODE_INPUTS
+
+try:                                             # ~/soul-mind/hello_log_query.py; server/common in the repository
+    import hello_log_query as log_query          # (runlog puts server/common on sys.path when hello_log is not found)
+except ImportError:
+    log_query = None
 
 MAX_RANGE_MS = 24 * 3600_000
 MAX_BODY = 16 * 1024
@@ -99,6 +107,48 @@ def _range(q):
     lo, hi = _int(q, "from"), _int(q, "to")
     if hi <= lo or hi - lo > MAX_RANGE_MS:
         raise BadRequest("range must be positive and at most 24 h")
+    return lo, hi
+
+
+LOG_SVCS = ("ear", "mind", "eye", "notes", "memory", "tts")
+LOG_MAX_RANGE_MS = 31 * 86400_000
+LOG_DEFAULT_MS = 3600_000
+LOG_LAST_RECENT_MS = 3600_000                    # /log/last: any record in the last hour, else the last svc.* row
+LOG_LAST_BEATS_MS = 30 * 86400_000               # (svc.start / beat / stop / error: the kind index) in 30 days
+LOG_KIND_RE = re.compile(r"^[a-z][a-z0-9_.]{0,63}$")
+LOG_TRACE_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+LOG_ID_RE = re.compile(r"^[a-z]{1,16}:[A-Za-z0-9_-]{1,32}:\d{1,12}$")
+LOG_BODY_RE = re.compile(r"^[a-f0-9]{64}$")
+LOG_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+class Unavailable(Exception):
+    """503 with a message: a part mind needs is not deployed here."""
+
+
+def _one(q, name, pattern=None):
+    v = (q.get(name) or [None])[0]
+    if v is not None and pattern is not None and not pattern.fullmatch(v):
+        raise BadRequest(f"bad {name}")
+    return v
+
+
+def _log_ms(q, name, required=True):
+    """A ms timestamp parameter between 1970 and 2286 (beyond that the month tables' dates overflow)."""
+    v = _int(q, name, required)
+    if v is not None and not 0 <= v < 10**13:
+        raise BadRequest(f"{name} out of range")
+    return v
+
+
+def _log_range(q, now):
+    """from / to of a /log query (default: the last hour), at most 31 days."""
+    hi = _log_ms(q, "to", required=False)
+    hi = now if hi is None else hi
+    lo = _log_ms(q, "from", required=False)
+    lo = hi - LOG_DEFAULT_MS if lo is None else lo
+    if hi <= lo or hi - lo > LOG_MAX_RANGE_MS or lo < 0:
+        raise BadRequest("range must be positive and at most 31 days")
     return lo, hi
 
 
@@ -341,7 +391,64 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         return lib_call(lambda: lib.put(c, body.get('fields'), item_id=item_id, expected_version=body.get('expected_version'),
                                         scope_id=scope_id, now_ms=now, reason=reason[:200]))
 
+    def log_get(path, q):
+        """日志 page: the run/audit log (hello_log_query), read only."""
+        if log_query is None:
+            raise Unavailable("hello_log_query is not deployed next to mind")
+        now = int(time.time() * 1000)
+        try:
+            if path == '/log':
+                lo, hi = _log_range(q, now)
+                kind = _one(q, 'kind', LOG_KIND_RE)
+                svc = _one(q, 'svc')
+                if svc is not None and svc not in LOG_SVCS:
+                    raise BadRequest("bad svc")
+                cost = _one(q, 'cost')
+                if cost not in (None, '0', '1'):
+                    raise BadRequest("cost must be 0 or 1")
+                limit = max(1, min(_int(q, 'limit', required=False) or 200, log_query.MAX_LIMIT))
+                rows = log_query.flows(db, lo, hi, kinds=[kind] if kind and not kind.endswith('.') else None,
+                                       kind_prefix=kind if kind and kind.endswith('.') else None, svc=svc,
+                                       trace=_one(q, 'trace', LOG_TRACE_RE),
+                                       has_cost=None if cost is None else cost == '1', limit=limit,
+                                       before_id=_one(q, 'before', LOG_ID_RE))
+                return {"from": lo, "to": hi, "rows": rows, "more": len(rows) >= limit}
+            if path == '/log/body':
+                at, bid = _log_ms(q, 'at'), _one(q, 'id', LOG_BODY_RE)
+                if not bid:
+                    raise BadRequest("id required")
+                text = log_query.body(db, at, bid)
+                if text is None:
+                    raise NotFound("no such body")
+                return {"text": text}
+            if path == '/log/chain':
+                trace = _one(q, 'trace', LOG_TRACE_RE)
+                if not trace:
+                    raise BadRequest("trace required")
+                return {"trace": trace, "rows": log_query.chain(db, trace, _log_ms(q, 'at'))}
+            if path == '/log/ledger':
+                day = _one(q, 'day', LOG_DAY_RE)
+                if day is None:
+                    day = time.strftime("%Y-%m-%d", time.gmtime(now / 1000 + 8 * 3600))    # today, Beijing
+                return {"day": day, **log_query.ledger(db, day)}
+            if path == '/log/gaps':
+                lo, hi = _log_range(q, now)
+                return {"from": lo, "to": hi, "gaps": log_query.gaps(db, lo, hi, now_ms=now)}
+            if path == '/log/last':
+                out = {}
+                for svc in LOG_SVCS:
+                    rows = log_query.flows(db, now - LOG_LAST_RECENT_MS, now + 1, svc=svc, limit=1) or \
+                        log_query.flows(db, now - LOG_LAST_BEATS_MS, now + 1, svc=svc, limit=1,
+                                        kinds=["svc.start", "svc.beat", "svc.stop", "svc.error"])
+                    out[svc] = {k: rows[0].get(k) for k in ("at", "kind", "run")} if rows else None
+                return {"now": now, "svcs": out}
+        except ValueError as e:                  # a bad day, a span over 60 months
+            raise BadRequest(str(e)[:120]) from None
+        raise NotFound("not found")
+
     def get(path, q):
+        if path == '/log' or path.startswith('/log/'):
+            return log_get(path, q)
         if path.startswith('/db/'):
             if path not in ('/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item',
                             '/db/changes', '/db/sources', '/db/extract'):
@@ -855,6 +962,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 self._send(400, {"error": str(e)})
             except NotFound as e:
                 self._send(404, {"error": str(e)})
+            except Unavailable as e:
+                self._send(503, {"error": str(e)})
             except NoSituation as e:
                 self._send(409, {"error": str(e), "code": "no_situation"})
             except ModeConflict as e:

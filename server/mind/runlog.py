@@ -8,6 +8,7 @@ service from starting.
   start(svc, hub, args)      hello_log.init once per process (mind / eye / notes / memory); never raises
   watch(db, store)           the heartbeat's state: the switches table + the mind switch (store.enabled())
   trace()                    the current scope's trace, else a fresh one (a scope never drops an outer trace)
+  current_trace()            the current scope's trace, else None (what mind sends soul-tts as /v1/say's trace)
   switch(name, before, after, by)   with-block around one switch write -> one switch.set {name, before, after}
   read_switch(db, name)      a switch's stored value (on, or mode for 嘴) before a write; None when unreadable
   value(fn), by_scope(default)      a 'before' read that never raises; the scope's by, else default
@@ -124,6 +125,13 @@ def trace():
         return hello_log.current().get("trace") or hello_log.new_trace()
     except Exception:                            # noqa: BLE001
         return secrets.token_hex(6)
+
+
+def current_trace():
+    try:
+        return hello_log.current().get("trace") or None
+    except Exception:                            # noqa: BLE001
+        return None
 
 
 def value(fn):

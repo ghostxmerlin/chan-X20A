@@ -1,0 +1,31 @@
+/* 日志 page (log.html); base colours and header from mind.css. The CSP blocks style attributes: bars get left / width from log-ui.js. */
+header .ledger { margin-left: auto; font-size: 12px; text-align: right; }
+header .ledger table { margin-left: auto; }
+.warn { color: #d24b3c; }
+.log-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.log-filters select, .log-filters input { font: inherit; }
+.svcs { display: flex; flex-wrap: wrap; gap: 8px; }
+.svc-last { padding: 2px 8px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); font-variant-numeric: tabular-nums; }
+.svc-last.stale { background: #d24b3c; border-color: #d24b3c; color: #fff; }
+.gaprow { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin: 3px 0; }
+.gapbar { position: relative; height: 10px; background: var(--bar); border-radius: 3px; overflow: hidden; }
+.gap { position: absolute; top: 0; bottom: 0; min-width: 3px; background: #d24b3c; }
+.gap.seq_jump { background: #e8912d; }
+.gaplist { margin: 6px 0 0; padding-left: 18px; color: #d24b3c; font-size: 12px; }
+.logrow { display: grid; grid-template-columns: 64px 56px 150px 1fr 76px; gap: 8px; align-items: baseline; padding: 3px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.logrow:hover { background: var(--card); }
+.logrow.head { cursor: default; color: var(--muted); font-size: 12px; }
+.logrow.head:hover { background: none; }
+.logrow .t, .logrow .cost { font-variant-numeric: tabular-nums; }
+.logrow .t { color: var(--muted); }
+.logrow .kind { font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.logrow .summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logrow .cost { text-align: right; }
+.logrow.bad .summary { color: #d24b3c; }
+.chain { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; margin-top: 12px; }
+.chainhead { display: flex; align-items: center; gap: 12px; }
+.heard { margin: 0; padding-left: 18px; }
+.bodypart { margin: 4px 0; }
+.detail pre { max-height: 480px; }
+#log-more { margin-top: 10px; }
+@media (max-width: 640px) { .logrow { grid-template-columns: 56px 44px 1fr 64px; } .logrow .kind { display: none; } header .ledger { margin-left: 0; text-align: left; } }

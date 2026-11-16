@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hello 日志</title>
+  <link rel="stylesheet" href="/mind.css"><link rel="stylesheet" href="/log.css"><script type="module" src="/log-ui.js"></script>
+</head>
+<body>
+  <header>
+    <h1>hello 日志</h1>
+    <a href="/">← 观察台</a>
+    <a href="/mind.html">情景</a>
+    <span id="log-status">连接中…</span>
+    <div id="log-ledger" class="ledger"><label>总账 <input type="date" id="log-day"></label><div id="log-ledger-box"><p class="alt">加载中…</p></div></div>
+  </header>
+  <nav class="log-filters" aria-label="筛选">
+    <label>时间 <select id="log-range"><option value="15m">最近 15 分钟</option><option value="1h" selected>最近 1 小时</option><option value="6h">最近 6 小时</option><option value="24h">最近 24 小时</option><option value="custom">自定义</option></select></label>
+    <span id="log-custom" hidden><input type="datetime-local" id="log-from"> – <input type="datetime-local" id="log-to"></span>
+    <label>类型 <select id="log-kind"><option value="">全部</option><option value="call.">call</option><option value="gate.">gate</option><option value="trigger.">trigger</option><option value="switch.">switch</option><option value="mode.">mode</option><option value="link.">link</option><option value="svc.">svc</option><option value="heard.">heard</option><option value="robot.">robot</option></select></label>
+    <label>服务 <select id="log-svc"><option value="">全部</option><option>ear</option><option>mind</option><option>eye</option><option>notes</option><option>memory</option><option>tts</option></select></label>
+    <label><input type="checkbox" id="log-cost"> 只看有花费的</label>
+    <label>链路 <input id="log-trace" placeholder="trace" size="14"></label>
+    <button id="log-refresh">刷新</button>
+  </nav>
+  <main>
+    <section><h2>各服务最后一条记录</h2><div id="log-svcs" class="svcs"><span class="alt">加载中…</span></div></section>
+    <section><h2>断档</h2><div id="log-gaps"><p class="alt">加载中…</p></div></section>
+    <section id="log-chain" class="chain" hidden></section>
+    <section><h2>记录（新的在上）</h2><div class="logrow head"><span>时间</span><span>服务</span><span>类型</span><span>摘要</span><span>花费</span></div><div id="log-list"></div><button id="log-more" hidden>更早的</button></section>
+  </main>
+</body>
+</html>

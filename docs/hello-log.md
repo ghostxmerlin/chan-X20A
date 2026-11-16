@@ -93,7 +93,7 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
   - `usage` = 服务商原样的用量（`input_tokens`、`output_tokens`、`characters`……，各次尝试的 token 相加）加上 `chars`（文字字数）、`audio_ms`（合成出的音频时长）。
   - `cost = {amount, cur: CNY, est: true, basis}`：按 token 计费，`input_tokens × prices.TTS_CNY_PER_M_IN + output_tokens × prices.TTS_CNY_PER_M_OUT`（元 / 百万 token）。服务商没报 token（例如中途取消、出错）时 `amount: null`，`chars` / `audio_ms` 照记。
   - `extra = {op: say|synthesize, state: done|failed|partial|cancelled, stream, voice（音色别名；直接给音色 id 时记 direct，从不记音色 id）, rate, timings, attempts [{kind, model, ok, warm, started_s, task_id, request_id, error}]}`。`failed`（一点声音都没出）和 `partial`（出了一部分声音后出错，已有的照常播）时 `ok: false` + `err`；`cancelled`（被打断 / 取消）不算错，`ok: true`。
-  - `trace`：调用方在 `/v1/say` 的 JSON 里带 `trace`（1–64 个字母、数字、`. _ -`）就用它，接上调用方的链路；没带或不合格就新开一个。
+  - `trace`：调用方在 `/v1/say` 的 JSON 里带 `trace`（1–64 个字母、数字、`. _ -`）就用它，接上调用方的链路；没带或不合格就新开一个。mind 的 soul-tts 客户端（`speak.TtsHttp` 的 `say` / `begin`）带上当前 scope 的 `trace`：「说一句」和写它的模型调用同一个，脱口秀的句子用这一轮的（`say_rounds.trace`），聊天用 ear 传来的。
 - **心跳** `svc.beat` 的 `state`：`{player_mode, queue（排队的句数）, player（播放端名字）}`。
 - **停止**：soul-tts 在主线程里用 `signal.signal` 处理 SIGTERM（抛 SystemExit 打断 HTTP 服务），不走 asyncio 事件循环，所以用 hello_log 默认的 `install_signal=True`：它排在 soul-tts 的处理前面，先记 `svc.stop {reason: sigterm}`（最多等 3 秒写完），再交给原来的处理退出。
 
@@ -152,5 +152,20 @@ q.ledger(db, "2026-11-16")["total"]
 # 过去一天有没有断档
 q.gaps(db, now - 86400_000, now)
 ```
+
+## 网页和 mind 接口
+
+本机观察台的「日志」页（`web/monitor/public/log.html`，首页「日志」按钮）经 mind 的只读接口读这些表（带现有令牌，`server/mind/api.py`）：
+
+| 接口 | 参数 | 返回 |
+| --- | --- | --- |
+| `GET /log` | `from, to`（默认最近 1 小时，最长 31 天）、`kind`（以 `.` 结尾当前缀，如 `call.`；否则精确）、`svc`、`trace`、`cost`（1 只要有花费的，0 只要没有的）、`limit`（默认 200，最大 1000）、`before`（上一页最后一条的 `_id`） | `{from, to, rows, more}`，正文只给编号 |
+| `GET /log/body` | `at, id` | `{text}`；没有时 404 |
+| `GET /log/chain` | `trace, at` | `{trace, rows}`：`chain()`，按时间正序 |
+| `GET /log/ledger` | `day`（默认北京时间今天） | `{day, by, total, unknown_n}` |
+| `GET /log/gaps` | `from, to`（同 `/log`） | `{from, to, gaps}`（`now_ms` = 服务器此刻） |
+| `GET /log/last` | — | `{now, svcs: {ear…tts: {at, kind, run} \| null}}`：每个服务最后一条（先看最近 1 小时任何类型，没有再看 30 天内的 `svc.*`） |
+
+`hello_log_query.py` 没部署在 mind 旁边时这些接口回 503，mind 照常跑。页面上：窗口里一条记录都没有的服务 `gaps()` 看不见，所以另有「各服务最后一条记录」，看「最近 …」时超过 2 分钟没有记录的服务标红；`call.realtime.turn` / `gate.realtime` 的详情列出 `extra.heard` 的候选，点开各自的链路。正文每次点开现取，不缓存。
 
 直接用 mongo shell 也行，例如某天的失败记录：`db.log_202611.find({ok: false, at: {$gte: 1794240000000}}).sort({at: -1})`。
