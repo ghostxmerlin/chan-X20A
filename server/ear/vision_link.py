@@ -114,6 +114,7 @@ class VisionLink:
         self.recordings_root = recordings_root
         self.session = None
         self.device = None                       # the hello's device dict (boot_id)
+        self.source = None                       # the hello's source (the robot, for robot.state)
         self.why = None                          # why the link ended: idle / closed
         self.events = 0
         self.frames = 0
@@ -132,6 +133,7 @@ class VisionLink:
         if kind == "hello":
             if self.session is None:
                 self.device = msg.get("device") if isinstance(msg.get("device"), dict) else None
+                self.source = safe_source(msg.get("source"))
                 self.session = session_key(msg.get("source"), self.number, self.start_ms / 1000)
                 if self.db is not None:
                     self.db.session_open(self.session, {
@@ -148,7 +150,7 @@ class VisionLink:
             except Exception:                     # noqa: BLE001 - carry-over is a bonus, never costs the event
                 carried = None
             if msg["event"] in STATE_EVENTS:
-                ear_log.robot_state(*STATE_EVENTS[msg["event"]], session=self.session)
+                ear_log.robot_state(*STATE_EVENTS[msg["event"]], device=self.source, session=self.session)
             for m in (msg, carried) if carried else (msg,):
                 self.events += 1
                 if self.db is not None:

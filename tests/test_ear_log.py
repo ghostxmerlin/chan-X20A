@@ -149,6 +149,18 @@ class PlainTest(unittest.TestCase):
         self.assertEqual((recs[1]["extra"]["before"]["mode"], recs[1]["extra"]["after"]["mode"]), ("crowd", "chat"))
         self.assertEqual(recs[1]["by"], "touch")
 
+    def test_overlapping_reconnect_records_no_false_off(self):
+        # fix round 1: the robot reconnects while its old socket is half open: c2 on, then c1 closes
+        robot = "stackchan-7c4f"
+        ear_log.robot_link("hearing", robot, "c1", True)
+        ear_log.robot_link("hearing", robot, "c2", True)                # no change: still on
+        ear_log.robot_link("hearing", robot, "c1", False)               # the old one goes: c2 still on
+        ear_log.robot_link("hearing", "stackchan-other", "c3", True)    # another robot is its own state
+        ear_log.robot_link("hearing", robot, "c2", False)               # the last one: off
+        ear_log.robot_link("hearing", robot, "c9", False)               # never on: nothing
+        recs = [(r["extra"]["device"], r["extra"]["before"], r["extra"]["after"]) for r in self.flows("robot.state")]
+        self.assertEqual(recs, [(robot, None, "on"), ("stackchan-other", None, "on"), (robot, "on", "off")])
+
     def test_tingwu_cost_follows_the_price_table(self):
         c = ear_log.tingwu_cost(60)
         self.assertEqual((c["cur"], c["est"]), ("CNY", True))
@@ -361,6 +373,53 @@ class RealtimeLogTest(HubBase):
         self.assertEqual(search[0]["usage"], {"count": 1})
         self.assertAlmostEqual(search[0]["cost"]["amount"], prices.REALTIME_SEARCH_CNY_PER_CALL)
 
+    async def test_two_sentences_keep_their_own_traces(self):
+        # fix round 1: sentence A's ASR comes in after its turn ended; B starts and ends within 3 s. B's turn must
+        # carry B's trace and words, not A's.
+        ws = await self.open_ready()
+
+        async def push(e, at):
+            self.t[0] = at
+            ws.push(e)
+            await trl.settle()
+
+        async def quiet(rid):
+            ws.push({"type": "response.created", "response": {"id": rid}})
+            ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
+            ws.push({"type": "response.done", "response": {"id": rid, "status": "completed", "usage": {}}})
+            await trl.settle(20)
+        await push({"type": "input_audio_buffer.speech_started"}, 1000.0)
+        await push({"type": "input_audio_buffer.speech_stopped"}, 1001.0)
+        self.t[0] = 1001.2
+        ta = self.heard("从农民到进城打工")                              # A's ASR, after the server's VAD end
+        await quiet("rA")
+        await push({"type": "input_audio_buffer.speech_started"}, 1002.0)
+        await push({"type": "input_audio_buffer.speech_stopped"}, 1003.0)
+        self.t[0] = 1003.3
+        tb = self.heard("他们还没有学会如何成为")                         # B's ASR, also late
+        await quiet("rB")
+        turns = self.flows("call.realtime.turn")
+        self.assertEqual([r["trace"] for r in turns], [ta, tb])
+        self.assertNotEqual(ta, tb)
+        b_input = bodies(self.flows, turns[1])["input"]
+        self.assertIn("他们还没有学会如何成为", b_input)
+        self.assertNotIn("从农民到进城打工", b_input)
+        self.assertNotIn("他们还没有学会如何成为", bodies(self.flows, turns[0])["input"])
+        self.assertEqual([g["trace"] for g in self.flows("gate.realtime")], [ta, tb])
+
+    async def test_judge_look_wait_carries_the_turn_trace(self):
+        # R16: a look question found by the gate (the burst was not there when the words came) shares the trace
+        self.hub.fillers = [("我看看哈", trl.pcm24(100))]
+        ws = await self.open_ready()
+        t = self.heard("这是什么？")                                     # no burst yet: no look wait
+        self.assertIsNone(self.hub._look_wait)
+        self.hub.burst = trl.LookAnswerTest.Burst()
+        await trl.LookAnswerTest.instant(self, ws, "r1", "哇，是个黑色的圆球球！")
+        self.assertEqual(self.hub._look_wait["trace"], t)
+        self.assertEqual([r["trace"] for r in self.flows("filler.play")], [t])
+        gate = self.flows("gate.realtime")
+        self.assertEqual([(g["extra"]["verdict"], g["trace"]) for g in gate], [("muted_wait_look", t)])
+
     async def test_filler_play_logged(self):
         self.hub.burst = trl.LookAnswerTest.Burst()
         self.hub.fillers = [("我看看哈", trl.pcm24(100))]
@@ -391,6 +450,24 @@ class FakeVisionWS:
         self.closed = (code, reason)
 
 
+class FakeHearingWS:
+    def __init__(self):
+        self.q, self.sent, self.close_code, self.remote_address = asyncio.Queue(), [], None, ("10.0.0.8", 1)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        m = await self.q.get()
+        if m is None:
+            self.close_code = 1000
+            raise StopAsyncIteration
+        return m
+
+    async def send(self, m):
+        self.sent.append(m)
+
+
 @unittest.skipUnless(HAVE_EAR, "needs the ear's deps (numpy, sherpa_onnx)")
 class EarServerLogTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -414,6 +491,57 @@ class EarServerLogTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(closes[0]["ms"], int)
         state = self.flows("robot.state")
         self.assertEqual([(r["extra"]["part"], r["extra"]["after"]) for r in state], [("m12", "online")])
+
+    def hearing_ctx(self, executor):
+        import mouth_mode
+        import tingwu_switch
+        return SimpleNamespace(models=SimpleNamespace(vad_cfg=None, speakers={}, lock=__import__("threading").Lock(),
+                                                      denoise_cfg=None, new_denoiser=lambda: None),
+                               ex=executor, rec_root=str(temp_dir()), database=None, tingwu_keys=None,
+                               tw_switch=tingwu_switch.SwitchReader(lambda: None), write_tingwu_status=lambda: None,
+                               mouth=mouth_mode.ModeReader(lambda: None), mode_hub=None, rt_hub=None, ears=set(),
+                               active=set())
+
+    async def test_hearing_link_is_paired_even_when_the_ear_fails(self):
+        # R16: link.open now happens inside the try, so an Ear that cannot be built still gets its link.close
+        ctx = self.hearing_ctx(None)
+        ws = FakeHearingWS()
+        ctx.active.add(ws)
+        with mock.patch.object(ear_server, "Ear", side_effect=RuntimeError("no models")):
+            with self.assertRaises(RuntimeError):
+                await ear_server.serve_hearing(ws, ("10.0.0.8", 1), 7, ctx)
+        self.assertEqual(ctx.active, set())
+        opens, closes = self.flows("link.open"), self.flows("link.close")
+        self.assertEqual((len(opens), len(closes)), (1, 1))
+        self.assertEqual((closes[0]["extra"]["conn"], closes[0]["extra"]["why"]), ("c7", "error"))
+
+    async def test_hearing_reconnect_overlap_keeps_hearing_on(self):
+        executor = __import__("concurrent.futures").futures.ThreadPoolExecutor(1)
+        ctx = self.hearing_ctx(executor)
+        declare = json.dumps({"type": "audio", "format": "opus", "sample_rate": 16000, "channels": 1, "frame_ms": 60,
+                              "source": "stackchan-7c4f"})
+        with mock.patch.object(ear_server.so, "VoiceActivityDetector", return_value=SimpleNamespace(reset=lambda: None)):
+            ws1, ws2 = FakeHearingWS(), FakeHearingWS()
+            c1 = asyncio.create_task(ear_server.serve_hearing(ws1, ("10.0.0.8", 1), 1, ctx))
+            ws1.q.put_nowait(declare)
+            await asyncio.sleep(0.05)
+            c2 = asyncio.create_task(ear_server.serve_hearing(ws2, ("10.0.0.8", 2), 2, ctx))
+            ws2.q.put_nowait(declare)
+            await asyncio.sleep(0.05)
+            ws1.q.put_nowait(None)                                     # the old half-open socket finally closes
+            await c1
+            self.assertEqual([r["extra"]["after"] for r in self.flows("robot.state")], ["on"])
+            ws2.q.put_nowait(None)
+            await c2
+        executor.shutdown()
+        state = [(r["extra"]["part"], r["extra"]["device"], r["extra"]["after"]) for r in self.flows("robot.state")]
+        self.assertEqual(state, [("hearing", "stackchan-7c4f", "on"), ("hearing", "stackchan-7c4f", "off")])
+        self.assertEqual(len(self.flows("link.close")), 2)
+
+    def test_refused_link_name_is_the_routed_link_never_the_path(self):
+        self.assertEqual([ear_server.link_of(p) for p in ("/mouth?token=x", "/signal", "/vision", "/", "",
+                                                          "/sk-secretpath?token=y")],
+                         ["mouth", "signal", "vision", "hearing", "hearing", "hearing"])
 
     async def test_tingwu_cost(self):
         class Stream:

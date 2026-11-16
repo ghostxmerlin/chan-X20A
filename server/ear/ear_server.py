@@ -302,6 +302,8 @@ class Ear:
         self.audio_declared = False
         self._tw_box = None
         self.device = None             # the audio declaration's device dict (boot_id for the run log's link.close)
+        self.source = None             # the robot's source (robot.state "hearing" is kept per robot)
+        self.link_conn = None          # "c12": this connection's name in the run log (set by serve_hearing)
         self.hello = {"type": "hello", "sr": SR, "tick_ms": ms(TICK), "speakers": sorted(m.speakers)[:64],
                       "speaker_hi": self.hi, "speaker_lo": self.lo, "sound_min_db": self.sound_min_db,
                       "voice_hi": self.voice_hi, "voice_lo": self.voice_lo,
@@ -851,7 +853,8 @@ class Ear:
                 self.device_profile = str(msg.get("source") or "").startswith("stackchan")
                 self.device = msg.get("device") if isinstance(msg.get("device"), dict) else None
                 if self.device_profile:
-                    ear_log.robot_state("hearing", "on", source=str(msg.get("source"))[:64])
+                    self.source = vision_link.safe_source(msg.get("source"))
+                    ear_log.robot_link("hearing", self.source, self.link_conn or f"e{id(self)}", True)
                 self.denoiser = self.m.new_denoiser() if self.device_profile else None
                 stream = self.denoiser is not None and getattr(self.m, "denoise_mode", "stream") == "stream"
                 asr_only = self.denoiser is not None and not stream
@@ -942,6 +945,64 @@ class Ear:
 
 def _boot(device):
     return (device.get("boot_id") or device.get("boot")) if isinstance(device, dict) else None
+
+
+def link_of(path):
+    """The link a request path is served as (the handler's routing: /mouth, /signal, /vision, anything else hearing).
+    Only this name goes into the run log for a refused connection, never the path itself (it could carry a secret)."""
+    p = urlsplit(path or "").path
+    return {"/mouth": "mouth", "/signal": "signal", "/vision": "vision"}.get(p, "hearing")
+
+
+async def serve_hearing(ws, peer, number, ctx):
+    """One hearing connection (the Ear), with its run-log link.open / link.close: the pair is written even when the
+    Ear cannot be set up. ctx: models, ex, rec_root, database, tingwu_keys, tw_switch, write_tingwu_status, mouth,
+    mode_hub, rt_hub, ears (live Ears), active (live sockets; ws is in it and is removed here)."""
+    conn = f"c{number}"
+    print(f"+ {peer} {conn}", flush=True)
+    t0 = ear_log.link_open("hearing", conn=conn, peer=peer)
+    ear = ticker = None
+    why = "error"
+    try:
+        ear = Ear(ctx.models, ws, ctx.ex)
+        ear.link_conn = conn
+        ear.rec = recorder.Recorder(ctx.rec_root, number, f"{peer[0]}:{peer[1]}", ear.hello)
+        ear.db = ctx.database
+        ear.tingwu_keys = ctx.tingwu_keys
+        ear.tingwu_switch, ear.on_tingwu_change = ctx.tw_switch, ctx.write_tingwu_status
+        mode_hub = ctx.mode_hub
+        ear.mouth_mode = ctx.mouth
+        ear.chat = mode_hub
+        ear.realtime = ctx.rt_hub
+        ctx.ears.add(ear)
+        ticker = asyncio.create_task(ear.ticker())
+        async for data in ws:
+            if isinstance(data, bytes):
+                await ear.on_audio(data)
+            else:
+                await ear.on_text(data)
+        why = f"closed {getattr(ws, 'close_code', None)}"
+    finally:
+        try:
+            if ticker is not None:
+                ticker.cancel()
+            if ear is not None:
+                await ear.close()
+            if ticker is not None:
+                await asyncio.gather(ticker, return_exceptions=True)
+            if ear is not None and ear.rec is not None:
+                ear.rec.close()
+        finally:
+            ctx.active.discard(ws)
+            if ear is not None:
+                ctx.ears.discard(ear)
+            ear_log.link_close("hearing", t0, conn=conn, boot=_boot(ear.device) if ear else None, peer=peer, why=why,
+                               counts={"utterances": ear.sid, "sounds": ear.aid, "rx_bytes": ear.rx_bytes,
+                                       "session": ear.session} if ear is not None else None)
+            if ear is not None and ear.device_profile:
+                ear_log.robot_link("hearing", ear.source, conn, False)
+            if ear is not None and ear.rec is not None:
+                print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
 
 
 async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=None):
@@ -1066,11 +1127,16 @@ def main():
         burst = vision_burst.VisionBurst(rt_hub, vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]), db=database)
         rt_hub.burst = burst
 
+    hearing_ctx = argparse.Namespace(models=models, ex=ex, rec_root=rec_root, database=database,
+                                     tingwu_keys=tingwu_keys, tw_switch=tw_switch,
+                                     write_tingwu_status=write_tingwu_status, mouth=mouth, mode_hub=mode_hub,
+                                     rt_hub=rt_hub, ears=ears, active=active)
+
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
         header = ws.request.headers.get("Authorization", "") if getattr(ws, "request", None) else ""
         if not hp.authenticate(path, header, token_value):
-            ear_log.link_open(urlsplit(path).path.strip("/") or "hearing", peer=ws.remote_address, ok=False, why="bad_token")
+            ear_log.link_open(link_of(path), peer=ws.remote_address, ok=False, why="bad_token")
             await ws.close(code=4401, reason="bad token")
             return
         if urlsplit(path).path == "/mouth":            # speaker downlink: ear ends it, soul-tts behind (2026-11-14)
@@ -1130,41 +1196,8 @@ def main():
             await ws.close(code=1013, reason="server busy")
             return
         active.add(ws)
-        peer = ws.remote_address
         conn_no[0] += 1
-        print(f"+ {peer} c{conn_no[0]}", flush=True)
-        t0 = ear_log.link_open("hearing", conn=f"c{conn_no[0]}", peer=peer)
-        conn = f"c{conn_no[0]}"
-        ear = Ear(models, ws, ex)
-        ear.rec = recorder.Recorder(rec_root, conn_no[0], f"{peer[0]}:{peer[1]}", ear.hello)
-        ear.db = database
-        ear.tingwu_keys = tingwu_keys
-        ear.tingwu_switch, ear.on_tingwu_change = tw_switch, write_tingwu_status
-        ear.mouth_mode = mouth
-        ear.chat = mode_hub
-        ear.realtime = rt_hub
-        ears.add(ear)
-        ticker = asyncio.create_task(ear.ticker())
-        try:
-            async for data in ws:
-                if isinstance(data, bytes):
-                    await ear.on_audio(data)
-                else:
-                    await ear.on_text(data)
-        finally:
-            ticker.cancel()
-            await ear.close()
-            await asyncio.gather(ticker, return_exceptions=True)
-            ear.rec.close()
-            active.discard(ws)
-            ears.discard(ear)
-            ear_log.link_close("hearing", t0, conn=conn, boot=_boot(ear.device), peer=peer,
-                               why=f"closed {getattr(ws, 'close_code', None)}",
-                               counts={"utterances": ear.sid, "sounds": ear.aid, "rx_bytes": ear.rx_bytes,
-                                       "session": ear.session})
-            if ear.device_profile:
-                ear_log.robot_state("hearing", "off", conn=conn)
-            print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
+        await serve_hearing(ws, ws.remote_address, conn_no[0], hearing_ctx)
 
     def beat_state():
         """The run log's svc.beat state (beat thread; a race with the loop is caught and recorded by hello_log)."""

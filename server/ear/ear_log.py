@@ -209,22 +209,41 @@ def link_close(link, t0, *, conn=None, boot=None, peer=None, why=None, counts=No
          extra={"link": link, "conn": conn, "boot": boot, "peer": peer_text(peer), "why": why, "counts": counts})
 
 
-_robot = {}                                      # part -> what the robot last reported
+_robot = {}                                      # (part, device) -> what the robot last reported
+_live = {}                                       # (part, device) -> live links that report the part on
 
 
-def robot_state(part, after, *, by="robot", **extra):
-    """robot.state {part, before, after} when the robot's reported `part` (mode, hearing, vision, m12) changed."""
-    before = _robot.get(part)
-    if part in _robot and before == after:
+def robot_state(part, after, *, device=None, by="robot", **extra):
+    """robot.state {part, device, before, after} when the reported `part` (mode, hearing, vision, m12) of one robot
+    (device: its source, None = the one relayed mode) changed. Kept per device, so two robots never mix."""
+    key = (part, device)
+    before = _robot.get(key)
+    if key in _robot and before == after:
         return False
-    _robot[part] = after
+    _robot[key] = after
     emit("robot.state", by=by, sum=f"{part} {before}→{after}",
-         extra={"part": part, "before": before, "after": after, **extra})
+         extra={"part": part, "device": device, "before": before, "after": after, **extra})
     return True
+
+
+def robot_link(part, device, conn, up, **extra):
+    """A state the robot shows by holding a link open (hearing): on while ANY live link of that device carries it, off
+    only when its last one closes. A reconnect overlaps the old half-open socket (new c2 opens, then old c1 closes):
+    c1's close must not record off while c2 is up, so the state is derived from the set of live links, not set by
+    each link's own open / close."""
+    live = _live.setdefault((part, device), set())
+    if up:
+        live.add(conn)
+    elif conn in live:
+        live.discard(conn)
+    else:
+        return False                             # never reported on: nothing changes
+    return robot_state(part, "on" if live else "off", device=device, conn=conn, links=len(live), **extra)
 
 
 def reset_robot_state():
     _robot.clear()
+    _live.clear()
 
 
 # ---- stop

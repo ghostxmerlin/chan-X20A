@@ -101,6 +101,12 @@ PRICE_CNY_PER_M = {"text_in": 1.5, "audio_in": 6.0, "text_out": 4.5, "audio_out"
 PRICE_BASIS = "realtime_link.PRICE_CNY_PER_M 2026-11-14 (help.aliyun.com/zh/model-studio/qwen-audio-3-1-realtime-flash)"
 LOCAL_KINDS = ("look_filler", "greet_beep")         # played from local PCM: no model call, no call.realtime.turn
 FAILED_STATES = ("error", "stalled", "no_done", "robot_gone")
+# Which of the ear's own sentences belong to a server VAD turn (run log trace + the turn's "ear" words): those whose ASR
+# came in after the turn's speech_started, less SEG_EPS_S. A sentence's ASR always arrives after its own speech began;
+# the margin covers speech_started being stamped when the event reaches us (server VAD detection + network lag behind
+# the real onset). The previous sentence's ASR comes ~0.4 s or more before the next turn's speech_started (server VAD
+# silence 1.0 s vs the ear's 0.4 s + ASR ~0.2 s; closer sentences are one server turn), so 0.3 s keeps them apart.
+SEG_EPS_S = 0.3
 GATE_REASONS = {"play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
                 "unclear": "a didn't-hear question", "repeat": "word for word a recent reply",
                 "blind": "看不清 without a fresh look", "wait_look": "a look question: the answer comes from the next photo"}
@@ -687,6 +693,7 @@ class RealtimeHub:
         self._looks = collections.deque(maxlen=LOOKS_KEEP)    # (at wall ms, text): memory only, never logged
         self._looks_dirty, self._looks_sent_at = False, None
         self._local_traces = collections.deque(maxlen=6)  # (clock, trace) of the ear's own sentences (run log)
+        self._seg_start = None                           # the server VAD's last speech_started (clock)
         self._next_trace = self._next_prompt = None      # the trace / text item of the next non-speech response
 
     # ---- conditions ----
@@ -1241,15 +1248,19 @@ class RealtimeHub:
                 self._retry_at = now + self.cfg.retry_s
                 self.close("refused")
         elif t == "input_audio_buffer.speech_started":
-            self._last_speech = now
+            self._last_speech = self._seg_start = now
         elif t == "input_audio_buffer.speech_stopped":
             self._speech_end = now
             recent = self._local_end if self._local_end is not None and now - self._local_end < 3 else None
+            start = self._seg_start if self._seg_start is not None and self._seg_start <= now else None
+            mine = (lambda at: at >= start - SEG_EPS_S) if start is not None else (lambda at: now - at < 3)  # noqa: E731
+            traces = list(self._local_traces) if start is not None else list(reversed(self._local_traces))
+            pick = next(((at, tr) for at, tr in traces if tr and mine(at)), (None, None))   # in the turn: its first
             self._turn = self._heard_turn = {"kind": "speech", "speech_end": now, "heard_chars": None,
-                                             "local_end": recent,
-                                             "trace": next((tr for at, tr in reversed(self._local_traces)
-                                                            if tr and now - at < 3), None),
-                                             "ear": [t for at, t in self._local_texts if now - at < 3]}
+                                             "local_end": recent, "start": start,
+                                             "trace": pick[1], "trace_at": pick[0],
+                                             "ear": [t for at, t in self._local_texts if mine(at)]}
+            self._seg_start = None
             self._stage("think")
         elif t == "conversation.item.input_audio_transcription.completed":
             text = strip_emoji(e.get("transcript"))
@@ -1346,7 +1357,7 @@ class RealtimeHub:
             asked = next((t for t in [turn.get("heard")] + [t for at, t in self._local_texts if now - at <= 3]
                           if t and is_look_ask(t)), None)
             if asked is not None:
-                self._start_look_wait(asked, now)
+                self._start_look_wait(asked, now, turn.get("trace"))
             w = self._look_wait
             if w is not None and not w["sent"] and now - w["at"] <= 4:
                 v = "wait_look"                        # the answer comes from the next fresh look
@@ -1412,11 +1423,14 @@ class RealtimeHub:
         now = self.clock()
         self._local_texts.append((now, str(text)[:300]))
         self._local_traces.append((now, trace))
-        h = self._heard_turn                           # the server VAD ended the turn first: it is this sentence's
-        if h is not None and now - h["speech_end"] < 3:
+        h = self._heard_turn                           # the server VAD ended the turn first: it is this sentence's ...
+        if h is not None and now - h["speech_end"] < 3 and h.get("kind") == "speech" \
+                and not (self._last_speech is not None and self._last_speech > h["speech_end"]):   # ... unless new speech began
             h.setdefault("ear", []).append(str(text)[:300])
-            if trace and not h.get("trace"):
-                h["trace"] = trace
+            stale = h.get("start") is not None and h.get("trace_at") is not None \
+                and h["trace_at"] < h["start"] - SEG_EPS_S
+            if trace and (not h.get("trace") or stale):
+                h["trace"], h["trace_at"] = trace, now
         self._heard_text(str(text)[:300], now, trace=trace)
 
     def _heard_text(self, text, now, told=False, trace=None):
