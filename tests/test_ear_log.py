@@ -351,6 +351,36 @@ class RealtimeLogTest(HubBase):
         errs = self.flows("svc.error")
         self.assertEqual([(r["extra"]["where"], r["err"]) for r in errs], [("realtime.task", "KeyError: 'gone'")])
 
+    async def test_run_log_failure_never_stops_the_voice_loop(self):
+        # I4: the record builders raising (gate / turn: _heard_in, turn: cost, search: search_count) -> the reply
+        # still plays, its realtime_turns row is written, the session stays open; a raising emit in context / hush
+        # -> session.update and the hush still go out; each failure said once per helper on the console
+        said = []
+        boom = mock.Mock(side_effect=RuntimeError("record builder broke"))
+        ws = await self.open_ready()
+        with mock.patch.object(self.hub, "_heard_in", boom), mock.patch.object(ear_log, "search_count", boom), \
+                mock.patch.object(ear_log, "cost", boom), \
+                mock.patch.object(rl, "log", lambda *a, **k: said.append(a[0] if a else "")), \
+                mock.patch.object(rl, "_LOG_FAILED", set()):
+            sid = await self.play_one(ws, "r1")
+            self.assertEqual(self.hub.state, "open")
+            self.assertTrue(sid)
+            self.assertGreater(len(self.link.frames()), 0)              # the reply's audio reached the robot
+            self.assertEqual(len(self.recs.turns), 1)                    # and its realtime_turns row was written
+            await self.play_one(ws, "r2")
+            self.assertEqual(len(self.recs.turns), 2)
+            with mock.patch.object(ear_log, "emit", boom):
+                n = len([m for m in ws.sent if m.get("type") == "session.update"])
+                self.hub._send_instructions("test")
+                await asyncio.sleep(0.05)
+                self.assertEqual(len([m for m in ws.sent if m.get("type") == "session.update"]), n + 1)
+                self.hub._hush("闭嘴", trace="t1")
+                self.assertEqual(self.hub.stats["hush"], 1)
+        failed = [t for t in said if "run log" in str(t)]
+        self.assertEqual(len(failed), len(set(failed)))                  # once per helper
+        for name in ("_log_gate", "_log_turn", "_log_search", "context", "hush"):
+            self.assertTrue(any(f"run log {name} " in t for t in failed), (name, failed))
+
     async def test_gate_mute_logged(self):
         ws = await self.open_ready()
         await trl.GateTest.reply(self, ws, "r1", "嗯。")

@@ -82,6 +82,7 @@ import math
 import os
 import random
 import re
+import functools
 import struct
 import time
 import traceback
@@ -118,6 +119,30 @@ GATE_REASONS = {"play": "the reply may play", "quiet": "only 嗯: nobody was tal
                 "blind": "看不清 without a fresh look", "wait_look": "a look question: the answer comes from the next photo"}
 STEP_S = 0.2
 log = print                                         # tests silence it
+_LOG_FAILED = set()                                 # run-log helpers that have failed once (said once on the console)
+
+
+def _log_failed(where, e):
+    """A run-log helper raised: say so once per helper on the console, never pass it on (the voice loop goes on)."""
+    if where not in _LOG_FAILED:
+        _LOG_FAILED.add(where)
+        try:
+            log(f"realtime: run log {where} failed ({type(e).__name__}: {str(e)[:120]}); the voice loop goes on",
+                flush=True)
+        except Exception:                           # noqa: BLE001
+            pass
+
+
+def _run_log(fn):
+    """Run-log helpers on the realtime voice loop never raise: their records are optional, the audio is not."""
+    @functools.wraps(fn)
+    def wrapper(*a, **kw):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:                      # noqa: BLE001 - see _log_failed
+            _log_failed(fn.__name__, e)
+            return None
+    return wrapper
 
 PERSONA = (
     "你是 hello，主人的小宠物机器人，主人去哪常带着你（办公室、家里、车上、饭店、户外都有可能）。"
@@ -1202,8 +1227,11 @@ class RealtimeHub:
         """session.update with fresh instructions; in the run log a call.realtime.context with the full text (the
         body table keeps each distinct text once a month, so the same instructions again cost one small record)."""
         instr = self._instructions()
-        ear_log.emit("call.realtime.context", trace=trace, model=self.cfg.model, body={"system": instr},
-                     ref={"session": self.session_no}, extra={"why": why, "chars": len(instr)})
+        try:
+            ear_log.emit("call.realtime.context", trace=trace, model=self.cfg.model, body={"system": instr},
+                         ref={"session": self.session_no}, extra={"why": why, "chars": len(instr)})
+        except Exception as e:                      # noqa: BLE001 - the session.update below must still go out
+            _log_failed("context", e)
         self._send_soon({"type": "session.update", "session": {"instructions": instr}})
 
     def _send_soon(self, obj):
@@ -1435,6 +1463,7 @@ class RealtimeHub:
         cold, self._cold = self._cold_live(now), None
         return cold
 
+    @_run_log
     def _log_gate(self, rid, turn, v, done, **extra):
         """gate.realtime: one verdict per reply (emit only: this runs on the voice loop)."""
         if not turn.get("trace"):
@@ -1445,6 +1474,7 @@ class RealtimeHub:
                      extra={"verdict": verdict, "reason": GATE_REASONS.get(v, v), "kind": turn.get("kind"),
                             "done": done, "heard": self._heard_in(turn, self.clock()), **extra})
 
+    @_run_log
     def _log_search(self, rid, turn, usage):
         """call.realtime.search when the response searched the web (usage count, else a search event)."""
         n = ear_log.search_count(usage)
@@ -1530,6 +1560,7 @@ class RealtimeHub:
                                                                                    "text": rescue_text(heard)}]}})
         self._send_soon({"type": "response.create"})
 
+    @_run_log
     def _log_rescue(self, r, outcome, heard):
         ear_log.emit("gate.rescue", trace=r.get("trace"), sum=f"{outcome} {str(heard)[:40]}",
                      ref={"session": self.session_no}, extra={"outcome": outcome, "texts": len(r["texts"])})
@@ -1541,9 +1572,13 @@ class RealtimeHub:
         self._hush_busy = True
         self.stats["hush"] += 1
         log("realtime: hush heard, switching 围观 off", flush=True)
-        ear_log.emit("trigger.hush", trace=trace, by="asr", sum=f"闭嘴 → 围观 关：{str(text or '')[:40]}",
-                     ref={"session": self.session_no}, extra={"word": "闭嘴" if HUSH_ANY.search(norm_text(text or ""))
-                                                             else "short", "action": "realtime_off"})
+        try:
+            ear_log.emit("trigger.hush", trace=trace, by="asr", sum=f"闭嘴 → 围观 关：{str(text or '')[:40]}",
+                         ref={"session": self.session_no},
+                         extra={"word": "闭嘴" if HUSH_ANY.search(norm_text(text or "")) else "short",
+                                "action": "realtime_off"})
+        except Exception as e:                      # noqa: BLE001 - the switch-off below must still happen
+            _log_failed("hush", e)
         self.spawn(self._post_hush())
 
     async def _post_hush(self):
@@ -1748,6 +1783,7 @@ class RealtimeHub:
         if turn.get("kind") not in LOCAL_KINDS:
             self._log_turn(turn, doc, state)
 
+    @_run_log
     def _log_turn(self, turn, doc, state):
         """call.realtime.turn: usage as DashScope sent it, the cost estimate, what was heard (the model's transcript and
         the ear's own words) and the reply; ref.tid = the realtime_turns row."""
