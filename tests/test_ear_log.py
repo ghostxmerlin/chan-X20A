@@ -310,7 +310,9 @@ class RealtimeLogTest(HubBase):
                  "output_tokens_details": {"text_tokens": 5, "audio_tokens": 20}}
         self.assertEqual(r["cost"]["cur"], "CNY")
         self.assertAlmostEqual(r["cost"]["amount"], rl.cost_cny(usage))
-        self.assertEqual(r["trace"], t)
+        self.assertNotEqual(r["trace"], t)                              # R17: the turn's own trace ...
+        self.assertEqual([(h["trace"], h["text"]) for h in r["extra"]["heard"]], [(t, "你好呀，你在干嘛")])   # + candidates
+        self.assertGreater(r["extra"]["heard"][0]["at"], 1794000000000)    # wall ms, not the hub's clock
         self.assertEqual(r["model"], rl.MODEL)
         self.assertEqual(r["usage"], usage)
         self.assertEqual(r["ref"]["tid"], self.recs.turns[-1]["tid"])
@@ -319,7 +321,7 @@ class RealtimeLogTest(HubBase):
         self.assertIn("你好呀，你在干嘛", b["input"])                   # the ear's own words
         self.assertEqual(b["output"], "你好呀")
         gates = self.flows("gate.realtime")
-        self.assertEqual([(g["extra"]["verdict"], g["trace"]) for g in gates], [("play", t)])
+        self.assertEqual([(g["extra"]["verdict"], g["trace"]) for g in gates], [("play", r["trace"])])
 
     async def test_gate_mute_logged(self):
         ws = await self.open_ready()
@@ -359,7 +361,9 @@ class RealtimeLogTest(HubBase):
         await trl.RescueTest.quiet(self, ws, "r1")
         rescue = self.flows("gate.rescue")
         self.assertEqual(len(rescue), 1)
-        self.assertEqual((rescue[0]["extra"]["outcome"], rescue[0]["trace"]), ("asked", t))
+        turn = self.flows("call.realtime.turn")[0]                       # the muted 「嗯」
+        self.assertEqual((rescue[0]["extra"]["outcome"], rescue[0]["trace"]), ("asked", turn["trace"]))
+        self.assertEqual([h["trace"] for h in turn["extra"]["heard"]], [t])
         ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": "别说话了。"})
         await trl.settle(20)
         hush = self.flows("trigger.hush")
@@ -373,47 +377,75 @@ class RealtimeLogTest(HubBase):
         self.assertEqual(search[0]["usage"], {"count": 1})
         self.assertAlmostEqual(search[0]["cost"]["amount"], prices.REALTIME_SEARCH_CNY_PER_CALL)
 
-    async def test_two_sentences_keep_their_own_traces(self):
-        # fix round 1: sentence A's ASR comes in after its turn ended; B starts and ends within 3 s. B's turn must
-        # carry B's trace and words, not A's.
-        ws = await self.open_ready()
-
-        async def push(e, at):
-            self.t[0] = at
+    # ---- R17: a turn has its own trace; what the ear heard is listed as candidates by time ----
+    async def at(self, ws, when, e=None):
+        self.t[0] = when
+        if e:
             ws.push(e)
-            await trl.settle()
+        await trl.settle()
 
-        async def quiet(rid):
-            ws.push({"type": "response.created", "response": {"id": rid}})
-            ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
-            ws.push({"type": "response.done", "response": {"id": rid, "status": "completed", "usage": {}}})
-            await trl.settle(20)
-        await push({"type": "input_audio_buffer.speech_started"}, 1000.0)
-        await push({"type": "input_audio_buffer.speech_stopped"}, 1001.0)
+    async def quiet(self, ws, rid):
+        ws.push({"type": "response.created", "response": {"id": rid}})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
+        ws.push({"type": "response.done", "response": {"id": rid, "status": "completed", "usage": {}}})
+        await trl.settle(20)
+
+    def turn_heard(self, i):
+        return [(h["text"], h["trace"]) for h in self.flows("call.realtime.turn")[i]["extra"]["heard"]]
+
+    def b_input(self, i):
+        return bodies(self.flows, self.flows("call.realtime.turn")[i])["input"] or ""
+
+    def assert_own_traces(self, heard_traces):
+        """Each turn's gate and record share one trace of its own, never a heard.asr trace."""
+        turns, gates = self.flows("call.realtime.turn"), self.flows("gate.realtime")
+        self.assertEqual([g["trace"] for g in gates], [r["trace"] for r in turns])
+        self.assertEqual(len({r["trace"] for r in turns}), len(turns))
+        self.assertFalse({r["trace"] for r in turns} & set(heard_traces))
+
+    async def test_two_sentences_list_their_own_heard(self):
+        # A's ASR comes in after its turn's VAD end; B starts 1 s later. Window = [start - 0.3 s, record written].
+        ws = await self.open_ready()
+        await self.at(ws, 1000.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1001.0, {"type": "input_audio_buffer.speech_stopped"})
         self.t[0] = 1001.2
-        ta = self.heard("从农民到进城打工")                              # A's ASR, after the server's VAD end
-        await quiet("rA")
-        await push({"type": "input_audio_buffer.speech_started"}, 1002.0)
-        await push({"type": "input_audio_buffer.speech_stopped"}, 1003.0)
+        ta = self.heard("从农民到进城打工")
+        await self.quiet(ws, "rA")                                       # A's record at 1001.2: [999.7, 1001.2]
+        await self.at(ws, 1002.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1003.0, {"type": "input_audio_buffer.speech_stopped"})
         self.t[0] = 1003.3
-        tb = self.heard("他们还没有学会如何成为")                         # B's ASR, also late
-        await quiet("rB")
-        turns = self.flows("call.realtime.turn")
-        self.assertEqual([r["trace"] for r in turns], [ta, tb])
-        self.assertNotEqual(ta, tb)
-        b_input = bodies(self.flows, turns[1])["input"]
-        self.assertIn("他们还没有学会如何成为", b_input)
-        self.assertNotIn("从农民到进城打工", b_input)
-        self.assertNotIn("他们还没有学会如何成为", bodies(self.flows, turns[0])["input"])
-        self.assertEqual([g["trace"] for g in self.flows("gate.realtime")], [ta, tb])
+        tb = self.heard("他们还没有学会如何成为")
+        await self.quiet(ws, "rB")                                       # B's record at 1003.3: [1001.7, 1003.3]
+        self.assertEqual(self.turn_heard(0), [("从农民到进城打工", ta)])
+        self.assertEqual(self.turn_heard(1), [("他们还没有学会如何成为", tb)])
+        self.assertNotIn("从农民到进城打工", self.b_input(1))
+        self.assertIn("他们还没有学会如何成为", self.b_input(1))
+        self.assert_own_traces([ta, tb])
+        self.assertEqual([g["extra"]["heard"] and g["extra"]["heard"][0]["text"] for g in self.flows("gate.realtime")],
+                         ["从农民到进城打工", "他们还没有学会如何成为"])
 
-    async def test_cold_open_first_sentence_keeps_its_trace(self):
-        # fix round 2: the session was closed (idle); the first sentence's audio waits in the queue while the session
-        # connects and reaches the server in a burst, so speech_started comes after the ear already recognised it
+    async def test_window_rule_is_exact(self):
+        # a sentence 0.29 s before speech_started is listed, one 0.31 s before is not, and so is one after the record
+        ws = await self.open_ready()
+        self.t[0] = 999.69
+        self.heard("早了一点点")
+        self.t[0] = 999.71
+        tin = self.heard("刚好算进去")
+        await self.at(ws, 1000.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1001.0, {"type": "input_audio_buffer.speech_stopped"})
+        await self.quiet(ws, "r1")
+        self.t[0] = 1001.5
+        self.heard("记录写完之后才到")
+        self.assertEqual(self.turn_heard(0), [("刚好算进去", tin)])
+
+    async def test_cold_open_turn_starts_at_the_ear_onset(self):
+        # fix round 2 / R17: the session was closed; the onset that opens it starts the first segment, so the opening
+        # sentence (recognised before the late burst speech_started) is listed; the turn has the cold trace
         self.hub.close("idle")
         self.t[0] = 999.5
-        self.speak(3)                                                   # the ear's onset: opens the session
+        self.speak(3)                                                    # the ear's onset: opens the session
         self.assertEqual(self.hub.state, "connecting")
+        cold = self.hub._cold["trace"]
         self.t[0] = 999.8
         self.speak(1, speaking=False)
         await trl.settle(20)
@@ -421,90 +453,119 @@ class RealtimeLogTest(HubBase):
         ws.push({"type": "session.updated", "session": {}})
         await trl.settle()
         self.t[0] = 1000.0
-        t = self.heard("你好呀")                                          # local ASR done before the server saw speech
-        self.t[0] = 1001.0
-        ws.push({"type": "input_audio_buffer.speech_started"})
-        await trl.settle()
-        self.t[0] = 1001.3
-        ws.push({"type": "input_audio_buffer.speech_stopped"})
-        await trl.settle()
-        ws.push({"type": "response.created", "response": {"id": "r1"}})
-        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
-        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
-        await trl.settle(20)
+        t = self.heard("你好呀")
+        await self.at(ws, 1001.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1001.3, {"type": "input_audio_buffer.speech_stopped"})
+        await self.quiet(ws, "r1")
         turn = self.flows("call.realtime.turn")[-1]
-        self.assertEqual(turn["trace"], t)
-        self.assertIn("你好呀", bodies(self.flows, turn)["input"])
+        self.assertEqual(turn["trace"], cold)
+        self.assertEqual(self.turn_heard(-1), [("你好呀", t)])
+        self.assertIn("你好呀", self.b_input(-1))
+        self.assertIsNone(self.hub._cold)                                # used by that one segment only
+        self.assert_own_traces([t])
+        # the next segment starts at its own speech_started again
+        self.t[0] = 1010.0
+        self.heard("隔了很久的一句")
+        await self.at(ws, 1020.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1021.0, {"type": "input_audio_buffer.speech_stopped"})
+        await self.quiet(ws, "r2")
+        self.assertEqual(self.turn_heard(-1), [])
 
-    async def test_cold_open_without_an_onset_uses_unclaimed_sentences(self):
-        # the reviewer's repro: no ear onset known, speech_started 1 s after the ear's ASR; no other turn took that
-        # sentence, so the turn still gets it (round 1's two-sentence case: A's sentence is claimed by A's turn)
+    async def test_no_onset_late_speech_started_is_not_listed(self):
+        # round 2's no-onset repro under R17: the session was already open (no cold onset), the ear's ASR came 1 s
+        # before speech_started: outside the window, so it is not a candidate (the documented limit)
         ws = await self.open_ready()
         self.t[0] = 1000.0
-        t = self.heard("你好呀")
-        self.t[0] = 1001.0
-        ws.push({"type": "input_audio_buffer.speech_started"})
-        await trl.settle()
-        self.t[0] = 1001.3
-        ws.push({"type": "input_audio_buffer.speech_stopped"})
-        await trl.settle()
-        ws.push({"type": "response.created", "response": {"id": "r1"}})
-        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
-        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
-        await trl.settle(20)
-        turn = self.flows("call.realtime.turn")[-1]
-        self.assertEqual(turn["trace"], t)
-        self.assertIn("你好呀", bodies(self.flows, turn)["input"])
+        self.heard("你好呀")
+        await self.at(ws, 1001.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1001.3, {"type": "input_audio_buffer.speech_stopped"})
+        await self.quiet(ws, "r1")
+        self.assertEqual(self.turn_heard(-1), [])
 
-    async def test_two_sentences_with_onsets_keep_their_own_traces(self):
-        # round 1's case with the ear's own onsets fed too (they move each window start earlier, never into A)
+    # the reviewer's leak_check.py scenarios (round 3), expectations by the window rule
+    async def test_leak_stale_onset_noise_long_before(self):
         ws = await self.open_ready()
+        self.t[0] = 1010.0; self.speak(2); self.t[0] = 1010.3; self.speak(1, speaking=False)   # noqa: E702
+        self.t[0] = 1010.5; tn = self.heard("嗯")                                                # noqa: E702
+        await self.at(ws, 1060.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1061.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1061.3; tb = self.heard("今天天气怎么样")                                     # noqa: E702
+        await self.quiet(ws, "rB")
+        self.assertEqual(self.turn_heard(-1), [("今天天气怎么样", tb)])
+        self.assertNotIn("嗯", self.b_input(-1))
+        self.assert_own_traces([tn, tb])
 
-        async def at(when, e=None):
-            self.t[0] = when
-            if e:
-                ws.push(e)
-            await trl.settle()
+    async def test_leak_stale_onset_after_a_turn(self):
+        ws = await self.open_ready()
+        await self.at(ws, 1000.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1001.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1001.1; self.speak(2); self.t[0] = 1001.2; self.speak(1, speaking=False)   # noqa: E702
+        self.t[0] = 1001.4; ta = self.heard("从农民到进城打工")                                   # noqa: E702
+        await self.quiet(ws, "rA")
+        await self.at(ws, 1003.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1004.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1004.3; tb = self.heard("他们还没有学会如何成为")                             # noqa: E702
+        await self.quiet(ws, "rB")
+        self.assertEqual(self.turn_heard(0), [("从农民到进城打工", ta)])
+        self.assertEqual(self.turn_heard(1), [("他们还没有学会如何成为", tb)])
+        self.assert_own_traces([ta, tb])
 
-        async def quiet(rid):
-            ws.push({"type": "response.created", "response": {"id": rid}})
-            ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
-            ws.push({"type": "response.done", "response": {"id": rid, "status": "completed", "usage": {}}})
-            await trl.settle(20)
-        self.t[0] = 999.8
-        self.speak(2)
-        self.t[0] = 1000.6
-        self.speak(1, speaking=False)
-        await at(1000.0, {"type": "input_audio_buffer.speech_started"})
-        await at(1001.0, {"type": "input_audio_buffer.speech_stopped"})
-        self.t[0] = 1001.2
-        ta = self.heard("从农民到进城打工")
-        await quiet("rA")
-        self.t[0] = 1001.9
-        self.speak(2)
-        self.t[0] = 1002.6
-        self.speak(1, speaking=False)
-        await at(1002.0, {"type": "input_audio_buffer.speech_started"})
-        await at(1003.0, {"type": "input_audio_buffer.speech_stopped"})
-        self.t[0] = 1003.3
-        tb = self.heard("他们还没有学会如何成为")
-        await quiet("rB")
-        turns = self.flows("call.realtime.turn")
-        self.assertEqual([r["trace"] for r in turns], [ta, tb])
-        self.assertNotIn("从农民到进城打工", bodies(self.flows, turns[1])["input"])
+    async def test_leak_db_off_lists_sentences_by_text(self):
+        ws = await self.open_ready()
+        await self.at(ws, 1000.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1001.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1001.2; self.hub.local_heard("从农民到进城打工", trace=None)                 # noqa: E702
+        await self.quiet(ws, "rA")
+        await self.at(ws, 1002.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1003.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1003.3; self.hub.local_heard("他们还没有学会如何成为", trace=None)           # noqa: E702
+        await self.quiet(ws, "rB")
+        self.assertEqual(self.turn_heard(0), [("从农民到进城打工", None)])
+        self.assertEqual(self.turn_heard(1), [("他们还没有学会如何成为", None)])
+        self.assertNotIn("从农民到进城打工", self.b_input(1))
+
+    async def test_leak_sentence_while_sounding_outside_the_window(self):
+        # A spoken while hello sounds (no audio up, no server turn), its ASR 0.6 s before B's speech_started
+        ws = await self.open_ready()
+        self.t[0] = 999.0; self.hub.feed(b"\x01\x00" * 960, True, True)                          # noqa: E702
+        self.t[0] = 1000.0; self.hub.feed(b"\x01\x00" * 960, False, True)                        # noqa: E702
+        self.t[0] = 1000.4; ta = self.heard("别说了")                                             # noqa: E702
+        await self.at(ws, 1001.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1002.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1002.3; tb = self.heard("你看这是什么")                                       # noqa: E702
+        await self.quiet(ws, "rB")
+        self.assertEqual(self.turn_heard(-1), [("你看这是什么", tb)])
+        self.assertNotIn("别说了", self.b_input(-1))
+        self.assert_own_traces([ta, tb])
+
+    async def test_leak_sentence_while_sounding_inside_the_window_is_listed(self):
+        # the same, but its ASR lands 0.2 s before B's speech_started: by the rule it is a candidate (a neighbour)
+        ws = await self.open_ready()
+        self.t[0] = 999.0; self.hub.feed(b"\x01\x00" * 960, True, True)                          # noqa: E702
+        self.t[0] = 1000.0; self.hub.feed(b"\x01\x00" * 960, False, True)                        # noqa: E702
+        self.t[0] = 1000.8; ta = self.heard("别说了")                                             # noqa: E702
+        await self.at(ws, 1001.0, {"type": "input_audio_buffer.speech_started"})
+        await self.at(ws, 1002.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1002.3; tb = self.heard("你看这是什么")                                       # noqa: E702
+        await self.quiet(ws, "rB")
+        self.assertEqual(self.turn_heard(-1), [("别说了", ta), ("你看这是什么", tb)])
 
     async def test_judge_look_wait_carries_the_turn_trace(self):
-        # R16: a look question found by the gate (the burst was not there when the words came) shares the trace
+        # R16 / R17: a look question found by the gate (the burst was not there when the words came): the look wait,
+        # the filler and the gate all carry the turn's own trace
         self.hub.fillers = [("我看看哈", trl.pcm24(100))]
         ws = await self.open_ready()
         t = self.heard("这是什么？")                                     # no burst yet: no look wait
         self.assertIsNone(self.hub._look_wait)
         self.hub.burst = trl.LookAnswerTest.Burst()
         await trl.LookAnswerTest.instant(self, ws, "r1", "哇，是个黑色的圆球球！")
-        self.assertEqual(self.hub._look_wait["trace"], t)
-        self.assertEqual([r["trace"] for r in self.flows("filler.play")], [t])
         gate = self.flows("gate.realtime")
-        self.assertEqual([(g["extra"]["verdict"], g["trace"]) for g in gate], [("muted_wait_look", t)])
+        self.assertEqual([g["extra"]["verdict"] for g in gate], ["muted_wait_look"])
+        own = gate[0]["trace"]
+        self.assertNotEqual(own, t)
+        self.assertEqual(self.hub._look_wait["trace"], own)
+        self.assertEqual([r["trace"] for r in self.flows("filler.play")], [own])
+        self.assertEqual(self.flows("call.realtime.turn")[0]["trace"], own)
 
     async def test_filler_play_logged(self):
         self.hub.burst = trl.LookAnswerTest.Burst()
