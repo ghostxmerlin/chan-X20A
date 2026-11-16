@@ -925,7 +925,7 @@ def main():
     ap.add_argument("--models", required=True)
     ap.add_argument("--speakers", default=None, help="speakers.npz (default: next to this file)")
     ap.add_argument("--threads", type=int, default=2)
-    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/aidea/agent/.env"),
+    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/soul-spike/hello.env"),
                     help="env file with MONGO_URI and DASHSCOPE_API_KEY / DASHSCOPE_APP_ID (server only)")
     ap.add_argument("--db", choices=["on", "off"], default="on", help="write sessions/speech/sounds/tingwu to MongoDB 'hello'")
     ap.add_argument("--tingwu", choices=["on", "off"], default="on",
@@ -938,8 +938,8 @@ def main():
                          "realtime switch is on (default off) and hello is in crowd")
     ap.add_argument("--realtime-voices", default=os.environ.get("SOUL_RT_VOICES", os.path.expanduser("~/soul-tts/soul_tts/voices.json")),
                     help="soul-tts voices.json that holds the cloned voice (private; the id is never logged)")
-    # owner 2026-11-15: 围观 speaks in Mandy (mm01, clone of 11-14) with a Shandong accent (PERSONA); was yy01
-    ap.add_argument("--realtime-voice", default=os.environ.get("SOUL_RT_VOICE", "mm01"), help="soul-tts voice key")
+    # owner 2026-11-15 night: 围观 speaks in 鹿野 (ly01, Qwen clone; fillers in ~/soul-spike/fillers/ly01); was mm01, before that yy01
+    ap.add_argument("--realtime-voice", default=os.environ.get("SOUL_RT_VOICE", "ly01"), help="soul-tts voice key")
     ap.add_argument("--realtime-silence-ms", type=int, default=realtime_link.Config.silence_ms,
                     help="server VAD silence that ends a turn (crowd: longer than DashScope's 800 ms)")
     ap.add_argument("--realtime-vad-threshold", type=float, default=realtime_link.Config.vad_threshold)

@@ -11,7 +11,7 @@
 - **设置**：`~/soul-mind/settings.json`，只在服务器上，含真实称呼；第一次部署时从 `settings.example.json` 复制。改完不用重启，下一分钟生效；要让历史也按新设置算，用重算。
 - **重算**：在服务器 `~/soul-mind` 下 `~/soul-spike/.venv/bin/python -m mind.runner --settings settings.json --rebuild 2026-11-10T00:00 2026-11-11T00:00`（本地时间）。
 - **接口**：只监听服务器 `127.0.0.1:52740`，令牌与耳朵相同；`/state`、`/timeline?from=&to=`（毫秒，≤24 小时）、`/minute?t=&version=`。Mac 上由监控页经 ssh 转发访问（`/mind.html`）。
-- **密钥**：`MONGO_URI` 运行时从 hubmix 的 `~/aidea/agent/.env` 读，不进仓库。
+- **密钥**：`MONGO_URI` 运行时从 hubmix 的 `~/soul-spike/hello.env` 读，不进仓库。
 
 ## 库（第 1 期）
 

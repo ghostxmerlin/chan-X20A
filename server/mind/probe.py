@@ -92,7 +92,7 @@ def prompt_from(pkg, strong):
 
 def main():
     ap = argparse.ArgumentParser(description="probe aihubmix models for mind")
-    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/aidea/agent/.env"))
+    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/soul-spike/hello.env"))
     ap.add_argument("--models", default="gpt-6-luna,gpt-6.1-terra")
     ap.add_argument("--minutes", type=int, default=5)
     ap.add_argument("--image")

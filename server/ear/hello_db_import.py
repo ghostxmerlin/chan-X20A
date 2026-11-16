@@ -1,6 +1,6 @@
 """Import the ear's existing recordings into MongoDB "hello" (2026-11-10). Safe to re-run.
 
-  python hello_db_import.py [--recordings ~/soul-spike/recordings] [--hubmix-env ~/aidea/agent/.env] [--dry-run]
+  python hello_db_import.py [--recordings ~/soul-spike/recordings] [--hubmix-env ~/soul-spike/hello.env] [--dry-run]
 
 Reads every <recordings>/<YYYYMMDD>/<HHMMSS-source-cN>/ folder: meta.json → sessions,
 events.jsonl → speech (speech end events) and sounds (sound end events). Rows are upserted
@@ -47,7 +47,7 @@ def read_session(folder):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--recordings", default=os.path.expanduser("~/soul-spike/recordings"))
-    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/aidea/agent/.env"))
+    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/soul-spike/hello.env"))
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     folders = sorted(os.path.join(a.recordings, d, s) for d in os.listdir(a.recordings)

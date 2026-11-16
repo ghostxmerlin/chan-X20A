@@ -232,7 +232,7 @@ def tick(db,store,settings_store,env,now_ms,chat=None):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--hubmix-env',default=os.path.expanduser('~/aidea/agent/.env'))
+    parser.add_argument('--hubmix-env',default=os.path.expanduser('~/soul-spike/hello.env'))
     parser.add_argument('--settings',default=os.path.expanduser('~/soul-mind/settings.json'))
     parser.add_argument('--clip-texts',default=os.path.expanduser('~/soul-mind/clip_texts.json'))
     args=parser.parse_args()

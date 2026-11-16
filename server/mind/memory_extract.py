@@ -845,7 +845,7 @@ def main(argv=None):
     ap.add_argument('--lane', choices=('replay', 'live'), default='replay')
     ap.add_argument('--yes-live', action='store_true', help='required with --lane live')
     ap.add_argument('--dry-run', action='store_true', help='gather the material and estimate; no model call, no write')
-    ap.add_argument('--hubmix-env', default=os.path.expanduser('~/aidea/agent/.env'))
+    ap.add_argument('--hubmix-env', default=os.path.expanduser('~/soul-spike/hello.env'))
     ap.add_argument('--settings', default=os.path.expanduser('~/soul-mind/settings.json'))
     ap.add_argument('--clip-texts', default=os.path.expanduser('~/soul-mind/clip_texts.json'))
     a = ap.parse_args(argv)

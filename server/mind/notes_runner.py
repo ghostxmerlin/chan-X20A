@@ -130,7 +130,7 @@ def tick(db, store, records, s, env, now_ms):
 
 def main():
     ap = argparse.ArgumentParser(description="hello notes: conversation notes every minute")
-    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/aidea/agent/.env"))
+    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/soul-spike/hello.env"))
     ap.add_argument("--settings", default=os.path.expanduser("~/soul-mind/settings.json"))
     ap.add_argument("--clip-texts", default=os.path.expanduser("~/soul-mind/clip_texts.json"))
     a = ap.parse_args()

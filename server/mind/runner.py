@@ -321,7 +321,7 @@ def _parse_local(text, tz):
 
 def main():
     ap = argparse.ArgumentParser(description="hello mind: minute packages and strong elements")
-    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/aidea/agent/.env"))
+    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/soul-spike/hello.env"))
     ap.add_argument("--settings", default=os.path.expanduser("~/soul-mind/settings.json"))
     ap.add_argument("--token-file")
     ap.add_argument("--api-port", type=int, default=52740)

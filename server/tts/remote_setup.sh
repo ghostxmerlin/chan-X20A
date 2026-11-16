@@ -3,7 +3,7 @@
 # API on 127.0.0.1:52750 (mind calls it), mouth on 127.0.0.1:52751 (the ear relays the robot's /mouth to it).
 # Tokens: the device (robot) uses the ear's SOUL_TOKEN_FILE (the ear relays /mouth with it); the API (mind
 # calls it) uses its own ~/soul-tts/api.token, generated once here (soul-tts refuses the same token for both).
-# DashScope key from ~/aidea/agent/.env.
+# DashScope key from ~/soul-spike/hello.env.
 set -euo pipefail
 D="$HOME/${TTS_DIR:-soul-tts}"
 UNIT="${UNIT:-soul-tts}"
@@ -26,7 +26,7 @@ else
     --uid "$(id -u)" --gid "$(id -g)" -p WorkingDirectory="$D" -p Restart=on-failure -p RestartSec=5s \
     -p MemoryMax=512M -p CPUQuota=50% \
     --setenv=SOUL_TTS_PLAYER=stream --setenv=SOUL_TTS_TOKEN_FILE="$API_TOKEN_FILE" \
-    --setenv=SOUL_TTS_DEVICE_TOKEN_FILE="$TOKEN_FILE" --setenv=SOUL_TTS_ENV_FILE="$HOME/aidea/agent/.env" \
+    --setenv=SOUL_TTS_DEVICE_TOKEN_FILE="$TOKEN_FILE" --setenv=SOUL_TTS_ENV_FILE="$HOME/soul-spike/hello.env" \
     --setenv=SOUL_TTS_LISTEN=127.0.0.1:52750 --setenv=SOUL_TTS_MOUTH_LISTEN=127.0.0.1:52751 \
     "$PY" -m soul_tts serve
 fi

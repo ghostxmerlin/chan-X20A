@@ -60,7 +60,7 @@ def tick(db, store, s, env, recordings_root, now_ms):
 
 def main():
     ap = argparse.ArgumentParser(description="hello eye: per-minute look at the body-camera frames")
-    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/aidea/agent/.env"))
+    ap.add_argument("--hubmix-env", default=os.path.expanduser("~/soul-spike/hello.env"))
     ap.add_argument("--settings", default=os.path.expanduser("~/soul-mind/settings.json"))
     ap.add_argument("--recordings", default=os.path.expanduser("~/soul-spike/recordings"))
     a = ap.parse_args()

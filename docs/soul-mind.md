@@ -92,7 +92,7 @@
 ## 6. 实测：听悟实时（2026-11-09 晚）
 
 - **录音**：两段修正前的机器人录音，按 sherpa 声纹分数挑"最像主人"的部分。A 是 2 分 10 秒的多人交谈，B 是 80 秒、主人说得多。共约 3.5 分钟，花费约 5 分钱。
-- **脚本和原始结果**：在本机 `.private/mind-tingwu-test/`（不提交），服务器上在 `~/soul-mind-test/`。用的是 hubmix 的听悟 key（`~/aidea/agent/.env`），没有复制出来。
+- **脚本和原始结果**：在本机 `.private/mind-tingwu-test/`（不提交），服务器上在 `~/soul-mind-test/`。用的是 hubmix 的听悟 key（`~/soul-spike/hello.env`），没有复制出来。
 
 结果：
 
