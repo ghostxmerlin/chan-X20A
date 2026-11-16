@@ -64,12 +64,17 @@ per LOOKS_PUSH_S. Without looks of its own (an ear restart), mind's 注视： li
 Caps: one session at most MAX_SESSION_S, closed after IDLE_S without speech, and at most HOUR_CAP_S of open sessions in
 any hour; after a cap / idle close the next session opens only on the next speech onset (or an owner greeting).
 Records: one realtime_turns document per response (timings, transcript lengths only, token usage, cost estimate); the
-log has timings and ids only, never text, names, the key or the voice id.
+console log has timings and ids only, never text, names, the key or the voice id. The run log (ear_log / hello_log,
+2026-11-16) has the full instructions (call.realtime.session / .context), every gate verdict (gate.realtime), rescue
+(gate.rescue), hush (trigger.hush), greeting (trigger.greet), filler (filler.play), web search (call.realtime.search)
+and turn (call.realtime.turn: usage, cost, heard / ear's own words / reply), on the trace of the heard sentence that
+started it; never the key (only its first 7 characters) or the voice id.
 """
 import asyncio
 import base64
 import collections
 import concurrent.futures
+import contextvars
 import itertools
 import json
 import math
@@ -80,6 +85,7 @@ import struct
 import time
 import traceback
 
+import ear_log
 from mouth_link import RT_STREAM_BASE
 
 MODEL = "qwen-audio-3.1-realtime-flash"
@@ -92,6 +98,12 @@ HDR = struct.Struct("<4sIIHH")
 # Official price, 华北2（北京）, 元 per million tokens (help.aliyun.com/zh/model-studio/qwen-audio-3-1-realtime-flash,
 # read 2026-11-14). With audio output the accompanying text output is not billed.
 PRICE_CNY_PER_M = {"text_in": 1.5, "audio_in": 6.0, "text_out": 4.5, "audio_out": 12.0}
+PRICE_BASIS = "realtime_link.PRICE_CNY_PER_M 2026-11-14 (help.aliyun.com/zh/model-studio/qwen-audio-3-1-realtime-flash)"
+LOCAL_KINDS = ("look_filler", "greet_beep")         # played from local PCM: no model call, no call.realtime.turn
+FAILED_STATES = ("error", "stalled", "no_done", "robot_gone")
+GATE_REASONS = {"play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
+                "unclear": "a didn't-hear question", "repeat": "word for word a recent reply",
+                "blind": "看不清 without a fresh look", "wait_look": "a look question: the answer comes from the next photo"}
 STEP_S = 0.2
 log = print                                         # tests silence it
 
@@ -674,6 +686,8 @@ class RealtimeHub:
         self.burst = None                              # vision_burst.VisionBurst (ear_server wires it)
         self._looks = collections.deque(maxlen=LOOKS_KEEP)    # (at wall ms, text): memory only, never logged
         self._looks_dirty, self._looks_sent_at = False, None
+        self._local_traces = collections.deque(maxlen=6)  # (clock, trace) of the ear's own sentences (run log)
+        self._next_trace = self._next_prompt = None      # the trace / text item of the next non-speech response
 
     # ---- conditions ----
     def link(self):
@@ -900,7 +914,7 @@ class RealtimeHub:
         self.state, self.opened_at = "connecting", now
         self.session_no = next(self._sessions)
         self._ready.clear()
-        self._task = self.spawn(self._session(self.session_no, why))
+        self._task = self.spawn(self._session(self.session_no, why), clean=True)   # no caller's trace in it
         self._write_status(now)
 
     def close(self, why, need_speech=False):
@@ -908,6 +922,9 @@ class RealtimeHub:
             return
         now = self.clock()
         log(f"realtime: session {self.session_no} closing ({why}) after {now - self.opened_at:.0f}s", flush=True)
+        ear_log.emit("call.realtime.session", ok=why not in ("error", "refused", "connect_failed"), model=self.cfg.model,
+                     sum=f"围观会话关闭 {why}", ms=int((now - self.opened_at) * 1000), ref={"session": self.session_no},
+                     extra={"state": "close", "why": why})
         self._spans.append((self.opened_at, now))
         self.state, self.opened_at = "closed", None
         self._need_speech = need_speech
@@ -943,13 +960,21 @@ class RealtimeHub:
                                             self.cfg.open_timeout_s + 1)
             except Exception as e:                     # noqa: BLE001 - offline, refused: try again later
                 log(f"realtime: session {n} could not connect ({type(e).__name__}: {str(e)[:80]})", flush=True)
+                ear_log.emit("call.realtime.session", ok=False, err=f"{type(e).__name__}: {str(e)[:120]}",
+                             model=self.cfg.model, key=self.key, ref={"session": n},
+                             extra={"state": "connect_failed", "why": why})
                 self._retry_at = self.clock() + self.cfg.retry_s
                 self.close("connect_failed")
                 return
             self._ws = ws
             await self._take_context(ctx_fut)
+            instr = self._instructions()
             await ws.send(json.dumps({"type": "session.update", "session": session_config(
-                self.voice, self._instructions(), self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search)}))
+                self.voice, instr, self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search)}))
+            ear_log.emit("call.realtime.session", ok=True, model=self.cfg.model, key=self.key, sum=f"围观会话打开 {why}",
+                         body={"system": instr}, ref={"session": n},
+                         extra={"state": "open", "why": why, "search": bool(self.cfg.search),
+                                "silence_ms": self.cfg.silence_ms, "vad_threshold": self.cfg.vad_threshold})
             self._ctx_at = self.clock()
             log(f"realtime: session {n} open ({why}), context {len(self.ctx.get('text') or '')} chars", flush=True)
             self.stats["sessions"] += 1
@@ -999,7 +1024,7 @@ class RealtimeHub:
         loop = asyncio.get_running_loop()
         fut = loop.run_in_executor(self._pool, self.call, "GET", "/realtime/context", None, self.cfg.context_timeout_s)
         if await self._take_context(fut) == 200:
-            self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
+            self._send_instructions("context")
 
     def _told(self, text):
         """A heard sentence that may say where we are ("我们现在在饭店") goes to mind /place/told (a local rule there, no
@@ -1052,7 +1077,7 @@ class RealtimeHub:
         self._push_looks(self.clock())
 
     # ---- look questions (see LOOK_ASK) ----
-    def _start_look_wait(self, question, now):
+    def _start_look_wait(self, question, now, trace=None):
         w = self._look_wait
         if w is not None and not w["sent"] and now <= w["deadline"]:
             w["question"] = str(question)[:80]         # the same wait: keep its mark, take the newest wording
@@ -1060,14 +1085,15 @@ class RealtimeHub:
         if self.burst is None or not self.active():
             return
         try:
-            mark = self.burst.ask("ask")
+            with ear_log.scope(trace=trace):
+                mark = self.burst.ask("ask")
         except Exception:                              # noqa: BLE001 - a burst never costs the session
             log(f"realtime: look ask failed\n{traceback.format_exc().rstrip()}", flush=True)
             mark = None
         if mark is None:
             return                                     # no burst can run (switch / crowd / link): reply as usual
         self._look_wait = {"at": now, "mark": mark, "question": str(question)[:80], "deadline": now + LOOK_WAIT_S,
-                           "sent": False, "look": None, "filler": not self.fillers}
+                           "sent": False, "look": None, "filler": not self.fillers, "trace": trace}
         self.stats["look_asks"] += 1
         log("realtime: look question: waiting for a fresh look", flush=True)
         self._stage("think")
@@ -1096,6 +1122,9 @@ class RealtimeHub:
                             "audio_ms": len(pcm) * 1000 // (SR_OUT * 2), "usage": None, "at": self.wall_ms()}
         self.stats["look_fillers"] += 1
         log(f"realtime: session {self.session_no} look filler", flush=True)
+        ear_log.emit("filler.play", trace=w.get("trace"), sum=self.fillers[i][0][:60] or None,
+                     ref={"rid": rid, "session": self.session_no},
+                     extra={"kind": "look_filler", "clip": i, "audio_ms": self._turns[rid]["audio_ms"]})
         self._out_put(("pcm", rid, pcm))
         self._out_put(("end", rid, b""))
 
@@ -1117,9 +1146,11 @@ class RealtimeHub:
         self._look_wait = None
         self.stats["look_answers"] += 1
         log(f"realtime: session {self.session_no} answering the look question from a fresh look", flush=True)
+        prompt = look_answer_text(w["look"], w["question"])
+        self._next_trace, self._next_prompt = w.get("trace"), prompt
         self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
                                                                       "content": [{"type": "input_text",
-                                                                                   "text": look_answer_text(w["look"], w["question"])}]}})
+                                                                                   "text": prompt}]}})
         self._send_soon({"type": "response.create"})
 
     def _push_looks(self, now):
@@ -1127,7 +1158,7 @@ class RealtimeHub:
             return
         if self._looks_sent_at is not None and now - self._looks_sent_at < LOOKS_PUSH_S:
             return                                     # step() sends it once LOOKS_PUSH_S have passed
-        self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
+        self._send_instructions("looks")
 
     def seen_for_look(self):
         """The live M12 line for the burst's recognition prompt (names as hello calls them), or None."""
@@ -1148,7 +1179,15 @@ class RealtimeHub:
         if self._ws is None or not self._ready.is_set() or now - (self._seen_at or 0) < self.cfg.seen_min_s:
             return
         if self._seen() != self._seen_sent:
-            self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
+            self._send_instructions("seen")
+
+    def _send_instructions(self, why, trace=None):
+        """session.update with fresh instructions; in the run log a call.realtime.context with the full text (the
+        body table keeps each distinct text once a month, so the same instructions again cost one small record)."""
+        instr = self._instructions()
+        ear_log.emit("call.realtime.context", trace=trace, model=self.cfg.model, body={"system": instr},
+                     ref={"session": self.session_no}, extra={"why": why, "chars": len(instr)})
+        self._send_soon({"type": "session.update", "session": {"instructions": instr}})
 
     def _send_soon(self, obj):
         ws = self._ws
@@ -1183,6 +1222,10 @@ class RealtimeHub:
     def _event(self, e, n):
         t, now = e.get("type"), self.clock()
         self.stats["ev:" + str(t)[:48]] += 1
+        if "search" in str(t):                         # a web search event (none documented yet): note it on the turn
+            turn = self._turns.get(self._resp)
+            if turn is not None:
+                turn["search_events"] = turn.get("search_events", 0) + 1
         if t == "session.updated":
             if not self._ready.is_set():
                 self._ready.set()
@@ -1203,7 +1246,10 @@ class RealtimeHub:
             self._speech_end = now
             recent = self._local_end if self._local_end is not None and now - self._local_end < 3 else None
             self._turn = self._heard_turn = {"kind": "speech", "speech_end": now, "heard_chars": None,
-                                             "local_end": recent}
+                                             "local_end": recent,
+                                             "trace": next((tr for at, tr in reversed(self._local_traces)
+                                                            if tr and now - at < 3), None),
+                                             "ear": [t for at, t in self._local_texts if now - at < 3]}
             self._stage("think")
         elif t == "conversation.item.input_audio_transcription.completed":
             text = strip_emoji(e.get("transcript"))
@@ -1212,13 +1258,16 @@ class RealtimeHub:
                 self._heard_turn["heard"] = text[:300]
             if self.on_transcript:
                 self.on_transcript("heard", text)
-            self._heard_text(text, now, told=True)
+            self._heard_text(text, now, told=True, trace=(self._heard_turn or {}).get("trace"))
         elif t == "response.created":
             rid = str((e.get("response") or {}).get("id") or f"r{now}")
             self._resp = rid
             turn = self._turn if self._turn is not None and self._next_kind == "speech" else \
-                {"kind": self._next_kind, "speech_end": None, "heard_chars": None}
+                {"kind": self._next_kind, "speech_end": None, "heard_chars": None,
+                 "trace": self._next_trace if self._next_kind != "speech" else None,
+                 "prompt": self._next_prompt if self._next_kind != "speech" else None}
             self._next_kind, self._turn = "speech", None
+            self._next_trace = self._next_prompt = None
             turn.update({"rid": rid, "session": n, "response_at": now, "first_delta": None, "sound_at": None,
                          "reply_chars": 0, "audio_ms": 0, "usage": None, "at": self.wall_ms(),
                          "gate": None if turn.get("kind") in ("speech", "rescue", "look_answer") else "play",
@@ -1266,13 +1315,14 @@ class RealtimeHub:
                 if text and turn.get("gate") == "play":
                     self._recent.append((self.clock(), turn, text[:80]))   # heard is read later (it may come after)
                     if self._ws is not None and self._ready.is_set():     # the next reply already knows it
-                        self._send_soon({"type": "session.update", "session": {"instructions": self._instructions()}})
+                        self._send_instructions("reply", turn.get("trace"))
             if self.on_transcript:
                 self.on_transcript("reply", text)
         elif t == "response.done":
             resp = e.get("response") or {}
             rid = str(resp.get("id") or self._resp)
             turn = self._turns.get(rid)
+            self._log_search(rid, turn, resp.get("usage"))
             if turn is not None:
                 turn["usage"], turn["status"] = resp.get("usage"), resp.get("status")
                 self._judge(rid, turn, True)            # no transcript came: decided on what there is
@@ -1304,6 +1354,7 @@ class RealtimeHub:
                 self._dropped.add(rid)
                 self.stats["muted_wait_look"] += 1
                 log("realtime: reply muted (wait_look)", flush=True)
+                self._log_gate(rid, turn, v, done)
                 return
         recent = [norm_text(r) for at, _, r in self._recent if now - at <= self.cfg.recent_s]
         fresh = bool(self._looks) and self.wall_ms() - self._looks[-1][0] <= FRESH_LOOK_S * 1000
@@ -1311,6 +1362,7 @@ class RealtimeHub:
         if v is None:
             return
         turn["gate"], held, turn["held"] = v, turn["held"], []
+        self._log_gate(rid, turn, v, done, fresh_look=fresh)
         if v == "play":
             for pcm in held:
                 if rid not in self._dropped:
@@ -1322,24 +1374,54 @@ class RealtimeHub:
             end = turn.get("speech_end") or now
             texts = [turn["heard"]] if turn.get("heard") else []
             texts += [t for at, t in self._local_texts if end - 3 <= at <= now + 0.5]
-            self._rescue = {"at": now, "texts": texts, "sent": False}
+            self._rescue = {"at": now, "texts": texts, "sent": False, "trace": turn.get("trace")}
             self._try_rescue(now)
         self.stats[f"muted_{v}"] += 1
         log(f"realtime: reply muted ({v})", flush=True)
 
+    def _log_gate(self, rid, turn, v, done, **extra):
+        """gate.realtime: one verdict per reply (emit only: this runs on the voice loop)."""
+        if not turn.get("trace"):
+            turn["trace"] = ear_log.new_trace()        # nothing heard by the ear: the reply starts its own trace
+        verdict = "play" if v == "play" else f"muted_{v}"
+        ear_log.emit("gate.realtime", trace=turn["trace"], sum=f"{verdict} {(turn.get('tx') or '')[:40]}".strip(),
+                     ref={"rid": rid, "session": turn.get("session")},
+                     extra={"verdict": verdict, "reason": GATE_REASONS.get(v, v), "kind": turn.get("kind"),
+                            "done": done, **extra})
+
+    def _log_search(self, rid, turn, usage):
+        """call.realtime.search when the response searched the web (usage count, else a search event)."""
+        n = ear_log.search_count(usage)
+        events = (turn or {}).get("search_events", 0)
+        if not n and events:
+            n = 1
+        if not n:
+            return
+        ear_log.emit("call.realtime.search", trace=(turn or {}).get("trace"), model=self.cfg.model, key=self.key,
+                     usage={"count": n}, cost=ear_log.search_cost(n), sum=f"联网搜索 {n} 次",
+                     ref={"rid": rid, "session": (turn or {}).get("session")},
+                     extra={"source": "usage" if ear_log.search_count(usage) else "events", "events": events})
+
     # ---- what was heard: the session's transcript and the ear's own ASR ----
-    def local_heard(self, text):
+    def local_heard(self, text, trace=None):
         """Ear: a sentence of its own ASR (SenseVoice) at the speech end, on the event loop. Live, the session's own
-        transcript was often missing; this one feeds the 「嗯」 rescue, the burst words and 闭嘴 too. Never logged."""
+        transcript was often missing; this one feeds the 「嗯」 rescue, the burst words and 闭嘴 too. Not in the console
+        log. trace: its heard.asr trace (run log), carried by the turn, gate, rescue and burst it leads to."""
         if not text or not self.active() or not self.in_crowd():
             return
         now = self.clock()
         self._local_texts.append((now, str(text)[:300]))
-        self._heard_text(str(text)[:300], now)
+        self._local_traces.append((now, trace))
+        h = self._heard_turn                           # the server VAD ended the turn first: it is this sentence's
+        if h is not None and now - h["speech_end"] < 3:
+            h.setdefault("ear", []).append(str(text)[:300])
+            if trace and not h.get("trace"):
+                h["trace"] = trace
+        self._heard_text(str(text)[:300], now, trace=trace)
 
-    def _heard_text(self, text, now, told=False):
+    def _heard_text(self, text, now, told=False, trace=None):
         if is_look_ask(text):
-            self._start_look_wait(text, now)
+            self._start_look_wait(text, now, trace)
         r = self._rescue
         if r is not None and not r["sent"] and now - r["at"] <= RESCUE_S:
             r["texts"].append(text)
@@ -1349,13 +1431,14 @@ class RealtimeHub:
             if key and not (self._cmd_last.get(key, -1e9) > now - 4):    # both sources heard it: once
                 self._cmd_last[key] = now
                 try:
-                    self.burst.heard(text)
+                    with ear_log.scope(trace=trace):    # the burst (and its looks) carry this sentence's trace
+                        self.burst.heard(text)
                 except Exception:                      # noqa: BLE001 - a burst never costs the session
                     log(f"realtime: burst trigger failed\n{traceback.format_exc().rstrip()}", flush=True)
         if told:
             self._told(text)
         if is_hush(text):
-            self._hush()
+            self._hush(text, trace)
 
     @staticmethod
     def _burst_key(text):
@@ -1377,9 +1460,10 @@ class RealtimeHub:
         follow = bool(self._recent) and now - self._recent[-1][0] <= FOLLOW_S      # hello just spoke
         heard = next((t for t in r["texts"] if addressed(t) or (follow and is_question(t))), None)
         if heard is not None and is_look_ask(heard):
-            self._start_look_wait(heard, now)
+            self._start_look_wait(heard, now, r.get("trace"))
         if heard is not None and self._look_wait is not None:
             r["sent"] = True                           # a look question is answered from the next fresh look
+            self._log_rescue(r, "look_wait", heard)
             return
         if heard is None or self._ws is None or not self._ready.is_set() or self._resp is not None \
                 or self.output_busy():
@@ -1387,18 +1471,27 @@ class RealtimeHub:
         r["sent"], self._rescue_heard, self._next_kind = True, heard, "rescue"
         self.stats["rescued"] += 1
         log(f"realtime: session {self.session_no} muted 嗯 was addressed: asked again", flush=True)
+        self._log_rescue(r, "asked", heard)
+        self._next_trace, self._next_prompt = r.get("trace"), rescue_text(heard)
         self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
                                                                       "content": [{"type": "input_text",
                                                                                    "text": rescue_text(heard)}]}})
         self._send_soon({"type": "response.create"})
 
-    def _hush(self):
+    def _log_rescue(self, r, outcome, heard):
+        ear_log.emit("gate.rescue", trace=r.get("trace"), sum=f"{outcome} {str(heard)[:40]}",
+                     ref={"session": self.session_no}, extra={"outcome": outcome, "texts": len(r["texts"])})
+
+    def _hush(self, text=None, trace=None):
         """A spoken 闭嘴: the 围观 switch off through mind (the session closes when the switch reader sees it)."""
         if self._hush_busy:
             return
         self._hush_busy = True
         self.stats["hush"] += 1
         log("realtime: hush heard, switching 围观 off", flush=True)
+        ear_log.emit("trigger.hush", trace=trace, by="asr", sum=f"闭嘴 → 围观 关：{str(text or '')[:40]}",
+                     ref={"session": self.session_no}, extra={"word": "闭嘴" if HUSH_ANY.search(norm_text(text or ""))
+                                                             else "short", "action": "realtime_off"})
         self.spawn(self._post_hush())
 
     async def _post_hush(self):
@@ -1532,6 +1625,8 @@ class RealtimeHub:
                     self._greet = None
                     self._last_greet = now
                     self.stats["greeted"] += 1
+                    ear_log.emit("trigger.greet", trace=ear_log.new_trace(), by="m12", sum="招呼 greet_beep",
+                                 ref={"session": self.session_no}, extra={"kind": "greet_beep"})
                     self._beep(now)
                     return
                 text = greet_text(call, "short", word=SHORT_WORDS[pick])
@@ -1547,6 +1642,10 @@ class RealtimeHub:
             self._last_long = now
         self._next_kind = ("greet" if g.get("size", "long") == "long" else "greet_short") if g["kind"] == "owner" \
             else "tap"
+        self._next_trace, self._next_prompt = ear_log.new_trace(), text
+        ear_log.emit("trigger.greet", trace=self._next_trace, by="tap" if g["kind"] == "tap" else "m12",
+                     sum=f"招呼 {self._next_kind}", ref={"session": self.session_no},
+                     extra={"kind": self._next_kind, "pick": (g.get("pick") or {}).get("kind")})
         self.stats["greeted"] += 1
         log(f"realtime: session {self.session_no} {self._next_kind} greeting", flush=True)
         self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
@@ -1594,6 +1693,24 @@ class RealtimeHub:
                 self.db.realtime_turn(doc)
             except Exception:                          # noqa: BLE001 - a record never costs the session
                 pass
+        if turn.get("kind") not in LOCAL_KINDS:
+            self._log_turn(turn, doc, state)
+
+    def _log_turn(self, turn, doc, state):
+        """call.realtime.turn: usage as DashScope sent it, the cost estimate, what was heard (the model's transcript and
+        the ear's own words) and the reply; ref.tid = the realtime_turns row."""
+        inp = {k: v for k, v in (("heard", turn.get("heard")), ("ear", turn.get("ear") or None),
+                                 ("prompt", turn.get("prompt"))) if v}
+        reply = turn.get("tx") or turn.get("reply")
+        ear_log.emit("call.realtime.turn", trace=turn.get("trace") or ear_log.new_trace(), model=self.cfg.model,
+                     key=self.key, ok=state not in FAILED_STATES, err=state if state in FAILED_STATES else None,
+                     ms=doc["timings"].get("response_to_first_audio_ms"), usage=turn.get("usage"),
+                     cost=ear_log.cost(doc["cost_cny"], PRICE_BASIS), sum=(reply or f"[{state}]")[:60],
+                     body={"input": inp or None, "output": reply or None},
+                     ref={"tid": doc["tid"], "session": turn.get("session"), "rid": turn.get("rid")},
+                     extra={"kind": turn.get("kind"), "state": state, "timings": doc["timings"],
+                            "audio_ms": turn.get("audio_ms"), "heard_chars": turn.get("heard_chars"),
+                            "reply_chars": turn.get("reply_chars"), "tokens": doc["usage"]})
 
     def _write_status(self, now):
         self._status_at = now
@@ -1609,8 +1726,9 @@ class RealtimeHub:
             pass
 
     # ---- tasks ----
-    def spawn(self, coro):
-        task = asyncio.create_task(coro)
+    def spawn(self, coro, clean=False):
+        # clean: a fresh context, so a long-lived task never keeps the run-log scope (trace) of whoever opened it
+        task = asyncio.create_task(coro, context=contextvars.Context()) if clean else asyncio.create_task(coro)
         self._bg.add(task)
         task.add_done_callback(self._done)
         return task

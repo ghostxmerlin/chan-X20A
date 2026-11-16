@@ -80,6 +80,8 @@ import traceback
 import urllib.error
 import urllib.request
 
+import ear_log
+
 try:
     from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidURI
 except ImportError:                                 # tests without websockets only use mind_client
@@ -93,6 +95,7 @@ HELLO_TIMEOUT_S = 10
 REPLACED = 4000                                     # soul-tts: "replaced by new connection"
 MIND = "http://127.0.0.1:52740"
 REPORT_FIELDS = ("seq", "mode", "dir", "host", "return_to", "by", "input", "effects")
+STATE_FIELDS = ("mode", "dir", "host", "return_to")           # hello's mode state in a report (run log robot.state)
 STAGE_DEBOUNCE_S = 0.3
 STAGE_INFLIGHT = 4
 RT_STREAM_BASE = 0x40000000                         # realtime's /mouth stream ids (soul-tts counts from 1)
@@ -219,6 +222,9 @@ class ModeRelay:
         mode = m.get("mode")
         if isinstance(mode, str):
             self.robot_mode, self._mode_conn = _ascii(mode, 16), conn
+            # run log: robot.state when hello's reported mode state changed (a repeated report records nothing)
+            ear_log.robot_state("mode", {k: m.get(k) for k in STATE_FIELDS}, by=_ascii(m.get("by"), 16) or "robot",
+                                conn=f"m{conn}", seq=m.get("seq"), input=_ascii(m.get("input"), 16) or None)
 
     def link_closed(self, conn):
         self._links.pop(conn, None)
@@ -439,6 +445,7 @@ def chat_body(ev, session):
             "voice": {k: v.get(k) for k in ("p", "band", "acoustic_band", "loud_db")}, "loud_db": v.get("loud_db"),
             "self": {k: me.get(k) for k in ("sounding", "moving")}, "debug": dict(ev.get("debug") or {}),
             "speech_start_at": ev.get("t"),
+            "trace": ev.get("trace"),                 # run log: mind's chat turn joins this sentence's trace
             "sent_at": int(time.time() * 1000)}
 
 
@@ -675,6 +682,7 @@ class MouthLink:
                 await up.send(self.hello_text)
                 self._up = up
             log(f"mouth m{self.conn}: soul-tts up", flush=True)
+            ear_log.emit("link.upstream", sum="soul-tts up", extra={"to": "soul-tts", "state": "up", "conn": f"m{self.conn}"})
             async for message in up:
                 m = _parse(message)
                 if m is not None:
@@ -706,6 +714,8 @@ class MouthLink:
             await up.close()
         self.upstream_drops += 1
         log(f"mouth m{self.conn}: soul-tts down ({up.close_code})", flush=True)
+        ear_log.emit("link.upstream", sum="soul-tts down", extra={"to": "soul-tts", "state": "down", "conn": f"m{self.conn}",
+                                                                  "code": up.close_code, "drops": self.upstream_drops})
         return up.close_code
 
     # ---- modes (step 1b) ----

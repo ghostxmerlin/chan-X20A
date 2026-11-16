@@ -20,7 +20,12 @@ import re
 import struct
 import time
 
+import ear_log
+
 IDLE_TIMEOUT = 60
+# the robot's camera / M12 state as its vision events report it (run log robot.state, only on a change)
+STATE_EVENTS = {"m12_online": ("m12", "online"), "m12_offline": ("m12", "offline"),
+                "vision_on": ("vision", "on"), "vision_off": ("vision", "off")}
 # Name carry-over (owner 2026-11-15 "同一位置 2 秒内又冒出一张新脸，就沿用原来的名字。只改服务器"; and "宁可叫不出名字，也不要叫错").
 CARRY_US = 2_000_000          # a new face this soon after a named face was lost ...
 CARRY_DIST = 0.5              # ... with its box centre within this × the old box size ...
@@ -108,6 +113,8 @@ class VisionLink:
         self.on_event, self.on_frame = on_event, on_frame
         self.recordings_root = recordings_root
         self.session = None
+        self.device = None                       # the hello's device dict (boot_id)
+        self.why = None                          # why the link ended: idle / closed
         self.events = 0
         self.frames = 0
         self.start_ms = int(time.time() * 1000)
@@ -124,6 +131,7 @@ class VisionLink:
         kind = msg.get("type")
         if kind == "hello":
             if self.session is None:
+                self.device = msg.get("device") if isinstance(msg.get("device"), dict) else None
                 self.session = session_key(msg.get("source"), self.number, self.start_ms / 1000)
                 if self.db is not None:
                     self.db.session_open(self.session, {
@@ -139,6 +147,8 @@ class VisionLink:
                 carried = self.carry.feed(msg)
             except Exception:                     # noqa: BLE001 - carry-over is a bonus, never costs the event
                 carried = None
+            if msg["event"] in STATE_EVENTS:
+                ear_log.robot_state(*STATE_EVENTS[msg["event"]], session=self.session)
             for m in (msg, carried) if carried else (msg,):
                 self.events += 1
                 if self.db is not None:
@@ -221,13 +231,15 @@ async def serve_link(ws, db, number, peer, recordings_root=None, on_event=None, 
             try:
                 data = await asyncio.wait_for(ws.recv(), IDLE_TIMEOUT)
             except asyncio.TimeoutError:
+                link.why = "idle"
                 await ws.close(code=1000, reason="idle")
                 break
             reply = link.on_binary(data) if isinstance(data, bytes) else link.on_text(data)
             if reply:
                 await ws.send(json.dumps(reply))
     except Exception:                                   # noqa: BLE001 - connection closed or broken
-        pass
+        link.why = link.why or "closed"
     finally:
+        link.why = link.why or "cancelled"
         link.close()
     return link

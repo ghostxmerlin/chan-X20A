@@ -45,11 +45,11 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 - **服务**：`svc.start`、`svc.stop`、`svc.beat`（每分钟一次，带本分钟各类计数）、`svc.error`。
 - **连接**：`link.open` / `link.close`（ear 每条机器人链路）、`link.upstream`（ear 到听悟、realtime、soul-tts 的上游连接）。
 - **开关 / 模式 / 预设**：`switch.set`、`mode.input`（mind 的 `mode_log` 每行一条）、`mode.change`、`preset.apply`、`billing.set`、`robot.state`（机器人上报的开关）。
-- **触发与闸门**：`trigger.*`、`gate.realtime`（放行 / muted_quiet / muted_unclear / muted_repeat / muted_blind / muted_wait_look / rescue……及理由）、`filler.play`。
+- **触发与闸门**：`trigger.*`（`trigger.burst`、`trigger.hush`、`trigger.greet`）、`gate.rescue`、`gate.realtime`（放行 / muted_quiet / muted_unclear / muted_repeat / muted_blind / muted_wait_look / rescue……及理由）、`filler.play`。
 - **业务调用**（正文里存系统输入 / 背景 / 用户输入 / 输出全文）：
   - `call.eye`、`call.look`；
   - `call.fusion`、`call.segment`、`call.notes`；
-  - `call.realtime.session`、`call.realtime.turn`、`call.realtime.search`；
+  - `call.realtime.session`、`call.realtime.context`、`call.realtime.turn`、`call.realtime.search`；
   - `call.chat`、`call.say.*`（`call.say`、`call.say.speak`、`call.say.line`、`call.say.huyu`、`call.say.judge`、`call.say.check`）、`call.attention`；
   - `call.memory`、`call.memory.extract`、`call.memory.backfill`；
   - `call.tingwu`；
@@ -63,6 +63,26 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 - **`switch.set`**：`extra = {name, before, after}`，`by` = page / mode / extract……，`sum` 如 "听悟 开→关"；写库失败时 `ok: false` + `err`。`name` 有 tingwu、eye、notes、realtime、mouth（值是模式）、mind（情景）、memory_extract、say_prefetch（提前写）、say_auto（连续说）。
 - **`mode.input`**：`by` = 来源，`mode` = 之后的模式，`extra` = `{input, value, from, to, code, device, boot, dev_seq, sid, seq, effects, toast}`。**`mode.change`**：`extra = {from, to, seq, input}`（`from`/`to` 是 mode、dir、host、return_to）。**`billing.set`**：`extra = {before, after}`。**`preset.apply`**：`extra = {n, code, toast, failed, robot}`，`ok` = 没有失败的步骤。一次输入和它引起的预设、开关变化共用一个 `trace`。
 - **心跳** `svc.beat` 的 `state`：`switches` 表里每个开关的值（`*_status` 除外）加 `mind`（情景开关）。
+
+## ear 一侧的记录
+
+写入口是 `server/ear/ear_log.py`（hello_log 没部署时什么都不记，ear 照常跑）。价格表 `server/common/prices.py`（每项带 `BASIS`：来源网址 + 查询日期；查不到的是 `None`，记录里 `cost.amount: null`）。
+
+- **链路** `link.open` / `link.close`：`extra = {link: mouth|signal|vision|hearing, conn（m3 / v4 / c12 / DualKey 设备名）, peer（ip:port）, boot, why, counts}`，`link.close` 的 `ms` 是连接时长。`counts`：mouth `{upstream_drops}`，signal `{signals}`，vision `{events, frames}`，hearing `{utterances, sounds, rx_bytes, session}`。token 不对、连接已满时只记一条 `link.open`，`ok: false`，`why` = bad_token / busy。`link.upstream`：ear 到 soul-tts 的连接起落，`extra = {to: "soul-tts", state: up|down, conn, code, drops}`（连不上时不重复记，只记起落）。
+- **`robot.state`**：机器人报上来的状态变了才记，`extra = {part, before, after, …}`。`part`：`mode`（mode_report 里的 `{mode, dir, host, return_to}`，`by` = 报告的 by，另带 `conn`、`seq`、`input`）、`hearing`（机器人的听觉链路 on / off）、`m12`（online / offline）、`vision`（on / off，来自 vision 事件）。
+- **`heard.asr`**：本地识别出有字的每一句。新的 `trace`，`by: asr`，`sum` = 前 60 字，正文 `input` = 全文，`ref = {session, pos, id}`，`extra = {lang, emotion, dur, speaker {band, name（只在 known 时）}, voice, self}`。同一个 `trace` 写回这句的事件（`speech` 表里也有 `trace`），并随 `/chat/heard` 的 `trace` 字段带给 mind。
+- **`call.tingwu`**：每个听悟流一个 `trace`。`extra.state` = start / stop / error。stop 那条带 `usage = {audio_s}`、`ms`（流的时长）、`cost`（`prices.TINGWU_CNY_PER_HOUR` × 小时，按送上去的音频时长计费）、`ref = {session, stream, data_id}`、`extra.sentences`。
+- **围观 realtime**（`model` = qwen-audio-3.1-realtime-flash，`key` = 指纹，从不记声音 id）：
+  - `call.realtime.session`：`extra.state` = open（正文 `system` = 完整 instructions，`extra = {why, search, silence_ms, vad_threshold}`）/ close（`extra.why`，`ms` = 会话时长）/ connect_failed（`ok: false`）。`ref.session` = 本进程的会话编号。
+  - `call.realtime.context`：每次 `session.update` 发 instructions 一条，正文 `system` 是全文（相同全文同月只存一份），`extra = {why: context|looks|seen|reply, chars}`。
+  - `gate.realtime`：每个回答一次判定，`extra = {verdict: play|muted_quiet|muted_unclear|muted_repeat|muted_blind|muted_wait_look, reason, kind, done}`，`ref = {rid, session}`。
+  - `gate.rescue`：被静音的「嗯」被救回，`extra = {outcome: asked|look_wait, texts}`。`trigger.hush`：说了闭嘴，围观关，`extra = {word, action}`。`trigger.greet`：主人出现 / 单击打招呼，新的 `trace`，`extra = {kind, pick}`。`filler.play`：预录垫话「我看看哈」，`sum` = 垫话文字，`extra = {kind, clip, audio_ms}`。
+  - `call.realtime.turn`：每个回答一条（垫话、哔哔声不算）。`usage` 是服务商原样的用量，`cost = {amount: cost_cny(usage), cur: CNY, est, basis}`，`ms` = 发出回答到第一段音频，正文 `input = {heard（模型转写）, ear（ear 自己听到的句子）, prompt（招呼 / 救回 / 看图回答时 ear 发的文字）}`、`output` = 回答转写，`ref = {tid（realtime_turns）, session, rid}`，`extra = {kind, state, timings, audio_ms, heard_chars, reply_chars, tokens}`。`state` 是 error / stalled / no_done / robot_gone 时 `ok: false`。
+  - `call.realtime.search`：回答里用了联网搜索（用量里的 `plugins.search.count`，或者出现名字带 search 的服务端事件），`usage = {count}`，`cost` 按 `prices.REALTIME_SEARCH_CNY_PER_CALL`。
+  - 一轮的 `trace`：沿用触发它的那句 `heard.asr`（ear 自己的识别 3 秒内）；没有就由闸门判定时新建。救回、看图回答、垫话沿用原来那句的 `trace`。
+- **视觉爆发**：`trigger.burst`，`extra.action` = start / extend / refused / stop / end（`word` 是启动词或停止词，`why`；end 带 `looks、snaps、failures、duration_s、extended`），`ref.burst_id`。`call.look`：每张一条，`model`、`key`、`ms`、`usage`、`cost`（USD，`vision_burst.PRICE_USD_PER_M`）、正文 `system` / `input`（照片换成 `[image omitted, N bytes]`）/ `output`，`ref = {path（照片文件）, lid（vision_looks）, burst_id}`。一次爆发和它的每张识图共用触发那句的 `trace`。
+- **心跳** `svc.beat` 的 `state`：`{tingwu, tingwu_running, realtime, realtime_state, mouth, robot_mode, burst, links {hearing, vision, mouth, signal}}`。
+- **停止**：SIGTERM 由 ear 自己的事件循环处理：停止服务、各模块收尾，再在工作线程里记 `svc.stop {reason: sigterm}`；收尾超过 10 秒（或者第二次 SIGTERM）就记下 `svc.stop` 直接退出。
 
 ## 判断断档
 

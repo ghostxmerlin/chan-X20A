@@ -24,6 +24,8 @@ import queue
 import threading
 import time
 
+import ear_log
+
 DB_NAME = "hello"
 log = logging.getLogger("hello_db")
 
@@ -41,7 +43,25 @@ def speech_doc(session, ev, epoch_ms=None):
             "speaker": {"band": sp.get("band"), "name": sp.get("name") if sp.get("band") == "known" else None,
                         "best": sp.get("name"), "score": sp.get("score")},
             "voice": ev.get("voice"), "self": ev.get("self"), "engine": "sensevoice",
-            "at": epoch_ms or ev.get("t")}
+            "at": epoch_ms or ev.get("t"), "trace": ev.get("trace")}
+
+
+def heard(session, ev):
+    """heard.asr for one SenseVoice sentence with text: a new trace, kept on the event (ev["trace"]) so the realtime
+    turn, the gate and mind's chat turn that this sentence starts carry it too (run log, spec 7.5). -> the trace."""
+    text = str(ev.get("text") or "")
+    if not text.strip():
+        return None
+    if not ev.get("trace"):
+        ev["trace"] = ear_log.new_trace()
+    sp = ev.get("speaker") or {}
+    ear_log.emit("heard.asr", trace=ev["trace"], by="asr", sum=text[:60], body={"input": text},
+                 ref={"session": session, "pos": ev.get("pos"), "id": ev.get("id")},
+                 extra={"lang": ev.get("lang"), "emotion": ev.get("emotion"), "dur": ev.get("dur"),
+                        "speaker": {"band": sp.get("band"), "name": sp.get("name") if sp.get("band") == "known" else None},
+                        "voice": (ev.get("voice") or {}).get("acoustic_band") if isinstance(ev.get("voice"), dict) else None,
+                        "self": ev.get("self")})
+    return ev["trace"]
 
 
 def sound_doc(session, ev):
@@ -99,6 +119,7 @@ class HelloDB:
         self._put("set", "sessions", {"session": session}, fields)
 
     def speech(self, session, ev):
+        heard(session, ev)                          # run log: heard.asr, the start of this sentence's trace
         self._put("upsert", "speech", {"session": session, "id": ev.get("id")}, speech_doc(session, ev))
 
     def sound(self, session, ev):

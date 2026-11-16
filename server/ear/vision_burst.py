@@ -27,13 +27,17 @@ error) waits RETRY_S, then goes on.
 
 Each look: one hello.vision_looks document {kind: look, at, session, seq, snap_id, path, text, latency_ms, snap_ms,
 usage, cost_usd, burst_id} and hub.add_look() (the realtime instructions' 【你的眼睛】 shows the latest few as 注视；mind
-reads vision_looks for chat and the realtime context). At the end one {kind: burst} summary row. The log has ids,
-timings and counts only, never the description text. Frames stay where VisionLink put them (recordings/frames/).
+reads vision_looks for chat and the realtime context). At the end one {kind: burst} summary row. The console log has
+ids, timings and counts only, never the description text. The run log (ear_log, 2026-11-16) has trigger.burst (start /
+extend / refused / stop / end) and one call.look per recognition (prompt, the photo as its size only, the reply, usage,
+cost; ref = frame path + lid), all on the trace of the sentence that started the burst. Frames stay where VisionLink
+put them (recordings/frames/).
 """
 import asyncio
 import base64
 import collections
 import concurrent.futures
+import contextvars
 import itertools
 import json
 import time
@@ -41,12 +45,15 @@ import traceback
 import urllib.error
 import urllib.request
 
+import ear_log
+
 # Same model / endpoint / price as mind/eye.py (2026-11-15 bake-off, owner chose qwen3.8-flash on DashScope direct;
 # the ear does not ship mind, so the constants are repeated here).
 LOOK_MODEL = "qwen3.8-flash"
 LOOK_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 LOOK_EXTRA = {"enable_thinking": False}
 PRICE_USD_PER_M = (0.1126, 0.380025)           # (input, output) USD per million tokens, as mind/llm.PRICES
+PRICE_BASIS = "vision_burst.PRICE_USD_PER_M = mind llm.PRICES qwen3.8-flash 2026-11-15"
 LOOK_PROMPT = "look-v1"
 
 # 2026-11-15 evening: the owner's own first try was "你看看我手里拿的是什么东西" (no burst); 你看看 / 看看这 / 你看这 / 看一下
@@ -90,10 +97,20 @@ def look_messages(jpeg, seen=None):
 
 def dashscope_look(key, base_url=LOOK_BASE_URL, model=LOOK_MODEL, timeout=LOOK_TIMEOUT_S):
     """recognise(jpeg, seen) -> (text or None, usage dict, latency ms, error or None). Blocking (run it on a pool);
-    never raises; the key is only in the header, never logged."""
+    never raises; the key is only in the header (the run log keeps its first 7 characters). Every call is one call.look
+    in the run log (trace and ref {path, lid} from the caller's scope; the photo is replaced by its size there)."""
     def recognise(jpeg, seen=None):
-        body = {"model": model, "messages": look_messages(jpeg, seen), "temperature": 0, "max_tokens": MAX_TOKENS,
-                **LOOK_EXTRA}
+        messages = look_messages(jpeg, seen)
+        out = _recognise(messages)
+        text, usage, ms, err = out
+        ear_log.emit("call.look", ok=err is None, err=err, ms=ms, model=model, key=key, usage=usage or None,
+                     cost=ear_log.cost(cost_usd(usage) if usage else None, PRICE_BASIS, "USD"),
+                     sum=(text or "")[:60] or None,
+                     body={"system": LOOK_SYSTEM, "input": messages[1:], "output": text})
+        return out
+
+    def _recognise(messages):
+        body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": MAX_TOKENS, **LOOK_EXTRA}
         req = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", method="POST",
                                      data=json.dumps(body).encode(),
                                      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
@@ -187,7 +204,7 @@ class VisionBurst:
             return None
         if any(w in text for w in STOP_WORDS):
             if self.running():
-                self.stop("heard_stop")
+                self.stop("heard_stop", word=next(w for w in STOP_WORDS if w in text))
                 return "stop"
             return None
         if not any(w in text for w in START_WORDS):
@@ -195,10 +212,18 @@ class VisionBurst:
         word = next(w for w in START_WORDS if w in text)
         return self.start(word)
 
+    def _emit(self, action, b=None, trace=None, **extra):
+        """trigger.burst in the run log (start / extend / refused / stop / end); never the heard text."""
+        ear_log.emit("trigger.burst", trace=trace or (b or {}).get("trace") or ear_log.trace(),
+                     sum=f"视觉爆发 {action}", ref={"burst_id": b["id"]} if b else None,
+                     extra={"action": action, **extra})
+
     def start(self, trigger="manual"):
         if not self.allowed():
             if self.hub is not None and not self.hub.switch.on:
                 log("vision burst: not started (realtime switch off)", flush=True)
+            self._emit("refused", word=trigger,
+                       why="switch_off" if self.hub is not None and not self.hub.switch.on else "not_allowed")
             return None
         if self.running() and self._stop_why:
             log(f"vision burst {self._burst['id']}: stopping ({self._stop_why}), not extended", flush=True)
@@ -208,16 +233,18 @@ class VisionBurst:
             self.stats["extended"] += 1
             self._burst["extended"] += 1
             log(f"vision burst {self._burst['id']}: extended to {self.cfg.burst_s:.0f} s from now ({trigger})", flush=True)
+            self._emit("extend", self._burst, ear_log.scoped_trace(), word=trigger)
             return "extend"
         now_ms = self.wall_ms()
         self._stop_why = None
         self._burst = {"id": f"b{now_ms}", "link": self.hub.link(), "started": self.clock(), "at": now_ms,
                        "trigger": trigger, "looks": 0, "snaps": 0, "fails": collections.Counter(), "fails_in_row": 0,
                        "last_fail": None, "cost_usd": 0.0, "latency_ms": [], "cycle_ms": [], "extended": 0,
-                       "session": None}
+                       "session": None, "trace": ear_log.trace()}      # the heard sentence's trace when in its scope
         self.stats["bursts"] += 1
         log(f"vision burst {self._burst['id']}: start ({trigger}) for {self.cfg.burst_s:.0f} s", flush=True)
-        self._task = asyncio.create_task(self._run(self._burst))
+        self._emit("start", self._burst, word=trigger, burst_s=self.cfg.burst_s)
+        self._task = asyncio.create_task(self._run(self._burst), context=contextvars.Context())
         self._task.add_done_callback(self._done)
         return "start"
 
@@ -226,9 +253,10 @@ class VisionBurst:
         burst clock's now (a look whose photo was sent for after it answers the question), or None (no burst can run)."""
         return self.clock() if self.start(trigger) is not None else None
 
-    def stop(self, why):
+    def stop(self, why, word=None):
         if self.running() and not self._stop_why:
             self._stop_why = why
+            self._emit("stop", self._burst, ear_log.scoped_trace(), why=why, word=word)
             self._wake.set()
 
     # ---- the robot's answers ----
@@ -337,8 +365,11 @@ class VisionBurst:
             seen = None
         b["looks"] += 1
         self.stats["looks"] += 1
+        lid = f"{b['id']}-{f['snap_id']}"
+        with ear_log.scope("call.look", trace=b.get("trace"), ref={"path": f["path"], "lid": lid, "burst_id": b["id"]}):
+            ctx = contextvars.copy_context()             # the pool thread logs call.look with this trace and ref
         try:
-            fut = loop.run_in_executor(self._pool, self.recognise, f["jpeg"], seen)
+            fut = loop.run_in_executor(self._pool, ctx.run, self.recognise, f["jpeg"], seen)
             text, usage, latency_ms, err = await asyncio.wait_for(fut, self.cfg.look_timeout_s + 1)
         except asyncio.TimeoutError:
             text, usage, latency_ms, err = None, {}, int((self.cfg.look_timeout_s + 1) * 1000), "timeout"
@@ -348,7 +379,7 @@ class VisionBurst:
         cost = cost_usd(usage) if usage else None
         b["cost_usd"] += cost or 0.0
         at = self.wall_ms()
-        doc = {"kind": "look", "lid": f"{b['id']}-{f['snap_id']}", "burst_id": b["id"], "at": at,
+        doc = {"kind": "look", "lid": lid, "burst_id": b["id"], "at": at,
                "session": f["session"], "seq": f["seq"], "snap_id": f["snap_id"], "path": f["path"], "bytes": f["bytes"],
                "text": text, "error": err, "latency_ms": latency_ms, "snap_ms": f.get("snap_ms"),
                "usage": {k: v for k, v in usage.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
@@ -432,6 +463,8 @@ class VisionBurst:
                "latency_p50_ms": lat[len(lat) // 2] if lat else None,
                "cycle_mean_ms": int(sum(cyc) / len(cyc)) if cyc else None}
         self._store(doc)
+        self._emit("end", b, why=why, looks=b["looks"], snaps=b["snaps"], failures=dict(b["fails"]),
+                   duration_s=round(dur, 1), extended=b["extended"])
         self.stats["stop:" + why.split(":")[0]] += 1
         log(f"vision burst {b['id']}: stop ({why}) after {dur:.0f} s, {b['looks']} looks / {b['snaps']} snaps, "
             f"{sum(b['fails'].values())} failures, {b['cost_usd']:.5f} USD", flush=True)

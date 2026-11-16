@@ -42,6 +42,7 @@ import sherpa_onnx as so
 from websockets.asyncio.server import serve
 
 import recorder
+import ear_log
 import hello_db
 import vision_link
 import signal_link
@@ -300,6 +301,7 @@ class Ear:
         self.on_tingwu_change = None   # main: called when a stream starts or stops (status document)
         self.audio_declared = False
         self._tw_box = None
+        self.device = None             # the audio declaration's device dict (boot_id for the run log's link.close)
         self.hello = {"type": "hello", "sr": SR, "tick_ms": ms(TICK), "speakers": sorted(m.speakers)[:64],
                       "speaker_hi": self.hi, "speaker_lo": self.lo, "sound_min_db": self.sound_min_db,
                       "voice_hi": self.voice_hi, "voice_lo": self.voice_lo,
@@ -379,8 +381,19 @@ class Ear:
     def stop_tingwu(self):
         stream, self.tingwu = self.tingwu, None
         if stream is not None:
-            self._tw_box["stopped_ms"] = int(time.time() * 1000)
+            box = self._tw_box
+            box["stopped_ms"] = int(time.time() * 1000)
             stream.close()
+            try:
+                audio_s = round(float(stream.audio_seconds()), 1)
+            except Exception:                    # noqa: BLE001 - the record goes without it
+                audio_s = None
+            # run log: billed on the audio sent (one input: silence too), so the cost is decided here
+            ear_log.emit("call.tingwu", trace=box.get("trace"), model="tingwu-meeting-realtime", key=box.get("key"),
+                         ms=box["stopped_ms"] - box["started_ms"], usage={"audio_s": audio_s},
+                         cost=ear_log.tingwu_cost(audio_s), sum=f"听悟 结束 {audio_s} s",
+                         ref={"session": self.session, "stream": box.get("k"), "data_id": stream.data_id},
+                         extra={"state": "stop", "sentences": box["sentences"]})
             self._tingwu_changed()
 
     def start_tingwu(self):
@@ -388,7 +401,8 @@ class Ear:
         self.tw_streams += 1
         k, offset = self.tw_streams, self.ring.end       # 听悟 times count from here
         start_ms = int(time.time() * 1000)
-        box = {"stream": None, "sentences": 0, "stopped_ms": None}
+        box = {"stream": None, "sentences": 0, "stopped_ms": None, "started_ms": start_ms, "k": k,
+               "trace": ear_log.new_trace(), "key": key}
 
         def sentence(s):
             if not s["final"]:
@@ -419,6 +433,9 @@ class Ear:
 
         def error(message):
             print(f"tingwu error {self.session} #{k}: {message}", flush=True)
+            ear_log.emit("call.tingwu", trace=box["trace"], ok=False, err=str(message)[:160],
+                         model="tingwu-meeting-realtime", ref={"session": self.session, "stream": k},
+                         extra={"state": "error"})
             self.post({"type": "tingwu", "phase": "error", "error": message[:160]})
             if self.db is not None and self.session:
                 self.db.session_update(self.session, {"tingwu_error": message[:300]})
@@ -431,6 +448,8 @@ class Ear:
         self.tingwu, self._tw_box = stream, box
         stream.start()
         print(f"tingwu start {self.session} #{k} at sample {offset}", flush=True)
+        ear_log.emit("call.tingwu", trace=box["trace"], model="tingwu-meeting-realtime", key=key, sum="听悟 开始",
+                     ref={"session": self.session, "stream": k}, extra={"state": "start", "offset_samples": offset})
         self._tingwu_changed()
 
     def arrival(self, sample):
@@ -681,7 +700,7 @@ class Ear:
         self.post(ev)
         if self.realtime is not None and self.device_profile and text:
             try:                       # 围观: the ear's own words for the 「嗯」 rescue, burst words and 闭嘴
-                self.realtime.local_heard(text)
+                self.realtime.local_heard(text, trace=ev.get("trace"))
             except Exception as error:     # noqa: BLE001 - never costs a sentence
                 print(f"realtime: local heard failed: {type(error).__name__}", flush=True)
         if self.chat is not None and self.device_profile and text:
@@ -830,6 +849,9 @@ class Ear:
                     self.opus = None
                 self.framing = framing
                 self.device_profile = str(msg.get("source") or "").startswith("stackchan")
+                self.device = msg.get("device") if isinstance(msg.get("device"), dict) else None
+                if self.device_profile:
+                    ear_log.robot_state("hearing", "on", source=str(msg.get("source"))[:64])
                 self.denoiser = self.m.new_denoiser() if self.device_profile else None
                 stream = self.denoiser is not None and getattr(self.m, "denoise_mode", "stream") == "stream"
                 asr_only = self.denoiser is not None and not stream
@@ -916,6 +938,27 @@ class Ear:
             if self.rec:
                 self.rec.tick(tick, events)
             await self.ws.send(json.dumps(tick, ensure_ascii=False))
+
+
+def _boot(device):
+    return (device.get("boot_id") or device.get("boot")) if isinstance(device, dict) else None
+
+
+async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=None):
+    """One /vision connection (vision_link.py), with its run-log link.open / link.close. -> the VisionLink."""
+    print(f"+ {peer} vision v{number}", flush=True)
+    t0 = ear_log.link_open("vision", conn=f"v{number}", peer=peer)
+    link = None
+    try:
+        link = await vision_link.serve_link(ws, database, number, f"{peer[0]}:{peer[1]}", rec_root,
+                                            on_event=rt_hub.on_vision if rt_hub else None,
+                                            on_frame=burst.on_frame if burst else None)
+    finally:
+        ear_log.link_close("vision", t0, conn=f"v{number}", peer=peer, boot=_boot(getattr(link, "device", None)),
+                           why=getattr(link, "why", None) or "error",
+                           counts={"events": link.events, "frames": link.frames} if link else None)
+    print(f"- {peer} vision v{number}: {link.events} events, {link.frames} frames ({link.session})", flush=True)
+    return link
 
 
 def main():
@@ -1027,60 +1070,71 @@ def main():
         path = ws.request.path if getattr(ws, "request", None) else ""
         header = ws.request.headers.get("Authorization", "") if getattr(ws, "request", None) else ""
         if not hp.authenticate(path, header, token_value):
+            ear_log.link_open(urlsplit(path).path.strip("/") or "hearing", peer=ws.remote_address, ok=False, why="bad_token")
             await ws.close(code=4401, reason="bad token")
             return
         if urlsplit(path).path == "/mouth":            # speaker downlink: ear ends it, soul-tts behind (2026-11-14)
             if len(mouth_active) >= 2:
+                ear_log.link_open("mouth", peer=ws.remote_address, ok=False, why="busy")
                 await ws.close(code=1013, reason="server busy")
                 return
             mouth_active.add(ws)
             mouth_no[0] += 1
             peer = ws.remote_address
             print(f"+ {peer} mouth m{mouth_no[0]}", flush=True)
+            t0 = ear_log.link_open("mouth", conn=f"m{mouth_no[0]}", peer=peer)
             link = mouth_link.MouthLink(ws, upstream_url=mouth_link.UPSTREAM, token=token_value, conn=mouth_no[0],
                                         modes=mode_hub, realtime=rt_hub, burst=burst)
+            why = "error"
             try:
                 why = await link.run()
             finally:
                 mouth_active.discard(ws)
+                ear_log.link_close("mouth", t0, conn=f"m{link.conn}", boot=link.boot, peer=peer, why=why,
+                                   counts={"upstream_drops": link.upstream_drops})
             print(f"- {peer} mouth m{link.conn} boot={link.boot}: {why}, {link.upstream_drops} soul-tts drops", flush=True)
             return
         if urlsplit(path).path == "/signal":           # DualKey owner signals, relayed to mind (2026-11-13)
             if len(signal_active) >= 4:
+                ear_log.link_open("signal", peer=ws.remote_address, ok=False, why="busy")
                 await ws.close(code=1013, reason="server busy")
                 return
             signal_active.add(ws)
             peer = ws.remote_address
             print(f"+ {peer} signal", flush=True)
+            t0 = ear_log.link_open("signal", peer=peer)
+            link = None
             try:
                 link = await signal_link.serve_link(ws, signal_post, f"{peer[0]}:{peer[1]}")
             finally:
                 signal_active.discard(ws)
+                ear_log.link_close("signal", t0, conn=getattr(link, "device", None), boot=getattr(link, "boot", None),
+                                   peer=peer, why="closed" if link is not None else "error",
+                                   counts={"signals": link.signals} if link is not None else None)
             print(f"- {peer} signal {link.device}: {link.signals} signals", flush=True)
             return
         if urlsplit(path).path == "/vision":           # vision uplink: its own connection (collector-0.4.74+)
             if len(vision_active) >= 4:
+                ear_log.link_open("vision", peer=ws.remote_address, ok=False, why="busy")
                 await ws.close(code=1013, reason="server busy")
                 return
             vision_active.add(ws)
             vision_no[0] += 1
-            peer = ws.remote_address
-            print(f"+ {peer} vision v{vision_no[0]}", flush=True)
             try:
-                link = await vision_link.serve_link(ws, database, vision_no[0], f"{peer[0]}:{peer[1]}", rec_root,
-                                                    on_event=rt_hub.on_vision if rt_hub else None,
-                                                    on_frame=burst.on_frame if burst else None)
+                await serve_vision(ws, ws.remote_address, vision_no[0], database, rec_root, rt_hub, burst)
             finally:
                 vision_active.discard(ws)
-            print(f"- {peer} vision v{vision_no[0]}: {link.events} events, {link.frames} frames ({link.session})", flush=True)
             return
         if len(active) >= 4:
+            ear_log.link_open("hearing", peer=ws.remote_address, ok=False, why="busy")
             await ws.close(code=1013, reason="server busy")
             return
         active.add(ws)
         peer = ws.remote_address
         conn_no[0] += 1
         print(f"+ {peer} c{conn_no[0]}", flush=True)
+        t0 = ear_log.link_open("hearing", conn=f"c{conn_no[0]}", peer=peer)
+        conn = f"c{conn_no[0]}"
         ear = Ear(models, ws, ex)
         ear.rec = recorder.Recorder(rec_root, conn_no[0], f"{peer[0]}:{peer[1]}", ear.hello)
         ear.db = database
@@ -1104,16 +1158,35 @@ def main():
             ear.rec.close()
             active.discard(ws)
             ears.discard(ear)
+            ear_log.link_close("hearing", t0, conn=conn, boot=_boot(ear.device), peer=peer,
+                               why=f"closed {getattr(ws, 'close_code', None)}",
+                               counts={"utterances": ear.sid, "sounds": ear.aid, "rx_bytes": ear.rx_bytes,
+                                       "session": ear.session})
+            if ear.device_profile:
+                ear_log.robot_state("hearing", "off", conn=conn)
             print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
 
+    def beat_state():
+        """The run log's svc.beat state (beat thread; a race with the loop is caught and recorded by hello_log)."""
+        return {"tingwu": tw_switch.on, "tingwu_running": sum(1 for e in list(ears) if e.tingwu is not None),
+                "realtime": rt_switch.on, "realtime_state": rt_hub.state if rt_hub is not None else None,
+                "mouth": mouth.mode, "robot_mode": mode_hub.robot_mode,
+                "burst": burst.running() if burst is not None else None,
+                "links": {"hearing": len(active), "vision": len(vision_active), "mouth": len(mouth_active),
+                          "signal": len(signal_active)}}
+
     async def serve_forever():
+        # SIGTERM on this loop first, then the run log (rulings R5 / R12: hello_log must not take the ear's SIGTERM)
+        stopper = ear_log.Stopper(asyncio.get_running_loop())
+        ear_log.start(secrets, a)
+        ear_log.watch(beat_state)
         async with serve(handler, a.host, a.port, max_size=65536):
             print(f"listening on {a.host}:{a.port}", flush=True)
             watcher = asyncio.create_task(watch_tingwu_switch())
             if rt_hub is not None:
                 rt_hub.start()
             try:
-                await asyncio.Future()
+                await stopper.wait()
             finally:
                 watcher.cancel()
                 if burst is not None:
@@ -1121,6 +1194,7 @@ def main():
                 if rt_hub is not None:
                     await rt_hub.shutdown()
                 mode_hub.close()
+        await stopper.finish("sigterm")
 
     asyncio.run(serve_forever())
 
