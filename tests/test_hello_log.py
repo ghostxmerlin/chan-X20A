@@ -107,6 +107,34 @@ class HelloLogTest(unittest.TestCase):
                          "wss://h/p?access-token=***&apiKey=***&auth_token=***&session_token=***"
                          "&max_tokens=5&keyword=k&githubtoken=***&x=1")
 
+    def test_url_params_split_on_semicolon_and_question_mark(self):
+        self.assertEqual(hello_log.redact("https://h/p?a=1;token=x"), "https://h/p?a=1;token=***")
+        self.assertEqual(hello_log.redact("https://h/login?next=https://x/?token=y&keyword=看看"),
+                         "https://h/login?next=https://x/?token=***&keyword=看看")
+        self.assertEqual(hello_log.redact("https://h/s?keyword=看看"), "https://h/s?keyword=看看")
+
+    def test_auth_failure_keeps_records(self):
+        class OperationFailure(Exception):
+            def __init__(self, msg, code):
+                super().__init__(msg)
+                self.code = code
+
+        for exc in (OperationFailure("bad auth", 18), OperationFailure("command insert requires auth", 13),
+                    RuntimeError("Authentication failed."), ValueError("user is not authorized on hello")):
+            with self.subTest(exc=repr(exc)):
+                self.assertTrue(hello_log._unreachable(exc))
+        logger, db = capture_log("mind")
+        db.fail = OperationFailure("Authentication failed.", 18)
+        hello_log.emit("call.chat", sum="a")
+        hello_log.emit("call.chat", sum="b")
+        for _ in range(5):
+            self.assertFalse(logger.flush())
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (0, 0, 2))
+        db.fail = None
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["a", "b"])
+
     def test_name_segment_suffixes(self):
         masked = {"accesstoken": "a", "githubtoken": "g", "dbpassword": "p", "awsaccesskey": "k",
                   "myapikey": "m", "clientsecret": "c", "usercredential": "u"}
@@ -456,7 +484,7 @@ class HelloLogTest(unittest.TestCase):
             pass
 
         logger, db = capture_log("mind")
-        db.fail = OperationFailure("not authorized on hello")
+        db.fail = OperationFailure("Document failed validation")      # same error for every write
         for i in range(20):
             hello_log.emit("call.chat", sum=str(i))
         self.assertFalse(logger.flush())

@@ -59,7 +59,7 @@ _NAME_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#@\s]+@")
 _FREE_SK = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
 _FREE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
-_URL_PARAM = re.compile(r"([?&;])([^=&#\s\"']+)=([^&#\s\"']*)")
+_URL_PARAM = re.compile(r"([?&;])([^=&#;?\s\"']+)=([^&#;?\s\"']*)")
 _DATA_URL_WHOLE = re.compile(r"data:([\w.+-]+)/[\w.+-]+[;,]")
 _DATA_URL_INLINE = re.compile(r"data:([\w.+-]+)/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/=\r\n]*")
 _SPOOL_NAME = r"^{}-(\d{{8}})\.jsonl$"
@@ -220,9 +220,18 @@ def _is_dup(exc):
 
 
 def _unreachable(exc):
+    """Network / DB-down / auth problems: everything waits, nothing is rejected."""
     if isinstance(exc, (OSError, ImportError, _NoDatabase)):
         return True
-    return any(c.__name__ in _UNREACHABLE for c in type(exc).__mro__)
+    if any(c.__name__ in _UNREACHABLE for c in type(exc).__mro__):
+        return True
+    if getattr(exc, "code", None) in (13, 18):      # Unauthorized, AuthenticationFailed
+        return True
+    try:
+        text = str(exc).lower()
+    except Exception:
+        return False
+    return "not authorized" in text or "authentication failed" in text
 
 
 class _Upsert:
@@ -430,7 +439,11 @@ class Logger:
                 with self._lock:
                     self._dropped += 1
         if items and not self._append(lines):
-            self._direct.extend(items)
+            room = max(0, QUEUE_MAX - len(self._direct))
+            self._direct.extend(items[:room])
+            if len(items) > room:
+                with self._lock:
+                    self._dropped += len(items) - room
 
     def _ship_direct(self, kick=True):
         """Ship what the spool could not take. Unshipped records stay in memory (at most QUEUE_MAX)."""
