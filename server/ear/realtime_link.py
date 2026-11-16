@@ -67,8 +67,9 @@ Records: one realtime_turns document per response (timings, transcript lengths o
 console log has timings and ids only, never text, names, the key or the voice id. The run log (ear_log / hello_log,
 2026-11-16) has the full instructions (call.realtime.session / .context), every gate verdict (gate.realtime), rescue
 (gate.rescue), hush (trigger.hush), greeting (trigger.greet), filler (filler.play), web search (call.realtime.search)
-and turn (call.realtime.turn: usage, cost, heard / ear's own words / reply), on the trace of the heard sentence that
-started it; never the key (only its first 7 characters) or the voice id.
+and turn (call.realtime.turn: usage, cost, heard / ear's own words / reply). Each turn has its own trace, made when its
+segment starts (R17); the ear's own sentences around it are listed in extra.heard as candidates by time, not as its
+owner. Never the key (only its first 7 characters) or the voice id.
 """
 import asyncio
 import base64
@@ -108,6 +109,10 @@ FAILED_STATES = ("error", "stalled", "no_done", "robot_gone")
 # covers speech_started being stamped when the event reaches us (server VAD detection + network after the onset).
 HEARD_EPS_S = 0.3
 HEARD_KEEP = 8                                      # candidates come from the last this many sentences
+# Ruling R18: the onset that opened the session stands in for the first segment's start only while it is at most this
+# old (against now). An onset the server VAD never turned into a segment (noise) must not stretch a later segment's
+# window back or collect later sentences' consequences; a cold open slower than this loses its opening sentence.
+COLD_MAX_S = 5.0
 GATE_REASONS = {"play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
                 "unclear": "a didn't-hear question", "repeat": "word for word a recent reply",
                 "blind": "看不清 without a fresh look", "wait_look": "a look question: the answer comes from the next photo"}
@@ -1238,6 +1243,7 @@ class RealtimeHub:
             turn = self._turns.get(self._resp)
             if turn is not None:
                 turn["search_events"] = turn.get("search_events", 0) + 1
+        self._cold_live(now)                           # R18: an onset no segment used does not outlive COLD_MAX_S
         if t == "session.updated":
             if not self._ready.is_set():
                 self._ready.set()
@@ -1255,14 +1261,14 @@ class RealtimeHub:
         elif t == "input_audio_buffer.speech_started":
             self._last_speech = now
             if self._seg is None:                      # the turn's own trace starts with its segment (R17)
-                cold, self._cold = self._cold, None
+                cold = self._take_cold(now)
                 self._seg = cold or {"start": now, "trace": ear_log.new_trace()}
         elif t == "input_audio_buffer.speech_stopped":
             self._speech_end = now
             recent = self._local_end if self._local_end is not None and now - self._local_end < 3 else None
             seg, self._seg = self._seg, None
             if seg is None:                            # no speech_started seen: the segment starts here
-                cold, self._cold = self._cold, None
+                cold = self._take_cold(now)
                 seg = cold or {"start": now, "trace": ear_log.new_trace()}
             self._turn = self._heard_turn = {"kind": "speech", "speech_end": now, "heard_chars": None,
                                              "local_end": recent, "start": seg["start"], "trace": seg["trace"]}
@@ -1413,9 +1419,21 @@ class RealtimeHub:
         if h is not None and (h.get("rid") is None or h.get("rid") in self._turns) and \
                 not (self._last_speech is not None and self._last_speech > h["speech_end"]):
             return h.get("trace")
-        if self._cold is not None:
-            return self._cold["trace"]
+        cold = self._cold_live(self.clock())
+        if cold is not None:
+            return cold["trace"]
         return own
+
+    def _cold_live(self, now):
+        """The onset that opened the session, while it is at most COLD_MAX_S old (R18); an older one is dropped."""
+        if self._cold is not None and now - self._cold["start"] > COLD_MAX_S:
+            self._cold = None
+        return self._cold
+
+    def _take_cold(self, now):
+        """The live cold onset for the segment starting now; it serves one segment only."""
+        cold, self._cold = self._cold_live(now), None
+        return cold
 
     def _log_gate(self, rid, turn, v, done, **extra):
         """gate.realtime: one verdict per reply (emit only: this runs on the voice loop)."""

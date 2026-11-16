@@ -471,6 +471,73 @@ class RealtimeLogTest(HubBase):
         await self.quiet(ws, "r2")
         self.assertEqual(self.turn_heard(-1), [])
 
+    async def cold_open(self, onset):
+        """A closed session opened by the ear's onset at `onset`; returns (ws, the cold trace)."""
+        self.hub.close("idle")
+        self.t[0] = onset
+        self.speak(3)
+        cold = self.hub._cold["trace"]
+        self.t[0] = onset + 0.3
+        self.speak(1, speaking=False)
+        await trl.settle(20)
+        ws = self.wss[-1]
+        ws.push({"type": "session.updated", "session": {}})
+        await trl.settle()
+        return ws, cold
+
+    async def test_stale_cold_onset_does_not_reach_a_late_turn(self):
+        # R18 (review N1): the onset that opened the session was noise the server never turned into a segment. 40 s
+        # later a sentence keeps its own trace for what it sets off; the turn at 1100 starts at its own speech_started
+        ws, cold = await self.cold_open(999.5)
+        self.hub.burst = trl.LookAnswerTest.Burst()
+        self.t[0] = 1040.0
+        ta = self.heard("这是什么？")                                     # a look question: look wait + burst ask
+        self.assertEqual(self.hub._look_wait["trace"], ta)
+        self.assertEqual(self.hub._trace_now(ta), ta)
+        self.assertIsNone(self.hub._cold)
+        self.t[0] = 1050.0
+        th = self.heard("别说话了。")
+        self.assertEqual([r["trace"] for r in self.flows("trigger.hush")], [th])
+        await self.at(ws, 1100.0, {"type": "input_audio_buffer.speech_started"})
+        self.assertEqual(self.hub._seg["start"], 1100.0)
+        await self.at(ws, 1101.0, {"type": "input_audio_buffer.speech_stopped"})
+        self.t[0] = 1101.3
+        tb = self.heard("今天天气怎么样")
+        await self.quiet(ws, "rB")
+        turn = self.flows("call.realtime.turn")[-1]
+        self.assertNotEqual(turn["trace"], cold)
+        self.assertEqual(self.turn_heard(-1), [("今天天气怎么样", tb)])
+        self.assertNotIn("这是什么", self.b_input(-1))
+        self.assert_own_traces([ta, th, tb])
+
+    async def test_cold_onset_is_valid_for_five_seconds(self):
+        # R18 edge: speech_started 4.9 s after the onset still uses it; 5.1 s after, the segment starts on its own
+        for i, (gap, used) in enumerate(((4.9, True), (5.1, False))):
+            base = 1000.0 + 100 * i
+            ws, cold = await self.cold_open(base)
+            self.t[0] = base + 0.5
+            t = self.heard("你好呀")
+            self.assertEqual(self.hub._trace_now(t), cold)               # inside the limit: the turn being opened
+            await self.at(ws, base + gap, {"type": "input_audio_buffer.speech_started"})
+            self.assertEqual(self.hub._seg["trace"] == cold, used, gap)
+            self.assertEqual(self.hub._seg["start"], base if used else base + gap, gap)
+            self.assertIsNone(self.hub._cold)
+            await self.at(ws, base + gap + 0.5, {"type": "input_audio_buffer.speech_stopped"})
+            await self.quiet(ws, f"r{i}")
+            self.assertEqual(self.turn_heard(-1), [("你好呀", t)] if used else [], gap)
+
+    async def test_stale_cold_onset_is_dropped_without_speech_started(self):
+        # R18: speech_stopped alone (no speech_started seen) and _trace_now ignore an onset older than 5 s
+        ws, cold = await self.cold_open(999.5)
+        self.t[0] = 1004.4
+        self.assertEqual(self.hub._trace_now("own"), cold)
+        self.t[0] = 1004.6
+        self.assertEqual(self.hub._trace_now("own"), "own")
+        ws, cold = await self.cold_open(1100.0)
+        await self.at(ws, 1105.2, {"type": "input_audio_buffer.speech_stopped"})
+        self.assertEqual(self.hub._heard_turn["start"], 1105.2)
+        self.assertNotEqual(self.hub._heard_turn["trace"], cold)
+
     async def test_no_onset_late_speech_started_is_not_listed(self):
         # round 2's no-onset repro under R17: the session was already open (no cold onset), the ear's ASR came 1 s
         # before speech_started: outside the window, so it is not a candidate (the documented limit)
