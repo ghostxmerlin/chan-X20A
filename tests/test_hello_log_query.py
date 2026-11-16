@@ -229,5 +229,48 @@ class GapsTest(unittest.TestCase):
         self.assertEqual(q.gaps(db, T0 - 1, T0 + 3 * MIN), [])
 
 
+class LastSeenTest(unittest.TestCase):
+    """last_seen: each service's newest record for the 日志 page, cheap: any kind only in the last 5 minutes, else the
+    newest svc.beat / start / stop (the (kind, at) index), newest month first, at most 2 months back."""
+
+    def count_finds(self, db):
+        seen = []
+        for name in list(db.collections):
+            col = db.collections[name]
+            orig = col.find
+            col.find = lambda flt=None, projection=None, _o=orig, _n=name: seen.append((_n, flt)) or _o(flt, projection)
+        return seen
+
+    def test_newest_row_per_service_across_a_month_boundary(self):
+        db = FakeDB()
+        now = bj(2026, 12, 1, 0, 10)
+        put(db, now - 60000, svc="ear", seq=9, kind="heard.asr")                     # fresh, any kind
+        put(db, now - 90000, svc="ear", seq=8, kind="svc.beat")
+        put(db, bj(2026, 11, 30, 23, 58), svc="tts", seq=4, kind="svc.beat", run="r7")   # last month, 12 min ago
+        put(db, bj(2026, 11, 30, 23, 50), svc="tts", seq=3, kind="svc.beat", run="r7")
+        put(db, bj(2026, 11, 30, 23, 59), svc="tts", seq=5, kind="call.tts", run="r7")  # older than 5 min: not looked at
+        put(db, bj(2026, 10, 2), svc="eye", seq=1, kind="svc.stop")                  # 2 months back: still found
+        put(db, bj(2026, 9, 2), svc="notes", seq=1, kind="svc.beat")                 # 3 months back: too old
+        put(db, now + 60000, svc="mind", seq=1, kind="svc.beat")                     # after now: ignored
+        out = q.last_seen(db, ["ear", "mind", "eye", "notes", "memory", "tts"], now)
+        self.assertEqual(out["ear"], {"at": now - 60000, "kind": "heard.asr", "run": "r1"})
+        self.assertEqual(out["tts"], {"at": bj(2026, 11, 30, 23, 58), "kind": "svc.beat", "run": "r7"})
+        self.assertEqual(out["eye"]["kind"], "svc.stop")
+        self.assertIsNone(out["notes"])
+        self.assertIsNone(out["mind"])
+        self.assertIsNone(out["memory"])
+
+    def test_stops_at_the_first_month_with_a_hit_and_skips_missing_tables(self):
+        db = FakeDB()
+        now = bj(2026, 12, 1, 0, 10)
+        put(db, bj(2026, 11, 30, 23, 0), svc="tts", seq=1, kind="svc.beat")
+        put(db, bj(2026, 10, 30, 23, 0), svc="tts", seq=0, kind="svc.beat")
+        seen = self.count_finds(db)
+        self.assertEqual(q.last_seen(db, ["tts"], now)["tts"]["at"], bj(2026, 11, 30, 23, 0))
+        self.assertNotIn("log_202610", [n for n, _ in seen])                          # stopped at November
+        self.assertTrue(all(n.startswith("log_2026") for n, _ in seen))
+        self.assertTrue(all(f.get("svc") == "tts" for _, f in seen))
+
+
 if __name__ == "__main__":
     unittest.main()

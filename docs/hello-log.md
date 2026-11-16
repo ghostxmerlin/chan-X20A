@@ -120,6 +120,7 @@ db = MongoClient(URI)["hello"]          # URI 见 hubmix 环境里的 Mongo 连�
 | `body(db, at_ms, body_id)` | 取正文全文，找不到返回 `None`；`at_ms` 用来定月份 |
 | `chain(db, trace, around_ms)` | 同一 `trace` 前后各 1 天的全部记录，按 `at` 正序 |
 | `ledger(db, "YYYY-MM-DD")` | 北京时间一天的花费，按 (svc, model, cur) 汇总：`{"by": [{svc, model, cur, amount, n, unknown_n}], "total": {"USD": x, "CNY": y}, "unknown_n": k}`；`amount` 为 `None` 的记进 `unknown_n` |
+| `last_seen(db, svcs, now_ms)` | 每个服务在 `now_ms` 及以前的最新一条 `{at, kind, run}`（或 `None`）：最近 5 分钟任何类型（`at` 索引），否则最新的 `svc.beat/start/stop`（`(kind, at)` 索引），本月起最多往前 2 个月，命中即停 |
 | `gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None)` | 断档：`{svc, run, from_ms, to_ms, why}`，`why` 是 `no_beat`（相邻心跳间隔超过 2 倍 `beat_ms`）或 `seq_jump`（`seq` 跳号）。边界规则见下 |
 
 ### gaps 的边界规则
@@ -164,8 +165,8 @@ q.gaps(db, now - 86400_000, now)
 | `GET /log/chain` | `trace, at` | `{trace, rows}`：`chain()`，按时间正序 |
 | `GET /log/ledger` | `day`（默认北京时间今天） | `{day, by, total, unknown_n}` |
 | `GET /log/gaps` | `from, to`（同 `/log`） | `{from, to, gaps}`（`now_ms` = 服务器此刻） |
-| `GET /log/last` | — | `{now, svcs: {ear…tts: {at, kind, run} \| null}}`：每个服务最后一条（先看最近 1 小时任何类型，没有再看 30 天内的 `svc.*`） |
+| `GET /log/last` | — | `{now, svcs: {ear…tts: {at, kind, run} \| null}}`：每个服务最后一条（`last_seen()`：最近 5 分钟内任何类型，没有再看最新的 `svc.beat/start/stop`，从本月往前最多 2 个月）；mind 缓存 60 秒，返回的 `now` 是那次读的时刻 |
 
-`hello_log_query.py` 没部署在 mind 旁边时这些接口回 503，mind 照常跑。页面上：窗口里一条记录都没有的服务 `gaps()` 看不见，所以另有「各服务最后一条记录」，看「最近 …」时超过 2 分钟没有记录的服务标红；`call.realtime.turn` / `gate.realtime` 的详情列出 `extra.heard` 的候选，点开各自的链路。正文每次点开现取，不缓存。
+`hello_log_query.py` 没部署在 mind 旁边时这些接口回 503，mind 照常跑。页面上：窗口里一条记录都没有的服务 `gaps()` 看不见，所以另有「各服务最后一条记录」，看「最近 …」时超过 2 分钟没有记录的服务标红（每 60 秒刷新）；`call.realtime.turn` / `gate.realtime` 的详情列出 `extra.heard` 的候选，点开各自的链路。正文每次点开现取，不缓存。页面上的时间和总账的默认日期一律按北京时间（+08:00）显示，与 Mac 的时区无关。
 
 直接用 mongo shell 也行，例如某天的失败记录：`db.log_202611.find({ok: false, at: {$gte: 1794240000000}}).sort({at: -1})`。

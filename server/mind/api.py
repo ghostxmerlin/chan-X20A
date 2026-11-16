@@ -32,6 +32,7 @@ import hmac
 import json
 import os
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -113,8 +114,7 @@ def _range(q):
 LOG_SVCS = ("ear", "mind", "eye", "notes", "memory", "tts")
 LOG_MAX_RANGE_MS = 31 * 86400_000
 LOG_DEFAULT_MS = 3600_000
-LOG_LAST_RECENT_MS = 3600_000                    # /log/last: any record in the last hour, else the last svc.* row
-LOG_LAST_BEATS_MS = 30 * 86400_000               # (svc.start / beat / stop / error: the kind index) in 30 days
+LOG_LAST_CACHE_MS = 60_000                       # /log/last (hello_log_query.last_seen) is read at most once a minute
 LOG_KIND_RE = re.compile(r"^[a-z][a-z0-9_.]{0,63}$")
 LOG_TRACE_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 LOG_ID_RE = re.compile(r"^[a-z]{1,16}:[A-Za-z0-9_-]{1,32}:\d{1,12}$")
@@ -391,6 +391,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         return lib_call(lambda: lib.put(c, body.get('fields'), item_id=item_id, expected_version=body.get('expected_version'),
                                         scope_id=scope_id, now_ms=now, reason=reason[:200]))
 
+    log_last, log_last_lock = {}, threading.Lock()
+
     def log_get(path, q):
         """日志 page: the run/audit log (hello_log_query), read only."""
         if log_query is None:
@@ -434,14 +436,12 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if path == '/log/gaps':
                 lo, hi = _log_range(q, now)
                 return {"from": lo, "to": hi, "gaps": log_query.gaps(db, lo, hi, now_ms=now)}
-            if path == '/log/last':
-                out = {}
-                for svc in LOG_SVCS:
-                    rows = log_query.flows(db, now - LOG_LAST_RECENT_MS, now + 1, svc=svc, limit=1) or \
-                        log_query.flows(db, now - LOG_LAST_BEATS_MS, now + 1, svc=svc, limit=1,
-                                        kinds=["svc.start", "svc.beat", "svc.stop", "svc.error"])
-                    out[svc] = {k: rows[0].get(k) for k in ("at", "kind", "run")} if rows else None
-                return {"now": now, "svcs": out}
+            if path == '/log/last':             # cached: the answer keeps its own now, so ages are as of then
+                with log_last_lock:
+                    hit = log_last.get('value')
+                    if hit is None or not 0 <= now - hit['now'] < LOG_LAST_CACHE_MS:
+                        hit = log_last['value'] = {"now": now, "svcs": log_query.last_seen(db, LOG_SVCS, now)}
+                    return hit
         except ValueError as e:                  # a bad day, a span over 60 months
             raise BadRequest(str(e)[:120]) from None
         raise NotFound("not found")

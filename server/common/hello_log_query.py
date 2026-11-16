@@ -8,6 +8,7 @@ and find_one). Used by mind's read-only API and by scripts. Table layout: see do
     text = q.body(db, rows[0]["at"], rows[0]["body"]["output"])
     q.ledger(db, "2026-11-16")     # cost per svc/model/currency for one Beijing day
     q.gaps(db, start_ms, end_ms)   # missing heartbeats and seq jumps
+    q.last_seen(db, ["ear", "mind"], now_ms)   # each service's newest record (cheap; the 日志 page polls it)
 
 Times are ms since epoch; months and days are Beijing time (Asia/Shanghai, UTC+8, no DST).
 """
@@ -137,6 +138,45 @@ def ledger(db, day):
         total[cur] = round(total.get(cur, 0.0) + amount, 9)
         unknown += g["unknown_n"]
     return {"by": by, "total": total, "unknown_n": unknown}
+
+
+LAST_RECENT_MS = 5 * 60000
+LAST_MONTHS_BACK = 2
+LIFE_KINDS = ("svc.beat", "svc.start", "svc.stop")
+
+
+def _newest(col, flt):
+    return next(iter(col.find(flt, {"at": 1, "kind": 1, "run": 1}).sort("at", -1).limit(1)), None)
+
+
+def last_seen(db, svcs, now_ms, *, recent_ms=LAST_RECENT_MS, months_back=LAST_MONTHS_BACK):
+    """{svc: {at, kind, run} | None}: each service's newest record at or before now_ms, kept cheap for a page that
+    polls it. Any kind only within the last recent_ms (the at index, a few minutes of rows); else the newest
+    svc.beat / svc.start / svc.stop (the (kind, at) index), newest month first, existing tables only, stopping at
+    the first month with a hit, at most months_back months before now_ms's month. None: nothing found."""
+    now = int(now_ms)
+    have = set(db.list_collection_names())
+    d = datetime.fromtimestamp(now / 1000, BJ)
+    y, m, months = d.year, d.month, []
+    for _ in range(months_back + 1):
+        months.append(f"{y:04d}{m:02d}")
+        y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+    months = [mo for mo in months if "log_" + mo in have]
+    recent_months = _months(db, now - recent_ms, now + 1)
+    out = {}
+    for svc in svcs:
+        best = None
+        for mo in recent_months:
+            r = _newest(_flow(db, mo), {"svc": svc, "at": {"$gte": now - recent_ms, "$lte": now}})
+            if r is not None and (best is None or r["at"] > best["at"]):
+                best = r
+        if best is None:
+            for mo in months:
+                best = _newest(_flow(db, mo), {"svc": svc, "kind": {"$in": list(LIFE_KINDS)}, "at": {"$lte": now}})
+                if best is not None:
+                    break
+        out[svc] = None if best is None else {"at": best.get("at"), "kind": best.get("kind"), "run": best.get("run")}
+    return out
 
 
 def gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None):

@@ -9,9 +9,16 @@ export const STALE_MS=120000;
 const escText=t=>String(t??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const esc=t=>escText(t).replace(/"/g,'&quot;');
 const two=n=>String(n).padStart(2,'0');
-export const hms=ms=>{const d=new Date(ms);return [d.getHours(),d.getMinutes(),d.getSeconds()].map(two).join(':');};
-const full=ms=>{const d=new Date(ms);return `${d.getFullYear()}-${two(d.getMonth()+1)}-${two(d.getDate())} ${hms(ms)}`;};
-export const today=(ms=Date.now())=>{const d=new Date(ms);return `${d.getFullYear()}-${two(d.getMonth()+1)}-${two(d.getDate())}`;};
+// Beijing time (+08:00, no DST) everywhere, like the server's months and days, whatever zone the Mac is in.
+const BJ_MS=8*3600000;
+const bj=ms=>new Date(Number(ms)+BJ_MS);                                      // read with the getUTC* getters
+export const hms=ms=>{const d=bj(ms);return [d.getUTCHours(),d.getUTCMinutes(),d.getUTCSeconds()].map(two).join(':');};
+export const today=(ms=Date.now())=>{const d=bj(ms);return `${d.getUTCFullYear()}-${two(d.getUTCMonth()+1)}-${two(d.getUTCDate())}`;};
+const full=ms=>`${today(ms)} ${hms(ms)}`;
+// <input type="datetime-local"> values read and written as Beijing wall time.
+export const bjInput=ms=>{const d=bj(ms);return `${today(ms)}T${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;};
+export const parseBj=v=>{const m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v||'');
+ return m?Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5])-BJ_MS:NaN;};
 
 // {from, to, kind ("call." = prefix), svc, trace, cost (true: only with a cost), before, limit} -> the query string.
 export function buildQuery({from,to,kind,svc,trace,cost,before,limit=200}={}){
@@ -114,7 +121,9 @@ function bodyText(t){
 }
 
 const RANGES={'15m':15*60000,'1h':3600000,'6h':6*3600000,'24h':86400000};
-export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind'+p,{cache:'no-store',signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.json();},now=Date.now}={}){
+export const LAST_POLL_MS=60000;                 // mind caches /log/last for 60 s
+export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind'+p,{cache:'no-store',signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.json();},now=Date.now,
+ every=(f,ms)=>setInterval(f,ms),stopEvery=t=>clearInterval(t)}={}){
  const $=id=>doc.getElementById(id);
  const rows=new Map();let win=null,lastId=null,timer=null;
  const status=(t,bad=false)=>{const s=$('log-status');s.textContent=t;s.classList.toggle('error',bad);};
@@ -123,7 +132,7 @@ export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind
  function filters(){
   let from,to;
   if(live()){to=now();from=to-RANGES[$('log-range').value];}
-  else{from=new Date($('log-from').value).getTime();to=new Date($('log-to').value).getTime();}
+  else{from=parseBj($('log-from').value);to=parseBj($('log-to').value);}
   return {from,to,kind:$('log-kind').value,svc:$('log-svc').value,trace:$('log-trace').value.trim(),cost:$('log-cost').checked};
  }
  async function last(){
@@ -150,10 +159,10 @@ export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind
    list.insertAdjacentHTML('beforeend',d.rows.map(rowHtml).join('')||(more?'':'<p class="alt">这段时间没有记录</p>'));
    lastId=d.rows.length?d.rows.at(-1)._id:lastId;
    $('log-more').hidden=!d.more;
-   status(`${rows.size} 条 · ${full(win.from)} – ${full(win.to)}`);
+   status(`${rows.size} 条 · 北京时间 ${full(win.from)} – ${full(win.to)}`);
   }catch(e){status('读取失败：'+e.message,true);}
  }
- async function refresh(){await page(false);gaps();last();}
+ async function refresh(){await page(false);gaps();last();ledger();}
  async function chain(trace,at){
   const box=$('log-chain');box.hidden=false;box.innerHTML='<p class="alt">读取链路…</p>';
   try{const d=await fetchJson(`/log/chain?trace=${encodeURIComponent(trace)}&at=${at}`);d.rows.forEach(r=>rows.set(r._id,r));box.innerHTML=chainHtml(trace,d.rows);}
@@ -183,10 +192,10 @@ export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind
  $('log-refresh').addEventListener('click',refresh);
  $('log-more').addEventListener('click',()=>page(true));
  $('log-day').value=today(now());$('log-day').addEventListener('change',ledger);
- const local=ms=>{const d=new Date(ms);return `${today(ms)}T${two(d.getHours())}:${two(d.getMinutes())}`;};
- $('log-to').value=local(now());$('log-from').value=local(now()-3600000);
- refresh();ledger();
- clearInterval(timer);timer=setInterval(()=>{if(live())last();},30000);
+ $('log-to').value=bjInput(now());$('log-from').value=bjInput(now()-3600000);
+ refresh();
+ if(timer!==null)stopEvery(timer);
+ timer=every(()=>{if(live())last();},LAST_POLL_MS);
  return {refresh};
 }
 

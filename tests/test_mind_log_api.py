@@ -145,6 +145,27 @@ class LogApiTest(unittest.TestCase):
         self.assertIsNone(d["svcs"]["mind"])
         self.assertLessEqual(abs(d["now"] - now), 5000)
 
+    def test_log_last_is_cached_for_a_minute(self):
+        now = int(time.time() * 1000)
+        mo = time.strftime("%Y%m", time.gmtime(now / 1000 + 8 * 3600))
+        self.put(rec("ear", 1, now - 5000, "svc.beat"), month=mo)
+        col = self.db["log_" + mo]
+        finds, orig = [], col.find
+        col.find = lambda flt=None, projection=None: finds.append(flt) or orig(flt, projection)
+        first = self.call("/log/last")[1]
+        n = len(finds)
+        self.assertGreater(n, 0)
+        self.put(rec("ear", 2, now - 1000, "heard.asr"), month=mo)
+        second = self.call("/log/last")[1]
+        self.assertEqual(len(finds), n)                                              # no DB read within 60 s
+        self.assertEqual(second, first)                                              # its own "now": ages as of then
+        saved = api.LOG_LAST_CACHE_MS
+        api.LOG_LAST_CACHE_MS = 0
+        self.addCleanup(setattr, api, "LOG_LAST_CACHE_MS", saved)
+        third = self.call("/log/last")[1]
+        self.assertGreater(len(finds), n)
+        self.assertEqual(third["svcs"]["ear"]["kind"], "heard.asr")
+
     def test_log_query_missing_is_503(self):
         saved = api.log_query
         api.log_query = None

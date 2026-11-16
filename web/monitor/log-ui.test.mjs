@@ -6,7 +6,7 @@ import {Monitor} from './core.mjs';
 import {createMonitorServer} from './server.mjs';
 const ui=await import('data:text/javascript;base64,'+readFileSync(new URL('./public/log-ui.js',import.meta.url)).toString('base64'));
 
-const T=new Date(2026,10,16,14,0,0).getTime();
+const T=Date.UTC(2026,10,16,6,0,0);             // 14:00 Beijing, whatever the test machine's zone
 const SHA='a'.repeat(64);
 
 test('filters become the /log query', ()=>{
@@ -108,4 +108,39 @@ test('server forwards /api/mind/log* and serves the log page', async t=>{
  assert.equal((await fetch(url+'/log-ui.js')).status,200);
  assert.equal((await fetch(url+'/log.css')).status,200);
  assert.match(readFileSync(new URL('./public/index.html',import.meta.url),'utf8'),/href="\/log.html"[^>]*>日志</);
+});
+
+test('times are Beijing time (+08:00), not the Mac zone', ()=>{
+ assert.equal(ui.hms(Date.UTC(2026,10,15,16,0,5)),'00:00:05');
+ assert.equal(ui.today(Date.UTC(2026,10,15,16,0,0)),'2026-11-16');            // Beijing midnight
+ assert.equal(ui.today(Date.UTC(2026,10,15,15,59,59)),'2026-11-15');
+ assert.equal(ui.parseBj('2026-11-16T14:00'),Date.UTC(2026,10,16,6,0,0));
+ assert.equal(ui.bjInput(Date.UTC(2026,10,16,6,30,0)),'2026-11-16T14:30');
+ assert.ok(Number.isNaN(ui.parseBj('')));
+});
+
+function fakeDoc(){
+ const els={},listeners={};
+ const el=id=>els[id]??=({id,value:id==='log-range'?'1h':'',checked:false,hidden:false,innerHTML:'',textContent:'',dataset:{},
+  classList:{toggle(){},contains(){return false;}},addEventListener(t,f){(listeners[id+':'+t]??=[]).push(f);},
+  querySelectorAll(){return [];},insertAdjacentHTML(_,h){this.innerHTML+=h;},scrollIntoView(){}});
+ return {els,listeners,doc:{getElementById:el,addEventListener(t,f){listeners['doc:'+t]=f;}}};
+}
+
+test('mount: refresh reloads the ledger too; last seen polls every 60 s; default day in Beijing', async ()=>{
+ const {els,doc}=fakeDoc(),seen=[],timers=[];
+ const fetchJson=async p=>{seen.push(p);
+  if(p.startsWith('/log?'))return {from:T-3600000,to:T,more:false,rows:[]};
+  if(p.startsWith('/log/gaps'))return {from:T-3600000,to:T,gaps:[]};
+  if(p.startsWith('/log/last'))return {now:T,svcs:{}};
+  return {day:'2026-11-16',by:[],total:{},unknown_n:0};};
+ const now=()=>Date.UTC(2026,10,15,16,30,0);                                  // 00:30 on the 16th in Beijing
+ const view=ui.mountLog(doc,{fetchJson,now,every:(f,ms)=>{timers.push(ms);return 1;},stopEvery:()=>{}});
+ await new Promise(r=>setTimeout(r,20));
+ assert.deepEqual(timers,[60000]);
+ assert.equal(els['log-day'].value,'2026-11-16');
+ assert.equal(seen.filter(p=>p.startsWith('/log/ledger')).length,1);
+ await view.refresh();await new Promise(r=>setTimeout(r,20));
+ assert.equal(seen.filter(p=>p.startsWith('/log/ledger')).length,2);
+ assert.equal(els['log-to'].value,'2026-11-16T00:30');
 });
