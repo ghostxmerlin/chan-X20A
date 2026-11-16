@@ -448,6 +448,10 @@ class EntryTest(LogCase):
         runlog.error(ValueError("bad\nthing"), "mind.loop")      # throttled
         errs = flows("svc.error")
         self.assertEqual([(f["err"], f["extra"]["where"], f["ok"]) for f in errs], [("ValueError: bad thing", "mind.loop", False)])
+        runlog.error(KeyError("某人的私事"), "memory.loop", type_only=True)
+        errs = flows("svc.error")
+        self.assertEqual([(f["err"], f["extra"]["where"]) for f in errs][-1], ("KeyError", "memory.loop"))
+        self.assertNotIn("私事", json.dumps(errs, ensure_ascii=False))
         with mock.patch.object(runlog.hello_log, "error", side_effect=RuntimeError("x")):
             runlog.error(ValueError("y"), "mind.loop")             # never raises
         self.assertIsNone(runlog._Off.error(ValueError("z"), where="w"))
@@ -475,7 +479,9 @@ class EntryTest(LogCase):
         self.assertEqual(found, {"runner.py": [1], "eye_runner.py": [1], "notes_runner.py": [1],
                                  "memory_worker.py": [1, 1]})
         src = (root / "memory_worker.py").read_text(encoding="utf-8")
-        self.assertIn("runlog.error(e,'memory.tick')", src)
+        self.assertIn("runlog.error(e,'memory.tick',type_only=True)", src)
+        # memory errors can carry private content: every memory call records the type only
+        self.assertEqual(src.count("runlog.error("), src.count("type_only=True)"))
 
     def test_mind_runs_without_hello_log(self):
         """hello_log not importable at all: every mind path still works, nothing is recorded."""

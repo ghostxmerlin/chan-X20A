@@ -7,7 +7,8 @@ service from starting.
 
   start(svc, hub, args)      hello_log.init once per process (mind / eye / notes / memory); never raises
   watch(db, store)           the heartbeat's state: the switches table + the mind switch (store.enabled())
-  error(exc, where)          svc.error from a top-level exception handler (throttled: 1 per message a minute)
+  error(exc, where, type_only)   svc.error from a top-level handler (throttled: 1 per message a minute; type_only:
+                             the exception's type name only, for memory)
   trace()                    the current scope's trace, else a fresh one (a scope never drops an outer trace)
   current_trace()            the current scope's trace, else None (what mind sends soul-tts as /v1/say's trace)
   switch(name, before, after, by)   with-block around one switch write -> one switch.set {name, before, after}
@@ -125,11 +126,12 @@ def watch(db, store=None):
         pass
 
 
-def error(exc, where):
-    """svc.error from a runner's top-level exception handler: one line (type + message, ≤ 300 chars), at most one
-    per distinct message a minute (hello_log throttles). Never raises."""
+def error(exc, where, type_only=False):
+    """svc.error from a runner's top-level exception handler: one line (type + message, redacted, ≤ 300 chars), at
+    most one per distinct message a minute (hello_log throttles). type_only=True records only the exception's type
+    name, no message (memory: its errors can carry private content). Never raises."""
     try:
-        hello_log.error(exc, where=where)
+        hello_log.error(type(exc).__name__ if type_only else exc, where=where)
     except Exception:                            # noqa: BLE001
         pass
 

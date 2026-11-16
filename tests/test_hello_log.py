@@ -720,6 +720,32 @@ class HelloLogTest(unittest.TestCase):
         self.assertTrue(logger.flush())
         self.assertEqual(logger.stats()["rejected"], 1)
 
+    def test_escaped_or_encoded_secrets_still_masked(self):
+        key = "sk-" + "A1b2C3d4E5f6G7h8I9j0K1l2"                 # 24 chars after sk-
+        for text in ("{\\n" + key + "}", "x%0A" + key, "nsk-" + key[3:]):
+            with self.subTest(text=text):
+                out = hello_log.redact(text)
+                self.assertNotIn(key[3:11], out)
+                self.assertIn("sk-***", out)
+        self.assertEqual(hello_log.redact("h%20Bearer abcd1234efgh5678"), "h%20Bearer ***")
+        self.assertEqual(hello_log.redact("task-finished ok"), "task-finished ok")
+        self.assertEqual(hello_log.redact("the bearer responsibility for it"), "the bearer responsibility for it")
+        self.assertEqual(hello_log.redact("a Bearer responsibilities"), "a Bearer responsibilities")
+
+    def test_svc_error_redacted_before_the_cut(self):
+        logger, db = capture_log("mind")
+        key = "sk-" + "Zq9" * 13 + "x"                             # 40 chars after sk-
+        for pad in range(270, 300, 3):           # the key (glued to a word: only the long rule) straddles the cut
+            hello_log.error(RuntimeError("p" * (pad - len("RuntimeError: ")) + key + " tail"), where=f"w{pad}")
+        self.assertTrue(logger.flush())
+        errs = [f["err"] for f in db.flows(MONTH) if f["kind"] == "svc.error"]
+        self.assertEqual(len(errs), 10)
+        for err in errs:
+            self.assertLessEqual(len(err), 300)
+            body = key[3:]
+            for i in range(len(body) - 7):
+                self.assertNotIn(body[i:i + 8], err)
+
     def test_free_sk_needs_a_word_boundary(self):
         self.assertEqual(hello_log.redact("task-finished at mask-abcdefgh1234"), "task-finished at mask-abcdefgh1234")
         self.assertEqual(hello_log.redact("x (sk-ABCDEFGH123) and:sk-ABCDEFGH123"), "x (sk-***) and:sk-***")

@@ -66,6 +66,7 @@ BEAT_MS = 60000                      # svc.beat period on the logger's clock
 COUNT_KINDS_MAX = 256                # distinct kinds counted per beat; the rest add up under "other"
 STOP_FLUSH_S = 3
 ERROR_TEXT_MAX = 300                 # svc.error err: "Type: message", one line, at most this many characters
+ERROR_SCAN_MAX = 8000                # characters of an error text redacted before the cut (bounds the caller's cost)
 ERROR_EVERY_MS = 60000               # at most one svc.error per distinct (where, err) per this long
 ERROR_KEYS_MAX = 256                 # distinct (where, err) remembered for the throttle
 
@@ -81,8 +82,12 @@ _SECRET_SUFFIXES = ("token", "secret", "password", "passwd", "apikey", "accesske
 _SECRET_PAIRS = {("api", "key"), ("session", "token")}
 _NAME_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#@\s]+@")
-_FREE_SK = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}")          # not the end of task-finished
-_FREE_BEARER = re.compile(r"(?i)(?<![A-Za-z0-9])bearer\s+[A-Za-z0-9._~+/=-]{8,}")
+# sk- keys: 20+ characters anywhere (real keys are long; also after an escaped \n or %0A), 8+ after a non-alphanumeric
+# (so the end of task-finished stays). Bearer tokens: one with a digit, 16+ characters anywhere (%20Bearer …), 8+
+# after a non-alphanumeric; "bearer responsibility" (no digit) stays.
+_FREE_SK = re.compile(r"sk-[A-Za-z0-9_-]{20,}|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}")
+_FREE_BEARER = re.compile(r"(?i)bearer\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}"
+                          r"|(?<![A-Za-z0-9])bearer\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{8,}")
 _URL_PARAM_NAME = re.compile(r"[?&;]([^=&#;?\s\"']+)=")
 _PARAM_END = re.compile(r"[&#;?\s\"']")
 _SECRET_PARAM_END = re.compile(r"[&#\s\"']")       # a secret value is masked through ; and ? too
@@ -416,7 +421,9 @@ class Logger:
                 text = f"{type(exc).__name__}: {exc}"
             else:
                 text = str(exc)
-            err = " ".join(text.split())[:ERROR_TEXT_MAX]
+            # one line, redacted whole (a secret cut in half must not survive half-masked), then cut
+            err = redact(" ".join(text[:ERROR_SCAN_MAX].split()))
+            err = (err if isinstance(err, str) else "***")[:ERROR_TEXT_MAX]
             now = self._clock()
             key = (str(where), err)
             with self._lock:
