@@ -13,15 +13,29 @@ MIND_DIR=${SOUL_MIND_DIR:-soul-mind}
 UNIT=${SOUL_MIND_UNIT:-soul-mind}
 cd "$HERE"
 FILES="$(ls ./*.py | sed 's#^\./##' | tr '\n' ' ')settings.example.json"   # every module, so new ones are never left behind
+COMMON="$HERE/../common"
+LOGFILES="$COMMON/hello_log.py $COMMON/hello_log_query.py $COMMON/prices.py"   # shipped into ~/soul-mind/ (the package's parent, on sys.path)
+for f in $LOGFILES; do [ -f "$f" ] || { echo "$f not found" >&2; exit 1; }; done
+SPOOL=${SOUL_SERVER_DIR:-soul-spike}/log-spool
+SHA=$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo nogit)
+[ -z "$(git -C "$HERE" status --porcelain 2>/dev/null)" ] || SHA="$SHA-dirty"
+VER="$SHA $(date '+%Y-%m-%dT%H:%M:%S%z')"
 if [ "${1:-}" = "--dry-run" ]; then
   # shellcheck disable=SC2086
   rsync -aicn -e "$SSH" $FILES "$SOUL_SERVER_SSH:$MIND_DIR/mind/"
+  # shellcheck disable=SC2086
+  rsync -aicn -e "$SSH" $LOGFILES "$SOUL_SERVER_SSH:$MIND_DIR/"
+  echo "(would write $MIND_DIR/CODE_VERSION: $VER; would create $SPOOL)"
   echo "(dry run: nothing copied)"
   exit 0
 fi
 $SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$MIND_DIR/mind"
 # shellcheck disable=SC2086
 rsync -aic -e "$SSH" $FILES "$SOUL_SERVER_SSH:$MIND_DIR/mind/"
+# shellcheck disable=SC2086
+rsync -aic -e "$SSH" $LOGFILES "$SOUL_SERVER_SSH:$MIND_DIR/"
+printf '%s\n' "$VER" | $SSH "$SOUL_SERVER_SSH" "cat > ~/$MIND_DIR/CODE_VERSION"
+$SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$SPOOL && chmod 700 ~/$SPOOL"
 # hello's voice clip texts (selfvoice), built locally and never committed:
 #   python3 server/mind/selfvoice.py <voice library>/stackchan_playable_80.json .private/clip_texts.json
 rsync -aic -e "$SSH" "$HERE/../../config/roles/" "$SOUL_SERVER_SSH:$MIND_DIR/roles/"     # hello's speaking roles
