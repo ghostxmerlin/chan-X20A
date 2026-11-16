@@ -13,11 +13,15 @@ Two layers in the Mongo database "hello", one pair of tables per Beijing month:
 emit() only snapshots the fields and puts them on a bounded queue; it never blocks and never raises.
 One daemon thread cleans each record (redaction, no images, size caps), appends it to the local spool
 <spool>/<svc>-YYYYMMDD.jsonl (fsync), then ships the spool to Mongo and records how far it got in
-<svc>-YYYYMMDD.offset. If Mongo is down or slow (5 s timeouts) the lines wait in the spool and are
-replayed later, also after a restart; replay is idempotent (duplicate _id = already shipped). If the
-spool folder is unwritable the batch goes straight to Mongo. Fully shipped spool files are deleted
-after 7 days. stdlib only; pymongo is imported when a real connection is first needed.
+<svc>-YYYYMMDD.offset (its mtime = when it last advanced). Records queued while Mongo is slow still
+reach the spool between database operations. If Mongo is down or slow (5 s timeouts) the lines wait
+in the spool and are replayed later, also after a restart; replay is idempotent (duplicate _id =
+already shipped). A record Mongo keeps refusing while others go through is counted as rejected and
+skipped, so it cannot block the spool. If the spool folder is unwritable records go straight to
+Mongo. A spool file is deleted 7 days after it was fully shipped. stdlib only; pymongo is imported
+when a real connection (or its UpdateOne) is first needed.
 """
+import functools
 import hashlib
 import itertools
 import json
@@ -40,22 +44,31 @@ BODY_MAX = 4 * 1024 * 1024           # bytes of one body text
 FLOW_STR_MAX = 64 * 1024             # bytes of one string in a flow record (big content belongs in body)
 BODY_CACHE = 5000                    # recently shipped (month, sha) pairs
 SPOOL_KEEP_DAYS = 7
+SHIP_TRIES = 3                       # failures of one chunk / one record before it is split / rejected
 RESERVED = ("_id", "svc", "run", "seq")
 
 log = logging.getLogger("hello_log")
 _current = None
 _EPOCH_BJ = datetime(1970, 1, 1) + timedelta(hours=8)        # naive Beijing wall clock at epoch (no DST)
-_SENSITIVE_NAME = re.compile(r"(?i)(^|[_-])(api[_-]?key|key|token|access[_-]?token|secret|password|passwd|pwd"
-                             r"|authorization|auth|uri|dsn|cookie|credentials?|session[_-]?token)$")
+_SECRET_SEGMENTS = {"key", "apikey", "token", "secret", "password", "passwd", "pwd", "authorization", "auth",
+                    "uri", "dsn", "cookie", "credential", "credentials"}
+_SECRET_PAIRS = {("api", "key"), ("session", "token")}
+_NAME_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#@\s]+@")
 _FREE_SK = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
 _FREE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
-_URL_SECRET = re.compile(r"(?i)([?&;][^=&#\s\"']*(?:key|token|secret|password|authorization)[^=&#\s\"']*=)"
-                         r"[^&#\s\"']*")
+_URL_SECRET = re.compile(r"(?i)([?&;](?:token|key|access_token|api_key)=)[^&#\s\"']*")
 _DATA_URL_WHOLE = re.compile(r"data:([\w.+-]+)/[\w.+-]+[;,]")
 _DATA_URL_INLINE = re.compile(r"data:([\w.+-]+)/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/=\r\n]*")
 _SPOOL_NAME = r"^{}-(\d{{8}})\.jsonl$"
 _INT64 = 2 ** 63
+# errors that mean "the database is unreachable", not "this record is bad" (pymongo names, no import)
+_UNREACHABLE = {"ConnectionFailure", "AutoReconnect", "ServerSelectionTimeoutError", "NetworkTimeout",
+                "NotPrimaryError", "WaitQueueTimeoutError"}
+
+
+class _NoDatabase(Exception):
+    pass
 
 
 # ---------------------------------------------------------------- helpers (pure)
@@ -76,13 +89,24 @@ def key_fp(key):
     return str(key)[:7]
 
 
+def _utf8(s):
+    """s with lone surrogates replaced, so it always encodes as UTF-8 (JSON lines, BSON)."""
+    if s.isascii():
+        return s
+    try:
+        s.encode("utf-8")
+        return s
+    except UnicodeEncodeError:
+        return s.encode("utf-8", "replace").decode("utf-8")
+
+
 def _omitted(match_text, mime_major):
     kind = mime_major if mime_major in ("image", "audio", "video") else "data"
-    return f"[{kind} omitted, {len(match_text.encode('utf-8'))} bytes]"
+    return f"[{kind} omitted, {len(match_text.encode('utf-8', 'replace'))} bytes]"
 
 
 def _cap(text, limit):
-    raw = text.encode("utf-8")
+    raw = text.encode("utf-8", "replace")
     if len(raw) <= limit:
         return text
     return raw[:limit].decode("utf-8", "ignore") + f"…[truncated, {len(raw)} bytes total]"
@@ -100,7 +124,8 @@ def _clean_str(s, limit):
         s = _URL_USERINFO.sub(r"\1***@", s)
     if "sk-" in s:
         s = _FREE_SK.sub("sk-***", s)
-    s = _FREE_BEARER.sub("Bearer ***", s)
+    if "earer" in s or "EARER" in s:
+        s = _FREE_BEARER.sub("Bearer ***", s)
     if limit and len(s) * 4 > limit:
         s = _cap(s, limit)
     return s
@@ -110,41 +135,54 @@ def _secret_value(s):
     return s.startswith("sk-") or s[:7].lower() == "bearer "
 
 
-def _clean(obj, limit=0, depth=0):
+@functools.lru_cache(maxsize=4096)
+def _secret_name(name):
+    """api_key, apiKey, X-Api-Key, MONGO_URI, tokenValue, sessionToken, auth … but not keyword, keys,
+    tokens, prompt_tokens, usage, session."""
+    parts = [p.lower() for chunk in re.split(r"[_\-.\s]+", name) for p in _NAME_PARTS.findall(chunk)]
+    if any(p in _SECRET_SEGMENTS for p in parts):
+        return True
+    return any(pair in _SECRET_PAIRS for pair in zip(parts, parts[1:]))
+
+
+def _clean(obj, limit=0, depth=0, masked=False):
     """JSON-safe copy: secrets masked, data: URLs and bytes replaced by a size note, odd objects as repr,
-    strings capped at `limit` bytes (0 = no cap)."""
+    strings capped at `limit` bytes (0 = no cap). Under a secret name every string leaf is '***'."""
     if obj is None or isinstance(obj, (bool, float)):
         return obj
     if isinstance(obj, int):
         return obj if -_INT64 <= obj < _INT64 else str(obj)
+    if masked and not isinstance(obj, (dict, list, tuple)):
+        return "***"
     if isinstance(obj, str):
-        return "***" if _secret_value(obj) else _clean_str(obj, limit)
+        return "***" if _secret_value(obj) else _clean_str(_utf8(obj), limit)
     if depth > 40:
         return "[too deep]"
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
-            name = k if isinstance(k, str) else str(k)
-            out[name] = "***" if isinstance(v, str) and _SENSITIVE_NAME.search(name) else _clean(v, limit, depth + 1)
+            name = _utf8(k if isinstance(k, str) else str(k))
+            out[name] = _clean(v, limit, depth + 1, masked or _secret_name(name))
         return out
     if isinstance(obj, (list, tuple)):
-        return [_clean(v, limit, depth + 1) for v in obj]
+        return [_clean(v, limit, depth + 1, masked) for v in obj]
     if isinstance(obj, (bytes, bytearray, memoryview)):
         return f"[bytes omitted, {len(bytes(obj))} bytes]"
     try:
         text = repr(obj)
     except Exception:
         text = f"<{type(obj).__name__} without repr>"
-    return _clean_str(text, limit)
+    return _clean_str(_utf8(text), limit)
 
 
 def redact(obj):
-    """Copy of obj with secrets as '***': string values under names like api_key / x-api-key / token /
-    access_token / secret / password / authorization / auth / db_uri / dsn / cookie / credentials /
-    session_token (whole name or its last _/- part, any case), string values starting with 'sk-' or
-    'Bearer ', key/token-style URL query values and URL user:pass@. Inside any text, sk-… keys become
-    'sk-***' and 'Bearer <token>' becomes 'Bearer ***'. Other fields (keyword, prompt_tokens, session,
-    usage dicts, numbers) stay; dicts and lists are walked. data: URLs omitted."""
+    """Copy of obj with secrets as '***'. A key name is secret when one of its parts (split on _ - . space
+    and camelCase) is key / apikey / token / secret / password / passwd / pwd / authorization / auth /
+    uri / dsn / cookie / credential(s), or two neighbours read api+key or session+token; every string
+    under it becomes '***' (numbers stay). keyword, keys, tokens, prompt_tokens, usage, session stay.
+    Strings starting with 'sk-' or 'Bearer ' become '***'; inside any text sk-… keys become 'sk-***',
+    'Bearer <token>' 'Bearer ***', URL ?token= / key= / access_token= / api_key= values and user:pass@
+    are masked. data: URLs are omitted."""
     return _clean(obj)
 
 
@@ -175,6 +213,32 @@ def _is_dup(exc):
     return getattr(exc, "code", None) == 11000
 
 
+def _unreachable(exc):
+    if isinstance(exc, (OSError, ImportError, _NoDatabase)):
+        return True
+    return any(c.__name__ in _UNREACHABLE for c in type(exc).__mro__)
+
+
+class _Upsert:
+    """Stand-in for pymongo.UpdateOne when pymongo is not installed (tests)."""
+
+    def __init__(self, flt, update, upsert=True):
+        self.filter, self.update, self.upsert = flt, update, upsert
+
+
+_update_one = None
+
+
+def _upsert_op(digest, text):
+    global _update_one
+    if _update_one is None:
+        try:
+            from pymongo import UpdateOne as _update_one
+        except ImportError:
+            _update_one = _Upsert
+    return _update_one({"_id": digest}, {"$setOnInsert": {"text": text}}, upsert=True)
+
+
 # ---------------------------------------------------------------- the writer
 
 class Logger:
@@ -192,16 +256,17 @@ class Logger:
         self._seq = itertools.count(1)
         self._lock = threading.Lock()
         self._cv = threading.Condition()
-        self._queued = self._shipped = self._dropped = self._spool_errors = self._db_errors = 0
-        self._backlog = 0
+        self._queued = self._shipped = self._dropped = self._rejected = 0
+        self._spool_errors = self._db_errors = self._backlog = 0
         self._enqueued = self._taken = 0            # records put / taken (flush waits on these)
-        self._loop_started = self._loop_done = 0
+        self._kick_gen = self._kick_done = 0       # flush() requests / requests served by the writer
         self._pending = {}                          # spool path -> shipped offset, files that may lag
+        self._direct = []                           # (flow, bodies) the spool could not take
         self._indexed = set()                       # months whose indexes this process has created
         self._cache = OrderedDict()                 # (month, sha) shipped recently
         self._fails = 0
         self._retry_at = 0.0
-        self._kick = False
+        self._stuck = (None, 0)                     # ((path, offset), failures) of the chunk that fails
         self._stop = False
         self._prune_day = None
         self._name_re = re.compile(_SPOOL_NAME.format(re.escape(svc)))
@@ -210,7 +275,7 @@ class Logger:
 
     # ---- caller side
 
-    def emit(self, kind, **fields):
+    def emit(self, kind, /, **fields):
         try:
             rec = {k: _snap(v) for k, v in fields.items() if v is not None and k not in RESERVED}
             at = rec.pop("at", None)
@@ -239,8 +304,10 @@ class Logger:
                 pass
 
     def stats(self):
+        """Cumulative counts since init (queued = accepted by emit), plus lines still waiting in the spool."""
         return {"queued": self._queued, "shipped": self._shipped, "dropped": self._dropped,
-                "spool_errors": self._spool_errors, "db_errors": self._db_errors, "backlog_lines": self._backlog}
+                "rejected": self._rejected, "spool_errors": self._spool_errors, "db_errors": self._db_errors,
+                "backlog_lines": self._backlog}
 
     def flush(self, timeout_s=5):
         """Wait until everything emitted so far has been through the writer and one ship attempt.
@@ -249,16 +316,16 @@ class Logger:
         with self._lock:
             target, dropped0 = self._enqueued, self._dropped
         with self._cv:
-            started = self._loop_started
-            self._kick = True
+            self._kick_gen += 1
+            gen = self._kick_gen
         self._wake()
         with self._cv:
-            while self._taken < target or self._loop_done <= started:
+            while self._taken < target or self._kick_done < gen:
                 left = deadline - time.monotonic()
                 if left <= 0 or not self._thread.is_alive():
                     return False
                 self._cv.wait(min(left, 0.1))
-        return self._backlog == 0 and self._dropped == dropped0
+        return self._backlog == 0 and not self._direct and self._dropped == dropped0
 
     def close(self, timeout_s=5):
         """Stop the writer after it has spooled what is queued (waits at most timeout_s)."""
@@ -281,28 +348,30 @@ class Logger:
         except Exception:
             log.exception("hello_log startup")
         while True:
-            with self._cv:
-                self._loop_started += 1
-                n, kick, self._kick = self._loop_started, self._kick, False
+            gen = self._kick_done
             try:
-                batch = self._take()
-                if batch:
-                    self._handle(batch)
+                batch = self._take(BATCH_WAIT_S)
+                with self._cv:
+                    gen = self._kick_gen              # flush requests made before this point are served now
+                kick = gen > self._kick_done
+                self._handle(batch)
+                self._ship_direct()
                 if self._backlog and (kick or time.monotonic() >= self._retry_at):
                     self._ship_backlog()
+                self._ship_direct()
                 self._maybe_prune()
             except Exception:
                 log.exception("hello_log writer")
             with self._cv:
-                self._loop_done = n
+                self._kick_done = gen
                 self._cv.notify_all()
             if self._stop and self._q.empty():
                 return
 
-    def _take(self):
+    def _take(self, wait_s):
         batch = []
         try:
-            item = self._q.get(timeout=BATCH_WAIT_S)
+            item = self._q.get(timeout=wait_s) if wait_s else self._q.get_nowait()
             if item is not None:
                 batch.append(item)
             while len(batch) < BATCH_MAX:
@@ -314,6 +383,11 @@ class Logger:
         with self._cv:
             self._taken += len(batch)
         return batch
+
+    def _between(self):
+        """Called between database operations: newly queued records go to the spool now, however slow
+        Mongo is (they are shipped later, in order)."""
+        self._handle(self._take(0))
 
     def _prepare(self, rec):
         """(flow, {sha: text}) from a queued record."""
@@ -331,29 +405,34 @@ class Logger:
                 value = _clean(value)
                 text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
                 text = _cap(text, BODY_MAX)
-                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                refs[str(name)] = digest
+                digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+                refs[_utf8(str(name))] = digest
                 bodies[digest] = text
             flow["body"] = refs
         return flow, bodies
 
     def _handle(self, batch):
+        """Clean and spool a batch; what the spool can't take waits in _direct for a direct ship."""
         items, lines = [], []
         for rec in batch:
             try:
                 flow, bodies = self._prepare(rec)
                 line = json.dumps({"flow": flow, "bodies": bodies}, ensure_ascii=False, separators=(",", ":"))
+                lines.append(line.encode("utf-8", "replace") + b"\n")
+                items.append((flow, bodies))
             except Exception:
                 with self._lock:
                     self._dropped += 1
-                continue
-            items.append((flow, bodies))
-            lines.append(line.encode("utf-8") + b"\n")
-        if not items or self._append(lines):
+        if items and not self._append(lines):
+            self._direct.extend(items)
+
+    def _ship_direct(self):
+        items, self._direct = self._direct, []
+        if not items:
             return
-        try:                                        # spool unusable: straight to Mongo
-            self._ship(items)
-            self._shipped += len(items)
+        try:
+            rejected = self._ship_chunk(items)
+            self._shipped += len(items) - rejected
             self._fails = 0
         except Exception as exc:
             self._failed(exc)
@@ -399,10 +478,13 @@ class Logger:
             return 0
 
     def _write_offset(self, path, offset):
+        """Save the shipped offset; the file's mtime (on the logger's clock) = when shipping last advanced."""
         target = path.with_suffix(".offset")
         tmp = target.with_suffix(".offset.tmp")
         try:
             tmp.write_text(str(offset))
+            now_s = self._clock() / 1000
+            os.utime(tmp, (now_s, now_s))
             os.replace(tmp, target)
         except OSError:
             self._spool_errors += 1
@@ -432,7 +514,7 @@ class Logger:
                         f.write(b"\n")
                 self._backlog += rest.count(b"\n") + (0 if rest.endswith(b"\n") else 1)
                 self._pending[path] = offset
-                self._kick = True
+                self._retry_at = 0.0
             except OSError:
                 self._spool_errors += 1
 
@@ -454,12 +536,12 @@ class Logger:
         return items, pos, n
 
     def _ship_backlog(self):
-        t0 = time.monotonic()
         today = self._spool_path(_bj(self._clock(), "%Y%m%d"), "jsonl")
         for path in sorted(self._pending):
             while True:
+                off = self._pending[path]
                 try:
-                    items, pos, n = self._read_chunk(path, self._pending[path])
+                    items, pos, n = self._read_chunk(path, off)
                 except OSError:
                     self._spool_errors += 1
                     self._pending.pop(path, None)
@@ -468,31 +550,72 @@ class Logger:
                     if path != today:
                         self._pending.pop(path, None)
                     break
+                rejected = 0
                 if items:
+                    where, fails = self._stuck
                     try:
-                        self._ship(items)
+                        rejected = self._ship_chunk(items, split=where == (path, off) and fails >= SHIP_TRIES)
                     except Exception as exc:
+                        self._stuck = ((path, off), fails + 1 if where == (path, off) else 1)
                         self._failed(exc)
                         return
+                self._stuck = (None, 0)
                 self._write_offset(path, pos)
                 self._pending[path] = pos
                 self._backlog = max(0, self._backlog - n)
-                self._shipped += len(items)
+                self._shipped += len(items) - rejected
                 self._fails = 0
-                if time.monotonic() - t0 > 1.0 and not self._q.empty():
-                    return                          # let new records reach the spool first
+                self._between()
+
+    def _ship_chunk(self, items, split=False):
+        """Ship items; returns how many were rejected. Raises (everything waits) when the database looks
+        unusable: unreachable, or no record at all goes through. A chunk failing SHIP_TRIES times for a
+        non-network reason, or with split=True (it failed SHIP_TRIES ship attempts before), is shipped
+        record by record; a record still failing SHIP_TRIES times while others succeed is rejected."""
+        if not split:
+            for attempt in range(SHIP_TRIES):
+                try:
+                    return self._ship(items)
+                except Exception as exc:
+                    if _unreachable(exc):
+                        raise
+        ok, bad, net_streak, refused = 0, [], 0, 0
+        for item in items:
+            err = None
+            for attempt in range(SHIP_TRIES):
+                try:
+                    refused += self._ship([item])
+                    err = None
+                    break
+                except Exception as exc:
+                    err = exc
+                    if _unreachable(exc):
+                        break
+            if err is None:
+                ok, net_streak = ok + 1, 0
+                continue
+            bad.append((item, err))
+            net_streak = net_streak + 1 if _unreachable(err) else 0
+            if ok == 0 and net_streak >= 2:
+                raise err                           # the database, not the records
+        if bad and ok == 0:
+            raise bad[0][1]
+        for (flow, _), err in bad:
+            self._rejected += 1
+            log.info("hello_log: rejected %s after %d tries: %r", flow.get("_id"), SHIP_TRIES, err)
+        return len(bad) + refused
 
     def _failed(self, exc):
         self._db_errors += 1
         self._fails += 1
         self._retry_at = time.monotonic() + min(30, 2 ** (self._fails - 1))
         if self._fails == 1:
-            log.info("hello_log: Mongo write failed, keeping records in the spool: %s", exc)
+            log.info("hello_log: Mongo write failed, keeping records in the spool: %r", exc)
 
     def _get_db(self):
         if self._db is None:
             if not self._uri:
-                raise RuntimeError("no database configured")
+                raise _NoDatabase("no database configured")
             from pymongo import MongoClient
             self._db = MongoClient(self._uri, serverSelectionTimeoutMS=5000, socketTimeoutMS=5000,
                                    connectTimeoutMS=5000)[DB_NAME]
@@ -502,16 +625,19 @@ class Logger:
         if month in self._indexed:
             return
         flows = db["log_" + month]
-        flows.create_index([("at", 1)])
-        flows.create_index([("kind", 1), ("at", 1)])
-        flows.create_index([("trace", 1)])
-        # descending so it never clashes with at_1 above; range scans work either way
-        flows.create_index([("at", -1)], name="at_cost", partialFilterExpression={"cost": {"$exists": True}})
+        specs = [([("at", 1)], {}), ([("kind", 1), ("at", 1)], {}), ([("trace", 1)], {}),
+                 # descending so it never clashes with at_1 above; range scans work either way
+                 ([("at", -1)], {"name": "at_cost", "partialFilterExpression": {"cost": {"$exists": True}}})]
+        for keys, kw in specs:
+            self._between()
+            flows.create_index(keys, **kw)
         self._indexed.add(month)
 
     def _ship(self, items):
-        """Write (flow, bodies) pairs to Mongo; raises when it should be retried later."""
+        """Write (flow, bodies) pairs to Mongo; returns how many flows the server refused (counted as
+        rejected). Raises when it should be retried later."""
         db = self._get_db()
+        refused = 0
         by_month = {}
         for flow, bodies in items:
             by_month.setdefault(month_of(flow["at"]), []).append((flow, bodies))
@@ -524,36 +650,43 @@ class Logger:
                         self._cache.move_to_end((month, digest))
                     else:
                         new[digest] = text
-            body_col = db["logbody_" + month]
-            for digest, text in new.items():
+            if new:
+                self._between()
                 try:
-                    body_col.update_one({"_id": digest}, {"$setOnInsert": {"text": text}}, upsert=True)
+                    db["logbody_" + month].bulk_write([_upsert_op(d, t) for d, t in new.items()], ordered=False)
                 except Exception as exc:
                     if not _is_dup(exc):
                         raise
+            self._between()
+            flows = [flow for flow, _ in group]
             try:
-                db["log_" + month].insert_many([flow for flow, _ in group], ordered=False)
+                db["log_" + month].insert_many(flows, ordered=False)
             except Exception as exc:
                 errs = _write_errors(exc)
                 if errs is None:
                     raise
-                rejected = [e for e in errs if e.get("code") != 11000]
-                if rejected:                        # the server refused those documents; retrying won't help
-                    self._db_errors += len(rejected)
-                    log.info("hello_log: %d records rejected: %s", len(rejected), rejected[0].get("errmsg"))
+                for e in errs:
+                    if e.get("code") != 11000:      # the server refused this document; retrying won't help
+                        self._rejected += 1
+                        refused += 1
+                        i = e.get("index")
+                        rid = flows[i].get("_id") if isinstance(i, int) and 0 <= i < len(flows) else "?"
+                        log.info("hello_log: rejected %s: %s", rid, e.get("errmsg"))
             for digest in new:
                 self._cache[(month, digest)] = True
             while len(self._cache) > BODY_CACHE:
                 self._cache.popitem(last=False)
+        return refused
 
     def _maybe_prune(self):
-        """Delete spool files that are fully shipped and older than SPOOL_KEEP_DAYS (checked once a day)."""
+        """Delete spool files fully shipped more than SPOOL_KEEP_DAYS ago (by the offset file's mtime,
+        i.e. when shipping last advanced; checked once a day). Today's file and lagging files stay."""
         now = self._clock()
         today = _bj(now, "%Y%m%d")
         if self._prune_day == today:
             return
         self._prune_day = today
-        cutoff = _bj(now - SPOOL_KEEP_DAYS * 86400000, "%Y%m%d")
+        cutoff_s = (now - SPOOL_KEEP_DAYS * 86400000) / 1000
         try:
             names = os.listdir(self.spool_dir)
         except OSError:
@@ -561,12 +694,14 @@ class Logger:
         for name in names:
             m = self._name_re.match(name)
             path = self.spool_dir / name
-            if not m or m.group(1) >= cutoff or path in self._pending:
+            if not m or m.group(1) >= today or path in self._pending:
                 continue
+            marker = path.with_suffix(".offset")
             try:
-                if self._read_offset(path) >= path.stat().st_size:
+                done_s = (marker if marker.exists() else path).stat().st_mtime
+                if self._read_offset(path) >= path.stat().st_size and done_s <= cutoff_s:
                     path.unlink()
-                    path.with_suffix(".offset").unlink(missing_ok=True)
+                    marker.unlink(missing_ok=True)
             except OSError:
                 self._spool_errors += 1
 
@@ -583,7 +718,7 @@ def init(svc, *, db=None, db_uri=None, spool_dir, code_version="", args=None, cl
     return _current
 
 
-def emit(kind, **fields):
+def emit(kind, /, **fields):
     """Record one event on this process's logger; does nothing before init(). Never raises, never blocks."""
     lg = _current
     if lg is not None:

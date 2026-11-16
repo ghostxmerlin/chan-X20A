@@ -39,16 +39,19 @@ class FakeCollection:
         self.db, self.name = db, name
         self.docs = {}                   # _id -> doc, in insertion order
 
-    def _write(self, op, *info):
+    def _write(self, op, *info, ids=()):
         self.db.calls.append((op, self.name) + info)
         if self.db.delay_s:
             time.sleep(self.db.delay_s)
         if self.db.fail is not None:
             raise self.db.fail
+        for i in ids:
+            if i in self.db.poison:
+                raise self.db.poison[i]
 
     def insert_many(self, docs, ordered=True):
         docs = list(docs)
-        self._write("insert_many", len(docs), ordered)
+        self._write("insert_many", len(docs), ordered, ids=[d.get("_id") for d in docs])
         errors = []
         with self.db.lock:
             for i, doc in enumerate(docs):
@@ -63,16 +66,32 @@ class FakeCollection:
                                       "nInserted": len(docs) - len(errors)})
 
     def update_one(self, flt, update, upsert=False):
-        self._write("update_one", flt, upsert)
+        self._write("update_one", flt, upsert, ids=[flt.get("_id")])
         with self.db.lock:
-            doc = self.find_one(flt)
-            if doc is None:
-                if not upsert:
-                    return
-                doc = dict(flt)
-                doc.update(update.get("$setOnInsert", {}))
-                self.docs[doc["_id"]] = doc
-            doc.update(update.get("$set", {}))
+            self._apply_update(flt, update, upsert)
+
+    def bulk_write(self, ops, ordered=True):
+        """UpdateOne requests only: pymongo.UpdateOne (private _filter/_doc/_upsert) or anything with
+        .filter/.update/.upsert (hello_log's stand-in when pymongo is missing)."""
+        reqs = []
+        for op in ops:
+            flt = getattr(op, "_filter", None)
+            reqs.append((op.filter, op.update, op.upsert) if flt is None else (flt, op._doc, op._upsert))
+        ids = [flt.get("_id") for flt, _, _ in reqs]
+        self._write("bulk_write", ids, ordered, ids=ids)
+        with self.db.lock:
+            for flt, update, upsert in reqs:
+                self._apply_update(flt, update, upsert)
+
+    def _apply_update(self, flt, update, upsert):
+        doc = self.find_one(flt)
+        if doc is None:
+            if not upsert:
+                return
+            doc = dict(flt)
+            doc.update(update.get("$setOnInsert", {}))
+            self.docs[doc["_id"]] = doc
+        doc.update(update.get("$set", {}))
 
     def create_index(self, keys, **kw):
         self._write("create_index", keys, kw)
@@ -88,13 +107,15 @@ class FakeCollection:
 
 class FakeDB:
     """Collections by name. Set .fail to an exception to make every write raise it, .delay_s to
-    make every write slow. .calls lists (op, collection, ...) for every write and create_index."""
+    make every write slow, .poison[_id] = exception to make any write touching that _id raise it.
+    .calls lists (op, collection, ...) for every write and create_index."""
 
     def __init__(self):
         self.collections = {}
         self.calls = []
         self.fail = None
         self.delay_s = 0
+        self.poison = {}
         self.lock = threading.RLock()
 
     def __getitem__(self, name):

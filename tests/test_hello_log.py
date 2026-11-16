@@ -57,12 +57,13 @@ class HelloLogTest(unittest.TestCase):
         self.assertTrue(logger.flush())
         bodies = db.bodies(MONTH)
         self.assertEqual(sorted(bodies.values()), ["out 0", "out 1", "out 2", "same prompt"])
-        upserts = [c for c in db.ops("update_one", "logbody_" + MONTH) if c[2] == {"_id": sha("same prompt")}]
+        upserts = [c for c in db.ops("bulk_write", "logbody_" + MONTH) if sha("same prompt") in c[2]]
         self.assertEqual(len(upserts), 1)
+        self.assertEqual(upserts[0][3], False)                 # ordered=False
         # a later batch with the same prompt only references it
         hello_log.emit("call.notes", body={"system": "same prompt"})
         self.assertTrue(logger.flush())
-        upserts = [c for c in db.ops("update_one", "logbody_" + MONTH) if c[2] == {"_id": sha("same prompt")}]
+        upserts = [c for c in db.ops("bulk_write", "logbody_" + MONTH) if sha("same prompt") in c[2]]
         self.assertEqual(len(upserts), 1)
         self.assertEqual(db.flows(MONTH)[-1]["body"], {"system": sha("same prompt")})
 
@@ -81,10 +82,28 @@ class HelloLogTest(unittest.TestCase):
                                            "keys": ["k1", "sk-k2"], "Secret": {"value": "v", "n": 2},
                                            "h2": "bearer Q", "token": 7}),
                          {"Access_Token": "***", "auth": "***", "passwd": "***", "tokens": "many",
-                          "keys": ["k1", "***"], "Secret": {"value": "v", "n": 2}, "h2": "***", "token": 7})
+                          "keys": ["k1", "***"], "Secret": {"value": "***", "n": 2}, "h2": "***", "token": 7})
         # provider usage counts stay numbers
         usage = {"prompt_tokens": 12, "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 0}}
         self.assertEqual(hello_log.redact({"usage": usage}), {"usage": usage})
+
+    def test_redact_name_segments(self):
+        kept = {"keyword": "看看", "keys": ["a"], "tokens": "many", "prompt_tokens": 1, "completion_tokens": 2,
+                "input_tokens_details": {"cached": 1}, "usage": {"total_tokens": 3}, "session": "20261115/x-c1",
+                "ref": {"session": "20261115/x-c1"}, "monkey": "m", "max_tokens": 9}
+        self.assertEqual(hello_log.redact(kept), kept)
+        masked = {"tokenValue": "t", "apiKey": "k", "MONGO_URI": "m", "db_uri": "d", "X-Api-Key": "x",
+                  "sessionToken": "s", "auth": {"user": "u", "pass": "p", "port": 1},
+                  "credentials": ["c1", "c2"], "client.secret": "c", "Cookie": "c"}
+        self.assertEqual(hello_log.redact(masked),
+                         {"tokenValue": "***", "apiKey": "***", "MONGO_URI": "***", "db_uri": "***",
+                          "X-Api-Key": "***", "sessionToken": "***", "auth": {"user": "***", "pass": "***", "port": 1},
+                          "credentials": ["***", "***"], "client.secret": "***", "Cookie": "***"})
+
+    def test_url_query_secret_names_exact(self):
+        self.assertEqual(hello_log.redact("https://h/p?max_tokens=5&keyword=hi&monkey=1&token=t&KEY=k"
+                                          "&access_token=a&api_key=b"),
+                         "https://h/p?max_tokens=5&keyword=hi&monkey=1&token=***&KEY=***&access_token=***&api_key=***")
 
     def test_redact_applies_to_flow_and_body(self):
         logger, db = capture_log("mind")
@@ -309,6 +328,97 @@ class HelloLogTest(unittest.TestCase):
         self.assertEqual(f["big"], str(2 ** 70))
         self.assertEqual(json.loads(db.bodies(MONTH)[f["body"]["input"]]), {"o": repr(thing)})
 
+    def test_emit_odd_kwarg_names(self):
+        logger, db = capture_log("mind")
+        hello_log.emit("call.chat", kind="other", self="me", fields=1, _id="x", seq=99)
+        logger.emit("call.chat", self="me", kind="other")
+        self.assertTrue(logger.flush())
+        flows = db.flows(MONTH)
+        self.assertEqual([(f["kind"], f["self"], f["seq"]) for f in flows], [("call.chat", "me", 1), ("call.chat", "me", 2)])
+        self.assertEqual(flows[0]["fields"], 1)
+        self.assertEqual(flows[0]["_id"], f"mind:{logger.run}:1")
+
+    def test_lone_surrogate_does_not_lose_the_batch(self):
+        logger, db = capture_log("ear")
+        hello_log.emit("heard.asr", sum="ok 1")
+        hello_log.emit("heard.asr", sum="半个表情\ud83d", body={"input": "x\ud83dy", "\udc00name": "v"})
+        hello_log.emit("heard.asr", sum="ok 2")
+        self.assertTrue(logger.flush())
+        flows = db.flows(MONTH)
+        self.assertEqual([f["sum"] for f in flows], ["ok 1", "半个表情?", "ok 2"])
+        self.assertEqual(db.bodies(MONTH)[flows[1]["body"]["input"]], "x?y")
+        self.assertIn("?name", flows[1]["body"])
+        self.assertEqual(len(spool_lines(logger.spool_dir, "ear")), 3)
+        self.assertEqual(logger.stats()["dropped"], 0)
+
+    def test_record_mongo_refuses_is_rejected_not_blocking(self):
+        class InvalidDocument(Exception):
+            pass
+
+        logger, db = capture_log("mind")
+        db.poison[f"mind:{logger.run}:1"] = InvalidDocument("cannot encode object")
+        hello_log.emit("call.chat", sum="bad")
+        hello_log.emit("call.chat", sum="good")
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["good"])
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (1, 1, 0))
+        hello_log.emit("call.chat", sum="later")
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["good", "later"])
+
+    def test_server_refused_document_counts_as_rejected(self):
+        from log_fixtures import FakeBulkWriteError
+
+        logger, db = capture_log("mind")
+        db.poison[f"mind:{logger.run}:1"] = FakeBulkWriteError(
+            {"writeErrors": [{"index": 0, "code": 2, "errmsg": "document too large"}], "writeConcernErrors": []})
+        hello_log.emit("call.chat", sum="refused")
+        self.assertTrue(logger.flush())
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (1, 0, 0))
+
+    def test_record_that_always_times_out_is_rejected_after_retries(self):
+        logger, db = capture_log("mind")
+        db.poison[f"mind:{logger.run}:1"] = TimeoutError("socket timed out")
+        hello_log.emit("call.chat", sum="huge")
+        hello_log.emit("call.chat", sum="normal")
+        results = [logger.flush() for _ in range(5)]
+        self.assertEqual(results[:3], [False, False, False])     # looks like the network: wait and retry
+        self.assertTrue(results[3])
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["normal"])
+        self.assertEqual(logger.stats()["rejected"], 1)
+
+    def test_db_down_keeps_every_line(self):
+        logger, db = capture_log("mind")
+        db.fail = ConnectionError("mongo down")
+        for i in range(3):
+            hello_log.emit("call.chat", sum=str(i))
+        for _ in range(5):
+            self.assertFalse(logger.flush())
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (0, 0, 3))
+        self.assertEqual(spool_offset(logger.spool_dir, "mind"), 0)
+        db.fail = None
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["0", "1", "2"])
+
+    def test_spooling_continues_while_mongo_is_slow(self):
+        db = FakeDB()
+        db.delay_s = 1
+        logger, _ = capture_log("ear", db=db)
+        hello_log.emit("heard.asr", sum="first")
+        time.sleep(0.3)                                   # the writer is now inside slow Mongo calls
+        hello_log.emit("heard.asr", sum="second")
+        t = time.monotonic()
+        seen = False
+        while time.monotonic() - t < 1.5 and not seen:
+            seen = any(b'"second"' in line for line in spool_lines(logger.spool_dir, "ear"))
+            time.sleep(0.05)
+        self.assertTrue(seen, "second record did not reach the spool while Mongo was busy")
+        self.assertLess(time.monotonic() - t, 1.3)
+        self.assertEqual(db.flows(), [])                  # nothing shipped yet: spooled first
+
     def test_emit_without_init_is_noop(self):
         hello_log._current = None
         self.assertIsNone(hello_log.emit("call.eye", sum="x"))
@@ -324,23 +434,54 @@ class HelloLogTest(unittest.TestCase):
         self.assertEqual(logger.stats()["spool_errors"], 1)
         self.assertEqual(logger.stats()["backlog_lines"], 0)
 
-    def test_old_shipped_spool_pruned(self):
+    def _shipped_file(self, spool, day, shipped_ms):
+        path = spool / f"mind-{day}.jsonl"
+        path.write_text('{"flow": {}}\n')
+        marker = spool / f"mind-{day}.offset"
+        marker.write_text(str(path.stat().st_size))
+        os.utime(marker, (shipped_ms / 1000, shipped_ms / 1000))
+        return path
+
+    def test_spool_kept_7_days_after_fully_shipped(self):
         spool = temp_dir()
-        old = spool / "mind-20261101.jsonl"
-        old.write_text('{"flow": {}}\n')
-        (spool / "mind-20261101.offset").write_text(str(old.stat().st_size))
-        unshipped = spool / "mind-20261102.jsonl"         # old but never shipped: replayed, not deleted
-        line = {"flow": {"_id": "mind:0000abcd:1", "at": T0 - 8 * 86400000, "svc": "mind", "kind": "svc.beat"},
+        old = self._shipped_file(spool, "20261101", T0 - 8 * 86400000)       # shipped 8 days ago
+        late = self._shipped_file(spool, "20261102", T0 - 1 * 86400000)      # 8 days old, shipped yesterday
+        replayed = spool / "mind-20261103.jsonl"
+        line = {"flow": {"_id": "mind:0000abcd:1", "at": T0 - 7 * 86400000, "svc": "mind", "kind": "svc.beat"},
                 "bodies": {}}
-        unshipped.write_text(json.dumps(line) + "\n")
-        recent = spool / "mind-20261105.jsonl"
-        recent.write_text("")
-        logger, db = capture_log("mind", spool_dir=spool)
+        replayed.write_text(json.dumps(line) + "\n")                     # never shipped: replayed now
+        now = [T0]
+        logger, db = capture_log("mind", spool_dir=spool, clock_ms=lambda: now[0])
         self.assertTrue(logger.flush())
         self.assertFalse(old.exists())
         self.assertFalse((spool / "mind-20261101.offset").exists())
-        self.assertTrue(recent.exists())
+        self.assertTrue(late.exists())
+        self.assertTrue(replayed.exists())
         self.assertEqual([f["_id"] for f in db.flows()], ["mind:0000abcd:1"])
+        now[0] = T0 + 6 * 86400000                       # 6 days after the replay: still kept
+        self.assertTrue(logger.flush())
+        self.assertTrue(replayed.exists())
+        self.assertFalse(late.exists())                  # 7 days after it was shipped
+        now[0] = T0 + 7 * 86400000 + 1000
+        self.assertTrue(logger.flush())
+        self.assertFalse(replayed.exists())
+
+    def test_old_unshipped_spool_kept_while_db_down(self):
+        spool = temp_dir()
+        old = spool / "mind-20261101.jsonl"
+        line = {"flow": {"_id": "mind:0000abcd:1", "at": T0 - 9 * 86400000, "svc": "mind", "kind": "svc.beat"},
+                "bodies": {}}
+        old.write_text(json.dumps(line) + "\n")
+        os.utime(old, ((T0 - 9 * 86400000) / 1000,) * 2)
+        down = FakeDB()
+        down.fail = ConnectionError("mongo down")
+        now = [T0]
+        logger, _ = capture_log("mind", db=down, spool_dir=spool, clock_ms=lambda: now[0])
+        self.assertFalse(logger.flush())
+        now[0] = T0 + 30 * 86400000
+        self.assertFalse(logger.flush())
+        self.assertTrue(old.exists())
+        self.assertEqual(logger.stats()["backlog_lines"], 1)
 
 
 if __name__ == "__main__":
