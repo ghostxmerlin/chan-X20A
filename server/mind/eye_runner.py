@@ -94,6 +94,7 @@ def main():
             time.sleep(5)
         except Exception as e:                   # noqa: BLE001 - keep running; status shows staleness
             print(f"eye error: {type(e).__name__}: {str(e)[:200]}", flush=True)
+            runlog.error(e, "eye.loop")
             time.sleep(30)
 
 

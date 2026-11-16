@@ -429,6 +429,7 @@ class ModeRelay:
             e = task.exception()
             text = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
             log(f"mode: background task failed\n{text}", flush=True)
+            ear_log.error(e, "mode.task")
 
     async def drain(self):
         """Wait for background posts (closed events) to finish; tests and shutdown."""

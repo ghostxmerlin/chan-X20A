@@ -849,6 +849,32 @@ class HelloLogLifecycleTest(unittest.TestCase):
         gaps = hello_log_query.gaps(db, T0 - 1, now[0] + 1, beat_ms=10 ** 9)
         self.assertEqual([g for g in gaps if g["why"] == "seq_jump"], [])
 
+    def test_svc_error_one_line_and_throttled(self):
+        now = [T0]
+        logger, db = capture_log("mind", clock_ms=lambda: now[0])
+        try:
+            raise KeyError("x" * 500 + "\nsecond line")
+        except KeyError as e:
+            exc = e
+        for _ in range(5):
+            hello_log.error(exc, where="mind.loop")             # same message: one record a minute
+        hello_log.error(RuntimeError("other"), where="mind.loop")
+        now[0] += 60000
+        hello_log.error(exc, where="mind.loop")
+        self.assertTrue(logger.flush())
+        errs = [f for f in db.flows(MONTH) if f["kind"] == "svc.error"]
+        self.assertEqual(len(errs), 3)
+        e0 = errs[0]
+        self.assertEqual((e0["ok"], e0["extra"]["where"]), (False, "mind.loop"))
+        self.assertTrue(e0["err"].startswith("KeyError: 'xxx"))
+        self.assertLessEqual(len(e0["err"]), 300)
+        self.assertNotIn("\n", e0["err"])
+        self.assertNotIn("Traceback", e0["err"])
+        self.assertEqual(errs[1]["err"], "RuntimeError: other")
+        self.assertEqual(logger._err_throttled, 4)
+        hello_log._current = None
+        hello_log.error(exc, where="x")                          # before init: nothing, no raise
+
     def test_beat_thread_is_daemon_and_stops_on_close(self):
         logger, _ = capture_log("eye", lifecycle=True, install_signal=False)
         t = logger._beat_thread

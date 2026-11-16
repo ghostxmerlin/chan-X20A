@@ -108,6 +108,25 @@ class PlainTest(unittest.TestCase):
     def tearDown(self):
         stop_log()
 
+    def failed(self, exc):
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        fut = loop.create_future()
+        fut.set_exception(exc)
+        return fut
+
+    def test_task_failed_records_svc_error(self):
+        fut = self.failed(RuntimeError("boom\nsecond line"))
+        with mock.patch.object(mouth_link, "log", lambda *a, **k: None), \
+                mock.patch.object(vb, "log", lambda *a, **k: None):
+            mouth_link.ModeRelay._done(SimpleNamespace(_bg=set()), fut)
+            vb.VisionBurst._done(SimpleNamespace(), fut)
+            vb.VisionBurst._done(SimpleNamespace(), fut)               # same message within a minute: throttled
+        errs = self.flows("svc.error")
+        self.assertEqual([(r["extra"]["where"], r["ok"], r["err"]) for r in errs],
+                         [("mode.task", False, "RuntimeError: boom second line"),
+                          ("burst.task", False, "RuntimeError: boom second line")])
+
     def test_heard_asr_starts_a_trace_on_the_sentence(self):
         db = hello_db.HelloDB("mongodb://unused", client_factory=NullDB)
         ev = {"type": "speech", "phase": "end", "id": "s-3", "pos": [16000, 40000], "t": 1, "dur": 1.5,
@@ -323,6 +342,14 @@ class RealtimeLogTest(HubBase):
         self.assertEqual(b["output"], "你好呀")
         gates = self.flows("gate.realtime")
         self.assertEqual([(g["extra"]["verdict"], g["trace"]) for g in gates], [("play", r["trace"])])
+
+    async def test_task_failed_records_svc_error(self):
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_exception(KeyError("gone"))
+        with mock.patch.object(rl, "log", lambda *a, **k: None):
+            rl.RealtimeHub._done(SimpleNamespace(_bg=set()), fut)
+        errs = self.flows("svc.error")
+        self.assertEqual([(r["extra"]["where"], r["err"]) for r in errs], [("realtime.task", "KeyError: 'gone'")])
 
     async def test_gate_mute_logged(self):
         ws = await self.open_ready()

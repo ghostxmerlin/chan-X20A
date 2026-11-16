@@ -424,6 +424,7 @@ def main():
             time.sleep(5)
         except Exception as e:                   # noqa: BLE001 - keep running; /state shows the error
             print(f"mind error: {type(e).__name__}: {str(e)[:200]}", flush=True)
+            runlog.error(e, "mind.loop")
             time.sleep(30)
 
 

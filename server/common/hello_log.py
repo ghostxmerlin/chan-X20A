@@ -6,10 +6,11 @@
                    body={"system": prompt, "input": messages, "output": text})
     with hello_log.scope("call.notes", trace=hello_log.new_trace(), ref={"minute": m}):
         ...                                     # emit(None, ...) in here takes kind, trace and ref from the scope
+    hello_log.error(exc, where="mind.loop")    # svc.error from a top-level handler (≤ 1 per message a minute)
 
 Lifecycle (init(lifecycle=True), the default): svc.start {code_version, args (redacted), pid} as seq 1, a
-svc.beat every minute {counts per kind this minute, dropped, spool_errors, db_errors, backlog_lines, state
-from set_beat_state(fn)}, and svc.stop {reason: "sigterm"|"exit"} from a SIGTERM handler (main thread
+svc.beat every minute {counts per kind this minute, dropped, rejected, spool_errors, db_errors, backlog_lines,
+errors_throttled, state from set_beat_state(fn)}, and svc.stop {reason: "sigterm"|"exit"} from a SIGTERM handler (main thread
 only, chains to the previous handler; install_signal=False leaves signals to the caller, who calls
 get().on_stop("sigterm")) or atexit, followed by flush(3).
 
@@ -64,6 +65,9 @@ RESERVED = ("_id", "svc", "run", "seq")
 BEAT_MS = 60000                      # svc.beat period on the logger's clock
 COUNT_KINDS_MAX = 256                # distinct kinds counted per beat; the rest add up under "other"
 STOP_FLUSH_S = 3
+ERROR_TEXT_MAX = 300                 # svc.error err: "Type: message", one line, at most this many characters
+ERROR_EVERY_MS = 60000               # at most one svc.error per distinct (where, err) per this long
+ERROR_KEYS_MAX = 256                 # distinct (where, err) remembered for the throttle
 
 log = logging.getLogger("hello_log")
 _current = None
@@ -341,6 +345,8 @@ class Logger:
         self._beat_stop = threading.Event()
         self._next_beat = self._clock() + BEAT_MS
         self._stopped = False                       # svc.stop recorded
+        self._err_last = OrderedDict()              # (where, err) -> logger-clock ms of its last svc.error
+        self._err_throttled = 0                     # svc.error calls swallowed by the throttle
         self._lifecycle = lifecycle
         self._thread = threading.Thread(target=self._run, name=f"hello-log-{svc}", daemon=True)
         self._thread.start()
@@ -400,6 +406,34 @@ class Logger:
                     self._dropped += 1
             except Exception:
                 pass
+
+    def error(self, exc, *, where=None, **fields):
+        """svc.error {ok: False, err: "Type: message" (one line, ≤ 300 chars, no traceback), extra.where}
+        for an unhandled exception (or a message string); at most one per distinct (where, err) a minute,
+        the rest counted (svc.beat extra.errors_throttled). Never raises."""
+        try:
+            if isinstance(exc, BaseException):
+                text = f"{type(exc).__name__}: {exc}"
+            else:
+                text = str(exc)
+            err = " ".join(text.split())[:ERROR_TEXT_MAX]
+            now = self._clock()
+            key = (str(where), err)
+            with self._lock:
+                last = self._err_last.get(key)
+                if last is not None and 0 <= now - last < ERROR_EVERY_MS:
+                    self._err_throttled += 1
+                    return
+                self._err_last[key] = now
+                self._err_last.move_to_end(key)
+                while len(self._err_last) > ERROR_KEYS_MAX:
+                    self._err_last.popitem(last=False)
+            extra = dict(fields.pop("extra", None) or {})
+            if where is not None:
+                extra["where"] = where
+            self.emit("svc.error", ok=False, err=err, extra=extra or None, **fields)
+        except Exception:
+            pass
 
     def stats(self):
         """Cumulative counts since init (queued = accepted by emit), plus lines still waiting in the spool."""
@@ -466,6 +500,7 @@ class Logger:
                 extra = {"counts": None, "state": state}          # counts filled in atomically by _put
                 for k in ("dropped", "rejected", "spool_errors", "db_errors", "backlog_lines"):
                     extra[k] = st[k]
+                extra["errors_throttled"] = self._err_throttled
                 self._put("svc.beat", {"extra": extra})
                 return True
         except Exception:
@@ -1039,3 +1074,11 @@ def emit(kind, /, **fields):
     lg = _current
     if lg is not None:
         lg.emit(kind, **fields)
+
+
+def error(exc, *, where=None, **fields):
+    """svc.error for an unhandled exception on this process's logger (see Logger.error); throttled to one
+    per distinct message per minute; does nothing before init(). Never raises, never blocks."""
+    lg = _current
+    if lg is not None:
+        lg.error(exc, where=where, **fields)

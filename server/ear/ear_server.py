@@ -335,6 +335,7 @@ class Ear:
             self.tasks.discard(future)
             if not future.cancelled() and future.exception():
                 self.post({"type":"error", "error":"inference failed"})
+                ear_log.error(future.exception(), "ear.inference")
         task.add_done_callback(done)
 
     def segment_context(self, cur, start, end):

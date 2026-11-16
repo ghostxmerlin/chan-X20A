@@ -8,6 +8,7 @@ hello_log cannot be imported at all, `hello_log` here is a stand-in that records
   watch(fn)                   the heartbeat's state (switches, links)
   Stopper(loop)               SIGTERM on the ear's own loop: stop serving, clean up, then svc.stop off the loop
   emit / scope / trace()      as hello_log; trace() = the current scope's trace, else a fresh one
+  error(exc, where)           svc.error from a task-failed / top-level handler (throttled by hello_log)
   link_open / link_close      link.open / link.close of one robot link
   robot_state(part, after)    robot.state {part, before, after} only when what the robot reported changed
   cost(amount, basis, cur)    the cost envelope; tingwu_cost(audio_s), search_count(usage)
@@ -55,6 +56,10 @@ class _Off:
 
     @staticmethod
     def emit(kind, /, **fields):
+        return None
+
+    @staticmethod
+    def error(exc, *, where=None, **fields):
         return None
 
     @staticmethod
@@ -111,6 +116,15 @@ def emit(kind, /, **fields):
     try:
         hello_log.emit(kind, **fields)
     except Exception:                            # noqa: BLE001 - hello_log never raises; a stand-in might
+        pass
+
+
+def error(exc, where):
+    """svc.error for an exception a background task / handler did not handle (one line, throttled to one per
+    message a minute by hello_log). Never raises."""
+    try:
+        hello_log.error(exc, where=where)
+    except Exception:                            # noqa: BLE001
         pass
 
 

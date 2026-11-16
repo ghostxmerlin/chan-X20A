@@ -222,6 +222,7 @@ def tick(db,store,settings_store,env,now_ms,chat=None):
         return {'state':'ready','processed':processed}
     except Exception as e:
         error=type(e).__name__
+        runlog.error(e,'memory.tick')
         if active_job:
             jobs.update_one({'_id':active_job},{'$set':{'state':'error','error':error,'next_retry':now_ms+300_000}},upsert=True)
         jobs.update_one({'_id':'worker:live'},{'$set':{'state':'error','last_tick':now_ms,'last_error':error}})
@@ -259,6 +260,7 @@ def main():
                 print('memory: '+json.dumps(result,ensure_ascii=False),flush=True)
         except Exception as e:
             print('memory error: '+type(e).__name__,flush=True)
+            runlog.error(e,'memory.loop')
         try:
             # Long-term memory phase A (memory_extract.py): the daily / on-demand extraction, counts only in the log.
             x=memory_extract.tick(db,store,ss,env,int(time.time()*1000))
@@ -267,6 +269,7 @@ def main():
             last_extract=x['state']
         except Exception as e:
             print('memory extract error: '+type(e).__name__,flush=True)
+            runlog.error(e,'memory.extract')
         time.sleep(10)
 
 

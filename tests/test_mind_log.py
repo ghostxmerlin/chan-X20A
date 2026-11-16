@@ -440,6 +440,43 @@ class EntryTest(LogCase):
             hello_log._current = None
 
 
+    def test_runlog_error_records_svc_error_and_never_raises(self):
+        stop_log()
+        flows = capture_log("mind")
+        self.addCleanup(stop_log)
+        runlog.error(ValueError("bad\nthing"), "mind.loop")
+        runlog.error(ValueError("bad\nthing"), "mind.loop")      # throttled
+        errs = flows("svc.error")
+        self.assertEqual([(f["err"], f["extra"]["where"], f["ok"]) for f in errs], [("ValueError: bad thing", "mind.loop", False)])
+        with mock.patch.object(runlog.hello_log, "error", side_effect=RuntimeError("x")):
+            runlog.error(ValueError("y"), "mind.loop")             # never raises
+        self.assertIsNone(runlog._Off.error(ValueError("z"), where="w"))
+
+    def test_runner_loops_record_svc_error(self):
+        """Every `except Exception` directly inside a runner's `while True` loop (the top-level handler that keeps the
+        service running) calls runlog.error, and memory_worker.tick's catch-all does too."""
+        import ast
+        root = Path(__file__).resolve().parents[1] / "server" / "mind"
+        found = {}
+        for name in ("runner.py", "eye_runner.py", "notes_runner.py", "memory_worker.py"):
+            tree = ast.parse((root / name).read_text(encoding="utf-8"))
+            for loop in ast.walk(tree):
+                if not (isinstance(loop, ast.While) and isinstance(loop.test, ast.Constant) and loop.test.value is True):
+                    continue
+                for node in loop.body:
+                    if not isinstance(node, ast.Try):
+                        continue
+                    for h in node.handlers:
+                        if isinstance(h.type, ast.Name) and h.type.id == "Exception":
+                            calls = [c for c in ast.walk(h) if isinstance(c, ast.Call)
+                                     and isinstance(c.func, ast.Attribute) and c.func.attr == "error"
+                                     and isinstance(c.func.value, ast.Name) and c.func.value.id == "runlog"]
+                            found.setdefault(name, []).append(len(calls))
+        self.assertEqual(found, {"runner.py": [1], "eye_runner.py": [1], "notes_runner.py": [1],
+                                 "memory_worker.py": [1, 1]})
+        src = (root / "memory_worker.py").read_text(encoding="utf-8")
+        self.assertIn("runlog.error(e,'memory.tick')", src)
+
     def test_mind_runs_without_hello_log(self):
         """hello_log not importable at all: every mind path still works, nothing is recorded."""
         code = ("import sys, json; sys.modules['hello_log'] = None; sys.path.insert(0, sys.argv[1]);"

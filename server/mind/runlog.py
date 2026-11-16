@@ -7,6 +7,7 @@ service from starting.
 
   start(svc, hub, args)      hello_log.init once per process (mind / eye / notes / memory); never raises
   watch(db, store)           the heartbeat's state: the switches table + the mind switch (store.enabled())
+  error(exc, where)          svc.error from a top-level exception handler (throttled: 1 per message a minute)
   trace()                    the current scope's trace, else a fresh one (a scope never drops an outer trace)
   current_trace()            the current scope's trace, else None (what mind sends soul-tts as /v1/say's trace)
   switch(name, before, after, by)   with-block around one switch write -> one switch.set {name, before, after}
@@ -48,6 +49,10 @@ class _Off:
 
     @staticmethod
     def emit(kind, /, **fields):
+        return None
+
+    @staticmethod
+    def error(exc, *, where=None, **fields):
         return None
 
     @staticmethod
@@ -116,6 +121,15 @@ def watch(db, store=None):
         lg = hello_log.get()
         if lg is not None:
             lg.set_beat_state(lambda: beat_state(db, store))
+    except Exception:                            # noqa: BLE001
+        pass
+
+
+def error(exc, where):
+    """svc.error from a runner's top-level exception handler: one line (type + message, ≤ 300 chars), at most one
+    per distinct message a minute (hello_log throttles). Never raises."""
+    try:
+        hello_log.error(exc, where=where)
     except Exception:                            # noqa: BLE001
         pass
 

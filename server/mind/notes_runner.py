@@ -167,6 +167,7 @@ def main():
             time.sleep(5)
         except Exception as e:                   # noqa: BLE001 - keep running; status shows staleness
             print(f"notes error: {type(e).__name__}: {str(e)[:200]}", flush=True)
+            runlog.error(e, "notes.loop")
             time.sleep(30)
 
 

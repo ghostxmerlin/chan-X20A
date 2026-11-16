@@ -1792,6 +1792,7 @@ class RealtimeHub:
             e = task.exception()
             log("realtime: task failed\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip(),
                 flush=True)
+            ear_log.error(e, "realtime.task")
 
     async def shutdown(self):
         self.close("shutdown")

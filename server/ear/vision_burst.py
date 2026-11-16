@@ -474,6 +474,7 @@ class VisionBurst:
             e = task.exception()
             log("vision burst: task failed\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip(),
                 flush=True)
+            ear_log.error(e, "burst.task")
 
     async def shutdown(self):
         task = self._task
