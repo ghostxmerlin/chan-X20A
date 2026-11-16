@@ -106,11 +106,13 @@ def dashscope_look(key, base_url=LOOK_BASE_URL, model=LOOK_MODEL, timeout=LOOK_T
         ear_log.emit("call.look", ok=err is None, err=err, ms=ms, model=model, key=key, usage=usage or None,
                      cost=ear_log.cost(cost_usd(usage) if usage else None, PRICE_BASIS, "USD"),
                      sum=(text or "")[:60] or None,
-                     body={"system": LOOK_SYSTEM, "input": messages[1:], "output": text})
+                     body={"system": LOOK_SYSTEM, "input": messages[1:], "output": text, "params": params})
         return out
 
+    params = {"model": model, "temperature": 0, "max_tokens": MAX_TOKENS, **LOOK_EXTRA}   # sent and logged as one
+
     def _recognise(messages):
-        body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": MAX_TOKENS, **LOOK_EXTRA}
+        body = {**params, "messages": messages}
         req = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", method="POST",
                                      data=json.dumps(body).encode(),
                                      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})

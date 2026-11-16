@@ -248,6 +248,8 @@ class PlainTest(unittest.TestCase):
         self.assertNotIn("base64,", dump)                             # ... the log did not
         self.assertIn("[image omitted", b["input"])
         self.assertNotIn("LOOKKEY", dump)
+        # params = exactly what went out besides the messages
+        self.assertEqual(json.loads(b["params"]), {k: v for k, v in seen[0].items() if k != "messages"})
 
     def test_failed_look_is_logged_with_its_error(self):
         def fake(req, timeout=None):
@@ -361,8 +363,28 @@ class RealtimeLogTest(HubBase):
         b = bodies(self.flows, r)
         self.assertIn("你好呀，你在干嘛", b["input"])                   # the ear's own words
         self.assertEqual(b["output"], "你好呀")
+        # the system input in effect for this turn (persona + 情景 / 纪要 context), the same text as the session's
+        # instructions; the body table stores it once, so carrying it on every turn costs no space
+        session = self.flows("call.realtime.session")[-1]
+        self.assertTrue(b["system"])
+        self.assertEqual(b["system"], bodies(self.flows, session)["system"])
+        self.assertEqual(r["body"]["system"], session["body"]["system"])        # one body row, shared
         gates = self.flows("gate.realtime")
         self.assertEqual([(g["extra"]["verdict"], g["trace"]) for g in gates], [("play", r["trace"])])
+
+    async def test_turn_system_follows_instruction_updates(self):
+        ws = await self.open_ready()
+        self.heard("你好呀，你在干嘛")
+        await self.play_one(ws, "r1")
+        first = bodies(self.flows, self.flows("call.realtime.turn")[-1])["system"]
+        self.hub._instructions = lambda: "新的说明：情景 X，纪要 Y"          # e.g. a fresh mind context block
+        self.hub._send_instructions("test")
+        self.t[0] += 5
+        self.heard("现在呢")
+        await self.play_one(ws, "r2")
+        second = bodies(self.flows, self.flows("call.realtime.turn")[-1])["system"]
+        self.assertNotEqual(first, second)
+        self.assertEqual(second, "新的说明：情景 X，纪要 Y")
 
     async def test_task_failed_records_svc_error(self):
         fut = asyncio.get_running_loop().create_future()

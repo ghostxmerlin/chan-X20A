@@ -687,6 +687,7 @@ class RealtimeHub:
         self._stream = None                            # our robot stream: dict, see _start_stream
         self._dropped = set()                          # response ids whose audio must not play (yielded / failed)
         self._resp = None                              # the response being generated (id)
+        self._live_instr = None                        # the instructions last sent (run log: each turn's system input)
         self._turn = None                              # the turn the next response.created belongs to
         self._turns = {}                               # response id -> turn
         self._speech_end = None
@@ -1013,6 +1014,7 @@ class RealtimeHub:
             instr = self._instructions()
             await ws.send(json.dumps({"type": "session.update", "session": session_config(
                 self.voice, instr, self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search)}))
+            self._live_instr = instr
             ear_log.emit("call.realtime.session", ok=True, model=self.cfg.model, key=self.key, sum=f"围观会话打开 {why}",
                          body={"system": instr}, ref={"session": n},
                          extra={"state": "open", "why": why, "search": bool(self.cfg.search),
@@ -1233,6 +1235,7 @@ class RealtimeHub:
         except Exception as e:                      # noqa: BLE001 - the session.update below must still go out
             _log_failed("context", e)
         self._send_soon({"type": "session.update", "session": {"instructions": instr}})
+        self._live_instr = instr
 
     def _send_soon(self, obj):
         ws = self._ws
@@ -1321,7 +1324,7 @@ class RealtimeHub:
             turn.update({"rid": rid, "session": n, "response_at": now, "first_delta": None, "sound_at": None,
                          "reply_chars": 0, "audio_ms": 0, "usage": None, "at": self.wall_ms(),
                          "gate": None if turn.get("kind") in ("speech", "rescue", "look_answer") else "play",
-                         "held": [], "tx": ""})
+                         "held": [], "tx": "", "system": self._live_instr})
             if turn.get("kind") == "rescue":
                 turn["heard"] = self._rescue_heard
             elif turn.get("kind") == "look_answer":
@@ -1795,7 +1798,7 @@ class RealtimeHub:
                      key=self.key, ok=state not in FAILED_STATES, err=state if state in FAILED_STATES else None,
                      ms=doc["timings"].get("response_to_first_audio_ms"), usage=turn.get("usage"),
                      cost=ear_log.cost(doc["cost_cny"], PRICE_BASIS), sum=(reply or f"[{state}]")[:60],
-                     body={"input": inp or None, "output": reply or None},
+                     body={"system": turn.get("system") or None, "input": inp or None, "output": reply or None},
                      ref={"tid": doc["tid"], "session": turn.get("session"), "rid": turn.get("rid")},
                      extra={"kind": turn.get("kind"), "state": state, "heard": heard, "timings": doc["timings"],
                             "audio_ms": turn.get("audio_ms"), "heard_chars": turn.get("heard_chars"),

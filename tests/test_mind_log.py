@@ -104,6 +104,25 @@ class LlmChatTest(LogCase):
         self.assertNotIn("QUJDQUJD", inp)                  # no base64 in the stored body
         self.assertNotIn(KEY, json.dumps(self.flows.db.bodies(hello_log.month_of(r["at"])), ensure_ascii=False))
 
+    def test_llm_chat_logs_params_beside_messages(self):
+        # the JSON schema (its field descriptions are instructions too), tools / tool_choice and the sampling
+        # parameters are part of what the model got: kept as the "params" body, messages not repeated there
+        schema = {"type": "object", "properties": {"who": {"type": "string", "description": "画面里的人是谁"}}}
+        body = {"model": "gpt-6-luna", "messages": self.messages(), "temperature": 0, "max_tokens": 1200,
+                "reasoning_effort": "low",
+                "response_format": {"type": "json_schema", "json_schema": {"name": "eye", "strict": True, "schema": schema}},
+                "tools": [{"type": "function", "function": {"name": "eye", "parameters": schema}}],
+                "tool_choice": {"type": "function", "function": {"name": "eye"}}}
+        with urlopen_returning(reply()):
+            with hello_log.scope("call.eye"):
+                llm.chat(ENV["base_url"], KEY, body)
+        r = self.one("call.eye")
+        params = json.loads(self.body(r, "params"))
+        self.assertEqual(params, {k: v for k, v in body.items() if k != "messages"})
+        self.assertIn("画面里的人是谁", self.body(r, "params"))
+        self.assertNotIn("主人在桌前", self.body(r, "params"))      # the messages live in system / input only
+        self.assertNotIn(KEY, self.body(r, "params"))
+
     def test_llm_chat_logs_error(self):
         def boom(req, timeout=None):
             raise urllib.error.HTTPError(req.full_url, 500, "boom", {}, io.BytesIO(b"upstream broke"))

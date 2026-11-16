@@ -69,6 +69,9 @@ def _record(key, body, resp, ms, err):
                        cost={"amount": cost_usd(model, usage), "cur": "USD", "est": True, "basis": PRICE_BASIS},
                        key=hello_log.key_fp(key), sum=_text(user.get("content"))[-60:] if user else None,
                        body={"system": [m.get("content") for m in messages if is_system(m)],
-                             "input": [m for m in messages if not is_system(m)], "output": output})
+                             "input": [m for m in messages if not is_system(m)], "output": output,
+                             # everything else that was sent: response_format (JSON schema with its field
+                             # descriptions), tools / tool_choice, temperature, max_tokens, reasoning_effort ...
+                             "params": {k: v for k, v in body.items() if k != "messages"} or None})
     except Exception:                            # noqa: BLE001 - logging never touches the call
         pass
