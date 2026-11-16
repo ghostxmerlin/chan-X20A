@@ -3,7 +3,9 @@ replay. No Mongo, no network: every test runs on log_fixtures.FakeDB."""
 import hashlib
 import json
 import os
+import signal
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -598,6 +600,212 @@ class HelloLogTest(unittest.TestCase):
         self.assertTrue(old.exists())
         self.assertEqual(logger.stats()["backlog_lines"], 1)
 
+
+class HelloLogLifecycleTest(unittest.TestCase):
+    """Task 2: trace scopes, heartbeat, svc.start / svc.stop."""
+
+    def tearDown(self):
+        if hello_log._current is not None:
+            hello_log._current.close(timeout_s=0)
+            hello_log._current = None
+
+    def keep_sigterm(self):
+        prev = signal.getsignal(signal.SIGTERM)
+        self.addCleanup(signal.signal, signal.SIGTERM, prev)
+
+    def test_new_trace(self):
+        a, b = hello_log.new_trace(), hello_log.new_trace()
+        self.assertRegex(a, r"^[0-9a-f]{12}$")
+        self.assertNotEqual(a, b)
+
+    def test_scope_fills_trace_and_kind(self):
+        logger, db = capture_log("notes")
+        with hello_log.scope("call.notes", trace="t1", ref={"minute": 5}):
+            hello_log.emit(None, sum="a")
+            hello_log.emit("call.eye", trace="t2", ref={"minute": 6}, sum="b")      # explicit fields win
+            hello_log.emit(None, trace=None, sum="c")                              # None = not given
+        hello_log.emit(None, sum="d")
+        self.assertTrue(logger.flush())
+        a, b, c, d = db.flows(MONTH)
+        self.assertEqual((a["kind"], a["trace"], a["ref"], a["sum"]), ("call.notes", "t1", {"minute": 5}, "a"))
+        self.assertEqual((b["kind"], b["trace"], b["ref"], b["sum"]), ("call.eye", "t2", {"minute": 6}, "b"))
+        self.assertEqual((c["kind"], c["trace"]), ("call.notes", "t1"))
+        self.assertEqual(d["kind"], "event")
+        self.assertNotIn("trace", d)
+        self.assertNotIn("ref", d)
+
+    def test_scope_nested_and_thread_isolated(self):
+        logger, db = capture_log("mind")
+        self.assertEqual(hello_log.current(), {})
+        with hello_log.scope("call.say", trace="t1", by="asr", ref={"a": 1}):
+            with hello_log.scope("call.say.speak", ref={"b": 2}):
+                self.assertEqual(hello_log.current(),
+                                 {"kind": "call.say.speak", "trace": "t1", "by": "asr", "ref": {"b": 2}})
+                seen = []
+
+                def other():
+                    seen.append(hello_log.current())
+                    hello_log.emit(None, sum="other thread")
+                t = threading.Thread(target=other)
+                t.start()
+                t.join()
+                self.assertEqual(seen, [{}])
+                hello_log.emit(None, sum="inner")
+            self.assertEqual(hello_log.current(), {"kind": "call.say", "trace": "t1", "by": "asr", "ref": {"a": 1}})
+            hello_log.emit(None, sum="outer")
+        self.assertEqual(hello_log.current(), {})
+        self.assertTrue(logger.flush())
+        by_sum = {f["sum"]: f for f in db.flows(MONTH)}
+        self.assertEqual(by_sum["other thread"]["kind"], "event")
+        self.assertNotIn("trace", by_sum["other thread"])
+        inner, outer = by_sum["inner"], by_sum["outer"]
+        self.assertEqual((inner["kind"], inner["trace"], inner["by"], inner["ref"]),
+                         ("call.say.speak", "t1", "asr", {"b": 2}))
+        self.assertEqual((outer["kind"], outer["trace"], outer["ref"]), ("call.say", "t1", {"a": 1}))
+
+    def test_beat_counts_and_state(self):
+        now = [T0]
+        logger, db = capture_log("eye", clock_ms=lambda: now[0], lifecycle=True, install_signal=False)
+        logger.set_beat_state(lambda: {"eye": True, "mind": False})
+        hello_log.emit("call.eye", sum="1")
+        hello_log.emit("call.eye", sum="2")
+        hello_log.emit("heard.asr", sum="3")
+        self.assertFalse(logger._beat_once())                       # not a minute yet
+        now[0] += 60000
+        logger._beat_once()
+        self.assertTrue(logger.flush())
+        beats = [f for f in db.flows(MONTH) if f["kind"] == "svc.beat"]
+        self.assertEqual(len(beats), 1)
+        extra = beats[0]["extra"]
+        self.assertEqual(extra["counts"]["call.eye"], 2)
+        self.assertEqual(extra["counts"]["heard.asr"], 1)
+        self.assertEqual(extra["state"], {"eye": True, "mind": False})
+        for k in ("dropped", "spool_errors", "db_errors", "backlog_lines"):
+            self.assertEqual(extra[k], 0, k)
+        # counts are per minute and the beat does not count itself; a failing state fn still beats
+        hello_log.emit("call.eye", sum="4")
+        logger.set_beat_state(lambda: 1 / 0)
+        now[0] += 60000
+        logger._beat_once()
+        self.assertTrue(logger.flush())
+        beats = [f for f in db.flows(MONTH) if f["kind"] == "svc.beat"]
+        self.assertEqual(len(beats), 2)
+        self.assertEqual(beats[1]["extra"]["counts"], {"call.eye": 1})
+        self.assertIn("ZeroDivisionError", beats[1]["extra"]["state"]["error"])
+
+    def test_beat_thread_is_daemon_and_stops_on_close(self):
+        logger, _ = capture_log("eye", lifecycle=True, install_signal=False)
+        t = logger._beat_thread
+        self.assertTrue(t.daemon)
+        self.assertTrue(t.is_alive())
+        logger.close()
+        t.join(2)
+        self.assertFalse(t.is_alive())
+
+    def test_start_record(self):
+        logger, db = capture_log("mind", lifecycle=True, install_signal=False, code_version="v-abc123",
+                                 args={"token": "s3cr3t", "port": 8080, "mongo": "mongodb://u:pw@h/x"})
+        self.assertTrue(logger.flush())
+        first = db.flows(MONTH)[0]
+        self.assertEqual((first["kind"], first["seq"]), ("svc.start", 1))
+        extra = first["extra"]
+        self.assertEqual(extra["code_version"], "v-abc123")
+        self.assertEqual(extra["pid"], os.getpid())
+        self.assertEqual(extra["args"]["token"], "***")
+        self.assertEqual(extra["args"]["port"], 8080)
+        self.assertNotIn("pw", json.dumps(extra["args"]))
+
+    def test_stop_on_sigterm(self):
+        logger, db = capture_log("tts", lifecycle=True, install_signal=False)
+        hello_log.emit("call.tts", sum="x")
+        logger._on_stop("sigterm")
+        logger.on_stop("exit")                                       # only the first stop is recorded
+        hello_log._atexit()
+        self.assertTrue(logger.flush())
+        flows = db.flows(MONTH)
+        self.assertEqual(flows[-1]["kind"], "svc.stop")
+        self.assertEqual(flows[-1]["extra"], {"reason": "sigterm"})
+        self.assertEqual([f["kind"] for f in flows].count("svc.stop"), 1)
+
+    def test_atexit_records_exit(self):
+        hello_log._atexit()                                          # no logger: nothing happens
+        logger, db = capture_log("notes", lifecycle=True, install_signal=False)
+        hello_log._atexit()
+        self.assertTrue(logger.flush())
+        self.assertEqual(db.flows(MONTH)[-1]["extra"], {"reason": "exit"})
+
+    def test_sigterm_handler_chains(self):
+        self.keep_sigterm()
+        called = []
+        signal.signal(signal.SIGTERM, lambda signum, frame: called.append(signum))
+        logger, db = capture_log("eye", lifecycle=True)
+        handler = signal.getsignal(signal.SIGTERM)
+        self.assertIs(handler, hello_log._on_sigterm)
+        handler(signal.SIGTERM, None)
+        self.assertEqual(called, [signal.SIGTERM])
+        self.assertTrue(logger.flush())
+        self.assertEqual(db.flows(MONTH)[-1]["extra"], {"reason": "sigterm"})
+        # a second init does not chain to itself
+        logger, db = capture_log("eye", lifecycle=True)
+        hello_log._on_sigterm(signal.SIGTERM, None)
+        self.assertEqual(called, [signal.SIGTERM, signal.SIGTERM])
+
+    def test_sigterm_default_exits_ignore_keeps_ignoring(self):
+        self.keep_sigterm()
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        logger, db = capture_log("eye", lifecycle=True)
+        with self.assertRaises(SystemExit) as cm:
+            hello_log._on_sigterm(signal.SIGTERM, None)
+        self.assertEqual(cm.exception.code, 0)
+        self.assertTrue(logger.flush())
+        self.assertEqual(db.flows(MONTH)[-1]["kind"], "svc.stop")
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        logger, db = capture_log("eye", lifecycle=True)
+        self.assertIsNone(hello_log._on_sigterm(signal.SIGTERM, None))
+        self.assertTrue(logger.flush())
+        self.assertEqual(db.flows(MONTH)[-1]["extra"], {"reason": "sigterm"})
+
+    def test_install_signal_off_or_off_main_thread(self):
+        self.keep_sigterm()
+        mine = lambda signum, frame: None                            # noqa: E731
+        signal.signal(signal.SIGTERM, mine)
+        capture_log("eye", lifecycle=True, install_signal=False)
+        self.assertIs(signal.getsignal(signal.SIGTERM), mine)
+        errors = []
+
+        def start():
+            try:
+                capture_log("eye", lifecycle=True)
+            except Exception as e:                                   # pragma: no cover
+                errors.append(e)
+        t = threading.Thread(target=start)
+        t.start()
+        t.join()
+        self.assertEqual(errors, [])
+        self.assertIs(signal.getsignal(signal.SIGTERM), mine)
+
+
+    def test_real_sigterm_records_stop_and_exits_0(self):
+        """A real process under SIG_DFL: SIGTERM leaves svc.stop in the spool and exits with status 0."""
+        import subprocess
+        spool = temp_dir()
+        code = ("import os, signal, sys, time; sys.path.insert(0, sys.argv[1]); import hello_log; "
+                "hello_log.init('eye', spool_dir=sys.argv[2], code_version='v1'); "
+                "print('ready', flush=True); time.sleep(30)")
+        common = str(Path(__file__).resolve().parents[1] / "server" / "common")
+        p = subprocess.Popen([sys.executable, "-B", "-c", code, common, str(spool)], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(p.stdout.readline().strip(), "ready")
+            p.send_signal(signal.SIGTERM)
+            self.assertEqual(p.wait(15), 0)
+        finally:
+            if p.poll() is None:
+                p.kill()
+            p.stdout.close()
+        kinds = [json.loads(line)["flow"]["kind"] for f in sorted(spool.glob("eye-*.jsonl"))
+                 for line in f.read_text().splitlines()]
+        self.assertEqual(kinds[0], "svc.start")
+        self.assertEqual(kinds.count("svc.stop"), 1)
 
 if __name__ == "__main__":
     unittest.main()

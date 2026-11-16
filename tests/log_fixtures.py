@@ -155,7 +155,9 @@ def temp_dir():
 
 def capture_log(svc="test", *, db=None, spool_dir=None, clock_ms=None, **kw):
     """hello_log.init() on a FakeDB (or the given db) with a temporary spool folder.
-    Returns (logger, db). The logger becomes the module-level one, so hello_log.emit() lands in db."""
+    Returns (logger, db). The logger becomes the module-level one, so hello_log.emit() lands in db.
+    A bare writer unless lifecycle=True is passed (no svc.start / beat / stop hooks)."""
+    kw.setdefault("lifecycle", False)
     db = FakeDB() if db is None else db
     spool = spool_dir if spool_dir is not None else temp_dir()
     logger = hello_log.init(svc, db=db, spool_dir=spool, clock_ms=clock_ms or (lambda: T0), **kw)

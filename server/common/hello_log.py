@@ -4,6 +4,14 @@
     hello_log.init("mind", db_uri=MONGO_URI, spool_dir="~/soul-spike/log-spool")   # once per process
     hello_log.emit("call.eye", trace=t, ok=True, ms=812, model="...", sum="一行摘要",
                    body={"system": prompt, "input": messages, "output": text})
+    with hello_log.scope("call.notes", trace=hello_log.new_trace(), ref={"minute": m}):
+        ...                                     # emit(None, ...) in here takes kind, trace and ref from the scope
+
+Lifecycle (init(lifecycle=True), the default): svc.start {code_version, args (redacted), pid} as seq 1, a
+svc.beat every minute {counts per kind this minute, dropped, spool_errors, db_errors, backlog_lines, state
+from set_beat_state(fn)}, and svc.stop {reason: "sigterm"|"exit"} from a SIGTERM handler (main thread
+only, chains to the previous handler; install_signal=False leaves signals to the caller, who calls
+get().on_stop("sigterm")) or atexit, followed by flush(3).
 
 Two layers in the Mongo database "hello", one pair of tables per Beijing month:
   log_YYYYMM      flow: one small record per event. _id "{svc}:{run}:{seq}", at (ms), svc, run, seq,
@@ -21,6 +29,9 @@ skipped, so it cannot block the spool. If the spool folder is unwritable records
 Mongo. A spool file is deleted 7 days after it was fully shipped. stdlib only; pymongo is imported
 when a real connection (or its UpdateOne) is first needed.
 """
+import atexit
+import contextlib
+import contextvars
 import functools
 import hashlib
 import itertools
@@ -30,6 +41,8 @@ import os
 import queue
 import re
 import secrets
+import signal
+import sys
 import threading
 import time
 from collections import OrderedDict
@@ -47,9 +60,15 @@ SPOOL_KEEP_DAYS = 7
 SHIP_TRIES = 3                       # failures of one chunk / one record before it is split / rejected
 REFUSE_ALL = 5                       # first records of a split pass failing alike = the DB refuses everything
 RESERVED = ("_id", "svc", "run", "seq")
+BEAT_MS = 60000                      # svc.beat period on the logger's clock
+COUNT_KINDS_MAX = 256                # distinct kinds counted per beat; the rest add up under "other"
+STOP_FLUSH_S = 3
 
 log = logging.getLogger("hello_log")
 _current = None
+_scope = contextvars.ContextVar("hello_log_scope", default=None)    # dict of fields, or None
+_sigterm_prev = None                 # the SIGTERM handler ours replaced (chained to)
+_atexit_hooked = False
 _EPOCH_BJ = datetime(1970, 1, 1) + timedelta(hours=8)        # naive Beijing wall clock at epoch (no DST)
 _SECRET_SEGMENTS = {"key", "apikey", "token", "secret", "password", "passwd", "pwd", "authorization", "auth",
                     "uri", "dsn", "cookie", "credential", "credentials"}
@@ -268,7 +287,8 @@ def _upsert_op(digest, text):
 class Logger:
     """One per process (see init()). Counters in stats(); everything else happens on the writer thread."""
 
-    def __init__(self, svc, *, db=None, db_uri=None, spool_dir, code_version="", args=None, clock_ms=None):
+    def __init__(self, svc, *, db=None, db_uri=None, spool_dir, code_version="", args=None, clock_ms=None,
+                 lifecycle=True):
         self.svc = svc
         self.run = secrets.token_hex(4)
         self.code_version = code_version
@@ -294,12 +314,39 @@ class Logger:
         self._stop = False
         self._prune_day = None
         self._name_re = re.compile(_SPOOL_NAME.format(re.escape(svc)))
+        self._counts = {}                           # kind -> records emitted since the last beat
+        self._beat_state = None
+        self._beat_lock = threading.Lock()
+        self._beat_stop = threading.Event()
+        self._next_beat = self._clock() + BEAT_MS
+        self._stopped = False                       # svc.stop recorded
+        self._lifecycle = lifecycle
         self._thread = threading.Thread(target=self._run, name=f"hello-log-{svc}", daemon=True)
         self._thread.start()
+        self._beat_thread = None
+        if lifecycle:
+            self._put("svc.start", {"extra": {"code_version": code_version, "args": redact(self._args_dict()),
+                                              "pid": os.getpid()}})
+            self._beat_thread = threading.Thread(target=self._beat_loop, name=f"hello-log-beat-{svc}", daemon=True)
+            self._beat_thread.start()
 
     # ---- caller side
 
     def emit(self, kind, /, **fields):
+        """Fields left out (or None) are taken from the current scope(); kind None = the scope's, else "event"."""
+        try:
+            sc = _scope.get()
+            if sc:
+                for k, v in sc.items():
+                    if k == "kind":
+                        kind = v if kind is None else kind
+                    elif fields.get(k) is None:
+                        fields[k] = v
+        except Exception:
+            pass
+        self._put("event" if kind is None else kind, fields)
+
+    def _put(self, kind, fields):
         try:
             rec = {k: _snap(v) for k, v in fields.items() if v is not None and k not in RESERVED}
             at = rec.pop("at", None)
@@ -308,9 +355,7 @@ class Logger:
             with self._lock:
                 seq = next(self._seq)
             rec.update({"_id": f"{self.svc}:{self.run}:{seq}", "at": int(at), "svc": self.svc, "run": self.run,
-                        "seq": seq})
-            if kind is not None:
-                rec["kind"] = kind
+                        "seq": seq, "kind": kind})
             try:
                 self._q.put_nowait(rec)
             except queue.Full:
@@ -320,6 +365,9 @@ class Logger:
             with self._lock:
                 self._queued += 1
                 self._enqueued += 1
+                if kind != "svc.beat":
+                    name = kind if kind in self._counts or len(self._counts) < COUNT_KINDS_MAX else "other"
+                    self._counts[name] = self._counts.get(name, 0) + 1
         except Exception:
             try:
                 with self._lock:
@@ -352,11 +400,88 @@ class Logger:
         return self._backlog == 0 and not self._direct and self._dropped == dropped0
 
     def close(self, timeout_s=5):
-        """Stop the writer after it has spooled what is queued (waits at most timeout_s)."""
+        """Stop the writer after it has spooled what is queued (waits at most timeout_s); stops the beat."""
         self._stop = True
+        self._beat_stop.set()
         self._wake()
         if timeout_s > 0 and self._thread is not threading.current_thread():
             self._thread.join(timeout_s)
+
+    # ---- lifecycle: heartbeat and stop
+
+    def set_beat_state(self, fn):
+        """fn() -> dict of the switches' current state, called on the beat thread for every svc.beat."""
+        self._beat_state = fn
+
+    def _args_dict(self):
+        args = self.args
+        if not isinstance(args, (dict, list, tuple, str)) and hasattr(args, "__dict__"):
+            args = vars(args)                       # argparse.Namespace
+        return args
+
+    def _beat_once(self):
+        """Emit svc.beat when a minute has passed on the logger's clock. True when it did. Never raises."""
+        try:
+            with self._beat_lock:
+                now = self._clock()
+                if now < self._next_beat:
+                    if self._next_beat - now > 2 * BEAT_MS:           # the clock went back
+                        self._next_beat = now + BEAT_MS
+                    return False
+                self._next_beat += BEAT_MS
+                if self._next_beat <= now:                           # slept through beats: no catch-up burst
+                    self._next_beat = now + BEAT_MS
+                fn = self._beat_state
+                try:
+                    state = fn() if fn is not None else None
+                except Exception as e:
+                    state = {"error": f"{type(e).__name__}: {e}"[:200]}
+                with self._lock:
+                    counts, self._counts = self._counts, {}
+                st = self.stats()
+                extra = {"counts": counts, "state": state}
+                for k in ("dropped", "spool_errors", "db_errors", "backlog_lines"):
+                    extra[k] = st[k]
+                self._put("svc.beat", {"extra": extra})
+                return True
+        except Exception:
+            return False
+
+    def _beat_loop(self):
+        while True:
+            try:
+                wait_s = min(5.0, max(0.2, (self._next_beat - self._clock()) / 1000))
+            except Exception:
+                wait_s = 5.0
+            if self._beat_stop.wait(wait_s):
+                return
+            self._beat_once()
+
+    def _on_stop(self, reason):
+        """Record svc.stop {reason} once and flush (at most 3 s). Never raises."""
+        try:
+            with self._lock:
+                if self._stopped or self._stop:
+                    return
+                self._stopped = True
+            self._beat_stop.set()
+            self._put("svc.stop", {"extra": {"reason": reason}})
+            self.flush(STOP_FLUSH_S)
+        except Exception:
+            pass
+
+    on_stop = _on_stop
+
+    def _stop_from_signal(self):
+        """From a signal handler: the handler interrupted the main thread, which may hold the queue's or
+        the seq lock, so the record is written from a helper thread the handler waits for (bounded)."""
+        try:
+            t = threading.Thread(target=self._on_stop, args=("sigterm",), name="hello-log-stop", daemon=True)
+            t.start()
+        except Exception:
+            self._on_stop("sigterm")
+            return
+        t.join(STOP_FLUSH_S + 1)
 
     def _wake(self):
         try:
@@ -753,16 +878,99 @@ class Logger:
                 self._spool_errors += 1
 
 
-def init(svc, *, db=None, db_uri=None, spool_dir, code_version="", args=None, clock_ms=None):
+def init(svc, *, db=None, db_uri=None, spool_dir, code_version="", args=None, clock_ms=None, lifecycle=True,
+         install_signal=True):
     """Start this process's logger (call once). `db` is a ready database object (tests inject a fake);
-    otherwise `db_uri` is connected lazily. A previous logger in this process is stopped."""
-    global _current
+    otherwise `db_uri` is connected lazily. A previous logger in this process is stopped.
+    lifecycle: svc.start now, svc.beat every minute, svc.stop at exit (False = a bare writer, for tests).
+    install_signal: also record svc.stop on SIGTERM (main thread only); pass False when the caller
+    handles SIGTERM itself (e.g. an asyncio loop) and calls get().on_stop("sigterm") on shutdown."""
+    global _current, _atexit_hooked
     prev = _current
     if prev is not None:
         prev.close(timeout_s=2)
     _current = Logger(svc, db=db, db_uri=db_uri, spool_dir=spool_dir, code_version=code_version, args=args,
-                      clock_ms=clock_ms)
+                      clock_ms=clock_ms, lifecycle=lifecycle)
+    if lifecycle:
+        if not _atexit_hooked:
+            atexit.register(_atexit)
+            _atexit_hooked = True
+        if install_signal:
+            _install_sigterm()
     return _current
+
+
+def get():
+    """This process's logger, or None before init()."""
+    return _current
+
+
+def new_trace():
+    """A fresh trace id: 12 hex digits."""
+    return secrets.token_hex(6)
+
+
+@contextlib.contextmanager
+def scope(kind=None, *, trace=None, **fields):
+    """Within the block (this thread / asyncio task only), emit() fills kind (when None), trace and these
+    fields where the call leaves them out. Nested scopes: the inner one overrides the outer per key."""
+    sc = dict(_scope.get() or {})
+    if kind is not None:
+        sc["kind"] = kind
+    if trace is not None:
+        sc["trace"] = trace
+    sc.update((k, v) for k, v in fields.items() if v is not None)
+    token = _scope.set(sc)
+    try:
+        yield sc
+    finally:
+        _scope.reset(token)
+
+
+def current():
+    """The fields of the current scope ({} outside any)."""
+    return dict(_scope.get() or {})
+
+
+def _install_sigterm():
+    """Our SIGTERM handler in front of the present one; only from the main thread, never twice in a row,
+    and not over a handler installed outside Python (it could not be chained)."""
+    global _sigterm_prev
+    try:
+        if threading.current_thread() is not threading.main_thread():
+            return
+        prev = signal.getsignal(signal.SIGTERM)
+        if prev is None or prev is _on_sigterm:
+            return
+        _sigterm_prev = prev                 # before installing: a signal may arrive right after
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except Exception:
+        pass
+
+
+def _on_sigterm(signum, frame):
+    """Record svc.stop, then do what the previous handler would: call it, keep ignoring, or exit(0)."""
+    try:
+        lg = _current
+        if lg is not None and lg._lifecycle:
+            lg._stop_from_signal()
+    except Exception:
+        pass
+    prev = _sigterm_prev
+    if prev is signal.SIG_IGN:
+        return None
+    if callable(prev):
+        return prev(signum, frame)
+    sys.exit(0)
+
+
+def _atexit():
+    try:
+        lg = _current
+        if lg is not None and lg._lifecycle:
+            lg._on_stop("exit")
+    except Exception:
+        pass
 
 
 def emit(kind, /, **fields):
