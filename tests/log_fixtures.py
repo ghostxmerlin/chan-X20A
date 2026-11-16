@@ -48,6 +48,8 @@ class FakeCollection:
         for i in ids:
             if i in self.db.poison:
                 raise self.db.poison[i]
+        if self.db.after_write:
+            self.db.after_write(op, self.name, list(ids))
 
     def insert_many(self, docs, ordered=True):
         docs = list(docs)
@@ -107,7 +109,8 @@ class FakeCollection:
 
 class FakeDB:
     """Collections by name. Set .fail to an exception to make every write raise it, .delay_s to
-    make every write slow, .poison[_id] = exception to make any write touching that _id raise it.
+    make every write slow, .poison[_id] = exception to make any write touching that _id raise it,
+    .after_write = f(op, collection, ids) to react to a write (e.g. go down after it).
     .calls lists (op, collection, ...) for every write and create_index."""
 
     def __init__(self):
@@ -116,6 +119,7 @@ class FakeDB:
         self.fail = None
         self.delay_s = 0
         self.poison = {}
+        self.after_write = None              # f(op, collection, ids) after each write that went through
         self.lock = threading.RLock()
 
     def __getitem__(self, name):

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from log_fixtures import T0, FakeDB, capture_log, temp_dir   # noqa: E402
 import hello_log                                             # noqa: E402
 
+SHIP_TRIES_CALLS = 3 + 5 * 3   # whole-chunk tries + REFUSE_ALL records x tries (each fails at its 1st op)
 DAY = "20261110"            # T0's day in Beijing
 MONTH = "202611"
 
@@ -100,6 +101,23 @@ class HelloLogTest(unittest.TestCase):
                           "X-Api-Key": "***", "sessionToken": "***", "auth": {"user": "***", "pass": "***", "port": 1},
                           "credentials": ["***", "***"], "client.secret": "***", "Cookie": "***"})
 
+    def test_url_params_use_the_name_classifier(self):
+        self.assertEqual(hello_log.redact("wss://h/p?access-token=a&apiKey=b&auth_token=c&session_token=d"
+                                          "&max_tokens=5&keyword=k&githubtoken=g&x=1"),
+                         "wss://h/p?access-token=***&apiKey=***&auth_token=***&session_token=***"
+                         "&max_tokens=5&keyword=k&githubtoken=***&x=1")
+
+    def test_name_segment_suffixes(self):
+        masked = {"accesstoken": "a", "githubtoken": "g", "dbpassword": "p", "awsaccesskey": "k",
+                  "myapikey": "m", "clientsecret": "c", "usercredential": "u"}
+        self.assertEqual(hello_log.redact(masked), {k: "***" for k in masked})
+        kept = {"maxtokens": "1", "tokens": "t", "keys": "k", "keyword": "w", "monkey": "m"}
+        self.assertEqual(hello_log.redact(kept), kept)
+
+    def test_bearer_any_case(self):
+        self.assertEqual(hello_log.redact("auth header BeArEr xxxxxxxx1 sent"), "auth header Bearer *** sent")
+        self.assertEqual(hello_log.redact({"note": "BEARER abcdefgh12"}), {"note": "***"})
+
     def test_url_query_secret_names_exact(self):
         self.assertEqual(hello_log.redact("https://h/p?max_tokens=5&keyword=hi&monkey=1&token=t&KEY=k"
                                           "&access_token=a&api_key=b"),
@@ -111,7 +129,7 @@ class HelloLogTest(unittest.TestCase):
                        body={"input": {"secret": "s", "messages": ["hi"]}})
         self.assertTrue(logger.flush())
         f = db.flows(MONTH)[0]
-        self.assertEqual(f["args"], {"password": "***", "endpoint": "mongodb://h/?authSource=a&token=***"})
+        self.assertEqual(f["args"], {"password": "***", "endpoint": "mongodb://h/?authSource=***&token=***"})
         text = db.bodies(MONTH)[f["body"]["input"]]
         self.assertEqual(json.loads(text), {"secret": "***", "messages": ["hi"]})
 
@@ -378,16 +396,79 @@ class HelloLogTest(unittest.TestCase):
         st = logger.stats()
         self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (1, 0, 0))
 
-    def test_record_that_always_times_out_is_rejected_after_retries(self):
+    def test_record_that_always_times_out_waits_never_rejected(self):
+        # a network-class failure never rejects (it may be the DB going away); the record waits
         logger, db = capture_log("mind")
-        db.poison[f"mind:{logger.run}:1"] = TimeoutError("socket timed out")
-        hello_log.emit("call.chat", sum="huge")
-        hello_log.emit("call.chat", sum="normal")
+        db.poison[f"mind:{logger.run}:2"] = TimeoutError("socket timed out")
+        for name in ("before", "huge", "after"):
+            hello_log.emit("call.chat", sum=name)
         results = [logger.flush() for _ in range(5)]
-        self.assertEqual(results[:3], [False, False, False])     # looks like the network: wait and retry
-        self.assertTrue(results[3])
-        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["normal"])
-        self.assertEqual(logger.stats()["rejected"], 1)
+        self.assertEqual(results, [False] * 5)
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["before"])   # split pass got up to it
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["backlog_lines"]), (0, 2))
+        del db.poison[f"mind:{logger.run}:2"]
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["before", "huge", "after"])
+
+    def test_db_drops_during_split_pass_loses_nothing(self):
+        class InvalidDocument(Exception):
+            pass
+
+        logger, db = capture_log("mind")
+        ids = [f"mind:{logger.run}:{i}" for i in (1, 2, 3)]
+        db.poison[ids[2]] = InvalidDocument("cannot encode")      # forces a record-by-record pass
+
+        def go_down(op, collection, written):
+            if op == "insert_many" and written == [ids[0]]:
+                db.fail = ConnectionError("mongo went away")
+
+        db.fail = ConnectionError("down while the three are spooled")    # so they ship as one chunk
+        for name in ("one", "two", "three"):
+            hello_log.emit("call.chat", sum=name)
+        self.assertFalse(logger.flush())
+        db.fail, db.after_write = None, go_down
+        self.assertFalse(logger.flush())
+        st = logger.stats()
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["one"])
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (0, 1, 2))
+        first_line = spool_lines(logger.spool_dir, "mind")[0]
+        self.assertEqual(spool_offset(logger.spool_dir, "mind"), len(first_line) + 1)
+        db.after_write, db.fail = None, None
+        self.assertTrue(logger.flush())
+        self.assertEqual([f["sum"] for f in db.flows(MONTH)], ["one", "two"])
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (1, 2, 0))
+
+    def test_lone_poison_record_is_rejected(self):
+        class InvalidDocument(Exception):
+            pass
+
+        logger, db = capture_log("mind")
+        db.poison[f"mind:{logger.run}:1"] = InvalidDocument("cannot encode")
+        hello_log.emit("call.chat", sum="alone")
+        self.assertTrue(logger.flush())
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (1, 0, 0))
+
+    def test_db_refusing_everything_keeps_all_cheaply(self):
+        class OperationFailure(Exception):
+            pass
+
+        logger, db = capture_log("mind")
+        db.fail = OperationFailure("not authorized on hello")
+        for i in range(20):
+            hello_log.emit("call.chat", sum=str(i))
+        self.assertFalse(logger.flush())
+        del db.calls[:]
+        self.assertFalse(logger.flush())                  # one more full attempt
+        st = logger.stats()
+        self.assertEqual((st["rejected"], st["shipped"], st["backlog_lines"]), (0, 0, 20))
+        self.assertGreater(len(db.calls), 0)
+        self.assertLessEqual(len(db.calls), SHIP_TRIES_CALLS)
+        db.fail = None
+        self.assertTrue(logger.flush())
+        self.assertEqual(len(db.flows(MONTH)), 20)
 
     def test_db_down_keeps_every_line(self):
         logger, db = capture_log("mind")

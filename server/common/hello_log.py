@@ -45,6 +45,7 @@ FLOW_STR_MAX = 64 * 1024             # bytes of one string in a flow record (big
 BODY_CACHE = 5000                    # recently shipped (month, sha) pairs
 SPOOL_KEEP_DAYS = 7
 SHIP_TRIES = 3                       # failures of one chunk / one record before it is split / rejected
+REFUSE_ALL = 5                       # first records of a split pass failing alike = the DB refuses everything
 RESERVED = ("_id", "svc", "run", "seq")
 
 log = logging.getLogger("hello_log")
@@ -52,12 +53,13 @@ _current = None
 _EPOCH_BJ = datetime(1970, 1, 1) + timedelta(hours=8)        # naive Beijing wall clock at epoch (no DST)
 _SECRET_SEGMENTS = {"key", "apikey", "token", "secret", "password", "passwd", "pwd", "authorization", "auth",
                     "uri", "dsn", "cookie", "credential", "credentials"}
+_SECRET_SUFFIXES = ("token", "secret", "password", "passwd", "apikey", "accesskey", "credential")
 _SECRET_PAIRS = {("api", "key"), ("session", "token")}
 _NAME_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#@\s]+@")
 _FREE_SK = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
 _FREE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
-_URL_SECRET = re.compile(r"(?i)([?&;](?:token|key|access_token|api_key)=)[^&#\s\"']*")
+_URL_PARAM = re.compile(r"([?&;])([^=&#\s\"']+)=([^&#\s\"']*)")
 _DATA_URL_WHOLE = re.compile(r"data:([\w.+-]+)/[\w.+-]+[;,]")
 _DATA_URL_INLINE = re.compile(r"data:([\w.+-]+)/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/=\r\n]*")
 _SPOOL_NAME = r"^{}-(\d{{8}})\.jsonl$"
@@ -119,16 +121,19 @@ def _clean_str(s, limit):
     if "base64," in s:
         s = _DATA_URL_INLINE.sub(lambda mm: _omitted(mm.group(0), mm.group(1)), s)
     if "=" in s:
-        s = _URL_SECRET.sub(r"\1***", s)
+        s = _URL_PARAM.sub(_mask_param, s)
     if "@" in s and "://" in s:
         s = _URL_USERINFO.sub(r"\1***@", s)
     if "sk-" in s:
         s = _FREE_SK.sub("sk-***", s)
-    if "earer" in s or "EARER" in s:
-        s = _FREE_BEARER.sub("Bearer ***", s)
+    s = _FREE_BEARER.sub("Bearer ***", s)
     if limit and len(s) * 4 > limit:
         s = _cap(s, limit)
     return s
+
+
+def _mask_param(m):
+    return f"{m.group(1)}{m.group(2)}=***" if _secret_name(m.group(2)) else m.group(0)
 
 
 def _secret_value(s):
@@ -137,10 +142,10 @@ def _secret_value(s):
 
 @functools.lru_cache(maxsize=4096)
 def _secret_name(name):
-    """api_key, apiKey, X-Api-Key, MONGO_URI, tokenValue, sessionToken, auth … but not keyword, keys,
-    tokens, prompt_tokens, usage, session."""
+    """api_key, apiKey, X-Api-Key, MONGO_URI, tokenValue, sessionToken, auth, githubtoken, dbpassword …
+    but not keyword, keys, tokens, maxtokens, prompt_tokens, usage, session."""
     parts = [p.lower() for chunk in re.split(r"[_\-.\s]+", name) for p in _NAME_PARTS.findall(chunk)]
-    if any(p in _SECRET_SEGMENTS for p in parts):
+    if any(p in _SECRET_SEGMENTS or p.endswith(_SECRET_SUFFIXES) for p in parts):
         return True
     return any(pair in _SECRET_PAIRS for pair in zip(parts, parts[1:]))
 
@@ -178,11 +183,12 @@ def _clean(obj, limit=0, depth=0, masked=False):
 def redact(obj):
     """Copy of obj with secrets as '***'. A key name is secret when one of its parts (split on _ - . space
     and camelCase) is key / apikey / token / secret / password / passwd / pwd / authorization / auth /
-    uri / dsn / cookie / credential(s), or two neighbours read api+key or session+token; every string
-    under it becomes '***' (numbers stay). keyword, keys, tokens, prompt_tokens, usage, session stay.
+    uri / dsn / cookie / credential(s), or ends with token / secret / password / passwd / apikey /
+    accesskey / credential, or two neighbours read api+key or session+token; every string under it
+    becomes '***' (numbers stay). keyword, keys, tokens, maxtokens, prompt_tokens, usage, session stay.
     Strings starting with 'sk-' or 'Bearer ' become '***'; inside any text sk-… keys become 'sk-***',
-    'Bearer <token>' 'Bearer ***', URL ?token= / key= / access_token= / api_key= values and user:pass@
-    are masked. data: URLs are omitted."""
+    'Bearer <token>' 'Bearer ***', URL query values whose name is secret by the same rule, and
+    user:pass@ are masked. data: URLs are omitted."""
     return _clean(obj)
 
 
@@ -355,10 +361,10 @@ class Logger:
                     gen = self._kick_gen              # flush requests made before this point are served now
                 kick = gen > self._kick_done
                 self._handle(batch)
-                self._ship_direct()
+                self._ship_direct(kick)
                 if self._backlog and (kick or time.monotonic() >= self._retry_at):
                     self._ship_backlog()
-                self._ship_direct()
+                self._ship_direct(kick)
                 self._maybe_prune()
             except Exception:
                 log.exception("hello_log writer")
@@ -426,18 +432,23 @@ class Logger:
         if items and not self._append(lines):
             self._direct.extend(items)
 
-    def _ship_direct(self):
-        items, self._direct = self._direct, []
-        if not items:
+    def _ship_direct(self, kick=True):
+        """Ship what the spool could not take. Unshipped records stay in memory (at most QUEUE_MAX)."""
+        if not self._direct or not (kick or time.monotonic() >= self._retry_at):
             return
-        try:
-            rejected = self._ship_chunk(items)
-            self._shipped += len(items) - rejected
+        items, self._direct = self._direct, []
+        done, rejected, err = self._ship_chunk(items)
+        self._shipped += done - rejected
+        if err is None:
             self._fails = 0
-        except Exception as exc:
-            self._failed(exc)
+            return
+        self._failed(err)
+        self._direct = items[done:] + self._direct
+        extra = len(self._direct) - QUEUE_MAX
+        if extra > 0:
+            del self._direct[QUEUE_MAX:]
             with self._lock:
-                self._dropped += len(items)
+                self._dropped += extra
 
     def _spool_path(self, day, ext):
         return self.spool_dir / f"{self.svc}-{day}.{ext}"
@@ -519,7 +530,9 @@ class Logger:
                 self._spool_errors += 1
 
     def _read_chunk(self, path, offset):
-        items, pos, n = [], offset, 0
+        """Up to BATCH_MAX complete lines from offset: (items, ends, pos, n); ends[i] = (offset, lines)
+        just after item i, pos / n = after the whole chunk (unreadable lines are skipped)."""
+        items, ends, pos, n = [], [], offset, 0
         with open(path, "rb") as f:
             f.seek(offset)
             while n < BATCH_MAX:
@@ -531,9 +544,10 @@ class Logger:
                 try:
                     rec = json.loads(line)
                     items.append((rec["flow"], rec.get("bodies") or {}))
+                    ends.append((pos, n))
                 except Exception:
                     self._spool_errors += 1
-        return items, pos, n
+        return items, ends, pos, n
 
     def _ship_backlog(self):
         today = self._spool_path(_bj(self._clock(), "%Y%m%d"), "jsonl")
@@ -541,7 +555,7 @@ class Logger:
             while True:
                 off = self._pending[path]
                 try:
-                    items, pos, n = self._read_chunk(path, off)
+                    items, ends, pos, n = self._read_chunk(path, off)
                 except OSError:
                     self._spool_errors += 1
                     self._pending.pop(path, None)
@@ -553,34 +567,43 @@ class Logger:
                 rejected = 0
                 if items:
                     where, fails = self._stuck
-                    try:
-                        rejected = self._ship_chunk(items, split=where == (path, off) and fails >= SHIP_TRIES)
-                    except Exception as exc:
-                        self._stuck = ((path, off), fails + 1 if where == (path, off) else 1)
-                        self._failed(exc)
+                    done, rejected, err = self._ship_chunk(items, split=where == (path, off) and fails >= SHIP_TRIES)
+                    if err is not None:
+                        if done:                    # keep what went through; the rest waits
+                            self._advance(path, off, *ends[done - 1], done - rejected)
+                        here = self._pending[path]
+                        self._stuck = ((path, here), fails + 1 if where == (path, here) else 1)
+                        self._failed(err)
                         return
                 self._stuck = (None, 0)
-                self._write_offset(path, pos)
-                self._pending[path] = pos
-                self._backlog = max(0, self._backlog - n)
-                self._shipped += len(items) - rejected
+                self._advance(path, off, pos, n, len(items) - rejected)
                 self._fails = 0
                 self._between()
 
+    def _advance(self, path, off, pos, n, shipped):
+        """Lines up to pos (n of them after off) are in Mongo or rejected."""
+        self._write_offset(path, pos)
+        self._pending[path] = pos
+        self._backlog = max(0, self._backlog - n)
+        self._shipped += shipped
+
     def _ship_chunk(self, items, split=False):
-        """Ship items; returns how many were rejected. Raises (everything waits) when the database looks
-        unusable: unreachable, or no record at all goes through. A chunk failing SHIP_TRIES times for a
-        non-network reason, or with split=True (it failed SHIP_TRIES ship attempts before), is shipped
-        record by record; a record still failing SHIP_TRIES times while others succeed is rejected."""
+        """Ship items in order. Returns (done, rejected, err): the first `done` items are in Mongo or
+        rejected (`rejected` of them); err is set when shipping stopped and items[done:] must wait.
+        The chunk is shipped whole first (SHIP_TRIES tries) unless split=True (it already failed that
+        often at this spool position). Then record by record: a record failing SHIP_TRIES times for a
+        non-network reason is rejected, even when it is alone; an unreachable database stops the pass
+        and never rejects anything; when the first REFUSE_ALL records all fail with the same error and
+        none goes through, the database is refusing everything (auth …) and everything waits."""
         if not split:
             for attempt in range(SHIP_TRIES):
                 try:
-                    return self._ship(items)
+                    return len(items), self._ship(items), None
                 except Exception as exc:
                     if _unreachable(exc):
-                        raise
-        ok, bad, net_streak, refused = 0, [], 0, 0
-        for item in items:
+                        return 0, 0, exc
+        ok, bad, refused = 0, [], 0
+        for i, item in enumerate(items):
             err = None
             for attempt in range(SHIP_TRIES):
                 try:
@@ -592,18 +615,20 @@ class Logger:
                     if _unreachable(exc):
                         break
             if err is None:
-                ok, net_streak = ok + 1, 0
-                continue
-            bad.append((item, err))
-            net_streak = net_streak + 1 if _unreachable(err) else 0
-            if ok == 0 and net_streak >= 2:
-                raise err                           # the database, not the records
-        if bad and ok == 0:
-            raise bad[0][1]
-        for (flow, _), err in bad:
+                ok += 1
+            elif _unreachable(err):
+                return self._settle(i, bad, refused, err)
+            else:
+                bad.append((item, err))
+                if ok == 0 and len(bad) == REFUSE_ALL and len({type(e) for _, e in bad}) == 1:
+                    return 0, 0, err
+        return self._settle(len(items), bad, refused, None)
+
+    def _settle(self, done, bad, refused, err):
+        for (flow, _), exc in bad:
             self._rejected += 1
-            log.info("hello_log: rejected %s after %d tries: %r", flow.get("_id"), SHIP_TRIES, err)
-        return len(bad) + refused
+            log.info("hello_log: rejected %s after %d tries: %r", flow.get("_id"), SHIP_TRIES, exc)
+        return done, len(bad) + refused, err
 
     def _failed(self, exc):
         self._db_errors += 1
