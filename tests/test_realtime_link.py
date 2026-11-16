@@ -501,6 +501,111 @@ class RescueTest(HubBase):
         self.assertEqual(got, ["你注意看看。", "别看了"])
 
 
+class SearchAnswerTest(HubBase):
+    """Owner 2026-11-16: "让其搜索新闻，效果不好" (the model never searched) and "搜索需要触发……你查查，查一下，帮我找之类的"."""
+    def hints(self, ws):
+        return [m["item"]["content"][0]["text"] for m in ws.sent if m["type"] == "conversation.item.create"]
+
+    async def instant(self, ws, rid, reply, heard=None):
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        if heard is not None:
+            ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": heard})
+        ws.push({"type": "response.created", "response": {"id": rid}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(120)).decode()})
+        ws.push({"type": "response.audio_transcript.done", "transcript": reply})
+        ws.push({"type": "response.done", "response": {"id": rid, "status": "completed", "usage": {}}})
+        await settle(20)
+
+    def searcher(self, answer):
+        self.asked = []
+
+        def search(q):
+            self.asked.append(q)
+            return answer
+        return search
+
+    def test_words(self):
+        q = self.rl.is_search_ask
+        self.assertEqual([q("你查查明天天气"), q("帮我查一下黄仁勋"), q("帮我找一下最近的电影"), q("今天黄仁勋有什么新闻吗？"),
+                          q("联机搜索一下英伟达前CEO今天的新闻。"), q("上海明天天气怎么样")], [True] * 6)
+        self.assertEqual([q("你好呀"), q("我去检查一下代码"), q("你看看我拿着什么"), q("外面下雨了"), q("我来找你玩")],
+                         [False] * 5)                          # a look question is a look, not a search
+
+    async def test_the_answer_comes_from_the_ears_search(self):
+        self.hub.searcher = self.searcher("黄仁勋11月12日宣布辞去英伟达CEO。")
+        ws = await self.open_ready()
+        self.hub.local_heard("今天黄仁勋有什么新闻吗？")
+        await self.instant(ws, "r1", "黄仁勋是啥呀")             # the model's own instant reply: never plays
+        self.assertEqual(self.link.sent, [])
+        self.assertEqual(self.recs.turns[-1]["state"], "muted_wait_search")
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(self.asked, ["今天黄仁勋有什么新闻吗？"])   # one search, though both ASRs heard it
+        self.assertEqual(self.hints(ws), [self.rl.search_answer_text("黄仁勋11月12日宣布辞去英伟达CEO。",
+                                                                     "今天黄仁勋有什么新闻吗？")])
+        self.assertEqual(ws.kinds()[-1], "response.create")
+        ws.push({"type": "response.created", "response": {"id": "r2"}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(120)).decode()})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "黄仁勋前几天辞职啦！"})
+        ws.push({"type": "response.done", "response": {"id": "r2", "status": "completed", "usage": {}}})
+        await settle(20)
+        sid = self.link.texts()[0]["stream"]
+        self.hub.on_report(self.link, {"type": "tts.playing", "stream": sid})
+        self.hub.on_report(self.link, {"type": "tts.done", "stream": sid, "played_ms": 120})
+        await settle()
+        self.assertEqual((self.recs.turns[-1]["kind"], self.recs.turns[-1]["state"]), ("search_answer", "done"))
+        self.assertEqual(self.hub._recent_pairs()[-1], ("今天黄仁勋有什么新闻吗？", "黄仁勋前几天辞职啦！"))
+
+    async def test_nothing_found_is_said_not_made_up(self):
+        self.hub.searcher = self.searcher(None)
+        ws = await self.open_ready()
+        await self.instant(ws, "r1", "查啥呀", heard="帮我查一下那个东西")
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(self.hints(ws), [self.rl.search_answer_text(None, "帮我查一下那个东西")])
+        self.assertEqual(self.hub.stats["search_none"], 1)
+
+    async def test_a_slow_search_counts_as_not_found(self):
+        gate = asyncio.Event()
+        self.hub.searcher = lambda q: None
+        ws = await self.open_ready()
+        self.hub._search_wait = None
+
+        async def never(w):
+            await gate.wait()
+        self.hub._run_search = never
+        self.hub.local_heard("你查查明天天气")
+        self.t[0] += self.rl.SEARCH_WAIT_S + 1
+        self.hub.step()
+        await settle()
+        self.assertEqual(self.hints(ws), [self.rl.search_answer_text(None, "你查查明天天气")])
+        self.assertEqual(self.hub.stats["search_timeout"], 1)
+        gate.set()
+
+    async def test_a_search_filler_plays_at_once(self):
+        gate = asyncio.Event()
+        self.hub.searcher = lambda q: "明天上海多云，11到17度。"
+        self.hub.search_fillers = [("我查查哈", pcm24(100))]
+        ws = await self.open_ready()
+
+        async def slow(w):
+            await gate.wait()
+        self.hub._run_search = slow
+        self.hub.local_heard("你查查明天天气")
+        await settle(20)
+        starts = [m for m in self.link.texts() if m["type"] == "tts.start"]
+        self.assertEqual(len(starts), 1)
+        self.assertEqual([t["kind"] for t in self.hub._turns.values()], ["search_filler"])
+        self.assertEqual(self.hub.stats["search_fillers"], 1)
+        gate.set()
+
+    async def test_no_searcher_means_the_usual_reply(self):
+        ws = await self.open_ready()
+        await self.instant(ws, "r1", "我不会查呀", heard="帮我查一下天气")
+        self.assertEqual(self.hub.stats["muted_wait_search"], 0)
+        self.assertTrue(self.link.texts())                     # the reply plays as before
+
+
 class LookAnswerTest(HubBase):
     """Owner 2026-11-15 evening: "你看看我手里拿的是什么" got 看不清 / 全白 / 全黑 at once, before any photo; wait for a
     fresh look instead, or stay quiet."""

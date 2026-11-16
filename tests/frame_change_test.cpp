@@ -51,6 +51,8 @@ int main()
     // a failed frame send holds frames for 60 s (no reconnect storm); big messages get 3 s to send
     assert(kFrameFailHoldUs == 60000000);
     assert(frame_held(1000, 2000) && !frame_held(2000, 2000) && !frame_held(5, 0));
+    assert(snap_uplink_up(true, true) && snap_uplink_up(true, false));   // 0.5.01: a hold never blocks a snap
+    assert(!snap_uplink_up(false, false) && !snap_uplink_up(false, true));
     assert(frame_send_budget_ms(8192) == 1000 && frame_send_budget_ms(8193) == 3000 && frame_send_budget_ms(100) == 1000);
     puts("PASS: thumb per format, diff, bounds, upload policy, failure hold and send budget");
 }

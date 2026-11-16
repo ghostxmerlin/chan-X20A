@@ -52,6 +52,7 @@ import mouth_link
 import mouth_mode
 import realtime_link
 import vision_burst
+import web_search
 import sound_kinds
 import hearing_protocol as hp
 
@@ -1125,6 +1126,11 @@ def main():
                                                call=mouth_link.mind_client(token_value), switch=rt_switch, db=database,
                                                cfg=cfg, fillers=fillers)
             print(f"realtime (围观): {len(fillers)} look fillers", flush=True)
+            # 联网搜索 (owner 2026-11-16): search words make the ear search itself (web_search.py), "我查查哈" meanwhile
+            rt_hub.searcher = web_search.dashscope_search(secrets["DASHSCOPE_API_KEY"])
+            rt_hub.search_fillers = realtime_link.load_fillers(
+                os.path.expanduser(f"~/soul-spike/fillers/{a.realtime_voice}-search"))
+            print(f"realtime (围观): web search on search words, {len(rt_hub.search_fillers)} search fillers", flush=True)
     print(f"realtime (围观): {'ready, follows the switch' if rt_hub else 'off (no key, no voice or --realtime off)'}", flush=True)
     burst = None                                   # 视觉爆发 (2026-11-15): "注意看" in crowd, only with the realtime hub
     if rt_hub is not None:

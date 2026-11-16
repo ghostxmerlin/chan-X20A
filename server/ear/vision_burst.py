@@ -1,4 +1,5 @@
-"""视觉爆发 vision burst (2026-11-15): while hello is in crowd, "注意看" makes the ear look photo by photo for 2 minutes.
+"""视觉爆发 vision burst (2026-11-15): while hello is in crowd, "注意看" makes the ear look photo by photo for BURST_S
+(20 s since 2026-11-16, owner: "视觉爆发改为20秒。2分钟没什么意义。"; was 2 minutes).
 
 Owner (verbatim): "这叫视觉爆发。只是拍照，识别，然后增加进情景或者任何下次对话可以用到的地方。" and "我们在meet中，让hello注意看，
 则……持续2分钟" and "爆发模式就是拍照，上传，识别……再拍照" (no fixed interval: strictly one at a time). hello does not
@@ -16,14 +17,15 @@ Trigger (heard(), the 围观 realtime session's input transcription): while the 
 switch is on (a paid feature: owner's 0 / 9 rule), a sentence with 注意看 / 仔细看 / 好好看看 starts a burst of BURST_S
 (one already running is extended to BURST_S from now); 别看了 / 不用看了 / 停止看 stops it. It also stops when BURST_S
 are up, hello leaves crowd, the /mouth link that reported crowd drops (or is replaced), the realtime switch goes off,
-after MAX_LOOKS recognitions, or after MAX_FAILURES failures in a row. Start / extend / stop are logged with the reason
+after MAX_LOOKS recognitions, or after MAX_FAILURES failures in a row (no_uplink excepted). Start / extend / stop are logged with the reason
 (never the heard text).
 
 Loop (one task; exactly one snap or one recognition in flight): snap(id) on the current mouth link -> wait for its
 snap_result (SNAP_TIMEOUT_S) and, when ok, its frame (FRAME_WAIT_S more) -> recognise that one JPEG with qwen3.8-flash
 direct on DashScope (thinking off, MAX_TOKENS, LOOK_TIMEOUT_S; on its own one-thread pool, never on the event loop) ->
 store -> the next snap at once. A failure (no reply, busy, camera_off, no_uplink, timeout, no frame, recognition
-error) waits RETRY_S, then goes on.
+error) waits RETRY_S, then goes on. no_uplink (the robot's vision link is down / reconnecting) never counts toward
+MAX_FAILURES in a row (2026-11-16): the burst keeps asking until BURST_S.
 
 Each look: one hello.vision_looks document {kind: look, at, session, seq, snap_id, path, text, latency_ms, snap_ms,
 usage, cost_usd, burst_id} and hub.add_look() (the realtime instructions' 【你的眼睛】 shows the latest few as 注视；mind
@@ -60,7 +62,7 @@ LOOK_PROMPT = "look-v1"
 # start one too (a burst costs ~0.001 USD a minute).
 START_WORDS = ("注意看", "仔细看", "好好看看", "你看看", "看看这", "看看我", "你看这", "看一下")
 STOP_WORDS = ("别看了", "不用看了", "停止看")
-BURST_S = 120.0
+BURST_S = 20.0                                 # owner 2026-11-16 (was 120 s)
 MAX_LOOKS = 120
 MAX_FAILURES = 3
 SNAP_TIMEOUT_S = 3.0
@@ -314,7 +316,8 @@ class VisionBurst:
 
     def _fail(self, b, why):
         b["fails"][why] += 1
-        b["fails_in_row"] += 1
+        if why != "no_uplink":                   # 2026-11-16: the robot's vision link is reconnecting; wait it out
+            b["fails_in_row"] += 1               # (RETRY_S apart) until BURST_S, never "3 in a row" in 3 s
         b["last_fail"] = why
         self.stats["fail:" + why] += 1
         log(f"vision burst {b['id']}: snap failed ({why}), {b['fails_in_row']} in a row", flush=True)

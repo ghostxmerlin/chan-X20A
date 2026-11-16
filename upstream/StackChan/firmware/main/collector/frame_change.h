@@ -89,6 +89,10 @@ inline bool frame_gate_open(size_t vision_events_pending, bool look_active)
 // carry a frame does not reconnect every 2 s re-sending it; M12 events keep flowing meanwhile.
 constexpr int64_t kFrameFailHoldUs = 60000000;
 inline bool frame_held(int64_t now_us, int64_t hold_until_us) { return now_us < hold_until_us; }
+// 0.5.01 (owner 2026-11-16, 视觉爆发 died in 3 s): the hold is for the camera's own uploads only. A snap is one
+// explicit request from the ear, never a re-send storm, so it goes whenever the socket is connected, held or not;
+// before, a burst started within 60 s of one failed frame got no_uplink three times and stopped.
+inline bool snap_uplink_up(bool connected, bool /*frames_held*/) { return connected; }
 
 // WebSocket send budget: 1 s for small messages, 3 s for frames (a 32 KB frame needs several RTTs
 // through the 5.7 KB TCP send buffer).

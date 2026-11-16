@@ -8,7 +8,7 @@ set -eu
 . "$(dirname "$0")/_env.sh"
 need SOUL_SERVER_SSH SOUL_SERVER_DIR SOUL_SERVER_UNIT
 cd "$HERE"
-FILES="ear_server.py ear_log.py recorder.py sound_kinds.py hearing_protocol.py tingwu.py tingwu_switch.py mouth_link.py mouth_mode.py realtime_link.py vision_burst.py hello_db.py hello_db_import.py vision_link.py signal_link.py"
+FILES="ear_server.py ear_log.py recorder.py sound_kinds.py hearing_protocol.py tingwu.py tingwu_switch.py mouth_link.py mouth_mode.py realtime_link.py vision_burst.py web_search.py hello_db.py hello_db_import.py vision_link.py signal_link.py"
 COMMON="$HERE/../common"
 LOGFILES="$COMMON/hello_log.py $COMMON/prices.py"   # the run log's shared modules (the ear never reads the log: no hello_log_query), copied flat next to ear_server.py, before FILES
 for f in $LOGFILES; do [ -f "$f" ] || { echo "$f not found" >&2; exit 1; }; done

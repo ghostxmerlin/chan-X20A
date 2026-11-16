@@ -191,9 +191,9 @@ void run(void*)
                 std::lock_guard<std::mutex> lock(mutex);
                 frames_hold_until_us = esp_timer_get_time() + kFrameFailHoldUs; ++frames_failed;
             };
-            if (ok && snapping && (!camera_streaming() || frame_held(esp_timer_get_time(), frames_hold_until_us))) {
-                std::lock_guard<std::mutex> lock(snap_mutex);    // camera switched off / frames held since the accept
-                snap_slot->failed(ticket, camera_streaming() ? snap::Why::NoUplink : snap::Why::CameraOff);
+            if (ok && snapping && !camera_streaming()) {
+                std::lock_guard<std::mutex> lock(snap_mutex);    // camera switched off since the accept (0.5.01: a frame
+                snap_slot->failed(ticket, snap::Why::CameraOff); // hold no longer fails a snap: snap_uplink_up)
             } else if (ok && snapping && gate) {
                 const auto frame = camera_latest_frame();
                 if (frame && frame->bytes && frame->length && snap::fresh(frame->timestamp_us, ticket.since_us)) {
@@ -274,7 +274,7 @@ void vision_snap_request(uint32_t id)
 {
     const int64_t now = esp_timer_get_time();
     bool up;
-    { std::lock_guard<std::mutex> lock(mutex); up = connected && !frame_held(now, frames_hold_until_us); }
+    { std::lock_guard<std::mutex> lock(mutex); up = snap_uplink_up(connected, frame_held(now, frames_hold_until_us)); }
     const bool camera = camera_streaming();
     snap::Why why;
     {

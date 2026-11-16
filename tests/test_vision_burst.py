@@ -266,6 +266,21 @@ class LoopTest(BurstBase):
         self.assertEqual(row["failures"], {"busy": 1, "no_uplink": 1, "timeout": 1, "no_reply": 1, "no_frame": 1,
                                            "seq_mismatch": 1})
 
+    async def test_no_uplink_never_stops_it(self):
+        self.make(plan=["no_uplink"] * 6 + ["result_first"])     # vision link reconnecting for a while
+        self.burst.start("注意看")
+        await self.until(lambda: len(self.db.looks()) >= 1)
+        self.burst.stop("heard_stop")
+        row = await self.stopped()
+        self.assertEqual(row["reason"], "heard_stop")
+        self.assertEqual(row["failures"], {"no_uplink": 6})
+
+    async def test_no_uplink_burst_still_ends_on_time(self):
+        self.make(plan=["no_uplink"] * 200, burst_s=0.4)
+        self.burst.start("注意看")
+        row = await self.stopped()
+        self.assertEqual(row["reason"], "elapsed")
+
     async def test_three_failures_in_a_row_stop_it(self):
         self.make(plan=["camera_off"] * 5)
         self.burst.start("注意看")
