@@ -84,6 +84,19 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 - **心跳** `svc.beat` 的 `state`：`{tingwu, tingwu_running, realtime, realtime_state, mouth, robot_mode, burst, links {hearing, vision, mouth, signal}}`。
 - **停止**：SIGTERM 由 ear 自己的事件循环处理：停止服务、各模块收尾，再在工作线程里记 `svc.stop {reason: sigterm}`；收尾超过 10 秒（或者第二次 SIGTERM）就记下 `svc.stop` 直接退出。
 
+## tts 一侧的记录（soul-tts，hello 的嘴）
+
+写入口是 `voice/tts_service/soul_tts/runlog.py`（不在本仓库；部署时 `server/tts/deploy.sh` 把 `server/common/hello_log.py`、`prices.py` 拷到服务器 `~/soul-tts/`，和 `soul_tts/` 包并排。没部署时什么都不记，soul-tts 照常说）。`MONGO_URI` 取环境变量，否则取 `SOUL_TTS_ENV_FILE`（服务器上 `~/soul-spike/hello.env`）里的同名变量；都没有就只落盘。落盘目录默认 `~/soul-spike/log-spool`（`SOUL_TTS_LOG_SPOOL` 可改），`code_version` 来自 `~/soul-tts/CODE_VERSION`。
+
+- **`call.tts`**：一次合成一条——一次 `/v1/say`（流式输入也只算一条，不是一个片段一条）或一次 `/v1/synthesize`，在合成这一步结束时记（成功、失败、被取消都记；播放结果不在这条里）。
+  - `model` = 实际出声的模型（`qwen-audio-3.1-tts-flash`；回退到绑定模型或 HTTP 时是那一个），`ms` = 从收到这句到合成结束，`key` = 百炼 key 指纹，`sum` = 前 60 字，正文 `input` = 全文、`system` = 音色的 instruction（有的话），`ref = {uid}`（soul-tts 的句子 id）。
+  - `usage` = 服务商原样的用量（`input_tokens`、`output_tokens`、`characters`……，各次尝试的 token 相加）加上 `chars`（文字字数）、`audio_ms`（合成出的音频时长）。
+  - `cost = {amount, cur: CNY, est: true, basis}`：按 token 计费，`input_tokens × prices.TTS_CNY_PER_M_IN + output_tokens × prices.TTS_CNY_PER_M_OUT`（元 / 百万 token）。服务商没报 token（例如中途取消、出错）时 `amount: null`，`chars` / `audio_ms` 照记。
+  - `extra = {op: say|synthesize, state: done|failed|partial|cancelled, stream, voice（音色别名；直接给音色 id 时记 direct，从不记音色 id）, rate, timings, attempts [{kind, model, ok, warm, started_s, task_id, request_id, error}]}`。`failed`（一点声音都没出）和 `partial`（出了一部分声音后出错，已有的照常播）时 `ok: false` + `err`；`cancelled`（被打断 / 取消）不算错，`ok: true`。
+  - `trace`：调用方在 `/v1/say` 的 JSON 里带 `trace`（1–64 个字母、数字、`. _ -`）就用它，接上调用方的链路；没带或不合格就新开一个。
+- **心跳** `svc.beat` 的 `state`：`{player_mode, queue（排队的句数）, player（播放端名字）}`。
+- **停止**：soul-tts 在主线程里用 `signal.signal` 处理 SIGTERM（抛 SystemExit 打断 HTTP 服务），不走 asyncio 事件循环，所以用 hello_log 默认的 `install_signal=True`：它排在 soul-tts 的处理前面，先记 `svc.stop {reason: sigterm}`（最多等 3 秒写完），再交给原来的处理退出。
+
 ## 判断断档
 
 - 每个 `run` 从 `svc.start`（seq 1）开始，`seq` 连续；跳号只会因为真丢了。

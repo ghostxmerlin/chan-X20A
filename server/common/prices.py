@@ -13,9 +13,12 @@ TINGWU_CNY_PER_HOUR = 0.6
 REALTIME_SEARCH_CNY_PER_CALL = 0.004
 
 # soul-tts speaks with qwen-audio-3.1-tts-flash, which is billed per token, not per 10k characters:
-# there is no per-character list price for it, so this stays unknown. Its token prices are below.
+# there is no per-character list price for it, so this stays unknown (kept so nobody adds a guessed one).
 TTS_CNY_PER_10K_CHARS = None
-TTS_CNY_PER_M_TOKENS = {"in": 1.5, "out": 12.0}     # qwen-audio-3.1-tts-flash, 元 per million tokens
+# Its token prices, 元 per million tokens (ruling R15): soul-tts's call.tts cost = input_tokens × IN + output_tokens
+# × OUT from the usage DashScope reports at task-finished; amount None when there is no usage.
+TTS_CNY_PER_M_IN = 1.5
+TTS_CNY_PER_M_OUT = 12.0
 
 BASIS = {
     "TINGWU_CNY_PER_HOUR": "https://help.aliyun.com/zh/model-studio/tingwu-meeting-summary-overview and "
@@ -24,7 +27,9 @@ BASIS = {
     "REALTIME_SEARCH_CNY_PER_CALL": "https://help.aliyun.com/zh/model-studio/web-search 计费说明 "
                                     "(agent 策略 4 元/千次, 华北2 北京), looked up 2026-11-16",
     "TTS_CNY_PER_10K_CHARS": "unknown (looked up 2026-11-16): qwen-audio-3.1-tts-flash is billed per token, "
-                             "see TTS_CNY_PER_M_TOKENS",
-    "TTS_CNY_PER_M_TOKENS": "https://help.aliyun.com/zh/model-studio/qwen-audio-3-1-tts-flash "
-                            "(华北2 北京: 输入 1.5, 输出 12 元/百万 Token), looked up 2026-11-16",
+                             "see TTS_CNY_PER_M_IN / TTS_CNY_PER_M_OUT",
+    "TTS_CNY_PER_M_IN": "https://help.aliyun.com/zh/model-studio/qwen-audio-3-1-tts-flash "
+                        "(华北2 北京: 输入 1.5 元/百万 Token), looked up 2026-11-16",
+    "TTS_CNY_PER_M_OUT": "https://help.aliyun.com/zh/model-studio/qwen-audio-3-1-tts-flash "
+                         "(华北2 北京: 输出 12 元/百万 Token), looked up 2026-11-16",
 }

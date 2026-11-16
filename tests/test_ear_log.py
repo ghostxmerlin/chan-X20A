@@ -170,7 +170,8 @@ class PlainTest(unittest.TestCase):
             self.assertIsNone(ear_log.tingwu_cost(60)["amount"])
 
     def test_prices_have_a_basis_each(self):
-        for name in ("TINGWU_CNY_PER_HOUR", "REALTIME_SEARCH_CNY_PER_CALL", "TTS_CNY_PER_10K_CHARS"):
+        for name in ("TINGWU_CNY_PER_HOUR", "REALTIME_SEARCH_CNY_PER_CALL", "TTS_CNY_PER_10K_CHARS",
+                     "TTS_CNY_PER_M_IN", "TTS_CNY_PER_M_OUT"):
             self.assertTrue(hasattr(prices, name))
             self.assertIn("2026-11-16", prices.BASIS[name])
             v = getattr(prices, name)
