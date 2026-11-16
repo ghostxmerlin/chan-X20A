@@ -34,15 +34,17 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 | `sum` | 一行中文摘要（听到的话前 60 字、回答前 60 字、开关"听悟 开→关"） |
 | `body` | 正文引用：`{system, context, input, output, …}` → 正文编号（用 `body()` 取全文）；没有大段内容时省略 |
 | `ref` | 指向原件或业务表：录音 `session` + `pos`、照片路径、`realtime_turns.tid`、`mind_runs` 的 id 等 |
-| `extra` | 该类型自己的字段。`svc.start`：`code_version`、`pid`、`args`；`svc.stop`：`reason`（sigterm / exit）；`svc.beat`：`counts`、`state`、`dropped`、`spool_errors`、`db_errors`、`backlog_lines` |
+| `extra` | 该类型自己的字段。`svc.start`：`code_version`、`pid`、`args`；`svc.stop`：`reason`（sigterm / exit）；`svc.beat`：`counts`、`state`、`dropped`、`rejected`、`spool_errors`、`db_errors`、`backlog_lines`、`errors_throttled`，ear 另有 `refused`（见下）；`svc.error`：`where` |
 
 小内容（几十字的听到的话、一句回答）直接放 `sum` 也放正文，脚本只靠日志表就能拿到全文。
 
-脱敏：键名含 key / token / secret / password / authorization 的值写成 `***`，URL 查询串里的 `token=`、`key=` 同样处理；图片、音频不存（`data:` URL 换成 `[image omitted, N bytes]`，原件用 `ref` 指向）；单条正文超过 4 MB 截断并带标记。
+脱敏：键名含 key / token / secret / password / authorization 的值写成 `***`，URL 查询串里的 `token=`、`key=` 同样处理；正文里的 `sk-…` 密钥（20 个字符以上在任何位置，含 JSON 转义的 `\n` 或 `%0A` 后面；8 个以上要求前面不是字母数字，所以 `task-finished` 不动）写成 `sk-***`，`Bearer <令牌>`（令牌里有数字：16 个字符以上在任何位置，如 `%20Bearer …`；8 个以上要求前面不是字母数字；`bearer responsibility` 不动）写成 `Bearer ***`；图片、音频不存（`data:` URL 换成 `[image omitted, N bytes]`，原件用 `ref` 指向）；单条正文超过 4 MB 截断并带标记。
 
 ## kind 清单
 
 - **服务**：`svc.start`、`svc.stop`、`svc.beat`（每分钟一次，带本分钟各类计数）、`svc.error`。
+  - `svc.error`：顶层异常处理接住的异常（mind / eye / notes / memory 主循环的 "… error:"，memory 每轮 tick 的兜底；ear 的后台任务失败："realtime: task failed"、"vision burst: task failed"、"mode: background task failed"、识别任务失败）。`ok: false`，`err` = `类型: 消息` 一行（先整行脱敏再截到 300 字，不带调用栈），`extra.where` 是出处（`mind.loop`、`eye.loop`、`notes.loop`、`memory.tick` / `memory.loop` / `memory.extract`、`realtime.task`、`burst.task`、`mode.task`、`ear.inference`）。memory 的只记异常类型、不记消息（消息里可能有私人内容）。同一出处同一句话每分钟最多一条，其余只数进心跳的 `errors_throttled`。
+  - `svc.beat` 的 `rejected`：库拒收、被跳过的记录累计数（见「写入」）；ear 的 `refused`：上一分钟里被限流、没单独记 `link.open` 的拒绝连接数（令牌不对的连接每个来源 IP 每分钟只记一条 `link.open ok:false`）。
 - **连接**：`link.open` / `link.close`（ear 每条机器人链路）、`link.upstream`（ear 到听悟、realtime、soul-tts 的上游连接）。
 - **开关 / 模式 / 预设**：`switch.set`、`mode.input`（mind 的 `mode_log` 每行一条）、`mode.change`、`preset.apply`、`billing.set`、`robot.state`（机器人上报的开关）。
 - **触发与闸门**：`trigger.*`（`trigger.burst`、`trigger.hush`、`trigger.greet`）、`gate.rescue`、`gate.realtime`（放行 / muted_quiet / muted_unclear / muted_repeat / muted_blind / muted_wait_look / rescue……及理由）、`filler.play`。
@@ -68,7 +70,7 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 
 写入口是 `server/ear/ear_log.py`（hello_log 没部署时什么都不记，ear 照常跑）。价格表 `server/common/prices.py`（每项带 `BASIS`：来源网址 + 查询日期；查不到的是 `None`，记录里 `cost.amount: null`）。
 
-- **链路** `link.open` / `link.close`：`extra = {link: mouth|signal|vision|hearing, conn（m3 / v4 / c12 / DualKey 设备名）, peer（ip:port）, boot, why, counts}`，`link.close` 的 `ms` 是连接时长。`counts`：mouth `{upstream_drops}`，signal `{signals}`，vision `{events, frames}`，hearing `{utterances, sounds, rx_bytes, session}`。token 不对、连接已满时只记一条 `link.open`，`ok: false`，`why` = bad_token / busy。`link.upstream`：ear 到 soul-tts 的连接起落，`extra = {to: "soul-tts", state: up|down, conn, code, drops}`（连不上时不重复记，只记起落）。
+- **链路** `link.open` / `link.close`：`extra = {link: mouth|signal|vision|hearing, conn（m3 / v4 / c12 / DualKey 设备名）, peer（ip:port）, boot, why, counts}`，`link.close` 的 `ms` 是连接时长。`counts`：mouth `{upstream_drops}`，signal `{signals}`，vision `{events, frames}`，hearing `{utterances, sounds, rx_bytes, session}`。token 不对、连接已满时只记一条 `link.open`，`ok: false`，`why` = bad_token / busy；token 不对的每个来源 IP 每分钟最多记一条，其余数进下一条心跳的 `extra.refused`。`link.upstream`：ear 到 soul-tts 的连接起落，`extra = {to: "soul-tts", state: up|down, conn, code, drops}`（连不上时不重复记，只记起落）。
 - **`robot.state`**：机器人报上来的状态变了才记，按机器人（`device` = 它的 source，模式为 `null`）分开，`extra = {part, device, before, after, …}`。`hearing` 由这台机器人还活着的听觉链路决定：重连时新旧链路重叠，旧的关掉不记 off，最后一条关掉才记 off（`extra.links` = 还连着的条数）。拒绝的连接（`link.open ok:false`）的 `extra.link` 按路由取 mouth / signal / vision / hearing，不记路径。`part`：`mode`（mode_report 里的 `{mode, dir, host, return_to}`，`by` = 报告的 by，另带 `conn`、`seq`、`input`）、`hearing`（机器人的听觉链路 on / off）、`m12`（online / offline）、`vision`（on / off，来自 vision 事件）。
 - **`heard.asr`**：本地识别出有字的每一句。新的 `trace`，`by: asr`，`sum` = 前 60 字，正文 `input` = 全文，`ref = {session, pos, id}`，`extra = {lang, emotion, dur, speaker {band, name（只在 known 时）}, voice, self}`。同一个 `trace` 写回这句的事件（`speech` 表里也有 `trace`），并随 `/chat/heard` 的 `trace` 字段带给 mind。
 - **`call.tingwu`**：每个听悟流一个 `trace`。`extra.state` = start / stop / error。stop 那条带 `usage = {audio_s}`、`ms`（流的时长）、`cost`（`prices.TINGWU_CNY_PER_HOUR` × 小时，按送上去的音频时长计费）、`ref = {session, stream, data_id}`、`extra.sentences`。
@@ -97,11 +99,17 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 - **心跳** `svc.beat` 的 `state`：`{player_mode, queue（排队的句数）, player（播放端名字）}`。
 - **停止**：soul-tts 在主线程里用 `signal.signal` 处理 SIGTERM（抛 SystemExit 打断 HTTP 服务），不走 asyncio 事件循环，所以用 hello_log 默认的 `install_signal=True`：它排在 soul-tts 的处理前面，先记 `svc.stop {reason: sigterm}`（最多等 3 秒写完），再交给原来的处理退出。
 
+## 写入
+
+- `emit()` 只在调用方线程里组装记录、放进有界队列（2 万条），不阻塞、不抛异常。一个写线程负责：脱敏和截断、追加到本机落盘文件（fsync），再把落盘文件补写进 Mongo（每次操作 5 秒超时），进度记在 `.offset` 文件里。
+- **Mongo 卡住时**（已知的限制）：写线程在两次库操作之间把新入队的记录搬进落盘文件，但一次卡住的操作本身要等到 pymongo 超时（每次约 5 秒）才返回，这段时间里新记录只在内存队列里。队列满了以后新记录不分类型一律丢掉（数进心跳的 `dropped`）。以后可以把"落盘"和"入库"拆成两个线程，让落盘永远不等 Mongo（未做）。
+- **拒收**：只有确有证据只是这一条的问题时才跳过一条记录（数进 `rejected`）：同一轮里别的记录写进去了，或者这条在本地就编不成 BSON 且库马上能 `ping` 通。连不上、认证失败、磁盘满、库不可写、连接串写错（如密码里没转义的 `@ : / %`）、建索引失败、说不清的错误：一律不拒收，全部留在落盘文件里等，按 1、2、4…最多 30 秒退避重试。
+
 ## 判断断档
 
 - 每个 `run` 从 `svc.start`（seq 1）开始，`seq` 连续；跳号只会因为真丢了。
-- 每分钟一条 `svc.beat`。心跳缺失 = 服务没了或库断了；有心跳没有业务调用 = 开关关着、服务闲着。
-- 故意停服务会记 `svc.stop`，它到下一次 `svc.start` 之间不算断档。
+- 每分钟一条 `svc.beat`，它的 `extra.counts` 恰好是上一条心跳（或 `svc.start`）之后入队的记录数（序号、计数和入队在同一把锁里完成），所以只看心跳就能算出丢了几条。心跳缺失 = 服务没了或库断了；有心跳没有业务调用 = 开关关着、服务闲着。
+- 故意停服务会记 `svc.stop`，它到下一次 `svc.start` 之间不算断档。被杀（OOM、`kill -9`）或崩溃后 systemd 很快拉起时没有 `svc.stop`：报 `no_stop`。
 
 ## 查询模块
 
@@ -121,14 +129,18 @@ db = MongoClient(URI)["hello"]          # URI 见 hubmix 环境里的 Mongo 连�
 | `chain(db, trace, around_ms)` | 同一 `trace` 前后各 1 天的全部记录，按 `at` 正序 |
 | `ledger(db, "YYYY-MM-DD")` | 北京时间一天的花费，按 (svc, model, cur) 汇总：`{"by": [{svc, model, cur, amount, n, unknown_n}], "total": {"USD": x, "CNY": y}, "unknown_n": k}`；`amount` 为 `None` 的记进 `unknown_n` |
 | `last_seen(db, svcs, now_ms)` | 每个服务在 `now_ms` 及以前的最新一条 `{at, kind, run}`（或 `None`）：最近 5 分钟任何类型（`at` 索引），否则最新的 `svc.beat/start/stop`（`(kind, at)` 索引），本月起最多往前 2 个月，命中即停 |
-| `gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None)` | 断档：`{svc, run, from_ms, to_ms, why}`，`why` 是 `no_beat`（相邻心跳间隔超过 2 倍 `beat_ms`）或 `seq_jump`（`seq` 跳号）。边界规则见下 |
+| `gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None)` | 断档：`{svc, run, from_ms, to_ms, why}`，`why` 是 `no_beat`（相邻心跳间隔超过 2 倍 `beat_ms`）、`no_stop`（被杀 / 崩溃后重启）或 `seq_jump`（丢了记录，另带 `lost`）。只读 `svc.beat/start/stop`（`(kind, at)` 索引），不读业务记录。规则见下 |
 
-### gaps 的边界规则
+### gaps 的规则
+
+- `seq_jump`：同一 `run` 按 `seq` 相邻的两条心跳类记录 A、B，B 是 `svc.beat`，`B.seq − A.seq − 1` 大于 B 的 `extra.counts` 之和（不算 `svc.start` / `svc.stop`）：差值就是丢的条数 `lost`（队列满被丢、心跳本身丢了……）。`from_ms` / `to_ms` 是 A、B 的时间。已入队、计过数、后来才丢的（如被拒收）这里看不出来，看心跳的 `dropped` / `rejected`。
+- `no_stop`：某服务一条不是 `svc.stop` 的心跳类记录后面紧跟另一个 `run` 的 `svc.start`：进程被杀或崩溃后重启了，不管隔多久。`run` 是被杀的那个，`from_ms` 是它最后一条记录，`to_ms` 是新的 `svc.start`。
 
 - 起点前多读 2 倍 `beat_ms`：断档在区间前开始、在区间内结束的会报（`to_ms >= start_ms`）；区间前就已启动的 run 不算断档。
 - 某服务最后一条心跳 / 启动记录不是 `svc.stop`，且离区间终点（`end_ms`，或更早的 `now_ms`）超过 2 倍 `beat_ms`：报一条 `no_beat`，`from_ms` 是那条记录，`to_ms` 是终点，即"服务挂了"。查询未来的区间时传 `now_ms` 以免把还没发生的时间算进去。
 - 窗口里一条记录都没有的服务无从判断，不报。
-- 区间内某 run 第一条记录若 `seq` 大于 1，只有同一窗口里能看到它前面的记录时才会按 `seq` 跳号处理。
+- 区间内某 run 的第一条心跳类记录前面没有可比的，不做跳号判断。
+- 每次查询都带 `max_time_ms` 5000（库里超过 5 秒就放弃，不拖住 mind）。
 - 时间跨度最多 60 个月，只查实际存在的月表；`flows` 的 `before_id` 找不到时返回空列表；`ledger` 里币种缺失的记在 `"?"` 下。
 
 ### 示例
@@ -160,13 +172,13 @@ q.gaps(db, now - 86400_000, now)
 
 | 接口 | 参数 | 返回 |
 | --- | --- | --- |
-| `GET /log` | `from, to`（默认最近 1 小时，最长 31 天）、`kind`（以 `.` 结尾当前缀，如 `call.`；否则精确）、`svc`、`trace`、`cost`（1 只要有花费的，0 只要没有的）、`limit`（默认 200，最大 1000）、`before`（上一页最后一条的 `_id`） | `{from, to, rows, more}`，正文只给编号 |
+| `GET /log` | `from, to`（默认最近 1 小时，最长 7 天，超过回 400）、`kind`（以 `.` 结尾当前缀，如 `call.`；否则精确）、`svc`、`trace`、`cost`（1 只要有花费的，0 只要没有的）、`limit`（默认 200，最大 1000）、`before`（上一页最后一条的 `_id`） | `{from, to, rows, more}`，正文只给编号 |
 | `GET /log/body` | `at, id` | `{text}`；没有时 404 |
 | `GET /log/chain` | `trace, at` | `{trace, rows}`：`chain()`，按时间正序 |
 | `GET /log/ledger` | `day`（默认北京时间今天） | `{day, by, total, unknown_n}` |
-| `GET /log/gaps` | `from, to`（同 `/log`） | `{from, to, gaps}`（`now_ms` = 服务器此刻） |
+| `GET /log/gaps` | `from, to`（默认最近 1 小时，最长 48 小时，超过回 400） | `{from, to, gaps}`（`now_ms` = 服务器此刻） |
 | `GET /log/last` | — | `{now, svcs: {ear…tts: {at, kind, run} \| null}}`：每个服务最后一条（`last_seen()`：最近 5 分钟内任何类型，没有再看最新的 `svc.beat/start/stop`，从本月往前最多 2 个月）；mind 缓存 60 秒，返回的 `now` 是那次读的时刻 |
 
-`hello_log_query.py` 没部署在 mind 旁边时这些接口回 503，mind 照常跑。页面上：窗口里一条记录都没有的服务 `gaps()` 看不见，所以另有「各服务最后一条记录」，看「最近 …」时超过 2 分钟没有记录的服务标红（每 60 秒刷新）；`call.realtime.turn` / `gate.realtime` 的详情列出 `extra.heard` 的候选，点开各自的链路。正文每次点开现取，不缓存。页面上的时间和总账的默认日期一律按北京时间（+08:00）显示，与 Mac 的时区无关。
+`hello_log_query.py` 没部署在 mind 旁边时这些接口回 503，mind 照常跑。页面上：窗口里一条记录都没有的服务 `gaps()` 看不见，所以另有「各服务最后一条记录」，看「最近 …」时超过 2 分钟没有记录的服务标红（每 60 秒刷新）；「断档」一栏：红 = 没有心跳，橙 = 跳号（标出丢了几条），亮橙 = 被杀/重启（`no_stop`）；所选时间超过 48 小时时只看最后 48 小时并注明。`call.realtime.turn` / `gate.realtime` 的详情列出 `extra.heard` 的候选，点开各自的链路。正文每次点开现取，不缓存。页面上的时间和总账的默认日期一律按北京时间（+08:00）显示，与 Mac 的时区无关。
 
 直接用 mongo shell 也行，例如某天的失败记录：`db.log_202611.find({ok: false, at: {$gte: 1794240000000}}).sort({at: -1})`。
