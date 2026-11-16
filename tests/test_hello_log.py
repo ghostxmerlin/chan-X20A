@@ -819,6 +819,36 @@ class HelloLogLifecycleTest(unittest.TestCase):
         self.assertEqual(beats[1]["extra"]["counts"], {"call.eye": 1})
         self.assertIn("ZeroDivisionError", beats[1]["extra"]["state"]["error"])
 
+    def test_beat_counts_agree_with_seq_under_concurrency(self):
+        import hello_log_query
+        now = [T0]
+        logger, db = capture_log("ear", clock_ms=lambda: now[0], lifecycle=True, install_signal=False)
+        logger._beat_stop.set()                                    # beats only from this test
+
+        def spam():
+            for i in range(500):
+                hello_log.emit("heard.asr", sum=str(i))
+                if i % 50 == 0:
+                    time.sleep(0.002)                              # let beats land in between
+
+        threads = [threading.Thread(target=spam) for _ in range(4)]
+        for t in threads:
+            t.start()
+        while any(t.is_alive() for t in threads):
+            now[0] += 60000
+            logger._beat_once()
+            time.sleep(0.003)
+        for t in threads:
+            t.join()
+        now[0] += 60000
+        logger._beat_once()
+        self.assertTrue(logger.flush(10))
+        beats = [f for f in db.flows(MONTH) if f["kind"] == "svc.beat"]
+        self.assertGreaterEqual(len(beats), 2)
+        self.assertEqual(sum(b["extra"]["counts"].get("heard.asr", 0) for b in beats), 2000)
+        gaps = hello_log_query.gaps(db, T0 - 1, now[0] + 1, beat_ms=10 ** 9)
+        self.assertEqual([g for g in gaps if g["why"] == "seq_jump"], [])
+
     def test_beat_thread_is_daemon_and_stops_on_close(self):
         logger, _ = capture_log("eye", lifecycle=True, install_signal=False)
         t = logger._beat_thread
