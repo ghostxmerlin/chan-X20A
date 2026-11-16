@@ -24,18 +24,26 @@ def month_of(at_ms):
     return datetime.fromtimestamp(int(at_ms) / 1000, BJ).strftime("%Y%m")
 
 
-def _months(start_ms, end_ms):
-    """Month suffixes touched by [start_ms, end_ms), newest first."""
+MAX_MONTHS = 60
+
+
+def _months(db, start_ms, end_ms):
+    """Month suffixes of the log_ tables that exist and are touched by [start_ms, end_ms), newest
+    first. A span over 60 months is a ValueError."""
     last = datetime.fromtimestamp(max(start_ms, end_ms - 1) / 1000, BJ)
     y, m = last.year, last.month
     first = month_of(start_ms)
-    out = []
+    wanted = []
     while True:
         s = f"{y:04d}{m:02d}"
-        out.append(s)
-        if s <= first or len(out) > 600:
-            return out
+        wanted.append(s)
+        if s <= first:
+            break
+        if len(wanted) > MAX_MONTHS:
+            raise ValueError(f"time span over {MAX_MONTHS} months")
         y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+    have = set(db.list_collection_names())
+    return [mo for mo in wanted if "log_" + mo in have]
 
 
 def _flow(db, month):
@@ -56,7 +64,7 @@ def flows(db, start_ms, end_ms, *, kinds=None, kind_prefix=None, svc=None, trace
     Page by passing the last _id of the previous page as before_id (same start/end/filters).
     limit is capped at 1000."""
     limit = max(1, min(int(limit), MAX_LIMIT))
-    months = _months(start_ms, end_ms)
+    months = _months(db, start_ms, end_ms)
     at_range = {"$gte": int(start_ms), "$lt": int(end_ms)}
     cond = {}
     if kinds:
@@ -72,19 +80,18 @@ def flows(db, start_ms, end_ms, *, kinds=None, kind_prefix=None, svc=None, trace
     after = None                                   # (at, _id) of the row to continue below
     if before_id:
         row = _find_flow(db, before_id, months)
-        if row is not None:
-            after = (row["at"], before_id)
+        if row is None:
+            return []
+        after = (row["at"], before_id)
     out = []
     for mo in months:
         flt = dict(cond, at=dict(at_range))
         if after is not None:
-            flt["at"]["$lte"] = after[0]           # ties at after[0] are cut by _id below
-        for doc in _flow(db, mo).find(flt).sort([("at", -1), ("_id", -1)]):
-            if after is not None and (doc["at"], doc["_id"]) >= after:
-                continue
-            out.append(doc)
-            if len(out) >= limit:
-                return out
+            flt["$or"] = [{"at": {"$lt": after[0]}}, {"at": after[0], "_id": {"$lt": after[1]}}]
+        cur = _flow(db, mo).find(flt).sort([("at", -1), ("_id", -1)]).limit(limit - len(out))
+        out += list(cur)
+        if len(out) >= limit:
+            break
     return out
 
 
@@ -98,7 +105,7 @@ def chain(db, trace, around_ms):
     """Every record of one trace within a day either side of around_ms, oldest first."""
     start, end = int(around_ms) - DAY_MS, int(around_ms) + DAY_MS
     out = []
-    for mo in _months(start, end):
+    for mo in _months(db, start, end):
         out += list(_flow(db, mo).find({"trace": trace, "at": {"$gte": start, "$lt": end}}))
     out.sort(key=lambda d: (d["at"], d.get("seq", 0), d["_id"]))
     return out
@@ -112,11 +119,11 @@ def ledger(db, day):
     start = int(d0.timestamp() * 1000)
     end = int((d0 + timedelta(days=1)).timestamp() * 1000)
     groups = {}
-    for mo in _months(start, end):
+    for mo in _months(db, start, end):
         flt = {"cost": {"$exists": True}, "at": {"$gte": start, "$lt": end}}
         for r in _flow(db, mo).find(flt):
             c = r.get("cost") or {}
-            g = groups.setdefault((r.get("svc"), r.get("model"), c.get("cur")),
+            g = groups.setdefault((r.get("svc"), r.get("model"), c.get("cur") or "?"),
                                   {"amount": 0.0, "n": 0, "unknown_n": 0})
             g["n"] += 1
             if c.get("amount") is None:
@@ -127,21 +134,30 @@ def ledger(db, day):
     for (s, m, cur), g in sorted(groups.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
         amount = round(g["amount"], 9)
         by.append({"svc": s, "model": m, "cur": cur, "amount": amount, "n": g["n"], "unknown_n": g["unknown_n"]})
-        if cur is not None:
-            total[cur] = round(total.get(cur, 0.0) + amount, 9)
+        total[cur] = round(total.get(cur, 0.0) + amount, 9)
         unknown += g["unknown_n"]
     return {"by": by, "total": total, "unknown_n": unknown}
 
 
-def gaps(db, start_ms, end_ms, *, beat_ms=60000):
-    """Holes in the logs inside [start_ms, end_ms): [{svc, run, from_ms, to_ms, why}].
-    "seq_jump": the next record of a run skipped seq numbers (real loss), from_ms/to_ms = the two
-    records' times. "no_beat": more than 2 * beat_ms between two svc.beat / svc.start / svc.stop of a
-    service; run = the earlier one's. The stretch from a svc.stop to the next svc.start is an
-    intentional stop and not a gap. Holes at the very edges of the range are not reported."""
+def gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None):
+    """Holes in the logs near [start_ms, end_ms): [{svc, run, from_ms, to_ms, why}].
+
+    "seq_jump": the next record of a run skipped seq numbers (real loss); from_ms/to_ms are the two
+    records' times. "no_beat": more than 2 * beat_ms between two svc.beat / svc.start / svc.stop
+    rows of a service (run = the earlier row's). The stretch from a svc.stop to the next svc.start
+    is an intentional stop, not a gap.
+
+    Edges: rows from 2 * beat_ms before start_ms are read too, so a hole that began before the range
+    and ends inside it is reported (to_ms >= start_ms); a run that started earlier is not a gap.
+    A service whose last beat/start row is not a svc.stop and is more than 2 * beat_ms before the
+    range end (end_ms, or now_ms when that is earlier) gets a no_beat gap from that row to the end:
+    the service died. A service with no row at all in the window is unknown, not reported."""
+    start, end = int(start_ms), int(end_ms)
+    lookback = start - 2 * beat_ms
+    limit_ms = end if now_ms is None else min(end, int(now_ms))
     rows = []
-    for mo in _months(start_ms, end_ms):
-        rows += list(_flow(db, mo).find({"at": {"$gte": int(start_ms), "$lt": int(end_ms)}},
+    for mo in _months(db, lookback, end):
+        rows += list(_flow(db, mo).find({"at": {"$gte": lookback, "$lt": end}},
                                         {"svc": 1, "run": 1, "seq": 1, "at": 1, "kind": 1}))
     out = []
     runs = {}
@@ -159,10 +175,11 @@ def gaps(db, start_ms, end_ms, *, beat_ms=60000):
     for svc, items in alive.items():
         items.sort(key=lambda r: (r["at"], r["seq"]))
         for a, b in zip(items, items[1:]):
-            if b["at"] - a["at"] <= 2 * beat_ms:
-                continue
-            if a["kind"] == "svc.stop" and b["kind"] == "svc.start":
-                continue
-            out.append({"svc": svc, "run": a["run"], "from_ms": a["at"], "to_ms": b["at"], "why": "no_beat"})
+            if b["at"] - a["at"] > 2 * beat_ms and not (a["kind"] == "svc.stop" and b["kind"] == "svc.start"):
+                out.append({"svc": svc, "run": a["run"], "from_ms": a["at"], "to_ms": b["at"], "why": "no_beat"})
+        last = items[-1]
+        if last["kind"] != "svc.stop" and limit_ms - last["at"] > 2 * beat_ms:
+            out.append({"svc": svc, "run": last["run"], "from_ms": last["at"], "to_ms": limit_ms, "why": "no_beat"})
+    out = [g for g in out if g["to_ms"] >= start]
     out.sort(key=lambda g: (g["from_ms"], g["svc"], g["why"]))
     return out

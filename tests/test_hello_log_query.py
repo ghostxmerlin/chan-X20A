@@ -1,6 +1,7 @@
 """Read side of the run/audit log (server/common/hello_log_query.py) on log_fixtures.FakeDB."""
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -66,7 +67,23 @@ class FlowsTest(unittest.TestCase):
         self.assertEqual(len(set(seen)), 5)
         ats = [db["log_202611"].docs[i]["at"] for i in seen]
         self.assertEqual(ats, sorted(ats, reverse=True))
-        self.assertEqual(len(q.flows(db, T0 - 1, T0 + 100, limit=99999)), 5)
+
+    def test_limit_cap(self):
+        db = FakeDB()
+        for i in range(1, 8):
+            put(db, T0 + i, seq=i)
+        with patch.object(q, "MAX_LIMIT", 3):
+            self.assertEqual(len(q.flows(db, T0, T0 + 100, limit=99999)), 3)
+            self.assertEqual(len(q.flows(db, T0, T0 + 100, limit=0)), 1)
+
+    def test_unknown_before_id_is_empty(self):
+        db = FakeDB()
+        put(db, T0, seq=1)
+        self.assertEqual(q.flows(db, T0 - 1, T0 + 100, before_id="mind:r1:99"), [])
+
+    def test_span_over_60_months_rejected(self):
+        with self.assertRaises(ValueError):
+            q.flows(FakeDB(), T0 - 70 * 31 * DAY_MS, T0)
 
     def test_paging_across_months(self):
         db = FakeDB()
@@ -116,6 +133,13 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(by[("mind", "m1", "USD")]["unknown_n"], 1)
         self.assertEqual(by[("tts", "m2", "CNY")]["amount"], 0.004)
 
+    def test_ledger_cur_none_kept(self):
+        db = FakeDB()
+        put(db, T0, seq=1, model="m", cost={"amount": 0.5, "cur": None})
+        out = q.ledger(db, "2026-11-10")
+        self.assertEqual(out["total"], {"?": 0.5})
+        self.assertEqual(out["by"][0]["cur"], "?")
+
     def test_ledger_empty(self):
         self.assertEqual(q.ledger(FakeDB(), "2026-11-10"), {"by": [], "total": {}, "unknown_n": 0})
 
@@ -135,7 +159,7 @@ class GapsTest(unittest.TestCase):
             put(db, T0 + 6 * MIN + i * 1000, seq=seq, kind="call.chat")
         beat(db, T0 + 6 * MIN + 30000, 11)
         beat(db, T0 + 7 * MIN, 12)
-        got = q.gaps(db, T0 - 1, T0 + 10 * MIN)
+        got = q.gaps(db, T0 - 1, T0 + 8 * MIN)
         self.assertEqual(len(got), 2, got)
         nb = [g for g in got if g["why"] == "no_beat"][0]
         sj = [g for g in got if g["why"] == "seq_jump"][0]
@@ -159,13 +183,50 @@ class GapsTest(unittest.TestCase):
         got = q.gaps(db, T0 - 1, T0 + 12 * MIN)
         self.assertEqual([(g["why"], g["run"]) for g in got], [("no_beat", "r1")])
 
+    def test_service_dead_at_end_of_range(self):
+        db = FakeDB()
+        put(db, T0, seq=1, kind="svc.start")
+        beat(db, T0 + MIN, 2)
+        got = q.gaps(db, T0 - 1, T0 + 10 * MIN)
+        self.assertEqual([(g["why"], g["from_ms"], g["to_ms"]) for g in got], [("no_beat", T0 + MIN, T0 + 10 * MIN)])
+        # a query into the future does not count time that has not happened
+        self.assertEqual(q.gaps(db, T0 - 1, T0 + 10 * MIN, now_ms=T0 + 2 * MIN), [])
+        # an intentional stop at the end is fine
+        put(db, T0 + 2 * MIN, seq=3, kind="svc.stop", extra={"reason": "exit"})
+        self.assertEqual(q.gaps(db, T0 - 1, T0 + 10 * MIN), [])
+
+    def test_run_started_before_range_no_false_gap(self):
+        db = FakeDB()
+        put(db, T0 - 50 * MIN, seq=1, kind="svc.start")
+        for i in range(2, 12):
+            beat(db, T0 - 50 * MIN + (i - 1) * MIN, i)
+        beat(db, T0 - 39 * MIN + 38 * MIN, 12)      # a beat just before the range
+        for i in range(13, 16):
+            beat(db, T0 + (i - 13) * MIN, i)
+        self.assertEqual(q.gaps(db, T0, T0 + 3 * MIN), [])
+
+    def test_range_starts_inside_gap(self):
+        db = FakeDB()
+        beat(db, T0 - MIN, 1)
+        beat(db, T0 + 3 * MIN, 2)
+        got = q.gaps(db, T0, T0 + 4 * MIN)
+        self.assertEqual([(g["why"], g["from_ms"]) for g in got], [("no_beat", T0 - MIN)])
+
+    def test_seq_jump_across_month_boundary(self):
+        db = FakeDB()
+        a, b = bj(2026, 11, 30, 23, 59, 30), bj(2026, 12, 1, 0, 0, 10)
+        beat(db, a, 7)
+        beat(db, b, 9)
+        got = q.gaps(db, a - 1000, b + 1000)
+        self.assertEqual([(g["why"], g["from_ms"], g["to_ms"]) for g in got], [("seq_jump", a, b)])
+
     def test_gaps_per_service(self):
         db = FakeDB()
         beat(db, T0, 1)
         beat(db, T0 + MIN, 2)
         beat(db, T0 + 30000, 1, svc="eye", run="e")
         beat(db, T0 + 90000, 2, svc="eye", run="e")
-        self.assertEqual(q.gaps(db, T0 - 1, T0 + 5 * MIN), [])
+        self.assertEqual(q.gaps(db, T0 - 1, T0 + 3 * MIN), [])
 
 
 if __name__ == "__main__":

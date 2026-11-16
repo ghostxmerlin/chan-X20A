@@ -79,7 +79,15 @@ db = MongoClient(URI)["hello"]          # URI 见 hubmix 环境里的 Mongo 连�
 | `body(db, at_ms, body_id)` | 取正文全文，找不到返回 `None`；`at_ms` 用来定月份 |
 | `chain(db, trace, around_ms)` | 同一 `trace` 前后各 1 天的全部记录，按 `at` 正序 |
 | `ledger(db, "YYYY-MM-DD")` | 北京时间一天的花费，按 (svc, model, cur) 汇总：`{"by": [{svc, model, cur, amount, n, unknown_n}], "total": {"USD": x, "CNY": y}, "unknown_n": k}`；`amount` 为 `None` 的记进 `unknown_n` |
-| `gaps(db, start_ms, end_ms, *, beat_ms=60000)` | 断档：`{svc, run, from_ms, to_ms, why}`，`why` 是 `no_beat`（相邻心跳间隔超过 2 倍 `beat_ms`）或 `seq_jump`（`seq` 跳号） |
+| `gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None)` | 断档：`{svc, run, from_ms, to_ms, why}`，`why` 是 `no_beat`（相邻心跳间隔超过 2 倍 `beat_ms`）或 `seq_jump`（`seq` 跳号）。边界规则见下 |
+
+### gaps 的边界规则
+
+- 起点前多读 2 倍 `beat_ms`：断档在区间前开始、在区间内结束的会报（`to_ms >= start_ms`）；区间前就已启动的 run 不算断档。
+- 某服务最后一条心跳 / 启动记录不是 `svc.stop`，且离区间终点（`end_ms`，或更早的 `now_ms`）超过 2 倍 `beat_ms`：报一条 `no_beat`，`from_ms` 是那条记录，`to_ms` 是终点，即"服务挂了"。查询未来的区间时传 `now_ms` 以免把还没发生的时间算进去。
+- 窗口里一条记录都没有的服务无从判断，不报。
+- 区间内某 run 第一条记录若 `seq` 大于 1，只有同一窗口里能看到它前面的记录时才会按 `seq` 跳号处理。
+- 时间跨度最多 60 个月，只查实际存在的月表；`flows` 的 `before_id` 找不到时返回空列表；`ledger` 里币种缺失的记在 `"?"` 下。
 
 ### 示例
 
