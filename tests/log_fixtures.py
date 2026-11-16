@@ -8,6 +8,7 @@ pymongo database and capture_log(), which starts a logger on it with a throwaway
 """
 import atexit
 import copy
+import re
 import shutil
 import sys
 import tempfile
@@ -102,9 +103,56 @@ class FakeCollection:
     def find_one(self, flt):
         return next(iter(self.find(flt)), None)
 
-    def find(self, flt=None):
-        """Documents whose fields equal every value in `flt` (plain equality only)."""
-        return [d for d in self.docs.values() if all(d.get(k) == v for k, v in (flt or {}).items())]
+    def find(self, flt=None, projection=None):
+        """A cursor over the documents matching `flt`: field equality, $gte/$gt/$lte/$lt/$in/$exists/
+        $regex (re.search), top-level $or. .sort() and .limit() chain as in pymongo."""
+        with self.db.lock:
+            docs = [copy.deepcopy(d) for d in self.docs.values() if _match(d, flt or {})]
+        return FakeCursor(docs)
+
+
+class FakeCursor:
+    def __init__(self, docs):
+        self.docs = docs
+
+    def sort(self, key, direction=1):
+        spec = key if isinstance(key, list) else [(key, direction)]
+        for k, d in reversed(spec):
+            self.docs.sort(key=lambda doc, k=k: (doc.get(k) is not None, doc.get(k)), reverse=d < 0)
+        return self
+
+    def limit(self, n):
+        if n:
+            self.docs = self.docs[:n]
+        return self
+
+    def __iter__(self):
+        return iter(self.docs)
+
+
+def _match(doc, flt):
+    for k, cond in flt.items():
+        if k == "$or":
+            if not any(_match(doc, sub) for sub in cond):
+                return False
+        elif isinstance(cond, dict) and cond and all(op.startswith("$") for op in cond):
+            have = doc.get(k)
+            for op, arg in cond.items():
+                if op == "$exists":
+                    ok = (k in doc) == bool(arg)
+                elif op == "$in":
+                    ok = have in arg
+                elif op == "$regex":
+                    ok = isinstance(have, str) and re.search(arg, have) is not None
+                else:
+                    cmp = {"$gte": lambda a, b: a >= b, "$gt": lambda a, b: a > b,
+                           "$lte": lambda a, b: a <= b, "$lt": lambda a, b: a < b}[op]
+                    ok = have is not None and cmp(have, arg)
+                if not ok:
+                    return False
+        elif doc.get(k) != cond:
+            return False
+    return True
 
 
 class FakeDB:
