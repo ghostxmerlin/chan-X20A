@@ -1140,7 +1140,7 @@ def main():
         path = ws.request.path if getattr(ws, "request", None) else ""
         header = ws.request.headers.get("Authorization", "") if getattr(ws, "request", None) else ""
         if not hp.authenticate(path, header, token_value):
-            ear_log.link_open(link_of(path), peer=ws.remote_address, ok=False, why="bad_token")
+            ear_log.link_refused(link_of(path), peer=ws.remote_address, why="bad_token")
             await ws.close(code=4401, reason="bad token")
             return
         if urlsplit(path).path == "/mouth":            # speaker downlink: ear ends it, soul-tts behind (2026-11-14)

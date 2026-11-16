@@ -127,6 +127,27 @@ class PlainTest(unittest.TestCase):
                          [("mode.task", False, "RuntimeError: boom second line"),
                           ("burst.task", False, "RuntimeError: boom second line")])
 
+    def test_refused_links_one_record_per_ip_a_minute_rest_in_the_beat(self):
+        t = [100.0]
+        clock = lambda: t[0]
+        with mock.patch.object(ear_log, "_refused_at", {}):
+            for _ in range(5):
+                ear_log.link_refused("hearing", peer=("10.0.0.9", 5000), clock=clock)
+            ear_log.link_refused("mouth", peer=("10.0.0.7", 5001), clock=clock)
+            t[0] += 61
+            ear_log.link_refused("hearing", peer=("10.0.0.9", 5002), clock=clock)
+        opens = self.flows("link.open")
+        self.assertEqual([(r["ok"], r["err"]) for r in opens], [(False, "bad_token")] * 3)   # 9, 7, 9 again
+        lg = self.flows.logger
+        self.assertEqual(lg._bumps, {"refused": 4})
+        lg._next_beat = 0
+        lg._beat_once()
+        beat = self.flows("svc.beat")[-1]
+        self.assertEqual(beat["extra"]["refused"], 4)
+        self.assertEqual(lg._bumps, {})
+        lg.bump("counts")                                          # a beat field name is never overwritten
+        self.assertEqual(lg._bumps, {})
+
     def test_heard_asr_starts_a_trace_on_the_sentence(self):
         db = hello_db.HelloDB("mongodb://unused", client_factory=NullDB)
         ev = {"type": "speech", "phase": "end", "id": "s-3", "pos": [16000, 40000], "t": 1, "dur": 1.5,

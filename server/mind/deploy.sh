@@ -30,10 +30,11 @@ if [ "${1:-}" = "--dry-run" ]; then
   exit 0
 fi
 $SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$MIND_DIR/mind"
-# shellcheck disable=SC2086
-rsync -aic -e "$SSH" $FILES "$SOUL_SERVER_SSH:$MIND_DIR/mind/"
+# the shared modules first: a mind service restarted in between never finds new code without its modules
 # shellcheck disable=SC2086
 rsync -aic -e "$SSH" $LOGFILES "$SOUL_SERVER_SSH:$MIND_DIR/"
+# shellcheck disable=SC2086
+rsync -aic -e "$SSH" $FILES "$SOUL_SERVER_SSH:$MIND_DIR/mind/"
 printf '%s\n' "$VER" | $SSH "$SOUL_SERVER_SSH" "cat > ~/$MIND_DIR/CODE_VERSION"
 $SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$SPOOL && chmod 700 ~/$SPOOL"
 # hello's voice clip texts (selfvoice), built locally and never committed:

@@ -10,6 +10,7 @@ hello_log cannot be imported at all, `hello_log` here is a stand-in that records
   emit / scope / trace()      as hello_log; trace() = the current scope's trace, else a fresh one
   error(exc, where)           svc.error from a task-failed / top-level handler (throttled by hello_log)
   link_open / link_close      link.open / link.close of one robot link
+  link_refused(link, peer)    link.open ok:false of a refused (bad-token) link, ≤ 1 per peer IP a minute, rest counted
   robot_state(part, after)    robot.state {part, before, after} only when what the robot reported changed
   cost(amount, basis, cur)    the cost envelope; tingwu_cost(audio_s), search_count(usage)
 Everything here is cheap and runs on the event loop; heavy cleaning happens on the writer thread.
@@ -208,6 +209,32 @@ def peer_text(peer):
     if isinstance(peer, (tuple, list)) and len(peer) >= 2:
         return f"{peer[0]}:{peer[1]}"
     return None if peer is None else str(peer)[:64]
+
+
+REFUSED_EVERY_S = 60.0                               # link_refused: at most one link.open ok:false per peer IP this often
+REFUSED_PEERS_MAX = 1024
+_refused_at = {}                                     # peer IP -> monotonic time of its last refused record
+
+
+def link_refused(link, *, peer=None, why="bad_token", clock=time.monotonic):
+    """link.open ok:false for a refused connection, at most one per peer IP a minute; the rest only count, as
+    extra.refused of the next svc.beat (a scanner with a bad token must not fill the log). Never raises."""
+    try:
+        ip = str(peer[0]) if isinstance(peer, (tuple, list)) and peer else str(peer)
+        now = clock()
+        last = _refused_at.get(ip)
+        if last is not None and 0 <= now - last < REFUSED_EVERY_S:
+            lg = hello_log.get()
+            if lg is not None:
+                lg.bump("refused")
+            return
+        _refused_at[ip] = now
+        if len(_refused_at) > REFUSED_PEERS_MAX:          # forget the oldest half
+            for k in sorted(_refused_at, key=_refused_at.get)[:REFUSED_PEERS_MAX // 2]:
+                _refused_at.pop(k, None)
+        link_open(link, peer=peer, ok=False, why=why)
+    except Exception:                            # noqa: BLE001
+        pass
 
 
 def link_open(link, *, conn=None, peer=None, ok=True, why=None):

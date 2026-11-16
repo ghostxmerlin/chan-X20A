@@ -69,6 +69,8 @@ ERROR_TEXT_MAX = 300                 # svc.error err: "Type: message", one line,
 ERROR_SCAN_MAX = 8000                # characters of an error text redacted before the cut (bounds the caller's cost)
 ERROR_EVERY_MS = 60000               # at most one svc.error per distinct (where, err) per this long
 ERROR_KEYS_MAX = 256                 # distinct (where, err) remembered for the throttle
+_BEAT_FIELDS = {"counts", "state", "dropped", "rejected", "spool_errors", "db_errors", "backlog_lines",
+                "errors_throttled"}
 
 log = logging.getLogger("hello_log")
 _current = None
@@ -352,6 +354,7 @@ class Logger:
         self._stopped = False                       # svc.stop recorded
         self._err_last = OrderedDict()              # (where, err) -> logger-clock ms of its last svc.error
         self._err_throttled = 0                     # svc.error calls swallowed by the throttle
+        self._bumps = {}                            # name -> count for the next svc.beat's extra (bump())
         self._lifecycle = lifecycle
         self._thread = threading.Thread(target=self._run, name=f"hello-log-{svc}", daemon=True)
         self._thread.start()
@@ -442,6 +445,18 @@ class Logger:
         except Exception:
             pass
 
+    def bump(self, name, n=1):
+        """Add n to a counter that the next svc.beat reports as extra[name] (then it starts again at 0), for
+        events the caller records only now and then (e.g. refused links: one record, the rest counted).
+        Names already in the beat (counts, state, dropped …) are ignored. Never raises."""
+        try:
+            if name in _BEAT_FIELDS:
+                return
+            with self._lock:
+                self._bumps[name] = self._bumps.get(name, 0) + n
+        except Exception:
+            pass
+
     def stats(self):
         """Cumulative counts since init (queued = accepted by emit), plus lines still waiting in the spool."""
         return {"queued": self._queued, "shipped": self._shipped, "dropped": self._dropped,
@@ -508,6 +523,9 @@ class Logger:
                 for k in ("dropped", "rejected", "spool_errors", "db_errors", "backlog_lines"):
                     extra[k] = st[k]
                 extra["errors_throttled"] = self._err_throttled
+                with self._lock:
+                    bumps, self._bumps = self._bumps, {}
+                extra.update(bumps)
                 self._put("svc.beat", {"extra": extra})
                 return True
         except Exception:
