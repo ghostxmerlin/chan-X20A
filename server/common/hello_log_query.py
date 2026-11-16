@@ -7,7 +7,7 @@ and find_one). Used by mind's read-only API and by scripts. Table layout: see do
     rows = q.flows(db, start_ms, end_ms, kind_prefix="call.", has_cost=True, limit=50)
     text = q.body(db, rows[0]["at"], rows[0]["body"]["output"])
     q.ledger(db, "2026-11-16")     # cost per svc/model/currency for one Beijing day
-    q.gaps(db, start_ms, end_ms)   # missing heartbeats and seq jumps
+    q.gaps(db, start_ms, end_ms)   # missing heartbeats, kills (no svc.stop before a restart), lost records
     q.last_seen(db, ["ear", "mind"], now_ms)   # each service's newest record (cheap; the 日志 page polls it)
 
 Times are ms since epoch; months and days are Beijing time (Asia/Shanghai, UTC+8, no DST).
@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 BJ = timezone(timedelta(hours=8))
 DAY_MS = 86400000
 MAX_LIMIT = 1000
+QUERY_MS = 5000                   # max_time_ms of every find / find_one: the server gives up instead of the reader
 
 
 def month_of(at_ms):
@@ -53,7 +54,7 @@ def _flow(db, month):
 
 def _find_flow(db, flow_id, months):
     for mo in months:
-        doc = _flow(db, mo).find_one({"_id": flow_id})
+        doc = _flow(db, mo).find_one({"_id": flow_id}, max_time_ms=QUERY_MS)
         if doc is not None:
             return doc
     return None
@@ -89,7 +90,7 @@ def flows(db, start_ms, end_ms, *, kinds=None, kind_prefix=None, svc=None, trace
         flt = dict(cond, at=dict(at_range))
         if after is not None:
             flt["$or"] = [{"at": {"$lt": after[0]}}, {"at": after[0], "_id": {"$lt": after[1]}}]
-        cur = _flow(db, mo).find(flt).sort([("at", -1), ("_id", -1)]).limit(limit - len(out))
+        cur = _flow(db, mo).find(flt, max_time_ms=QUERY_MS).sort([("at", -1), ("_id", -1)]).limit(limit - len(out))
         out += list(cur)
         if len(out) >= limit:
             break
@@ -98,7 +99,7 @@ def flows(db, start_ms, end_ms, *, kinds=None, kind_prefix=None, svc=None, trace
 
 def body(db, at_ms, body_id):
     """Full text of a body (flow["body"][name]); None when missing. at_ms picks the month table."""
-    doc = db["logbody_" + month_of(at_ms)].find_one({"_id": body_id})
+    doc = db["logbody_" + month_of(at_ms)].find_one({"_id": body_id}, max_time_ms=QUERY_MS)
     return None if doc is None else doc.get("text")
 
 
@@ -107,7 +108,7 @@ def chain(db, trace, around_ms):
     start, end = int(around_ms) - DAY_MS, int(around_ms) + DAY_MS
     out = []
     for mo in _months(db, start, end):
-        out += list(_flow(db, mo).find({"trace": trace, "at": {"$gte": start, "$lt": end}}))
+        out += list(_flow(db, mo).find({"trace": trace, "at": {"$gte": start, "$lt": end}}, max_time_ms=QUERY_MS))
     out.sort(key=lambda d: (d["at"], d.get("seq", 0), d["_id"]))
     return out
 
@@ -122,7 +123,7 @@ def ledger(db, day):
     groups = {}
     for mo in _months(db, start, end):
         flt = {"cost": {"$exists": True}, "at": {"$gte": start, "$lt": end}}
-        for r in _flow(db, mo).find(flt):
+        for r in _flow(db, mo).find(flt, max_time_ms=QUERY_MS):
             c = r.get("cost") or {}
             g = groups.setdefault((r.get("svc"), r.get("model"), c.get("cur") or "?"),
                                   {"amount": 0.0, "n": 0, "unknown_n": 0})
@@ -146,7 +147,8 @@ LIFE_KINDS = ("svc.beat", "svc.start", "svc.stop")
 
 
 def _newest(col, flt):
-    return next(iter(col.find(flt, {"at": 1, "kind": 1, "run": 1}).sort("at", -1).limit(1)), None)
+    return next(iter(col.find(flt, {"at": 1, "kind": 1, "run": 1}, max_time_ms=QUERY_MS).sort("at", -1).limit(1)),
+                None)
 
 
 def last_seen(db, svcs, now_ms, *, recent_ms=LAST_RECENT_MS, months_back=LAST_MONTHS_BACK):
@@ -179,17 +181,36 @@ def last_seen(db, svcs, now_ms, *, recent_ms=LAST_RECENT_MS, months_back=LAST_MO
     return out
 
 
-def gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None):
-    """Holes in the logs near [start_ms, end_ms): [{svc, run, from_ms, to_ms, why}].
+def _counted(row):
+    """Records a svc.beat says were queued since the previous lifecycle row of its run: the sum of
+    extra.counts without svc.start / svc.stop (those are lifecycle rows themselves). 0 when missing."""
+    counts = (row.get("extra") or {}).get("counts") or {}
+    if not isinstance(counts, dict):
+        return 0
+    return sum(v for k, v in counts.items() if k not in LIFE_KINDS and isinstance(v, int) and not isinstance(v, bool))
 
-    "seq_jump": the next record of a run skipped seq numbers (real loss); from_ms/to_ms are the two
-    records' times. "no_beat": more than 2 * beat_ms between two svc.beat / svc.start / svc.stop
-    rows of a service (run = the earlier row's). The stretch from a svc.stop to the next svc.start
-    is an intentional stop, not a gap.
+
+def gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None):
+    """Holes in the logs near [start_ms, end_ms): [{svc, run, from_ms, to_ms, why}] (+ lost for seq_jump).
+
+    Reads only svc.beat / svc.start / svc.stop rows ((kind, at) index; at, svc, run, seq, kind and
+    extra.counts), never the business records, so it stays cheap over a long range.
+
+    "seq_jump" (real loss): two consecutive lifecycle rows A, B of one run (by seq) where B is a
+    svc.beat and B.seq - A.seq - 1 > the records B's extra.counts says were queued since A (its
+    counts without svc.start / svc.stop). hello_log takes seq, the counts and the enqueue under one
+    lock, so the two agree exactly unless records were lost (dropped at a full queue, a lost beat,
+    rejected beats, …); lost = the difference. from_ms/to_ms = A's and B's times. A record queued
+    and counted but lost later (e.g. rejected) is not seen here; the beat's dropped / rejected say so.
+    "no_stop": a service's lifecycle row that is not svc.stop is followed by a svc.start of another
+    run: the process was killed or crashed and restarted (however quickly); from_ms = that last row,
+    to_ms = the new start, run = the killed one.
+    "no_beat": more than 2 * beat_ms between two lifecycle rows of a service (run = the earlier row's).
+    The stretch from a svc.stop to the next svc.start is an intentional stop, not a gap.
 
     Edges: rows from 2 * beat_ms before start_ms are read too, so a hole that began before the range
     and ends inside it is reported (to_ms >= start_ms); a run that started earlier is not a gap.
-    A service whose last beat/start row is not a svc.stop and is more than 2 * beat_ms before the
+    A service whose last lifecycle row is not a svc.stop and is more than 2 * beat_ms before the
     range end (end_ms, or now_ms when that is earlier) gets a no_beat gap from that row to the end:
     the service died. A service with no row at all in the window is unknown, not reported."""
     start, end = int(start_ms), int(end_ms)
@@ -197,8 +218,9 @@ def gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None):
     limit_ms = end if now_ms is None else min(end, int(now_ms))
     rows = []
     for mo in _months(db, lookback, end):
-        rows += list(_flow(db, mo).find({"at": {"$gte": lookback, "$lt": end}},
-                                        {"svc": 1, "run": 1, "seq": 1, "at": 1, "kind": 1}))
+        rows += list(_flow(db, mo).find({"kind": {"$in": list(LIFE_KINDS)}, "at": {"$gte": lookback, "$lt": end}},
+                                        {"svc": 1, "run": 1, "seq": 1, "at": 1, "kind": 1, "extra.counts": 1},
+                                        max_time_ms=QUERY_MS))
     out = []
     runs = {}
     for r in rows:
@@ -206,16 +228,21 @@ def gaps(db, start_ms, end_ms, *, beat_ms=60000, now_ms=None):
     for (svc, run), items in runs.items():
         items.sort(key=lambda r: r["seq"])
         for a, b in zip(items, items[1:]):
-            if b["seq"] > a["seq"] + 1:
-                out.append({"svc": svc, "run": run, "from_ms": a["at"], "to_ms": b["at"], "why": "seq_jump"})
+            if b["kind"] != "svc.beat":
+                continue
+            lost = b["seq"] - a["seq"] - 1 - _counted(b)
+            if lost > 0:
+                out.append({"svc": svc, "run": run, "from_ms": a["at"], "to_ms": b["at"], "why": "seq_jump",
+                            "lost": lost})
     alive = {}
     for r in rows:
-        if r["kind"] in ("svc.beat", "svc.start", "svc.stop"):
-            alive.setdefault(r["svc"], []).append(r)
+        alive.setdefault(r["svc"], []).append(r)
     for svc, items in alive.items():
         items.sort(key=lambda r: (r["at"], r["seq"]))
         for a, b in zip(items, items[1:]):
-            if b["at"] - a["at"] > 2 * beat_ms and not (a["kind"] == "svc.stop" and b["kind"] == "svc.start"):
+            if b["kind"] == "svc.start" and b["run"] != a["run"] and a["kind"] != "svc.stop":
+                out.append({"svc": svc, "run": a["run"], "from_ms": a["at"], "to_ms": b["at"], "why": "no_stop"})
+            elif b["at"] - a["at"] > 2 * beat_ms and not (a["kind"] == "svc.stop" and b["kind"] == "svc.start"):
                 out.append({"svc": svc, "run": a["run"], "from_ms": a["at"], "to_ms": b["at"], "why": "no_beat"})
         last = items[-1]
         if last["kind"] != "svc.stop" and limit_ms - last["at"] > 2 * beat_ms:

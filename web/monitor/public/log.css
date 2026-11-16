@@ -11,6 +11,7 @@ header .ledger table { margin-left: auto; }
 .gapbar { position: relative; height: 10px; background: var(--bar); border-radius: 3px; overflow: hidden; }
 .gap { position: absolute; top: 0; bottom: 0; min-width: 3px; background: #d24b3c; }
 .gap.seq_jump { background: #e8912d; }
+.gap.no_stop { background: #f07c1e; min-width: 5px; }
 .gaplist { margin: 6px 0 0; padding-left: 18px; color: #d24b3c; font-size: 12px; }
 .logrow { display: grid; grid-template-columns: 64px 56px 150px 1fr 76px; gap: 8px; align-items: baseline; padding: 3px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .logrow:hover { background: var(--card); }

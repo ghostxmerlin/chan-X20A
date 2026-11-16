@@ -58,14 +58,16 @@ export function lastSeenHtml(last,now,live){
  }).join('');
 }
 
-const WHY={no_beat:'没有心跳',seq_jump:'序号跳号'};
+const WHY={no_beat:'没有心跳',seq_jump:'序号跳号',no_stop:'被杀/重启'};
+export const GAPS_MAX_MS=48*3600000;             // mind answers /log/gaps for at most 48 h
+export const gapsFrom=(from,to)=>Math.max(from,to-GAPS_MAX_MS);
 const round3=x=>Math.round(x*1000)/1000;
 // Gaps placed on [from, to): left / width in percent, clipped to the window.
 export function gapSegments(gaps,from,to){
  const span=Math.max(1,to-from),pct=ms=>Math.min(100,Math.max(0,(ms-from)/span*100));
  return (gaps||[]).map(g=>{const l=pct(g.from_ms),r=pct(g.to_ms);
   return {svc:g.svc,why:g.why,run:g.run,from_ms:g.from_ms,to_ms:g.to_ms,left:round3(l),width:round3(Math.max(0,r-l)),
-   label:`${g.svc} ${WHY[g.why]||g.why} ${hms(g.from_ms)}–${hms(g.to_ms)}`};});
+   label:`${g.svc} ${WHY[g.why]||g.why}${g.lost>0?`（丢 ${g.lost} 条）`:''} ${hms(g.from_ms)}–${hms(g.to_ms)}`};});
 }
 export function gapsHtml(gaps,from,to){
  const seg=gapSegments(gaps,from,to);
@@ -140,8 +142,9 @@ export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind
   catch(e){$('log-svcs').innerHTML=`<span class="error">读不到各服务的最后记录：${escText(e.message)}</span>`;}
  }
  async function gaps(){
-  try{const d=await fetchJson(`/log/gaps?from=${win.from}&to=${win.to}`);
-   const html=gapsHtml(d.gaps,d.from,d.to);$('log-gaps').innerHTML=html||'<p class="alt">这段时间没有断档</p>';place($('log-gaps'));}
+  try{const from=gapsFrom(win.from,win.to),d=await fetchJson(`/log/gaps?from=${from}&to=${win.to}`);
+   const note=from>win.from?'<p class="alt">只看这段时间的最后 48 小时</p>':'';
+   const html=gapsHtml(d.gaps,d.from,d.to);$('log-gaps').innerHTML=note+(html||'<p class="alt">这段时间没有断档</p>');place($('log-gaps'));}
   catch(e){$('log-gaps').innerHTML=`<p class="error">读不到断档：${escText(e.message)}</p>`;}
  }
  async function ledger(){

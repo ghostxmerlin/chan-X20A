@@ -112,7 +112,8 @@ def _range(q):
 
 
 LOG_SVCS = ("ear", "mind", "eye", "notes", "memory", "tts")
-LOG_MAX_RANGE_MS = 31 * 86400_000
+LOG_MAX_RANGE_MS = 7 * 86400_000                # /log: at most 7 days per query
+LOG_GAPS_MAX_MS = 48 * 3600_000                  # /log/gaps: at most 48 h (lifecycle rows only, but bounded)
 LOG_DEFAULT_MS = 3600_000
 LOG_LAST_CACHE_MS = 60_000                       # /log/last (hello_log_query.last_seen) is read at most once a minute
 LOG_KIND_RE = re.compile(r"^[a-z][a-z0-9_.]{0,63}$")
@@ -141,14 +142,15 @@ def _log_ms(q, name, required=True):
     return v
 
 
-def _log_range(q, now):
-    """from / to of a /log query (default: the last hour), at most 31 days."""
+def _log_range(q, now, max_ms=LOG_MAX_RANGE_MS):
+    """from / to of a /log query (default: the last hour), at most max_ms (7 days; /log/gaps 48 h)."""
     hi = _log_ms(q, "to", required=False)
     hi = now if hi is None else hi
     lo = _log_ms(q, "from", required=False)
     lo = hi - LOG_DEFAULT_MS if lo is None else lo
-    if hi <= lo or hi - lo > LOG_MAX_RANGE_MS or lo < 0:
-        raise BadRequest("range must be positive and at most 31 days")
+    if hi <= lo or hi - lo > max_ms or lo < 0:
+        span = f"{max_ms // 86400_000} days" if max_ms % 86400_000 == 0 else f"{max_ms // 3600_000} h"
+        raise BadRequest(f"range must be positive and at most {span}")
     return lo, hi
 
 
@@ -434,7 +436,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                     day = time.strftime("%Y-%m-%d", time.gmtime(now / 1000 + 8 * 3600))    # today, Beijing
                 return {"day": day, **log_query.ledger(db, day)}
             if path == '/log/gaps':
-                lo, hi = _log_range(q, now)
+                lo, hi = _log_range(q, now, LOG_GAPS_MAX_MS)
                 return {"from": lo, "to": hi, "gaps": log_query.gaps(db, lo, hi, now_ms=now)}
             if path == '/log/last':             # cached: the answer keeps its own now, so ages are as of then
                 with log_last_lock:

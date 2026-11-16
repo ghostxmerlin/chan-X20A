@@ -100,12 +100,13 @@ class FakeCollection:
         self._write("create_index", keys, kw)
         return kw.get("name") or "_".join(f"{k}_{d}" for k, d in keys)
 
-    def find_one(self, flt):
+    def find_one(self, flt, *args, **kw):
         return next(iter(self.find(flt)), None)
 
-    def find(self, flt=None, projection=None):
+    def find(self, flt=None, projection=None, **kw):
         """A cursor over the documents matching `flt`: field equality, $gte/$gt/$lte/$lt/$in/$exists/
-        $regex (re.search), top-level $or. .sort() and .limit() chain as in pymongo."""
+        $regex (re.search), top-level $or. .sort() and .limit() chain as in pymongo. The projection and
+        cursor options (max_time_ms …) are accepted and ignored: whole documents come back."""
         with self.db.lock:
             docs = [copy.deepcopy(d) for d in self.docs.values() if _match(d, flt or {})]
         return FakeCursor(docs)

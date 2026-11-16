@@ -129,6 +129,12 @@ class LogApiTest(unittest.TestCase):
                          [("ear", "no_beat", T0 + MIN, T0 + 6 * MIN), ("ear", "seq_jump", T0 + 6 * MIN, T0 + 7 * MIN)])
         self.assertEqual((d["from"], d["to"]), (T0, T0 + 8 * MIN))
         self.assertEqual(self.call(f"/log/gaps?from={T0}&to={T0 - 1}")[0], 400)
+        self.assertEqual(self.call(f"/log/gaps?from={T0}&to={T0 + 48 * 60 * MIN}")[0], 200)
+        self.assertEqual(self.call(f"/log/gaps?from={T0}&to={T0 + 49 * 60 * MIN}")[0], 400)
+
+    def test_log_range_at_most_7_days(self):
+        self.assertEqual(self.call(f"/log?from={T0}&to={T0 + 7 * 1440 * MIN}")[0], 200)
+        self.assertEqual(self.call(f"/log?from={T0}&to={T0 + 8 * 1440 * MIN}")[0], 400)
 
     def test_log_last_per_service(self):
         now = int(time.time() * 1000)
@@ -151,7 +157,7 @@ class LogApiTest(unittest.TestCase):
         self.put(rec("ear", 1, now - 5000, "svc.beat"), month=mo)
         col = self.db["log_" + mo]
         finds, orig = [], col.find
-        col.find = lambda flt=None, projection=None: finds.append(flt) or orig(flt, projection)
+        col.find = lambda flt=None, projection=None, **kw: finds.append(flt) or orig(flt, projection)
         first = self.call("/log/last")[1]
         n = len(finds)
         self.assertGreater(n, 0)

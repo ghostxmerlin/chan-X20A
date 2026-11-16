@@ -10,6 +10,7 @@ import hello_log                             # noqa: E402
 import hello_log_query as q                  # noqa: E402
 
 MIN = 60000
+MONTH = "202611"
 DAY_MS = 86400000
 
 
@@ -144,8 +145,8 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(q.ledger(FakeDB(), "2026-11-10"), {"by": [], "total": {}, "unknown_n": 0})
 
 
-def beat(db, at, seq, svc="mind", run="r1"):
-    return put(db, at, svc=svc, run=run, seq=seq, kind="svc.beat", extra={"counts": {}})
+def beat(db, at, seq, svc="mind", run="r1", counts=None):
+    return put(db, at, svc=svc, run=run, seq=seq, kind="svc.beat", extra={"counts": counts or {}})
 
 
 class GapsTest(unittest.TestCase):
@@ -155,16 +156,60 @@ class GapsTest(unittest.TestCase):
         beat(db, T0 + MIN, 2)
         beat(db, T0 + 2 * MIN, 3)
         beat(db, T0 + 5 * MIN, 4)                              # missing 3 minutes
-        for i, seq in enumerate((5, 10)):                      # seq jump 5 -> 10
+        for i, seq in enumerate((5, 10)):                      # seq 5..10 used, only 2 records counted: 4 lost
             put(db, T0 + 6 * MIN + i * 1000, seq=seq, kind="call.chat")
-        beat(db, T0 + 6 * MIN + 30000, 11)
+        beat(db, T0 + 6 * MIN + 30000, 11, counts={"call.chat": 2})
         beat(db, T0 + 7 * MIN, 12)
         got = q.gaps(db, T0 - 1, T0 + 8 * MIN)
         self.assertEqual(len(got), 2, got)
         nb = [g for g in got if g["why"] == "no_beat"][0]
         sj = [g for g in got if g["why"] == "seq_jump"][0]
         self.assertEqual((nb["svc"], nb["run"], nb["from_ms"], nb["to_ms"]), ("mind", "r1", T0 + 2 * MIN, T0 + 5 * MIN))
-        self.assertEqual((sj["from_ms"], sj["to_ms"]), (T0 + 6 * MIN, T0 + 6 * MIN + 1000))
+        self.assertEqual((sj["from_ms"], sj["to_ms"], sj["lost"]), (T0 + 5 * MIN, T0 + 6 * MIN + 30000, 4))
+
+    def test_gaps_reads_only_lifecycle_rows(self):
+        db = FakeDB()
+        put(db, T0, seq=1, kind="svc.start")
+        for i in range(2, 30):
+            put(db, T0 + i * 1000, seq=i, kind="call.chat")
+        beat(db, T0 + MIN, 30, counts={"svc.start": 1, "call.chat": 28})     # every seq accounted for
+        seen = []
+        col = db["log_" + MONTH]
+        orig = col.find
+        col.find = lambda flt=None, projection=None, **kw: seen.append((flt, projection, kw)) or orig(flt, projection)
+        self.assertEqual(q.gaps(db, T0 - 1, T0 + 2 * MIN), [])
+        self.assertEqual(len(seen), 1)
+        flt, projection, kw = seen[0]
+        self.assertEqual(flt["kind"], {"$in": ["svc.beat", "svc.start", "svc.stop"]})
+        self.assertNotIn("body", projection)
+        self.assertEqual(kw.get("max_time_ms"), q.QUERY_MS)
+
+    def test_every_query_has_a_time_limit(self):
+        db = FakeDB()
+        put(db, T0, seq=1, kind="svc.start", trace="t1", cost={"amount": 1, "cur": "CNY"})
+        calls = []
+        col = db["log_" + MONTH]
+        of = col.find
+        col.find = lambda flt=None, projection=None, **kw: calls.append(("find", kw)) or of(flt, projection)
+        col.find_one = lambda flt, *a, **kw: calls.append(("find_one", kw)) or next(iter(of(flt)), None)
+        q.flows(db, T0 - 1, T0 + 1, before_id="mind:r1:1")
+        q.chain(db, "t1", T0)
+        q.ledger(db, "2026-11-10")
+        q.gaps(db, T0 - 1, T0 + 1)
+        q.last_seen(db, ["mind"], T0)
+        self.assertGreaterEqual(len(calls), 6)
+        for name, kw in calls:
+            self.assertEqual(kw.get("max_time_ms"), q.QUERY_MS, name)
+
+    def test_killed_and_quickly_restarted_is_no_stop(self):
+        db = FakeDB()
+        put(db, T0, seq=1, kind="svc.start")
+        beat(db, T0 + MIN, 2)
+        put(db, T0 + MIN + 20000, run="r2", seq=1, kind="svc.start")        # systemd restarted it 20 s later
+        beat(db, T0 + 2 * MIN + 20000, 2, run="r2")
+        got = q.gaps(db, T0 - 1, T0 + 3 * MIN)
+        self.assertEqual([(g["why"], g["run"], g["from_ms"], g["to_ms"]) for g in got],
+                         [("no_stop", "r1", T0 + MIN, T0 + MIN + 20000)])
 
     def test_gaps_ignores_intentional_stop(self):
         db = FakeDB()
@@ -181,7 +226,7 @@ class GapsTest(unittest.TestCase):
         beat(db, T0 + MIN, 2)
         put(db, T0 + 10 * MIN, run="r2", seq=1, kind="svc.start")
         got = q.gaps(db, T0 - 1, T0 + 12 * MIN)
-        self.assertEqual([(g["why"], g["run"]) for g in got], [("no_beat", "r1")])
+        self.assertEqual([(g["why"], g["run"]) for g in got], [("no_stop", "r1")])
 
     def test_service_dead_at_end_of_range(self):
         db = FakeDB()
@@ -238,7 +283,8 @@ class LastSeenTest(unittest.TestCase):
         for name in list(db.collections):
             col = db.collections[name]
             orig = col.find
-            col.find = lambda flt=None, projection=None, _o=orig, _n=name: seen.append((_n, flt)) or _o(flt, projection)
+            col.find = lambda flt=None, projection=None, _o=orig, _n=name, **kw: (seen.append((_n, flt))
+                                                                                    or _o(flt, projection))
         return seen
 
     def test_newest_row_per_service_across_a_month_boundary(self):

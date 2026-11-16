@@ -37,6 +37,21 @@ test('gaps: red bars placed on the window, labelled, clipped', ()=>{
  assert.equal(ui.gapsHtml([],T,T+1),'');
 });
 
+test('gaps: a kill / quick restart (no_stop) is its own orange mark; seq jumps say how many were lost', ()=>{
+ const gaps=[{svc:'mind',run:'r1',from_ms:T+5*60000,to_ms:T+5*60000+20000,why:'no_stop'},
+  {svc:'ear',run:'r2',from_ms:T,to_ms:T+60000,why:'seq_jump',lost:4}];
+ const html=ui.gapsHtml(gaps,T,T+60*60000);
+ assert.match(html,/class="gap no_stop"/);
+ assert.match(html,/mind 被杀\/重启 14:05:00–14:05:20/);
+ assert.match(html,/ear 序号跳号（丢 4 条） 14:00:00–14:01:00/);
+});
+
+test('gaps are asked for at most the last 48 h of the window (mind refuses more)', ()=>{
+ assert.equal(ui.gapsFrom(T-3600000,T),T-3600000);
+ assert.equal(ui.gapsFrom(T-72*3600000,T),T-48*3600000);
+ assert.equal(ui.GAPS_MAX_MS,48*3600000);
+});
+
 test('last seen: each service, red when older than 2 minutes while looking at now', ()=>{
  const last={ear:{at:T-30000,kind:'svc.beat'},mind:{at:T-5*60000,kind:'call.chat'},eye:null,notes:null,memory:null,tts:{at:T-1000,kind:'call.tts'}};
  assert.deepEqual(ui.staleSvcs(last,T),['mind','eye','notes','memory']);

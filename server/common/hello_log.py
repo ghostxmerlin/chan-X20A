@@ -373,17 +373,22 @@ class Logger:
             at = rec.pop("at", None)
             if isinstance(at, bool) or not isinstance(at, (int, float)):
                 at = self._clock()
+            beat = kind == "svc.beat" and isinstance(rec.get("extra"), dict)
+            # seq, the per-beat counts and the enqueue happen under one lock, so a beat's counts are exactly
+            # the records queued with a seq between the previous beat's and its own (gaps() relies on it)
             with self._lock:
                 seq = next(self._seq)
-            rec.update({"_id": f"{self.svc}:{self.run}:{seq}", "at": int(at), "svc": self.svc, "run": self.run,
-                        "seq": seq, "kind": kind})
-            try:
-                self._q.put_nowait(rec)
-            except queue.Full:
-                with self._lock:
+                rec.update({"_id": f"{self.svc}:{self.run}:{seq}", "at": int(at), "svc": self.svc,
+                            "run": self.run, "seq": seq, "kind": kind})
+                if beat:
+                    rec["extra"] = dict(rec["extra"], counts=self._counts)
+                try:
+                    self._q.put_nowait(rec)
+                except queue.Full:
                     self._dropped += 1
-                return
-            with self._lock:
+                    return
+                if beat:
+                    self._counts = {}
                 self._queued += 1
                 self._enqueued += 1
                 if kind != "svc.beat":
@@ -457,10 +462,8 @@ class Logger:
                     state = fn() if fn is not None else None
                 except Exception as e:
                     state = {"error": f"{type(e).__name__}: {e}"[:200]}
-                with self._lock:
-                    counts, self._counts = self._counts, {}
                 st = self.stats()
-                extra = {"counts": counts, "state": state}
+                extra = {"counts": None, "state": state}          # counts filled in atomically by _put
                 for k in ("dropped", "rejected", "spool_errors", "db_errors", "backlog_lines"):
                     extra[k] = st[k]
                 self._put("svc.beat", {"extra": extra})
