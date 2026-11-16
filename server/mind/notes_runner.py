@@ -12,7 +12,7 @@ import argparse
 import os
 import time
 
-from . import notes, selfvoice, settings, speech_settings
+from . import notes, runlog, selfvoice, settings, speech_settings
 from .records import Records
 from .settings_store import SettingsStore
 from .store import Store
@@ -136,6 +136,7 @@ def main():
     a = ap.parse_args()
     from pymongo import MongoClient
     hub = settings.load_env(a.hubmix_env)
+    runlog.start("notes", hub, a)                # run/audit log (svc.start / beat / stop); never stops the start
     if not hub.get("MONGO_URI"):
         raise SystemExit("MONGO_URI missing in the hubmix env file")
     env = {"base_url": hub.get("BASE_URL", "https://aihubmix.com/v1"), "api_key": hub["API_KEY"]} if hub.get("API_KEY") else None
@@ -144,6 +145,7 @@ def main():
     db["conversations"].create_index([("start_ms", 1)])
     db["conversation_versions"].create_index([("cid", 1), ("version", 1)])
     store, records = Store(db), Records(db)
+    runlog.watch(db, store)
     settings_store = SettingsStore(db, a.settings)
     print(f"notes: model {notes.NOTES_MODEL}, {selfvoice.load(a.clip_texts)} hello voice clips, "
           f"api key {'set' if env else 'missing'}", flush=True)

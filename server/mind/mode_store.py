@@ -48,6 +48,7 @@ import time
 
 from .mode_table import MODES, SUBTITLE_DIRS
 from .modes import EFFECTS, SOURCES, result, snapshot as _snapshot, transition
+from .runlog import hello_log, trace as log_trace
 
 STALE_MS = 3000                  # device inputs older than this are dropped (DualKey resends after a reconnect)
 PAID = ('say_round', 'prefetch_on', 'talk_enter')
@@ -66,6 +67,20 @@ _LOCK = threading.RLock()        # one mode per mind process
 
 def _log(msg):
     print(f'mind mode: {msg}', flush=True)
+
+
+def _log_input(row):
+    """Run log: one mode.input per mode_log row (by = its source, mode = the mode after it)."""
+    try:
+        res = row.get('result') or {}
+        value = row.get('value')
+        hello_log.emit('mode.input', by=row.get('source'), mode=row.get('to'),
+                       sum=f"{row.get('input')}{'' if value is None else ' ' + str(value)}: "
+                           f"{row.get('from')}→{row.get('to')} {row.get('code')}"[:60],
+                       extra={k: row.get(k) for k in ('input', 'value', 'from', 'to', 'code', 'device', 'boot', 'dev_seq',
+                                                      'sid', 'seq', 'effects')} | {'toast': res.get('toast')})
+    except Exception:                            # noqa: BLE001 - logging never touches the mode
+        pass
 
 
 def ensure_indexes(db):
@@ -162,6 +177,7 @@ class ModeStore:
         _log(f'bad stored mode state {st!r} seq={seq!r}: back to talk')
         prev = seq if _is_int(seq) and seq >= 1 else 0
         self._reset(now, seq=prev + 1, billing=True)
+        self._changed(st, self._state, 'boot', 'load', now)
         self._append({'at': now, 'source': 'boot', 'device': None, 'boot': None, 'dev_seq': None, 'sid': None,
                       'input': 'load', 'value': st, 'from': st['mode'] if isinstance(st['mode'], str) else None,
                       'to': 'talk', 'code': 'bad_state', 'result': None, 'seq': self._seq, 'effects': []})
@@ -190,6 +206,12 @@ class ModeStore:
             self.log_coll.insert_one(dict(row))
         except Exception as e:
             _log(f'hello.mode_log write failed: {type(e).__name__}')
+        _log_input(row)
+
+    def _changed(self, old, new, by, input, now):
+        """Run log: the mode state really changed (old / new: the FIELDS dicts)."""
+        hello_log.emit('mode.change', by=by, mode=new.get('mode'), sum=f"{old.get('mode')}→{new.get('mode')}",
+                       extra={'from': dict(old), 'to': dict(new), 'seq': self._seq, 'input': input})
 
     # ---- dedup ----
     def _seen(self, key):
@@ -217,7 +239,12 @@ class ModeStore:
     def apply(self, input, value=None, *, source, device=None, boot=None, dev_seq=None, age_ms=0, sid=None,
               now_ms=None):
         """-> {snapshot, result: {code, toast}, effects} (+ duplicate: True for a repeat, + extra keys from
-        preset_fn such as robot)."""
+        preset_fn such as robot). One run-log trace for the input and what it sets off (preset, switches)."""
+        with hello_log.scope(trace=log_trace()):
+            return self._apply(input, value, source=source, device=device, boot=boot, dev_seq=dev_seq, age_ms=age_ms,
+                               sid=sid, now_ms=now_ms)
+
+    def _apply(self, input, value, *, source, device, boot, dev_seq, age_ms, sid, now_ms):
         if source not in SOURCES:
             raise ValueError(f'unknown source {source!r}')
         now = self.clock_ms() if now_ms is None else now_ms
@@ -317,6 +344,7 @@ class ModeStore:
             changed = new != old
             if changed:
                 self._state, self._seq, self._since, self._by = new, self._seq + 1, now, source
+                self._changed(old, new, source, input, now)
             self._last_input = now
             if changed or new['mode'] == 'settings':     # settings: the 5-minute timer survives a mind restart
                 self._rebuild()
@@ -366,6 +394,8 @@ class ModeStore:
         now = self.clock_ms() if now_ms is None else now_ms
         with _LOCK:
             if on != self._billing:
+                hello_log.emit('billing.set', by=source, sum=f"计费 {'关开'[self._billing]}→{'关开'[on]}",
+                               extra={'before': self._billing, 'after': on})
                 self._billing, self._seq = on, self._seq + 1
                 self._rebuild()
                 self._write()
@@ -402,6 +432,10 @@ class ModeStore:
             raise ValueError('conn must be an integer')
         now = self.clock_ms() if now_ms is None else now_ms
         key = (REPORT_DEVICE, boot, rseq)
+        with hello_log.scope(trace=log_trace()):
+            return self._report(key, st, rseq, by, inp, effects, boot, conn, age_ms, now)
+
+    def _report(self, key, st, rseq, by, inp, effects, boot, conn, age_ms, now):
         dup = self._claim(key, 'report')
         if dup:
             return dup
@@ -430,6 +464,7 @@ class ModeStore:
             changed = st != old
             if changed:
                 self._state, self._seq, self._since, self._by = dict(st), self._seq + 1, now, by
+                self._changed(old, st, by, inp or 'report', now)
             self._last_input = now
             if changed or boot != self._robot_boot:
                 self._robot_boot = boot

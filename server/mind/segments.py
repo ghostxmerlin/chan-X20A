@@ -9,6 +9,7 @@ import json
 
 from . import fusion, llm
 from . import settings as settings_mod
+from .runlog import hello_log, trace as log_trace
 
 MIN_MS = 60_000
 CLASS = {"seen": "present", "just_left": "present", "likely_present": "present", "likely_absent": "absent",
@@ -65,7 +66,8 @@ def summarize(env, store, s, seg, scenes, lane, now_ms):
     body = {"model": model, "temperature": 0, "max_tokens": 2000,
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n".join(lines[-90:])}],
             "response_format": {"type": "json_schema", "json_schema": {"name": "segment", "strict": True, "schema": SUMMARY_SCHEMA}}}
-    resp, ms, err = fusion.CHAT(env["base_url"], env["api_key"], body)
+    with hello_log.scope("call.segment", trace=log_trace(), ref={"minute": seg["start"], "lane": lane}):
+        resp, ms, err = fusion.CHAT(env["base_url"], env["api_key"], body)
     out = None
     if not err:
         try:

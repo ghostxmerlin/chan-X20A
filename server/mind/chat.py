@@ -56,6 +56,7 @@ import uuid
 from . import eye as eye_mod, llm, place, recall, selfvoice, settings as settings_mod, speak, speech_settings
 from .library import Library
 from .store import LANE
+from .runlog import hello_log, trace as log_trace
 
 ROLE = 'deadpan'                     # 无限's delivery (config/roles/deadpan.json, voice wuxian)
 VOICE = 'wuxian'                     # owner 2026-11-14: 声音用无限
@@ -122,7 +123,7 @@ def parse(body):
     return {'session': body.get('session'), 'id': body.get('id'), 'pos': pos, 'text': text.strip(),
             'lang': _short(body.get('lang'), 16), 'emotion': _short(body.get('emotion'), 16),
             'event': _short(body.get('event'), 16), 't': body.get('t'), 'dur': body.get('dur'),
-            'sent_at': body.get('sent_at'),
+            'sent_at': body.get('sent_at'), 'trace': _short(body.get('trace'), 64),   # the ear's run-log trace
             'speech_start_at': body.get('speech_start_at') if body.get('speech_start_at') is not None else body.get('t'),
             'speaker': {'band': _short(sp.get('band'), 16), 'name': _short(sp.get('name'), 32),
                         'score': sp.get('score') if _num(sp.get('score')) else None},
@@ -427,8 +428,11 @@ class Chat:
             if item is None:
                 return None
             self.thinking = True
+        ref = {k: v for k, v in (('tid', item['tid']), ('session', item.get('session')), ('id', item.get('id')))
+               if v is not None}
         try:
-            return self._turn(item, gen)
+            with hello_log.scope(trace=item.get('trace') or log_trace(), ref=ref):    # the ear's trace (R14)
+                return self._turn(item, gen)
         except Exception as e:               # noqa: BLE001 - recorded; the worker logs it and goes on
             self._skip(item, 'error', error=type(e).__name__)
             raise
@@ -591,7 +595,8 @@ class Chat:
         while True:
             tries += 1
             left = LLM_TIMEOUT_S - (self.mono() - t0)
-            resp, ms, err = self.chat_fn(self.env['base_url'], self.env['api_key'], body, timeout=max(1.0, left))
+            with hello_log.scope('call.chat'):
+                resp, ms, err = self.chat_fn(self.env['base_url'], self.env['api_key'], body, timeout=max(1.0, left))
             if not err or tries >= 2 or self.mono() - t0 >= RETRY_BEFORE_S:
                 break
         raw = ''

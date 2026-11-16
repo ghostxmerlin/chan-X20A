@@ -11,7 +11,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 
-from . import fusion, package, segments, selfvoice, settings, speak, strong, speech_settings
+from . import fusion, package, runlog, segments, selfvoice, settings, speak, strong, speech_settings
 from .records import Records
 from .settings_store import SettingsStore
 from .store import LANE, Store
@@ -150,19 +150,22 @@ class _BillingCtx:
         self.say_worker, self.say_auto, self.mode_store, self.clock_ms = say_worker, say_auto, mode_store, clock_ms
 
     def set_switch(self, name, on):
-        self.db['switches'].update_one({'_id': name}, {'$set': {'on': bool(on), 'at': self.clock_ms(), 'by': 'mode'}},
-                                       upsert=True)
+        with runlog.switch(name, runlog.read_switch(self.db, name), bool(on), 'mode'):
+            self.db['switches'].update_one({'_id': name}, {'$set': {'on': bool(on), 'at': self.clock_ms(), 'by': 'mode'}},
+                                           upsert=True)
 
     def switch_on(self, name):
         return (self.db['switches'].find_one({'_id': name}) or {}).get('on') is True
 
     def set_mind(self, on):
-        self.store.set_state(enabled=bool(on), switched_at=self.clock_ms())
+        with runlog.switch('mind', runlog.value(self.store.enabled), bool(on), 'mode'):
+            self.store.set_state(enabled=bool(on), switched_at=self.clock_ms())
 
     def set_mouth(self, mode):
         was = (self.db['switches'].find_one({'_id': 'mouth'}) or {}).get('mode')
-        self.db['switches'].update_one({'_id': 'mouth'}, {'$set': {'mode': mode, 'at': self.clock_ms(), 'by': 'mode'}},
-                                       upsert=True)
+        with runlog.switch('mouth', was, mode, 'mode'):
+            self.db['switches'].update_one({'_id': 'mouth'}, {'$set': {'mode': mode, 'at': self.clock_ms(), 'by': 'mode'}},
+                                           upsert=True)
         if was == 'tts' and mode != 'tts' and self.tts:
             speak.cancel_pending(self.tts)
 
@@ -338,6 +341,7 @@ def main():
     a = ap.parse_args()
     from pymongo import MongoClient
     hub = settings.load_env(a.hubmix_env)
+    runlog.start("mind", hub, a)                 # run/audit log (svc.start / beat / stop); never stops the start
     uri = hub.get("MONGO_URI")
     env = {"base_url": hub.get("BASE_URL", "https://aihubmix.com/v1"), "api_key": hub["API_KEY"]} if hub.get("API_KEY") else None
     if not uri:
@@ -345,6 +349,7 @@ def main():
     db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
     print(f"mind: {selfvoice.load(a.clip_texts)} hello voice clips from {a.clip_texts}", flush=True)
     records, store = Records(db), Store(db)
+    runlog.watch(db, store)
     store.ensure_indexes()
     settings_store = SettingsStore(db, a.settings)
     if a.rebuild:

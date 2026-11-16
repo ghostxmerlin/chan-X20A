@@ -11,7 +11,7 @@ import argparse
 import os
 import time
 
-from . import eye, settings, speech_settings
+from . import eye, runlog, settings, speech_settings
 from .settings_store import SettingsStore
 from .store import Store
 
@@ -66,12 +66,14 @@ def main():
     a = ap.parse_args()
     from pymongo import MongoClient
     hub = settings.load_env(a.hubmix_env)
+    runlog.start("eye", hub, a)                  # run/audit log (svc.start / beat / stop); never stops the start
     if not hub.get("MONGO_URI"):
         raise SystemExit("MONGO_URI missing in the hubmix env file")
     # eye calls DashScope directly since 2026-11-15 (eye.EYE_BASE_URL, qwen3.8-flash); the key is DASHSCOPE_API_KEY
     env = {"base_url": eye.EYE_BASE_URL, "api_key": hub["DASHSCOPE_API_KEY"]} if hub.get("DASHSCOPE_API_KEY") else None
     db = MongoClient(hub["MONGO_URI"], serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
     store = Store(db)
+    runlog.watch(db, store)
     db["eye_minutes"].create_index([("minute", 1), ("version", 1)], unique=True)
     settings_store = SettingsStore(db, a.settings)
     last_on, last_status = None, 0.0

@@ -5,8 +5,31 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+# the run/audit log (server/common/hello_log.py; ~/soul-mind/hello_log.py on the server): mind does `import hello_log`
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server" / "common"))
 
 T0 = 1794300000000          # 2026-11-10 16:40:00 +08:00, a minute boundary
+
+
+def capture_log(svc="mind"):
+    """hello_log.init on log_fixtures' fake db (no Mongo, throwaway spool). Returns flows(kind=None): the flow
+    records written so far (flushed first), oldest first; flows.logger / flows.db for more. Stop it with
+    stop_log() (tearDown), so later tests don't keep logging."""
+    from log_fixtures import capture_log as _capture
+    logger, db = _capture(svc)
+
+    def flows(kind=None):
+        logger.flush()
+        return [r for r in db.flows() if kind is None or r["kind"] == kind]
+    flows.logger, flows.db = logger, db
+    return flows
+
+
+def stop_log():
+    import hello_log
+    if hello_log._current is not None:
+        hello_log._current.close(timeout_s=0)
+        hello_log._current = None
 
 
 def _get(doc, key):

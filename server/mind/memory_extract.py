@@ -53,7 +53,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo
 
-from . import place, selfvoice, settings as settings_mod, speech_settings
+from . import place, runlog, selfvoice, settings as settings_mod, speech_settings
 from .library import EMOTIONS, ROLES, SENSITIVITY, Library, LibraryConflict, _fp, extract_key
 from .model_calls import BudgetExceeded, object_schema, run_json
 
@@ -772,7 +772,8 @@ def status(db, store, s, now_ms):
 def set_switch(db, on, now_ms, by='page'):
     if not isinstance(on, bool):
         raise ValueError('on (true/false) required')
-    db['switches'].update_one({'_id': SWITCH}, {'$set': {'on': on, 'at': now_ms, 'by': by}}, upsert=True)
+    with runlog.switch(SWITCH, runlog.value(lambda: switch_on(db)), on, by):
+        db['switches'].update_one({'_id': SWITCH}, {'$set': {'on': on, 'at': now_ms, 'by': by}}, upsert=True)
     return switch_on(db)
 
 
@@ -877,6 +878,9 @@ def main(argv=None):
         raise SystemExit('--to is in the future')
     print(f'memory extract: {selfvoice.load(a.clip_texts)} hello voice clips; lane {a.lane}; model {MODEL}; '
           f'backfill cap ${BACKFILL_CAP_USD}, spent so far ${spent(db, "backfill", local_day(now_fn(), s["tz"])):.4f}', flush=True)
+    if not a.dry_run:                            # a backfill pays for model calls: they go to the run log (svc memory)
+        runlog.start('memory', hub, a)
+        runlog.watch(db, store)
     t = backfill(db, store, s, env, days_between(a.lo, a.hi), lane=a.lane, now_fn=now_fn, dry_run=a.dry_run,
                  log=lambda m: print('memory extract: ' + m, flush=True))
     kinds = ' '.join(f'{k}={v}' for k, v in sorted(t['kinds'].items())) or '-'

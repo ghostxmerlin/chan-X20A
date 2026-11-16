@@ -11,6 +11,7 @@ import os
 import time
 
 from . import llm, place, speech_settings, settings as settings_mod
+from .runlog import hello_log, trace as log_trace
 
 CHAT = llm.chat                       # injectable in tests
 # 2026-11-15 bake-off (owner chose it): qwen3.8-flash direct on DashScope, thinking off: most accurate on people / place,
@@ -221,13 +222,16 @@ def run_minute(env, store, s, minute_ms, recordings_root, now_ms=None):
             "tools": [{"type": "function", "function": {"name": "eye", "description": "这一分钟画面的视觉结果",
                                                         "parameters": EYE_SCHEMA}}],
             "tool_choice": {"type": "function", "function": {"name": "eye"}}}
-    resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
+    t = log_trace()                              # the retry shares the first call's trace
+    with hello_log.scope("call.eye", trace=t, ref={"minute": minute_ms}):
+        resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
     out, perr = _parse(resp) if not err else (None, err)
     usage, total_ms, retries = dict((resp or {}).get("usage") or {}), ms, 0
     if out is None:
         retries = 1
         body = dict(body, messages=messages + [{"role": "user", "content": f"上一次输出不合格（{perr}）。请严格按要求的 JSON 结构重新输出。"}])
-        resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
+        with hello_log.scope("call.eye", trace=t, ref={"minute": minute_ms}):
+            resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
         total_ms += ms
         out, perr = _parse(resp) if not err else (None, err)
         for k, v in ((resp or {}).get("usage") or {}).items():

@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 
-from . import memory_extract, selfvoice, settings, speech_settings
+from . import memory_extract, runlog, selfvoice, settings, speech_settings
 from .library import Library
 from .memory import MemoryStore, WINDOW, fingerprint
 from .model_calls import BudgetExceeded, object_schema, run_json
@@ -238,11 +238,12 @@ def main():
     args=parser.parse_args()
     from pymongo import MongoClient
     hub=settings.load_env(args.hubmix_env)
+    runlog.start('memory',hub,args)              # run/audit log (svc.start / beat / stop); never stops the start
     if not hub.get('MONGO_URI'):
         raise SystemExit('MONGO_URI missing')
     db=MongoClient(hub['MONGO_URI'],serverSelectionTimeoutMS=5000,connectTimeoutMS=5000)['hello']
     env={'base_url':hub.get('BASE_URL','https://aihubmix.com/v1'),'api_key':hub['API_KEY']} if hub.get('API_KEY') else None
-    store=Store(db); store.ensure_indexes(); MemoryStore(db).ensure_indexes()
+    store=Store(db); runlog.watch(db,store); store.ensure_indexes(); MemoryStore(db).ensure_indexes()
     db['mind_memory_jobs'].create_index([('kind',1),('lane',1),('scope_id',1),('window_ms',-1)])
     Library(db).ensure_indexes()
     ss=SettingsStore(db,args.settings)

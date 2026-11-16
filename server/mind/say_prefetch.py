@@ -12,6 +12,7 @@ import contextlib
 import threading
 import time
 
+from . import runlog
 from .say_moment import same_moment, signature
 
 HOUR_MS = 3600_000
@@ -42,10 +43,11 @@ class Worker:
         return self._on
 
     def set_enabled(self, on, now_ms):
-        self._on = bool(on)
+        before, self._on = self._on, bool(on)
         if not on:
             self._stock.clear()
-        self.store.set_state(say_prefetch={'on': self._on, 'since': now_ms})
+        with runlog.switch('say_prefetch', before, self._on, runlog.by_scope('mode')):
+            self.store.set_state(say_prefetch={'on': self._on, 'since': now_ms})
         for f in self.on_change:
             f(self._on, now_ms)
 

@@ -33,7 +33,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from . import fusion, memory_extract, place, prompts, segments, settings as settings_mod, speak
+from . import fusion, memory_extract, place, prompts, runlog, segments, settings as settings_mod, speak
 from .settings_store import MODELS, SettingsConflict
 from . import speech_settings
 from .memory import MemoryStore, MemoryConflict
@@ -659,7 +659,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise BadRequest('enabled must be true or false')
             if body['enabled']:
                 need_talk()
-            worker.set_enabled(body['enabled'], now)
+            with runlog.hello_log.scope(by='page'):           # the run log's switch.set by
+                worker.set_enabled(body['enabled'], now)
             return {'enabled': worker.enabled()}
         if path == '/say/auto':
             auto = ctx.get('say_auto')
@@ -669,7 +670,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 raise BadRequest('enabled must be true or false')
             if body['enabled']:
                 need_talk()
-            auto.set_enabled(body['enabled'], now)             # on also turns 提前写 on
+            with runlog.hello_log.scope(by='page'):
+                auto.set_enabled(body['enabled'], now)             # on also turns 提前写 on
             return {'enabled': auto.enabled(), 'prefetch': auto.prefetch.enabled()}
         if path == "/voice/try":
             tts = ctx.get("tts")
@@ -691,7 +693,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if body.get("mode") not in MOUTH_MODES:
                 raise BadRequest(f"mouth mode must be one of {'/'.join(MOUTH_MODES)}")
             was = mouth_mode()
-            db["switches"].update_one({"_id": "mouth"}, {"$set": {"mode": body["mode"], "at": now, "by": "page"}}, upsert=True)
+            with runlog.switch("mouth", was, body["mode"], "page"):
+                db["switches"].update_one({"_id": "mouth"}, {"$set": {"mode": body["mode"], "at": now, "by": "page"}}, upsert=True)
             if was == "tts" and body["mode"] != "tts" and ctx.get("tts"):
                 try:
                     speak.cancel_pending(ctx['tts'])
@@ -708,12 +711,14 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == "/switches":
             if body.get("name") not in SWITCHES or not isinstance(body.get("on"), bool):
                 raise BadRequest(f"name ({'/'.join(SWITCHES)}) and on (true/false) required")
-            db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page"}}, upsert=True)
+            with runlog.switch(body["name"], runlog.read_switch(db, body["name"]), body["on"], "page"):
+                db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page"}}, upsert=True)
             return switches()
         if path == "/switch":
             if not isinstance(body.get("enabled"), bool):
                 raise BadRequest("enabled (true/false) required")
-            store.set_state(enabled=body["enabled"], switched_at=now)
+            with runlog.switch("mind", runlog.value(store.enabled), body["enabled"], "page"):
+                store.set_state(enabled=body["enabled"], switched_at=now)
             return {"enabled": store.enabled(), "at": now}
         if path == "/mode":
             if body.get("input") not in MODE_INPUTS or body["input"] in ("boot", "timeout"):

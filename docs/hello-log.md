@@ -44,17 +44,25 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 
 - **服务**：`svc.start`、`svc.stop`、`svc.beat`（每分钟一次，带本分钟各类计数）、`svc.error`。
 - **连接**：`link.open` / `link.close`（ear 每条机器人链路）、`link.upstream`（ear 到听悟、realtime、soul-tts 的上游连接）。
-- **开关 / 模式 / 预设**：`switch.set`、`mode.change`、`preset.apply`、`billing.set`、`robot.state`（机器人上报的开关）。
+- **开关 / 模式 / 预设**：`switch.set`、`mode.input`（mind 的 `mode_log` 每行一条）、`mode.change`、`preset.apply`、`billing.set`、`robot.state`（机器人上报的开关）。
 - **触发与闸门**：`trigger.*`、`gate.realtime`（放行 / muted_quiet / muted_unclear / muted_repeat / muted_blind / muted_wait_look / rescue……及理由）、`filler.play`。
 - **业务调用**（正文里存系统输入 / 背景 / 用户输入 / 输出全文）：
   - `call.eye`、`call.look`；
   - `call.fusion`、`call.segment`、`call.notes`；
   - `call.realtime.session`、`call.realtime.turn`、`call.realtime.search`；
-  - `call.chat`、`call.say.*`；
-  - `call.memory`；
+  - `call.chat`、`call.say.*`（`call.say`、`call.say.speak`、`call.say.line`、`call.say.huyu`、`call.say.judge`、`call.say.check`）、`call.attention`；
+  - `call.memory`、`call.memory.extract`、`call.memory.backfill`；
   - `call.tingwu`；
   - `call.tts`。
 - **听到的话**：`heard.asr`（文字、session、pos），链路从它开始。
+- 没有包在任何 scope 里的模型调用记成 `call.llm`。
+
+## mind 一侧的记录（eye / notes / memory 同）
+
+- **模型调用**都在 `mind/llm.py` 的 `chat()` 里记：`model`、`ms`、`ok`/`err`、`usage`、`cost`（`basis: "llm.PRICES 2026-11-15"`，按 `llm.PRICES` 标价估算）、`key`、`sum`（最后一条用户消息的最后 60 字）、正文 `system`（系统消息文本的列表）/ `input`（其余消息原样，图片已换掉）/ `output`（回复文字，或 tool_calls 的 JSON）。`kind` 和 `ref` 来自调用方：`call.eye` / `call.fusion` / `call.segment` / `call.notes` 带 `ref.minute`（纪要另有 `cid`，情景另有 `lane`、`prompt`）；`run_json` 的 `call.<step>` 带 `minute`、`lane`、`step`；`call.chat` 带 `ref.tid`（`chat_turns`）和 ear 传来的 `trace`。重试和第一次共用 `trace`，一轮脱口秀（各句 + 裁判）共用一个 `trace`。
+- **`switch.set`**：`extra = {name, before, after}`，`by` = page / mode / extract……，`sum` 如 "听悟 开→关"；写库失败时 `ok: false` + `err`。`name` 有 tingwu、eye、notes、realtime、mouth（值是模式）、mind（情景）、memory_extract、say_prefetch（提前写）、say_auto（连续说）。
+- **`mode.input`**：`by` = 来源，`mode` = 之后的模式，`extra` = `{input, value, from, to, code, device, boot, dev_seq, sid, seq, effects, toast}`。**`mode.change`**：`extra = {from, to, seq, input}`（`from`/`to` 是 mode、dir、host、return_to）。**`billing.set`**：`extra = {before, after}`。**`preset.apply`**：`extra = {n, code, toast, failed, robot}`，`ok` = 没有失败的步骤。一次输入和它引起的预设、开关变化共用一个 `trace`。
+- **心跳** `svc.beat` 的 `state`：`switches` 表里每个开关的值（`*_status` 除外）加 `mind`（情景开关）。
 
 ## 判断断档
 

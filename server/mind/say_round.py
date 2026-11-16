@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import recall, say_prompts as P, speech_settings
 from .model_calls import run_json
+from .runlog import hello_log, trace as log_trace
 from .say_moment import signature
 from .speech_context import norm
 
@@ -97,8 +98,14 @@ def write_round(env, store, s, roles, ctx, now_ms, *, chat=None, trigger=None, m
         msgs = P.line_messages(key, prompt_role, ctx, now_ms, hist, max_chars)
         return key, _call(env, store, s, 'say_line', PROMPTS['line'], P.LINE_SCHEMA, msgs, now_ms, chat, 0.65, 160)
 
+    round_trace = log_trace()                # one round, one run-log trace: lines, huyu and the judge
+
+    def write_traced(key):                   # pool threads don't inherit the caller's log scope
+        with hello_log.scope(trace=round_trace):
+            return write(key)
+
     with ThreadPoolExecutor(len(keys)) as pool:
-        results = dict(pool.map(write, keys))
+        results = dict(pool.map(write_traced, keys))
     write_ms = int((time.monotonic() - started) * 1000)
     run_ids = [r[1] for r in results.values() if r[1]]
     lines = []
@@ -119,8 +126,9 @@ def write_round(env, store, s, roles, ctx, now_ms, *, chat=None, trigger=None, m
     labels = [{'text': x['text'], 'voice_label': P.VOICE_LABELS.get(x.get('persona_voice') or x['voice'], x['voice']), 'dialect': x['dialect']}
               for x in order]
     judge_started = time.monotonic()
-    out, judge_run, err = _call(env, store, s, 'say_judge', PROMPTS['judge'], P.JUDGE_SCHEMA,
-                                P.judge_messages(ctx, now_ms, labels), now_ms, chat, 0, 80)
+    with hello_log.scope(trace=round_trace):
+        out, judge_run, err = _call(env, store, s, 'say_judge', PROMPTS['judge'], P.JUDGE_SCHEMA,
+                                    P.judge_messages(ctx, now_ms, labels), now_ms, chat, 0, 80)
     judge_ms = int((time.monotonic() - judge_started) * 1000)
     if judge_run:
         run_ids.append(judge_run)

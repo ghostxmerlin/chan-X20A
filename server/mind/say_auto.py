@@ -10,6 +10,8 @@ leaving talk turning it off.
 import random
 import time
 
+from . import runlog
+
 WAKE_S = (120, 180)
 
 
@@ -30,11 +32,12 @@ class Worker:
         return self._on
 
     def set_enabled(self, on, now_ms):
-        self._on = bool(on)
+        before, self._on = self._on, bool(on)
         if self._on and not self.prefetch.enabled():
             self.prefetch.set_enabled(True, now_ms)
         self.next_at = now_ms + int(self.rng.uniform(*WAKE_S) * 1000) if self._on else None
-        self.store.set_state(say_auto={'on': self._on, 'since': now_ms})
+        with runlog.switch('say_auto', before, self._on, runlog.by_scope('mode')):
+            self.store.set_state(say_auto={'on': self._on, 'since': now_ms})
 
     def _prefetch_changed(self, on, now_ms):
         if not on and self._on:

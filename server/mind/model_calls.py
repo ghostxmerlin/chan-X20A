@@ -3,6 +3,7 @@ import json
 import threading
 
 from . import llm, settings
+from .runlog import hello_log, trace as log_trace
 
 MODEL = 'gpt-6-luna'
 _LOCK = threading.RLock()
@@ -28,7 +29,10 @@ def run_json(env, store, s, step, prompt, schema, messages, now_ms, chat=None, l
             raise BudgetExceeded('今天的模型预算已用完')
     # The HTTP call runs outside the lock so a talk-show round can write its lines in parallel
     # (2026-11-13). The budget check above may let a few concurrent calls through at the limit.
-    resp, latency, err = (chat or llm.chat)(env['base_url'],env['api_key'],body,timeout=timeout)
+    # run log: call.<step> with _ as dots (say_line -> call.say.line, memory_extract -> call.memory.extract)
+    with hello_log.scope('call.'+step.replace('_','.'), trace=log_trace(),
+                         ref={'minute':settings.minute_floor(now_ms), 'lane':lane, 'step':step}):
+        resp, latency, err = (chat or llm.chat)(env['base_url'],env['api_key'],body,timeout=timeout)
     out = None
     if resp and not err:
         try:

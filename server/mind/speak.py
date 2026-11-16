@@ -18,6 +18,7 @@ from . import attention, speech_context, scene_speech, speech_settings, say_mome
 from . import say_round as rounds
 from .records import Records
 from .store import LANE
+from .runlog import hello_log, trace as log_trace
 
 CHAT = llm.chat
 MODEL = "gpt-6-luna"
@@ -182,7 +183,9 @@ def _say_v1(env, store, s, roles, role_id, tts, now_ms, wait=False, is_current=N
     ctx = context(db, store, s, now_ms)
     body = {"model": MODEL, "messages": _messages(role, ctx), "temperature": 0.9, "max_tokens": 2000, "reasoning_effort": "low",
             "response_format": {"type": "json_schema", "json_schema": {"name": "say", "strict": True, "schema": SAY_SCHEMA}}}
-    resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
+    with hello_log.scope("call.say.speak", trace=log_trace(),
+                         ref={"minute": settings_mod.minute_floor(now_ms), "role": role_id}):
+        resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
     text = ""
     if resp and not err:
         try:

@@ -24,6 +24,7 @@ ctx (runner._BillingCtx):
 """
 from .mode_table import PRESETS
 from .modes import SOURCES, result
+from .runlog import hello_log, trace as log_trace
 
 PAID_SWITCHES = ('tingwu', 'eye', 'notes')     # 听悟, 识别, 纪要; 情景 is set_mind
 # 围观 realtime voice session (spike 2026-11-14, ear/realtime_link.py; runs only while hello reports crowd).
@@ -168,6 +169,24 @@ ACTIONS = {'realtime_toggle': _realtime_toggle, 'billing_off': _billing_off, 'bi
 
 
 def apply_preset(n, billing, *, source, now_ms):
+    """_apply_preset with one run-log record when it ends: preset.apply {n, code, toast, failed, robot}, by = source;
+    the switch.set records it causes share its trace."""
+    with hello_log.scope(trace=log_trace()):
+        try:
+            out = _apply_preset(n, billing, source=source, now_ms=now_ms)
+        except Exception as e:
+            hello_log.emit('preset.apply', by=source, ok=False, err=f'{type(e).__name__}: {str(e)[:160]}',
+                           sum=f'预设 {n}: error', extra={'n': n, 'failed': []})
+            raise
+        res, failed = out.get('result') or {}, list(out.get('failed') or [])
+        hello_log.emit('preset.apply', by=source, ok=not failed, err=f"failed: {', '.join(failed)}" if failed else None,
+                       sum=f"预设 {n}: {res.get('code')}" + (f" ({len(failed)} 步失败)" if failed else ''),
+                       extra={'n': n, 'code': res.get('code'), 'toast': res.get('toast'), 'failed': failed,
+                              'robot': out.get('robot')})
+        return out
+
+
+def _apply_preset(n, billing, *, source, now_ms):
     """Run preset n's server half -> {result: {code, toast}, robot: {hearing?, vision?}} (+ failed: [step names]
     when some step did not take; the toast then says 'PRESET N: K FAILED').
 

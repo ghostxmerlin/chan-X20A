@@ -7,6 +7,7 @@ running conversation, and on its first update says whether it continues one from
 import json
 
 from . import llm, package, place, prompts, selfvoice, speech_settings, settings as settings_mod
+from .runlog import hello_log, trace as log_trace
 
 GAP_MS = 60_000                  # no one spoke for a minute: the conversation is over (user 2026-11-11)
 CONTINUE_WINDOW_MS = 10 * 60_000  # the previous conversation is always a candidate within 10 minutes
@@ -222,13 +223,16 @@ def update(env, store, s, conv, sentences, now_ms, recent=None, until_ms=None, c
     messages = messages_for(s, None if new else conv, sentences, recent or [], cands, now_ms)
     body = {"model": NOTES_MODEL, "messages": messages, "temperature": 0, "max_tokens": 4000, "reasoning_effort": "low",
             "response_format": {"type": "json_schema", "json_schema": {"name": "notes", "strict": True, "schema": NOTES_SCHEMA}}}
-    resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
+    t, ref = log_trace(), {"minute": settings_mod.minute_floor(now_ms), "cid": conv["cid"]}   # the retry shares it
+    with hello_log.scope("call.notes", trace=t, ref=ref):
+        resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
     out, perr = _parse(resp) if not err else (None, err)
     usage, total_ms, retries = dict((resp or {}).get("usage") or {}), ms, 0
     if out is None:
         retries = 1
         body = dict(body, messages=messages + [{"role": "user", "content": f"上一次输出不合格（{perr}）。请严格按要求的 JSON 结构重新输出。"}])
-        resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
+        with hello_log.scope("call.notes", trace=t, ref=ref):
+            resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
         total_ms += ms
         out, perr = _parse(resp) if not err else (None, err)
         for k, v in ((resp or {}).get("usage") or {}).items():

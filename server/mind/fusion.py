@@ -7,6 +7,7 @@ import hashlib
 import json
 
 from . import llm, prompts, validate
+from .runlog import hello_log, trace as log_trace
 
 CHAT = llm.chat                       # injectable in tests
 MIN_MS = 60_000
@@ -141,13 +142,16 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
             "response_format": prompts.schema_format()}
     if prompts.REASONING_EFFORT.get(prompt):
         body["reasoning_effort"] = prompts.REASONING_EFFORT[prompt]
-    resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
+    t, ref = log_trace(), {"minute": minute_ms, "lane": lane, "prompt": prompt}    # the retry shares the trace
+    with hello_log.scope("call.fusion", trace=t, ref=ref):
+        resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
     out, perr = _parse(resp) if not err else (None, err)
     retries, total_ms, usage_sum = 0, ms, dict((resp or {}).get("usage") or {})
     if out is None:
         retries = 1
         body = dict(body, messages=messages + [{"role": "user", "content": f"上一次输出不合格（{perr}）。请严格按要求的 JSON 结构重新输出。"}])
-        resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
+        with hello_log.scope("call.fusion", trace=t, ref=ref):
+            resp, ms, err = CHAT(env["base_url"], env["api_key"], body)
         total_ms += ms
         out, perr = _parse(resp) if not err else (None, err)
         for k, v in ((resp or {}).get("usage") or {}).items():
