@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>美玲模式流程</title>
+  <link rel="stylesheet" href="/meiling-flow.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-row">
+    <h1>美玲模式（围观）现在怎么工作</h1>
+    <a href="/">← 观察台</a>
+  </div>
+  <p class="lead">代码里没有“美玲”这两个字。主人说的“用听觉、视觉，再加上情景和纪要来聊天”，在代码里是<b>围观模式</b>（代码名 <code>crowd</code>，机器人屏幕上显示 <b>MEET</b>）。这一页画的就是它：现在用鹿野（ly01）的声音，人设是“傲娇霸气”。</p>
+  <ul class="legend" aria-label="颜色">
+    <li><i class="sw hear"></i>听</li>
+    <li><i class="sw see"></i>看</li>
+    <li><i class="sw think"></i>想 / 情景</li>
+    <li><i class="sw note"></i>记 / 纪要</li>
+    <li><i class="sw say"></i>说</li>
+    <li><i class="sw dash"></i>虚线：回头补进去（反馈）</li>
+  </ul>
+</header>
+
+<main>
+<figure class="flow">
+  <p class="swipe">左右滑动看整张图</p>
+  <div class="scroller">
+  <svg viewBox="0 0 1290 790" role="img" aria-labelledby="flow-title flow-desc">
+    <title id="flow-title">美玲模式（围观）处理流程图</title>
+    <desc id="flow-desc">麦克风的声音经 ear 送给 realtime 模型；ear 的识别结果进入纪要和情景；M12、机身摄像头、视觉爆发进入“你的眼睛”；这些一起拼成说明发给模型；模型的回答经过回答闸门后从机器人喇叭说出来。</desc>
+    <defs>
+      <marker id="m-hear" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hear"/></marker>
+      <marker id="m-see" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk see"/></marker>
+      <marker id="m-think" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk think"/></marker>
+      <marker id="m-note" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk note"/></marker>
+      <marker id="m-say" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk say"/></marker>
+    </defs>
+
+    <!-- lanes -->
+    <rect x="0" y="40" width="800" height="295" rx="14" class="band hear"/>
+    <rect x="0" y="345" width="800" height="310" rx="14" class="band see"/>
+    <rect x="0" y="665" width="1030" height="110" rx="14" class="band say"/>
+    <text x="15" y="64" class="band-l hear" text-anchor="middle">听</text>
+    <text x="15" y="369" class="band-l see" text-anchor="middle">看</text>
+    <text x="15" y="689" class="band-l say" text-anchor="middle">插</text>
+
+    <!-- column headers -->
+    <text x="110" y="26" class="hdr" text-anchor="middle">① 输入</text>
+    <text x="375" y="26" class="hdr" text-anchor="middle">② 实时处理（ear）</text>
+    <text x="650" y="26" class="hdr" text-anchor="middle">③ 每分钟整理（mind）</text>
+    <text x="920" y="26" class="hdr" text-anchor="middle">④ 拼成说明</text>
+    <text x="1175" y="26" class="hdr" text-anchor="middle">⑤ 模型 → 说</text>
+
+    <!-- ===== arrows (drawn first, boxes on top) ===== -->
+    <!-- a2 ear → model: speech audio -->
+    <path d="M375,100 V70 H1175 V98" class="ln hear thick" marker-end="url(#m-hear)"/>
+    <text x="775" y="62" class="lbl hear" text-anchor="middle">收音闸门：只送有人说话的那几秒（前 0.8 秒、后约 1.6 秒）· hello 出声时和说完 0.6 秒内不送 · 每句</text>
+    <!-- a1 mic → ear -->
+    <path d="M190,170 H278" class="ln hear" marker-end="url(#m-hear)"/>
+    <text x="235" y="146" class="lbl hear" text-anchor="middle">声音流</text>
+    <text x="235" y="160" class="lbl hear" text-anchor="middle">一直在传</text>
+    <!-- a3 ear → notes / scene -->
+    <path d="M470,200 H515 V170 H558" class="ln hear" marker-end="url(#m-hear)"/>
+    <path d="M515,200 V265 H558" class="ln hear" marker-end="url(#m-hear)"/>
+    <text x="492" y="219" class="lbl hear" text-anchor="middle">句子</text>
+    <text x="492" y="232" class="lbl hear" text-anchor="middle">每句</text>
+    <!-- a4 notes → builder -->
+    <path d="M740,170 H828" class="ln note" marker-end="url(#m-note)"/>
+    <text x="785" y="146" class="lbl note" text-anchor="middle">纪要 · 话题</text>
+    <text x="785" y="160" class="lbl note" text-anchor="middle">每分钟</text>
+    <!-- a5 scene → builder -->
+    <path d="M740,265 H828" class="ln think" marker-end="url(#m-think)"/>
+    <text x="785" y="241" class="lbl think" text-anchor="middle">情景 · 时间线</text>
+    <text x="785" y="255" class="lbl think" text-anchor="middle">每分钟</text>
+    <!-- a6 M12 → faces in view -->
+    <path d="M190,420 H278" class="ln see" marker-end="url(#m-see)"/>
+    <text x="235" y="396" class="lbl see" text-anchor="middle">人脸事件</text>
+    <text x="235" y="410" class="lbl see" text-anchor="middle">实时</text>
+    <!-- a7 faces in view → builder -->
+    <path d="M470,420 H828" class="ln see" marker-end="url(#m-see)"/>
+    <text x="650" y="410" class="lbl see" text-anchor="middle">眼前有谁 · 变了就更新（≤3 秒一次）</text>
+    <!-- a8 camera → burst -->
+    <path d="M190,560 H278" class="ln see" marker-end="url(#m-see)"/>
+    <text x="235" y="536" class="lbl see" text-anchor="middle">拍一张</text>
+    <text x="235" y="550" class="lbl see" text-anchor="middle">约 2 秒一张</text>
+    <!-- a9 camera → eye -->
+    <path d="M110,600 V625 H650 V602" class="ln see" marker-end="url(#m-see)"/>
+    <text x="380" y="643" class="lbl see" text-anchor="middle">画面有变化才上传（最快约 1 秒一张）</text>
+    <!-- a10 burst → builder -->
+    <path d="M470,540 H510 V490 H828" class="ln see" marker-end="url(#m-see)"/>
+    <text x="670" y="480" class="lbl see" text-anchor="middle">注视：一张张细看 · 每张 ≤3 秒送到</text>
+    <!-- a11 eye → builder -->
+    <path d="M740,560 H828" class="ln see" marker-end="url(#m-see)"/>
+    <text x="785" y="536" class="lbl see" text-anchor="middle">画面描述</text>
+    <text x="785" y="550" class="lbl see" text-anchor="middle">每分钟</text>
+    <!-- a12 builder → model -->
+    <path d="M1010,150 H1098" class="ln think thick" marker-end="url(#m-think)"/>
+    <text x="1055" y="126" class="lbl think" text-anchor="middle">说明全文</text>
+    <text x="1055" y="140" class="lbl think" text-anchor="middle">≥每 30 秒</text>
+    <!-- a13 model → gate -->
+    <path d="M1150,210 V268" class="ln say" marker-end="url(#m-say)"/>
+    <text x="1158" y="236" class="lbl say">回答</text>
+    <text x="1158" y="250" class="lbl say">声音 + 文字</text>
+    <!-- a15 gate → builder (recent replies) -->
+    <path d="M1100,320 H1012" class="ln say dash" marker-end="url(#m-say)"/>
+    <text x="1055" y="296" class="lbl say" text-anchor="middle">说过的话</text>
+    <text x="1055" y="310" class="lbl say" text-anchor="middle">每次说完</text>
+    <!-- a14 gate → insert (rescue) -->
+    <path d="M1100,362 H1055 V685 H1012" class="ln say dash" marker-end="url(#m-say)"/>
+    <text x="1062" y="470" class="lbl say">「嗯」静音</text>
+    <text x="1062" y="484" class="lbl say">→ 救回</text>
+    <!-- a16 gate → speaker -->
+    <path d="M1150,380 V518" class="ln say thick" marker-end="url(#m-say)"/>
+    <text x="1158" y="446" class="lbl say">放行的声音</text>
+    <text x="1158" y="460" class="lbl say">每轮</text>
+    <!-- a18 insert → speaker (filler clips) -->
+    <path d="M1010,715 H1150 V602" class="ln say" marker-end="url(#m-say)"/>
+    <text x="1097" y="707" class="lbl say" text-anchor="middle">垫话 · 本地录音</text>
+    <!-- a17 insert → model -->
+    <path d="M1010,745 H1268 V165 H1252" class="ln say" marker-end="url(#m-say)"/>
+    <text x="1140" y="763" class="lbl say" text-anchor="middle">文字 + 让它回答 · 有事才发</text>
+
+    <!-- ===== boxes ===== -->
+    <!-- col1 -->
+    <rect x="30" y="130" width="160" height="80" rx="10" class="box hear"/>
+    <text x="110" y="156" class="t" text-anchor="middle">麦克风</text>
+    <text x="110" y="176" class="s" text-anchor="middle">机器人头上 · 16 kHz</text>
+    <text x="110" y="194" class="s" text-anchor="middle">GTCRN 降噪</text>
+
+    <rect x="30" y="380" width="160" height="80" rx="10" class="box see"/>
+    <text x="110" y="406" class="t" text-anchor="middle">M12 人脸识别</text>
+    <text x="110" y="426" class="s" text-anchor="middle">认出名字</text>
+    <text x="110" y="444" class="s" text-anchor="middle">性别 · 年龄段</text>
+
+    <rect x="30" y="520" width="160" height="80" rx="10" class="box see"/>
+    <text x="110" y="552" class="t" text-anchor="middle">机身摄像头</text>
+    <text x="110" y="574" class="s" text-anchor="middle">320×240</text>
+
+    <rect x="30" y="680" width="160" height="80" rx="10" class="box say"/>
+    <text x="110" y="706" class="t" text-anchor="middle">闭嘴</text>
+    <text x="110" y="726" class="s" text-anchor="middle">“围观”开关 → 关</text>
+    <text x="110" y="744" class="s" text-anchor="middle">会话马上断开</text>
+
+    <!-- col2 -->
+    <rect x="280" y="100" width="190" height="130" rx="10" class="box hear"/>
+    <text x="375" y="124" class="t" text-anchor="middle">ear 听觉</text>
+    <text x="375" y="145" class="s" text-anchor="middle">VAD 断句：有人在说吗</text>
+    <text x="375" y="163" class="s" text-anchor="middle">本地识别 SenseVoice</text>
+    <text x="375" y="181" class="s" text-anchor="middle">听悟（另有开关）</text>
+    <text x="375" y="199" class="s" text-anchor="middle">找关键词：</text>
+    <text x="375" y="217" class="s" text-anchor="middle">看看 · 查一下 · 闭嘴</text>
+
+    <rect x="280" y="380" width="190" height="80" rx="10" class="box see"/>
+    <text x="375" y="406" class="t" text-anchor="middle">眼前的人</text>
+    <text x="375" y="426" class="s" text-anchor="middle">M12 最近 2 秒的脸</text>
+    <text x="375" y="444" class="s" text-anchor="middle">主人出现 → 招呼</text>
+
+    <rect x="280" y="520" width="190" height="80" rx="10" class="box see"/>
+    <text x="375" y="546" class="t" text-anchor="middle">视觉爆发</text>
+    <text x="375" y="566" class="s" text-anchor="middle">听到「注意看」/ 看图问题</text>
+    <text x="375" y="584" class="s" text-anchor="middle">20 秒 · 拍一张认一张</text>
+
+    <!-- col3 -->
+    <rect x="560" y="135" width="180" height="70" rx="10" class="box note"/>
+    <text x="650" y="158" class="t" text-anchor="middle">纪要 notes</text>
+    <text x="650" y="177" class="s" text-anchor="middle">每分钟把对话缩成一段</text>
+    <text x="650" y="194" class="s" text-anchor="middle">每 5 分钟留一条话题</text>
+
+    <rect x="560" y="225" width="180" height="80" rx="10" class="box think"/>
+    <text x="650" y="249" class="t" text-anchor="middle">情景 mind</text>
+    <text x="650" y="269" class="s" text-anchor="middle">每分钟融合一次</text>
+    <text x="650" y="287" class="s" text-anchor="middle">听到的 + 看到的 + 纪要</text>
+
+    <rect x="560" y="520" width="180" height="80" rx="10" class="box see"/>
+    <text x="650" y="546" class="t" text-anchor="middle">eye 识图</text>
+    <text x="650" y="566" class="s" text-anchor="middle">每分钟一次 · ≤6 张</text>
+    <text x="650" y="584" class="s" text-anchor="middle">qwen3.8-flash</text>
+
+    <!-- col4: the instructions builder -->
+    <rect x="830" y="90" width="180" height="510" rx="12" class="box think strong"/>
+    <text x="920" y="113" class="t" text-anchor="middle">拼成一份说明</text>
+    <text x="920" y="130" class="mono" text-anchor="middle">session.update</text>
+    <rect x="840" y="138" width="160" height="24" rx="6" class="sec"/>
+    <text x="920" y="155" class="s2" text-anchor="middle">人设：傲娇霸气 · 一两句</text>
+    <rect x="840" y="168" width="160" height="122" rx="6" class="sec"/>
+    <text x="920" y="186" class="sh" text-anchor="middle">【背景】mind 给</text>
+    <text x="920" y="204" class="s2" text-anchor="middle">现在 · 地点</text>
+    <text x="920" y="221" class="s2 think-ink" text-anchor="middle">此刻的情景 · 最近的情景</text>
+    <text x="920" y="238" class="s2 note-ink" text-anchor="middle">对话纪要 · 最近聊过</text>
+    <text x="920" y="255" class="s2 note-ink" text-anchor="middle">最近的纪要</text>
+    <text x="920" y="272" class="s2 note-ink" text-anchor="middle">你记得 · 认识的人</text>
+    <rect x="840" y="298" width="160" height="44" rx="6" class="sec"/>
+    <text x="920" y="316" class="sh" text-anchor="middle">【刚才的对话】</text>
+    <text x="920" y="333" class="s2 say-ink" text-anchor="middle">最近 8 句 · 15 分钟内</text>
+    <rect x="840" y="350" width="160" height="240" rx="6" class="sec"/>
+    <text x="920" y="372" class="sh" text-anchor="middle">【你的眼睛】</text>
+    <text x="920" y="392" class="s" text-anchor="middle">放在最后，模型最容易看到</text>
+    <text x="920" y="424" class="s2 see-ink" text-anchor="middle">人脸识别（实时）</text>
+    <text x="920" y="442" class="s2 see-ink" text-anchor="middle">最近 3 分钟认出过</text>
+    <text x="920" y="494" class="s2 see-ink" text-anchor="middle">注视（最新 5 张）</text>
+    <text x="920" y="564" class="s2 see-ink" text-anchor="middle">摄像头识图（约 1 分钟前）</text>
+
+    <!-- bottom: inserted text items -->
+    <rect x="280" y="680" width="730" height="80" rx="10" class="box say"/>
+    <text x="300" y="712" class="t">插一句文字</text>
+    <text x="300" y="732" class="mono">conversation.item</text>
+    <text x="300" y="748" class="mono">+ response.create</text>
+    <rect x="450" y="690" width="176" height="26" rx="13" class="chip"/>
+    <text x="538" y="708" class="c" text-anchor="middle">主人出现 → 长 / 短招呼</text>
+    <rect x="636" y="690" width="176" height="26" rx="13" class="chip"/>
+    <text x="724" y="708" class="c" text-anchor="middle">单击屏幕 → 打招呼</text>
+    <rect x="822" y="690" width="176" height="26" rx="13" class="chip"/>
+    <text x="910" y="708" class="c" text-anchor="middle">「嗯」救回 → 再问一次</text>
+    <rect x="450" y="724" width="270" height="26" rx="13" class="chip"/>
+    <text x="585" y="742" class="c" text-anchor="middle">看图问题 → 「我看看哈」→ 照片到了再答</text>
+    <rect x="730" y="724" width="268" height="26" rx="13" class="chip"/>
+    <text x="864" y="742" class="c" text-anchor="middle">查询问题 → 「我查查哈」→ 搜到再答</text>
+
+    <!-- col5 -->
+    <rect x="1100" y="100" width="150" height="110" rx="10" class="box say strong"/>
+    <text x="1175" y="124" class="t" text-anchor="middle">realtime 模型</text>
+    <text x="1175" y="145" class="s" text-anchor="middle">qwen-audio-3.1</text>
+    <text x="1175" y="162" class="s" text-anchor="middle">realtime-flash</text>
+    <text x="1175" y="185" class="s" text-anchor="middle">声音进 · 声音出</text>
+
+    <rect x="1100" y="270" width="150" height="110" rx="10" class="box say"/>
+    <text x="1175" y="294" class="t" text-anchor="middle">回答闸门</text>
+    <text x="1175" y="315" class="s" text-anchor="middle">回答文字先到</text>
+    <text x="1175" y="333" class="s" text-anchor="middle">看完再放声音</text>
+    <text x="1175" y="356" class="s" text-anchor="middle">规则见下方 ⑤</text>
+
+    <rect x="1100" y="520" width="150" height="80" rx="10" class="box say strong"/>
+    <text x="1175" y="546" class="t" text-anchor="middle">机器人喇叭</text>
+    <text x="1175" y="566" class="s" text-anchor="middle">Opus 24 kHz</text>
+    <text x="1175" y="584" class="s" text-anchor="middle">话说完约 0.7 秒出声</text>
+  </svg>
+  </div>
+</figure>
+
+<section class="notes">
+  <article class="card hear">
+    <h2>① 听</h2>
+    <p>麦克风的声音一直传到 ear。ear 先降噪，再用自己的 VAD 判断有没有人在说话。</p>
+    <ul>
+      <li><b>送给模型：</b>只送说话的那几秒（前面多留 0.8 秒，后面多留约 1.6 秒），安静的时候不花钱。</li>
+      <li><b>不能打断：</b>hello 自己出声、在想、说完 0.6 秒内，一点声音都不送。</li>
+      <li><b>模型断句：</b>模型那边再用自己的 VAD 断句（阈值 0.6，静 1 秒算说完）。</li>
+      <li><b>ear 自己也识别</b>（SenseVoice），用来：写进库给纪要和情景用、找关键词（看图 / 查询 / 注意看 / 闭嘴）、救回「嗯」。</li>
+    </ul>
+  </article>
+
+  <article class="card see">
+    <h2>② 看（三条路）</h2>
+    <ul>
+      <li><b>M12 实时认脸 → 眼前的人：</b>变了就重发说明（最多 3 秒一次），也用来招呼主人、单击打招呼。</li>
+      <li><b>机身摄像头 → eye：</b>画面变了才上传；eye 每分钟挑最多 6 张识图一次，写成“摄像头照片识图（大约一分钟前）”，也进情景。</li>
+      <li><b>视觉爆发：</b>听到「注意看 / 仔细看 / 你看看…」或看图问题后，20 秒内拍一张、认一张、再拍下一张（约 2 秒一张）。每张变成一行“注视”，保留最新 5 张、3 分钟内的。</li>
+    </ul>
+  </article>
+
+  <article class="card think">
+    <h2>③ 情景和纪要（每分钟，不直接说话）</h2>
+    <ul>
+      <li class="note-li"><b>纪要（notes）：</b>每分钟把正在进行的对话缩成一段，整分后约 15 秒写好；每 5 分钟留一条，组成“最近半小时聊过”。</li>
+      <li><b>情景（mind）：</b>整分后约 20 秒，把这一分钟听到的句子、声音种类、M12 认出的人、eye 识图和当时的纪要合成“此刻的情景”。没有新东西就沿用上一分钟，不调模型。</li>
+      <li>这两样都不直接给模型，而是先放进库，再由 ④ 拼进说明。</li>
+    </ul>
+  </article>
+
+  <article class="card think">
+    <h2>④ 拼成说明（session.update）</h2>
+    <p>会话打开时、之后每 30 秒，ear 向 mind 要一次背景（<code>GET /realtime/context</code>：只读库，不调模型，不花钱），拼成：<b>人设 + 【背景】 + 【刚才的对话】 + 【你的眼睛】</b>，整份发给模型。</p>
+    <p>什么时候重发（日志 <code>call.realtime.context</code> 的 why）：</p>
+    <table class="why">
+      <tr><td><code>context</code></td><td>每 30 秒，背景更新</td></tr>
+      <tr><td><code>seen</code></td><td>眼前的人变了（最多 3 秒一次）</td></tr>
+      <tr><td><code>looks</code></td><td>来了新的注视照片（最多 3 秒一次）</td></tr>
+      <tr><td><code>reply</code></td><td>hello 每说完一句</td></tr>
+    </table>
+    <p class="small">【背景】最多 2600 字：现在时间、地点（不知道时 10 分钟最多问一次）、背景资料、此刻的情景 / 在聊 / 声音（4 分钟内的）、对话纪要、M12 认出的人（3 分钟内）、画面、注视、最近的情景（半小时、最多 8 行）、最近半小时聊过、最近的纪要（3 小时内 4 条）、你记得（最多 3 条）、认识的人（人物卡）。【刚才的对话】里重复说过的话会标上次数，让它别再说。</p>
+  </article>
+
+  <article class="card say">
+    <h2>⑤ 回答闸门（每轮）</h2>
+    <p>模型的回答文字比声音早 0.3–0.6 秒到，闸门按顺序看：</p>
+    <ol>
+      <li><b>看图问题</b>（你看看 / 这是什么 / 拿的是什么…）→ 这次回答不放（wait_look），开视觉爆发，马上放一句录好的「我看看哈」；拍到问题之后的第一张照片，就把照片描述当文字给它，让它照着答。8 秒没等到就不说。</li>
+      <li><b>查询问题</b>（查一下 / 搜一下 / 天气 / 新闻…）→ 不放（wait_search），放「我查查哈」；ear 自己用 qwen3.8-flash 强制联网搜（最多等 10 秒），把结果当文字给它，用自己的话说。没搜到就说没查到。</li>
+      <li><b>只回了「嗯」</b> → 不放（quiet）。5 秒内如果那句话里有叫它、问它的词，或者是它刚说完 20 秒内的问句，就用文字再问一次（救回）。</li>
+      <li><b>“没听清 / 说啥 / 啥意思”</b> → 不放（unclear）。</li>
+      <li><b>和最近说过的一字不差</b>（6 个字以上）→ 不放（repeat）。</li>
+      <li><b>5 秒内没有新照片却说“看不清 / 黑乎乎 / 全白”</b> → 不放（blind）。</li>
+      <li>其余 <b>放行</b>：声音转成 Opus（60 毫秒一帧），经 /mouth 发到机器人喇叭。</li>
+    </ol>
+    <p class="small">不放的回答已经算过钱（约 0.004 元一轮），只是不播。</p>
+  </article>
+
+  <article class="card say">
+    <h2>⑥ 招呼、闭嘴、会话开关</h2>
+    <ul>
+      <li><b>主人出现：</b>M12 认出主人，离开 1 分钟以上再出现 → 长招呼（喊名字，10 分钟最多一次）；10 分钟内再见 → 短招呼（hi / 你好 / 嗯哼？/ 嘿，或者两声哔；最多 1 分钟一次）。</li>
+      <li><b>单击屏幕：</b>看最近 2 秒最大的那张脸：认识的叫名字；不认识的按 M12 的性别年龄叫美女 / 帅哥 / 小朋友 / 爷爷 / 奶奶；没有脸就说没看到人。</li>
+      <li>招呼都等 hello 安静了才说，等超过 10 秒就作废。</li>
+      <li><b>闭嘴：</b>听到「闭嘴」，或者“别说话 / 安静点…”这样的短句 → 让 mind 关掉“围观”开关，会话马上断开。数字 1 或双击屏幕再打开。</li>
+      <li><b>会话：</b>机器人报告在围观、“围观”开关开着、/mouth 连着，三样都满足才开。每段最长 10 分钟就换一段新的（刚才的对话会带过去）；3 分钟没人说话就关，下一句话或者主人出现时再开。</li>
+      <li>围观开着时，本地的情绪台词不回应；模型自己也开着联网搜索，但它常常不搜，所以有 ⑤ 里 ear 自己强制搜这一步。</li>
+    </ul>
+  </article>
+
+  <article class="card wide">
+    <h2>节奏：多久一次</h2>
+    <table class="cadence">
+      <tr><th>多久</th><th>发生什么</th></tr>
+      <tr><td>一直</td><td><span class="tag hear">听</span>麦克风声音传到 ear　<span class="tag see">看</span>M12 人脸事件</td></tr>
+      <tr><td>每句话</td><td><span class="tag hear">听</span>送模型的声音、本地识别、找关键词　<span class="tag say">说</span>回答闸门；说完更新【刚才的对话】</td></tr>
+      <tr><td>约 2 秒</td><td><span class="tag see">看</span>视觉爆发一张（只在触发后 20 秒内）</td></tr>
+      <tr><td>最多 3 秒一次</td><td><span class="tag see">看</span>眼前的人变了、来了新注视 → 重发说明</td></tr>
+      <tr><td>30 秒</td><td><span class="tag think">想</span>向 mind 要背景 → 重发说明</td></tr>
+      <tr><td>每分钟</td><td><span class="tag see">看</span>eye 识图（整分后约 15–18 秒）　<span class="tag note">记</span>纪要（约 15 秒）　<span class="tag think">想</span>情景（约 20 秒）</td></tr>
+      <tr><td>5 分钟</td><td><span class="tag note">记</span>话题时间线留一条</td></tr>
+      <tr><td>10 分钟</td><td><span class="tag say">说</span>会话换一段；长招呼最多一次</td></tr>
+    </table>
+  </article>
+
+  <article class="card wide muted-card">
+    <h2>依据和没把握的地方</h2>
+    <ul>
+      <li>按本机源码整理（2026-11-17）：<code>server/ear/realtime_link.py</code>、<code>ear_server.py</code>、<code>vision_burst.py</code>、<code>web_search.py</code>；<code>server/mind/realtime.py</code>、<code>runner.py</code>、<code>notes_runner.py</code>、<code>eye.py</code>、<code>fusion.py</code>；日志说明 <code>docs/hello-log.md</code>。没有核对服务器上正在跑的版本。</li>
+      <li>“美玲模式 = 围观模式”是推断：代码里找不到“美玲”。</li>
+      <li>背景刷新：代码里是 30 秒（<code>Config.context_s</code>），几处注释还写着 60 秒；本页按代码。</li>
+      <li>摄像头“最快约 1 秒一张”出自固件笔记（0.4.98），这次没有在服务器代码里核对。</li>
+    </ul>
+  </article>
+</section>
+</main>
+</body>
+</html>
