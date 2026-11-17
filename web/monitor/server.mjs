@@ -21,7 +21,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/say-ui.js', ['say-ui.js', 'text/javascript; charset=utf-8']], ['/scene-ui.js', ['scene-ui.js', 'text/javascript; charset=utf-8']], ['/looks-ui.js', ['looks-ui.js', 'text/javascript; charset=utf-8']], ['/looks-ui-main.js', ['looks-ui-main.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']],
     ['/mode-ui.js', ['mode-ui.js', 'text/javascript; charset=utf-8']], ['/mode.css', ['mode.css', 'text/css; charset=utf-8']],
     ['/log.html', ['log.html', 'text/html; charset=utf-8']], ['/log-ui.js', ['log-ui.js', 'text/javascript; charset=utf-8']], ['/log.css', ['log.css', 'text/css; charset=utf-8']],
-    ['/meiling-flow.html', ['meiling-flow.html', 'text/html; charset=utf-8']], ['/meiling-flow.css', ['meiling-flow.css', 'text/css; charset=utf-8']]]);
+    ['/crowd-flow.html', ['crowd-flow.html', 'text/html; charset=utf-8']], ['/crowd-flow.css', ['crowd-flow.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];

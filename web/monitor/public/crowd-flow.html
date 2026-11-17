@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>美玲模式流程</title>
-  <link rel="stylesheet" href="/meiling-flow.css">
+  <title>围观模式流程</title>
+  <link rel="stylesheet" href="/crowd-flow.css">
 </head>
 <body>
 <header class="top">
   <div class="top-row">
-    <h1>美玲模式（围观）现在怎么工作</h1>
+    <h1>围观模式现在怎么工作</h1>
     <a href="/">← 观察台</a>
   </div>
-  <p class="lead">代码里没有“美玲”这两个字。主人说的“用听觉、视觉，再加上情景和纪要来聊天”，在代码里是<b>围观模式</b>（代码名 <code>crowd</code>，机器人屏幕上显示 <b>MEET</b>）。这一页画的就是它：现在用鹿野（ly01）的声音，人设是“傲娇霸气”。</p>
+  <p class="lead"><b>围观模式</b>（代码名 <code>crowd</code>，机器人屏幕上显示 <b>MEET</b>）：用听觉、视觉，再加上情景和纪要来聊天。这一页画的就是它：现在用鹿野（ly01）的声音，人设是“傲娇霸气”。</p>
   <ul class="legend" aria-label="颜色">
     <li><i class="sw hear"></i>听</li>
     <li><i class="sw see"></i>看</li>
@@ -28,7 +28,7 @@
   <p class="swipe">左右滑动看整张图</p>
   <div class="scroller">
   <svg viewBox="0 0 1290 790" role="img" aria-labelledby="flow-title flow-desc">
-    <title id="flow-title">美玲模式（围观）处理流程图</title>
+    <title id="flow-title">围观模式处理流程图</title>
     <desc id="flow-desc">麦克风的声音经 ear 送给 realtime 模型；ear 的识别结果进入纪要和情景；M12、机身摄像头、视觉爆发进入“你的眼睛”；这些一起拼成说明发给模型；模型的回答经过回答闸门后从机器人喇叭说出来。</desc>
     <defs>
       <marker id="m-hear" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hear"/></marker>
@@ -328,7 +328,6 @@
     <h2>依据和没把握的地方</h2>
     <ul>
       <li>按本机源码整理（2026-11-17）：<code>server/ear/realtime_link.py</code>、<code>ear_server.py</code>、<code>vision_burst.py</code>、<code>web_search.py</code>；<code>server/mind/realtime.py</code>、<code>runner.py</code>、<code>notes_runner.py</code>、<code>eye.py</code>、<code>fusion.py</code>；日志说明 <code>docs/hello-log.md</code>。没有核对服务器上正在跑的版本。</li>
-      <li>“美玲模式 = 围观模式”是推断：代码里找不到“美玲”。</li>
       <li>背景刷新：代码里是 30 秒（<code>Config.context_s</code>），几处注释还写着 60 秒；本页按代码。</li>
       <li>摄像头“最快约 1 秒一张”出自固件笔记（0.4.98），这次没有在服务器代码里核对。</li>
     </ul>
