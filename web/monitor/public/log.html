@@ -3,30 +3,44 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>hello 日志</title>
-  <link rel="stylesheet" href="/mind.css"><link rel="stylesheet" href="/log.css"><script type="module" src="/log-ui.js"></script>
+  <link rel="stylesheet" href="/log.css"><script type="module" src="/log-ui.js"></script>
 </head>
 <body>
-  <header>
-    <h1>hello 日志</h1>
-    <a href="/">← 观察台</a>
-    <a href="/mind.html">情景</a>
-    <span id="log-status">连接中…</span>
-    <div id="log-ledger" class="ledger"><label>总账（北京时间的一天） <input type="date" id="log-day"></label><div id="log-ledger-box"><p class="alt">加载中…</p></div></div>
+  <header class="topbar">
+    <div class="brand"><h1>hello 日志</h1><nav class="links" aria-label="其它页面"><a href="/">观察台</a><a href="/mind.html">情景</a></nav></div>
+    <div class="range" role="group" aria-label="时间范围">
+      <button data-range="15m" aria-pressed="false">15 分钟</button><button data-range="1h" aria-pressed="true">1 小时</button><button data-range="6h" aria-pressed="false">6 小时</button><button data-range="24h" aria-pressed="false">24 小时</button><button data-range="custom" aria-pressed="false">自定义</button>
+    </div>
+    <span id="log-custom" class="custom" hidden><input type="datetime-local" id="log-from" aria-label="从（北京时间）"><span>到</span><input type="datetime-local" id="log-to" aria-label="到（北京时间）"><button id="log-apply" class="btn">查看</button></span>
+    <button id="log-refresh" class="btn">刷新</button>
+    <span id="log-status" class="status">连接中…</span>
   </header>
-  <nav class="log-filters" aria-label="筛选">
-    <label>时间 <select id="log-range"><option value="15m">最近 15 分钟</option><option value="1h" selected>最近 1 小时</option><option value="6h">最近 6 小时</option><option value="24h">最近 24 小时</option><option value="custom">自定义</option></select></label>
-    <span id="log-custom" hidden>北京时间 <input type="datetime-local" id="log-from"> – <input type="datetime-local" id="log-to"></span>
-    <label>类型 <select id="log-kind"><option value="">全部</option><option value="call.">call</option><option value="gate.">gate</option><option value="trigger.">trigger</option><option value="switch.">switch</option><option value="mode.">mode</option><option value="link.">link</option><option value="svc.">svc</option><option value="heard.">heard</option><option value="robot.">robot</option></select></label>
-    <label>服务 <select id="log-svc"><option value="">全部</option><option>ear</option><option>mind</option><option>eye</option><option>notes</option><option>memory</option><option>tts</option></select></label>
-    <label><input type="checkbox" id="log-cost"> 只看有花费的</label>
-    <label>链路 <input id="log-trace" placeholder="trace" size="14"></label>
-    <button id="log-refresh">刷新</button>
-  </nav>
-  <main>
-    <section><h2>各服务最后一条记录</h2><div id="log-svcs" class="svcs"><span class="alt">加载中…</span></div></section>
-    <section><h2>断档</h2><div id="log-gaps"><p class="alt">加载中…</p></div></section>
-    <section id="log-chain" class="chain" hidden></section>
-    <section><h2>记录（新的在上）</h2><div class="logrow head"><span>时间（北京）</span><span>服务</span><span>类型</span><span>摘要</span><span>花费</span></div><div id="log-list"></div><button id="log-more" hidden>更早的</button></section>
-  </main>
+  <div class="layout">
+    <aside class="side" aria-label="筛选">
+      <h2>分类</h2>
+      <div id="log-cats" class="cats" role="group" aria-label="分类"></div>
+      <div class="legend" aria-label="图例"><span><span class="badge mini" aria-hidden="true">纪</span>实心：模型调用，有提示词</span><span><span class="badge mini soft" aria-hidden="true">悟</span>浅色：事件</span></div>
+      <h2>筛选</h2>
+      <div class="filters">
+        <label class="field"><span>服务</span><select id="log-svc"><option value="">全部服务</option><option>ear</option><option>mind</option><option>eye</option><option>notes</option><option>memory</option><option>tts</option></select></label>
+        <label class="field"><span>链路</span><input id="log-trace" placeholder="trace 编号，回车"></label>
+        <label class="switch"><input type="checkbox" id="log-cost"><span>只看花钱的</span></label>
+        <label class="switch"><input type="checkbox" id="log-beats"><span>显示心跳</span></label>
+      </div>
+    </aside>
+    <main class="feed">
+      <section class="strip" aria-label="概况">
+        <div class="strip-item svcs" id="log-svcs"><span class="muted">读取服务状态…</span></div>
+        <button class="strip-item" id="log-gaps-btn" aria-expanded="false"><span class="muted">断档</span> <b id="log-gaps-n">…</b></button>
+        <button class="strip-item" id="log-cost-btn" aria-expanded="false"><span class="muted">今天花费</span> <b id="log-cost-total">…</b></button>
+      </section>
+      <div id="log-gaps" class="drawer" hidden><p class="muted">读取中…</p></div>
+      <div id="log-ledger" class="drawer" hidden><label class="field inline"><span>北京时间的一天</span><input type="date" id="log-day"></label><div id="log-ledger-box"></div></div>
+      <section id="log-chain" class="chain" hidden></section>
+      <div id="log-list" class="events"></div>
+      <button id="log-more" class="btn wide" hidden>读更早的</button>
+    </main>
+    <aside id="log-detail" class="detail-pane" aria-live="polite"></aside>
+  </div>
 </body>
 </html>
