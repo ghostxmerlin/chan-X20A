@@ -48,6 +48,7 @@ import vision_link
 import signal_link
 import tingwu as tingwu_rt
 import tingwu_switch
+import presence as presence_mod
 import mouth_link
 import mouth_mode
 import realtime_link
@@ -298,6 +299,7 @@ class Ear:
         self.tingwu_switch = tingwu_switch.SwitchReader(lambda: None)   # the server switch; off unless main injects one
         self.mouth_mode = mouth_mode.ModeReader(lambda: None)          # 嘴 mode; clips unless main injects one
         self.chat = None               # mouth_link.ModeRelay (main): sentences go to mind while hello is in chat
+        self.presence = None           # presence.Presence (main): a known voice is presence for the pause (mind/pause.py)
         self.realtime = None           # realtime_link.RealtimeHub (main): 围观 voice session, fed from on_audio
         self.on_tingwu_change = None   # main: called when a stream starts or stops (status document)
         self.audio_declared = False
@@ -702,6 +704,8 @@ class Ear:
               "debug": {"vad_wait_ms": ms(t_pop - arr_mono), "queue_ms": ms(t0 - t_q), "spk_ms": ms(t1 - t0),
                         "asr_ms": ms(t2 - t1), "tag_ms": ms(t3 - t2), "server_ms": ms(time.monotonic() - t_pop)}}
         self.post(ev)
+        if self.presence is not None and self.device_profile:
+            self.presence.heard(ev)    # a known voice (owner / family) = someone is here; before 围观 sees the words
         if self.realtime is not None and self.device_profile and text:
             try:                       # 围观: the ear's own words for the 「嗯」 rescue, burst words and 闭嘴
                 self.realtime.local_heard(text, trace=ev.get("trace"))
@@ -976,6 +980,7 @@ async def serve_hearing(ws, peer, number, ctx):
         ear.mouth_mode = ctx.mouth
         ear.chat = mode_hub
         ear.realtime = ctx.rt_hub
+        ear.presence = getattr(ctx, "presence", None)
         ctx.ears.add(ear)
         ticker = asyncio.create_task(ear.ticker())
         async for data in ws:
@@ -1010,16 +1015,25 @@ async def serve_hearing(ws, peer, number, ctx):
                 print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
 
 
-async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=None):
-    """One /vision connection (vision_link.py), with its run-log link.open / link.close. -> the VisionLink."""
+async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=None, presence=None):
+    """One /vision connection (vision_link.py), with its run-log link.open / link.close. -> the VisionLink.
+    Every M12 event goes to presence first (a face lifts an away pause here at once), then to 围观."""
     print(f"+ {peer} vision v{number}", flush=True)
     t0 = ear_log.link_open("vision", conn=f"v{number}", peer=peer)
     link = None
+
+    def on_event(m):
+        if presence is not None:
+            presence.vision(number, m)
+        if rt_hub is not None:
+            rt_hub.on_vision(m)
     try:
         link = await vision_link.serve_link(ws, database, number, f"{peer[0]}:{peer[1]}", rec_root,
-                                            on_event=rt_hub.on_vision if rt_hub else None,
+                                            on_event=on_event if rt_hub or presence is not None else None,
                                             on_frame=burst.on_frame if burst else None)
     finally:
+        if presence is not None:
+            presence.vision_closed(number)
         ear_log.link_close("vision", t0, conn=f"v{number}", peer=peer, boot=_boot(getattr(link, "device", None)),
                            why=getattr(link, "why", None) or "error",
                            counts={"events": link.events, "frames": link.frames} if link else None)
@@ -1085,20 +1099,33 @@ def main():
     mouth_active = set()
     mouth_no = [0]                                   # /mouth connection number (conn)
     tw_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("tingwu")) if database else (lambda: None))
+    # The pause (2026-11-17, mind/pause.py; presence.py): the ear reports who is there and obeys mind's pause in its
+    # paid paths (听悟, 围观, 视觉爆发) without touching the owner's switches.
+    presence = presence_mod.Presence()
+    pause = presence_mod.Pause((lambda: database.read_switch("pause")) if database else (lambda: None), presence)
+    presence_writer = presence_mod.Writer(presence, lambda d: database.switch_status("presence", d)) if database else None
+    tw_paid = presence_mod.Gated(tw_switch, pause)
     mouth = mouth_mode.ModeReader((lambda: database.read_switch("mouth")) if database else (lambda: None))
 
     def write_tingwu_status():
         if database is not None:
             database.switch_status("tingwu", {"running": sorted(e.session or "?" for e in ears if e.tingwu is not None),
                                               "available": tingwu_keys is not None, "on": tw_switch.on,
-                                              "at": int(time.time() * 1000)})
+                                              "paused": tw_paid.paused, "at": int(time.time() * 1000)})
 
     async def watch_tingwu_switch():
         """Read the server switch every 5 s (off the model thread); status on change and every 30 s."""
-        last, n = None, 0
+        last, n, held = None, 0, []
         while True:
             await asyncio.to_thread(tw_switch.update)
             await asyncio.to_thread(rt_switch.update)
+            await asyncio.to_thread(pause.update)
+            if pause.reasons() != held:
+                held = pause.reasons()
+                print(f"pause: {'/'.join(held) if held else 'off'}", flush=True)
+                write_tingwu_status()
+            if presence_writer is not None:
+                presence_writer.maybe()
             before = mouth.mode
             await asyncio.to_thread(mouth.update)
             if mouth.mode != before:
@@ -1115,6 +1142,7 @@ def main():
     # hello's mode reports -> mind (step 1b); place frames for the robot's info page every 5 s (2026-11-15)
     mode_hub = mouth_link.ModeRelay(mouth_link.mind_client(token_value), place_poll_s=5.0)
     rt_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("realtime")) if database else (lambda: None))
+    rt_paid = presence_mod.Gated(rt_switch, pause)        # 围观 and 视觉爆发 see the switch through the pause
     rt_hub = None
     if a.realtime == "on":
         rt_voice = os.environ.get("SOUL_RT_VOICE_ID") or realtime_link.load_voice(a.realtime_voices, a.realtime_voice)
@@ -1123,7 +1151,7 @@ def main():
             cfg.silence_ms, cfg.vad_threshold = a.realtime_silence_ms, a.realtime_vad_threshold
             fillers = realtime_link.load_fillers(os.path.expanduser(f"~/soul-spike/fillers/{a.realtime_voice}"))
             rt_hub = realtime_link.RealtimeHub(key=secrets["DASHSCOPE_API_KEY"], voice=rt_voice, modes=mode_hub,
-                                               call=mouth_link.mind_client(token_value), switch=rt_switch, db=database,
+                                               call=mouth_link.mind_client(token_value), switch=rt_paid, db=database,
                                                cfg=cfg, fillers=fillers)
             print(f"realtime (围观): {len(fillers)} look fillers", flush=True)
             # 联网搜索 (owner 2026-11-16): search words make the ear search itself (web_search.py), "我查查哈" meanwhile
@@ -1138,9 +1166,9 @@ def main():
         rt_hub.burst = burst
 
     hearing_ctx = argparse.Namespace(models=models, ex=ex, rec_root=rec_root, database=database,
-                                     tingwu_keys=tingwu_keys, tw_switch=tw_switch,
+                                     tingwu_keys=tingwu_keys, tw_switch=tw_paid,
                                      write_tingwu_status=write_tingwu_status, mouth=mouth, mode_hub=mode_hub,
-                                     rt_hub=rt_hub, ears=ears, active=active)
+                                     rt_hub=rt_hub, ears=ears, active=active, presence=presence)
 
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
@@ -1160,7 +1188,7 @@ def main():
             print(f"+ {peer} mouth m{mouth_no[0]}", flush=True)
             t0 = ear_log.link_open("mouth", conn=f"m{mouth_no[0]}", peer=peer)
             link = mouth_link.MouthLink(ws, upstream_url=mouth_link.UPSTREAM, token=token_value, conn=mouth_no[0],
-                                        modes=mode_hub, realtime=rt_hub, burst=burst)
+                                        modes=mode_hub, realtime=rt_hub, burst=burst, presence=presence)
             why = "error"
             try:
                 why = await link.run()
@@ -1197,7 +1225,7 @@ def main():
             vision_active.add(ws)
             vision_no[0] += 1
             try:
-                await serve_vision(ws, ws.remote_address, vision_no[0], database, rec_root, rt_hub, burst)
+                await serve_vision(ws, ws.remote_address, vision_no[0], database, rec_root, rt_hub, burst, presence)
             finally:
                 vision_active.discard(ws)
             return
@@ -1213,6 +1241,7 @@ def main():
         """The run log's svc.beat state (beat thread; a race with the loop is caught and recorded by hello_log)."""
         return {"tingwu": tw_switch.on, "tingwu_running": sum(1 for e in list(ears) if e.tingwu is not None),
                 "realtime": rt_switch.on, "realtime_state": rt_hub.state if rt_hub is not None else None,
+                "paused": pause.reasons(),
                 "mouth": mouth.mode, "robot_mode": mode_hub.robot_mode,
                 "burst": burst.running() if burst is not None else None,
                 "links": {"hearing": len(active), "vision": len(vision_active), "mouth": len(mouth_active),

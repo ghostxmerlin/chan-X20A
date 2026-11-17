@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mind_fixtures import FakeDB, T0, vision   # noqa: E402
+from mind_fixtures import FakeDB, T0, away_pause, budget_pause, clear_pause, vision   # noqa: E402
 from mind import eye, eye_runner, llm, settings   # noqa: E402
 from mind.store import Store                    # noqa: E402
 from test_mind_fusion import FakeChat           # noqa: E402
@@ -179,11 +179,9 @@ class EyeTest(unittest.TestCase):
         self.assertIn("背景资料（主人平时的情况和常用词，只作背景，不代表 hello 现在在那里）：右边是冰箱和微波炉，同事常来热饭。", self.text(self.fake.calls[0]))
 
     def test_budget_reached_records_budget_without_calling(self):
-        import copy
-        s = copy.deepcopy(S)
-        s["budget_usd_per_day"] = 0.0
+        budget_pause(self.db)                    # the one daily cap (mind/pause.py)
         self.frame(T0 + 1000, 1)
-        rec = self.run_at(s=s)
+        rec = self.run_at()
         self.assertEqual((rec["source"], self.fake.calls), ("budget", []))
 
 
@@ -224,6 +222,20 @@ class EyeRunnerTest(EyeTest):
     def test_first_start_without_a_cursor_is_capped_too(self):
         self.switch(True)
         self.assertEqual(len(self.tick(T0 + MIN + 20_000)), 10)
+
+    def test_a_pause_moves_the_cursor_without_calls_and_keeps_the_switch(self):
+        """mind/pause.py (2026-11-17): nobody there -> no look, the owner's switch stays on; back -> from now on."""
+        self.switch(True)
+        self.db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": T0 - MIN}}, upsert=True)
+        self.frame(T0 + 1000, 1)
+        away_pause(self.db, since=T0)
+        self.assertEqual(self.tick(T0 + MIN + 20_000), [])
+        self.assertEqual(self.fake.calls, [])
+        self.assertTrue(eye_runner.switch_on(self.db))
+        clear_pause(self.db)
+        self.frame(T0 + MIN + 1000, 2)
+        self.assertEqual(self.tick(T0 + 2 * MIN + 20_000), [T0 + MIN])      # the paused minute is not caught up
+        self.assertEqual(len(self.fake.calls), 1)
 
     def test_switch_off_moves_the_cursor_without_calls(self):
         self.switch(False)

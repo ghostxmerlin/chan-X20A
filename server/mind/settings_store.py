@@ -44,7 +44,7 @@ def validate(s):
     if not isinstance(s, dict):
         return ["settings must be an object"]
     for k in s:
-        if k not in settings_mod.DEFAULTS:
+        if k not in settings_mod.DEFAULTS and k not in settings_mod.LEGACY_KEYS:
             errs.append(f"unknown setting {k}")
     s = dict(s)
     for k in ("owner", "place", "sources", "work", "fusion", "thresholds"):
@@ -99,9 +99,13 @@ def validate(s):
     for k in ("speech_text", "tingwu", "sounds", "vision"):
         if not isinstance(src.get(k), bool):
             errs.append(f"sources.{k}: true or false")
-    b = s.get("budget_usd_per_day")
-    if isinstance(b, bool) or not isinstance(b, (int, float)) or not (0 <= b <= 20):
-        errs.append("budget_usd_per_day: number 0–20")
+    pz = settings_mod._merge(settings_mod.DEFAULTS["pause"], s.get("pause") if isinstance(s.get("pause"), dict) else {})
+    for key, lo, hi in (("away_min", 1, 240), ("cap_cny_per_day", 0.5, 1000), ("usd_cny", 1, 20)):
+        v = pz.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi):
+            errs.append(f"pause.{key}: number {lo}–{hi}")
+    if "pause" in s and not isinstance(s["pause"], dict):
+        errs.append("pause: an object")
     for k, v in (s.get("thresholds") or {}).items():
         if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
             errs.append(f"thresholds.{k}: positive number")
@@ -134,10 +138,10 @@ class SettingsStore:
                 if getattr(e, 'code', None) != 11000:
                     raise
                 return self.current()
-        return settings_mod._merge(settings_mod.DEFAULTS, doc["settings"]), doc["version"]
+        return settings_mod.drop_legacy(settings_mod._merge(settings_mod.DEFAULTS, doc["settings"])), doc["version"]
 
     def save(self, s, note="", expected_version=None):
-        merged = settings_mod._merge(settings_mod.DEFAULTS, s if isinstance(s, dict) else {})
+        merged = settings_mod.drop_legacy(settings_mod._merge(settings_mod.DEFAULTS, s if isinstance(s, dict) else {}))
         errs = validate(s if isinstance(s, dict) else {}) + ([] if isinstance(s, dict) else ["settings must be an object"])
         if errs:
             raise ValueError("; ".join(errs))
@@ -159,7 +163,7 @@ class SettingsStore:
 
     def get(self, version):
         doc = self.coll.find_one({"lane": "live", "version": version}, {"_id": 0})
-        return settings_mod._merge(settings_mod.DEFAULTS, doc["settings"]) if doc else None
+        return settings_mod.drop_legacy(settings_mod._merge(settings_mod.DEFAULTS, doc["settings"])) if doc else None
 
     def history(self, limit=20):
         return [{"version": d["version"], "note": d.get("note", ""), "saved_at": d.get("saved_at")}

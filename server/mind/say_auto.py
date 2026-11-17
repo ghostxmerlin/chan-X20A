@@ -24,6 +24,7 @@ class Worker:
         self._on = False
         self.next_at = None
         self.last = None                   # {reason, at, n, stopped} of the latest wake, shown on the page
+        self.paused_fn = lambda: False     # mind/pause.py (runner sets it): nobody there / today's cap -> no play
         prefetch.on_change.append(self._prefetch_changed)
         self.store.set_state(say_auto={'on': False, 'since': None})          # a restart always starts off
 
@@ -69,6 +70,8 @@ class Worker:
     def _step(self, now_ms):
         if self.mode_fn() != 'talk':
             return {'reason': 'not_talk', 'played': []}
+        if self.paused_fn():                # the pause keeps the switch as the owner left it
+            return {'reason': 'paused', 'played': []}
         s = self.settings_fn()
         if (s.get('speech') or {}).get('pipeline') != 'round' or self.mouth_fn() != 'tts':
             return {'reason': 'off', 'played': []}

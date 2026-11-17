@@ -3,15 +3,16 @@
   python -m mind.eye_runner --settings ~/soul-mind/settings.json
 
 A minute is processed 15 s after it ends, once (cursor in hello.eye_state). After downtime, or the
-first time, at most the last 10 minutes are processed. While the switch is off the cursor only moves
-on, so turning it on never calls the model for minutes seen while it was off. Status goes to
+first time, at most the last 10 minutes are processed. While the switch is off, or hello is paused (mind/pause.py:
+nobody there, or today's cap reached), the cursor only moves on, so turning it on / coming back never calls the
+model for minutes seen meanwhile. Status goes to
 hello.switches.eye_status every 30 s (the page shows "unknown" when it is older than 90 s).
 """
 import argparse
 import os
 import time
 
-from . import eye, runlog, settings, speech_settings
+from . import eye, pause, runlog, settings, speech_settings
 from .settings_store import SettingsStore
 from .store import Store
 
@@ -33,7 +34,7 @@ def tick(db, store, s, env, recordings_root, now_ms):
     """Minutes handed to eye.run_minute this time (with or without frames)."""
     last_ready = settings.minute_floor(now_ms - MIN_MS - DELAY_MS)
     cursor = (db["eye_state"].find_one({"_id": "live"}) or {}).get("cursor_minute")
-    if not switch_on(db) or env is None:
+    if not switch_on(db) or env is None or pause.paused(db, now_ms):
         if cursor is None or cursor < last_ready:
             db["eye_state"].update_one({"_id": "live"}, {"$set": {"cursor_minute": last_ready}}, upsert=True)
         return []
@@ -43,7 +44,7 @@ def tick(db, store, s, env, recordings_root, now_ms):
         first = max(first, cursor + MIN_MS)
     done = []
     for m in range(first, last_ready + MIN_MS, MIN_MS):
-        if not switch_on(db):                    # 关 pressed during a catch-up: stop before the next paid call
+        if not switch_on(db) or pause.paused(db):    # 关 / a pause during a catch-up: stop before the next paid call
             break
         try:
             eye.run_minute(env, store, s, m, recordings_root, now_ms)
@@ -85,7 +86,7 @@ def main():
                 print(f"eye: switch {'on' if on else 'off'}", flush=True)
                 last_on, last_status = on, 0.0           # status right away when the switch flips
             if time.monotonic() - last_status >= 30:
-                write_status(db, on and env is not None, env is not None, int(time.time() * 1000))
+                write_status(db, on and env is not None and not pause.paused(db), env is not None, int(time.time() * 1000))
                 last_status = time.monotonic()
             s, _ = settings_store.current()
             done = tick(db, store, s, env, a.recordings, int(time.time() * 1000))

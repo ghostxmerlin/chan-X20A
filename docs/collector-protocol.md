@@ -80,6 +80,7 @@
 - 上行 `{"type":"mode_report","seq":N,"mode":"talk","dir":null,"host":null,"return_to":null,"by":"asr|touch|page|timeout|boot","input":"forward","effects":["stop_speech","talk_enter"]}`：每次切换、或者有效果的输入（说一轮、开关提前写、停说）发一条。`seq` 是 hello 本次开机的递增编号。`effects` 取 `stop_speech`、`talk_leave`、`talk_enter`、`say_round`、`prefetch_on`、`prefetch_off`，由 mind 执行（计费总闸照样拦）。
 - 每次连上 `/mouth`（收到 ear 的 hello）先发一条当前状态：开机后第一次是 `by:"boot"`、`input:"boot"`；以后 `input:null`、`by` 是最近一次切换的来源。它的 `effects` 是从 mind 上一次收到的状态到现在要做的切换效果，所以离线时切的模式也会让 mind 关掉 / 打开提前写和连续说。断线时没发出去的报告丢掉，由这一条代替。报告按顺序发，socket 收下才算发出；一下子积了 8 条没发出去，就合成一条（当前状态 + 从上次发出的状态起的切换效果 + 最新输入自己的效果）。
 - 上行 `{"type":"mode_input","seq":N,"age_ms":A,"source":"asr","input":"digit","value":0}`：只有数字 0 和 9。
+- **开机补发的 9 只恢复、不改开关（2026-11-17，服务器端）**：0.4.96 起 hello 每次开机自己打开听觉、相机、M12，再补发一个 `source:"quick"` 的 9 直到 mind 回 ok。mind 把“这次开机还没有任何数字回过 ok 时的 quick 9”认作开机补发：回 `ok`、提示 `POWER ON: SWITCHES KEPT`，服务器上的开关（听悟、识别、纪要、围观、情景、嘴）保持原样。之后的 quick 9（快捷页全开）、ASR 九、网页 9 照旧全开。mind 也接受 `source:"boot"` 的数字，永远算开机补发（以后固件想标明时用，见 `server/mind/billing.py` 的 `power_on`）。
 - 下行 `{"type":"mode_result","seq":N,"code":"ok","toast":"..."}`：只回给 `mode_input`；`toast` 显示 2 秒（空的不显示）。旧版 ear 推的 `{"type":"mode"}` 快照 0.4.92 忽略。
 - 收到的文本消息先查长度（≤ 1600 B）再完整解析，解析失败的不看；JSON 池在 PSRAM；模式处理有自己的锁，不碰音频锁。
 

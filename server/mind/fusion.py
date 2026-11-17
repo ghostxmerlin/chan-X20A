@@ -6,7 +6,7 @@ A scene record (mind_scenes) per minute and lane: source model | carried | rules
 import hashlib
 import json
 
-from . import llm, prompts, validate
+from . import llm, pause, prompts, validate
 from .runlog import hello_log, trace as log_trace
 
 CHAT = llm.chat                       # injectable in tests
@@ -132,7 +132,7 @@ def run_minute(env, store, s, settings_version, minute_ms, pkg, strong, neighbou
         state = store.state()
         if action == "call" and (state.get("fusion_backoff_until") or 0) >= now_ms:   # a 1-min backoff skips the next minute
             action, reason = "carry", "backoff"
-        if action == "call" and store.cost_today(s["tz"], now_ms) >= s["budget_usd_per_day"] and minute_ms % (30 * MIN_MS):
+        if action == "call" and pause.budget_stop(store.db, now_ms):    # the one daily cap (mind/pause.py)
             action, reason = "carry", "budget"
     if action == "carry":
         return carry("carried", reason)

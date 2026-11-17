@@ -396,7 +396,7 @@ class MouthModeTest(MouthLinkTest):
         self.conn_no += 1
         return self.mouth_link.MouthLink(ws, upstream_url=self.up_url, token="device-token", retry_s=0.3,
                                          connect=self.connect_override, conn=self.conn_no, modes=self.hub,
-                                         burst=getattr(self, "burst", None))
+                                         burst=getattr(self, "burst", None), presence=getattr(self, "presence", None))
 
     def _skip(self, m):                       # mode results are expected here, not "unexpected"
         if isinstance(m, str) and json.loads(m).get("type") == "mode_result":
@@ -455,6 +455,21 @@ class MouthModeTest(MouthLinkTest):
                           "return_to": None, "by": "touch", "input": "select", "effects": ["stop_speech", "talk_leave"]})
         self.assertTrue(0 <= body["age_ms"] < 1000)
         self.assertNotIn("mode_report", "".join(self.upstream_text))
+
+    async def test_an_owners_report_is_presence_a_boot_or_timeout_report_is_not(self):
+        """The pause (mind/pause.py, 2026-11-17): an ASR word / tap / select / quick page on hello = someone is here."""
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server" / "ear"))
+        import presence as pr
+        self.presence = pr.Presence(clock_ms=lambda: 1000)
+        async with self.robot() as ws:
+            await self.handshake(ws)
+            await ws.send(report(1, "crowd", ["stop_speech"], by="boot", inp="boot"))
+            await ws.send(report(2, "talk", [], by="timeout", inp="timeout"))
+            await self.wait_mind("/mode/report", n=2)
+            self.assertIsNone(self.presence.owner_at)
+            await ws.send(report(3, "crowd", [], by="touch", inp="tap"))
+            await self.wait_mind("/mode/report", n=3)
+        self.assertEqual((self.presence.owner_at, self.presence.owner_what), (1000, "touch:tap"))
 
     async def test_reports_keep_their_order(self):
         async with self.robot() as ws:

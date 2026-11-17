@@ -182,7 +182,8 @@ class GuardAndHooksTest(unittest.TestCase):
         r = ms.apply('double_tap', None, source='dualkey', device='dk', boot='x', dev_seq=1, sid='s1', now_ms=1)
         self.assertEqual((r['result'], r['effects']), (result('busy'), []))
         self.assertEqual(metas, [('prefetch_on', {'source': 'dualkey', 'input': 'double_tap', 'value': None,
-                                                  'device': 'dk', 'sid': 's1', 'mode': 'talk'})])
+                                                  'device': 'dk', 'sid': 's1', 'mode': 'talk',
+                                                  'boot': 'x', 'dev_seq': 1})])
         ms.apply('backward', None, source='page', now_ms=2)              # not paid: the guard is not asked
         self.assertEqual(len(metas), 1)
         self.assertEqual(ms.current()['mode'], 'idle')

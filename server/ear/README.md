@@ -15,6 +15,7 @@
 | 文件 | 内容 |
 | --- | --- |
 | `ear_server.py` | 服务端。开头的注释写着协议：消息格式、心跳和事件 |
+| `presence.py` | 暂停（`server/mind/pause.py`）的 ear 一侧：记下 M12 的脸、认识的声音、主人在 hello 上的操作，写进 `hello.switches {_id: presence_status}`；读 mind 的 `{_id: pause}`，让听悟、围观、视觉爆发在暂停时当作开关关着（开关本身不动） |
 | `recorder.py` | 为每条连接存档：Ogg Opus 或 WAV 音频，加上事件、心跳、客户端控制消息和 `meta.json` |
 | `sound_kinds.py` | 把 CED 的 AudioSet 标签归成约 30 类声音，并列出算作“人声”的标签 |
 | `mic_client.py`、`debug.html` | Mac 测试客户端，以及它在 `http://127.0.0.1:8770` 提供的调试网页 |

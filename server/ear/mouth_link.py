@@ -95,6 +95,7 @@ HELLO_TIMEOUT_S = 10
 REPLACED = 4000                                     # soul-tts: "replaced by new connection"
 MIND = "http://127.0.0.1:52740"
 REPORT_FIELDS = ("seq", "mode", "dir", "host", "return_to", "by", "input", "effects")
+OWNER_BY = ("asr", "touch", "select", "quick")         # a report from one of these with an input = an owner's input
 STATE_FIELDS = ("mode", "dir", "host", "return_to")           # hello's mode state in a report (run log robot.state)
 STAGE_DEBOUNCE_S = 0.3
 STAGE_INFLIGHT = 4
@@ -472,13 +473,14 @@ class _RobotGone(Exception):
 
 class MouthLink:
     def __init__(self, client, *, upstream_url, token, connect=None, retry_s=5, conn=0, modes=None, realtime=None,
-                 burst=None):
+                 burst=None, presence=None):
         if connect is None:
             from websockets.asyncio.client import connect
         self.client, self.upstream_url, self.token, self.connect = client, upstream_url, token, connect
         self.retry_s, self.conn, self.modes = retry_s, conn, modes
         self.realtime = realtime
         self.burst = burst                  # vision_burst.VisionBurst: the robot's snap_result goes there
+        self.presence = presence            # presence.Presence: hello's reports of an owner's input (the pause)
         self.tts_active = set()             # soul-tts streams the robot has not reported finished
         self._modes_on = False              # mode messages are relayed (needs a boot_id)
         self._inputs = asyncio.Queue(maxsize=modes.input_queue) if modes is not None else None
@@ -736,6 +738,12 @@ class MouthLink:
             return
         if m["type"] == "mode_report":
             self.modes.note_report(m, self.conn)
+            inp = m.get("input")
+            if self.presence is not None and m.get("by") in OWNER_BY and isinstance(inp, str) and inp not in ("boot", "report"):
+                try:                                    # an owner's input = someone is here (before the tap greets)
+                    self.presence.owner(f"{m.get('by')}:{inp}")
+                except Exception:                       # noqa: BLE001
+                    _trace(f"mouth m{self.conn} presence")
             if self.realtime is not None and m.get("mode") == "crowd" and m.get("input") == "tap":
                 try:
                     self.realtime.tap()

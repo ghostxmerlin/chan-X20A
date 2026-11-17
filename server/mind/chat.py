@@ -21,7 +21,7 @@ dropped once (superseded) so hello answers the newest; never twice in a row, so 
 answers. A chat line that is playing is never cut by the next reply: a sentence picked up while hello speaks waits for
 the line to end and is answered if it is still the newest and not stale, else skipped (hello_speaking). Dropped,
 replaced and waited-out sentences stay in the history as heard. An empty model reply is a skip (empty_reply), nothing
-is said. The daily runaway guard (budget_usd_per_day, mind_runs) stops chat calls too (budget).
+is said. The one daily cap (mind/pause.py: every paid item, the run log's ledger) stops chat calls too (budget).
 
 Context (refreshed part by part when its TTL ran out: while idle, and at turn time within ~100 ms): the latest scene
 (summary, topic, sound), the latest conversation notes, the recall pool (recall.py: MemoryStore.recall 8 habits + up to
@@ -53,7 +53,7 @@ import threading
 import time
 import uuid
 
-from . import eye as eye_mod, llm, place, recall, selfvoice, settings as settings_mod, speak, speech_settings
+from . import eye as eye_mod, llm, pause, place, recall, selfvoice, settings as settings_mod, speak, speech_settings
 from .library import Library
 from .store import LANE
 from .runlog import hello_log, trace as log_trace
@@ -464,9 +464,7 @@ class Chat:
                 return self._skip(item, why, heard_only=why == 'hello_speaking',
                                   **{'timings.wait_ms': int((self.mono() - item['received']) * 1000)})
             wait_ms = int((self.mono() - item['received']) * 1000)
-        self._refresh(self.clock_ms(), budget_ms=None, names=('cost',))
-        cost = self._part('cost')
-        if cost is not None and cost >= (s.get('budget_usd_per_day') or 0):
+        if pause.budget_stop(self.db, self.clock_ms()):    # the one daily cap (mind/pause.py)
             return self._skip(item, 'budget', **{'timings.wait_ms': wait_ms})      # before the open (review v1 M5)
         epoch = speak._EPOCH
         cfg = speech_settings.chat_config(s)

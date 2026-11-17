@@ -25,6 +25,9 @@ GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/rob
      mind mirrors it; /switches also takes {name: billing, on} = preset 9 / preset 0). With a mode store in ctx, 说话类
      接口 answer 409 {code: only_talk} outside talk (the mirrored mode); /say/stop always works. Billing gates nothing
      (owner 2026-11-14 evening): single switches always work.
+     The pause (2026-11-17, mind/pause.py): GET /switches carries `pause` {paused, why, since, away_since, spent_cny,
+     cap_cny, ...}; every explicit owner input (OWNER_POSTS, hello's own reports and digits except her power-on 9)
+     goes to pause.Controller.note_owner (lifts an away pause; a 9 also lifts today's budget pause).
 """
 import base64
 import copy
@@ -37,7 +40,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from . import fusion, memory_extract, place, prompts, runlog, segments, settings as settings_mod, speak
+from . import fusion, memory_extract, pause, place, prompts, runlog, segments, settings as settings_mod, speak
 from .settings_store import MODELS, SettingsConflict
 from . import speech_settings
 from .memory import MemoryStore, MemoryConflict
@@ -89,6 +92,10 @@ class ModeConflict(Conflict):
 # that are its own: the billing switch (= preset 9 / 0) and the presets (digit; only 0 and 9 do something).
 MIND_INPUTS = ('digit', 'billing')
 DEVICE_SOURCES = ('asr', 'touch', 'select', 'quick')                               # what ear forwards for hello
+# The page's / DualKey's posts that are an owner's explicit input (the pause, mind/pause.py: "back"). The ear's own
+# 闭嘴 post carries by: "hush" and is not one (a TV can say 闭嘴).
+OWNER_POSTS = ('/switch', '/switches', '/mode', '/preset', '/signal', '/say', '/say/round', '/say/play', '/say/stop',
+               '/say/prefetch', '/say/auto', '/db/extract/switch', '/db/extract/run')
 ON_HELLO = 'mode is switched on hello'
 
 
@@ -240,7 +247,40 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if ctx.get("mode_store"):
             last = db["mode_log"].find_one({"input": "billing", "device": None, "code": "ok"}, sort=[("at", -1)]) or {}
             out["billing"] = {"on": ctx["mode_store"].billing(), "at": last.get("at")}
+        pc = ctx.get("pause")
+        out["pause"] = pc.view(now) if pc else pause.view(pause.read(db), now)
         return out
+
+    def note_owner(path, body, reply):
+        """After a POST went through: tell the pause about an explicit owner input (never raises)."""
+        pc = ctx.get("pause")
+        if pc is None:
+            return
+        try:
+            what, nine = None, False
+            if path in OWNER_POSTS:
+                if path == "/switches" and body.get("by") == "hush":
+                    return
+                what = "page" if path != "/signal" else "dualkey"
+                nine = (path in ("/switches", "/mode") and body.get("name", "billing") == "billing" and
+                        (body.get("on") is True or body.get("value") is True)) or (path == "/preset" and body.get("n") == 9)
+            elif path == "/mode/input":
+                if not isinstance(reply, dict) or reply.get("power_on") or reply.get("duplicate"):
+                    return
+                what = f"{body.get('source')}:digit"
+                nine = (body.get("input") == "digit" and body.get("value") == 9) or \
+                       (body.get("input") == "billing" and body.get("value") is True)
+            elif path == "/mode/report":
+                inp = body.get("input")
+                if body.get("by") not in pause.OWNER_SOURCES or not isinstance(inp, str) or inp in ("boot", "report"):
+                    return
+                if isinstance(reply, dict) and (reply.get("duplicate") or (reply.get("result") or {}).get("code") == "stale"):
+                    return
+                what = f"{body.get('by')}:{inp}"
+            if what:
+                pc.note_owner(what[:32], nine=nine)
+        except Exception as e:                   # noqa: BLE001 - the input itself was answered already
+            print(f"mind pause: owner input not noted: {type(e).__name__}", flush=True)
 
     # ---- modes (step 1) ----
     def modes():
@@ -263,8 +303,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if not (isinstance(body.get("device"), str) and body["device"] and isinstance(body.get("boot"), str) and body["boot"]
                 and _is_int(body.get("seq")) and _is_int(body.get("age_ms")) and body["age_ms"] >= 0):
             raise BadRequest("device, boot (text), seq and age_ms (integers) required")
-        if body.get("source") not in DEVICE_SOURCES:
-            raise BadRequest(f"source must be one of {'/'.join(DEVICE_SOURCES)}")
+        if body.get("source") not in DEVICE_SOURCES + ("boot",):      # boot: hello's power-on digit (billing.power_on)
+            raise BadRequest(f"source must be one of {'/'.join(DEVICE_SOURCES + ('boot',))}")
         if body.get("input") not in MODE_INPUTS or body["input"] in ("boot", "timeout"):
             raise BadRequest("unknown input")
         if body["input"] not in MIND_INPUTS:
@@ -1011,7 +1051,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if not isinstance(body, dict):
                 self._send(400, {"error": "body must be an object"})
                 return
-            self._run(lambda: post(url.path, body))
+            def run():
+                reply = post(url.path, body)
+                note_owner(url.path, body, reply)
+                return reply
+            self._run(run)
 
         def do_PUT(self):
             self._send(405, {"error": "use POST"})

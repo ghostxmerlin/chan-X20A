@@ -6,13 +6,14 @@ Each pass reads people's sentences up to the start of the current minute (re-sca
 minutes for late rows; refs already handled are skipped), cuts them into conversations (a gap of more
 than 60 s ends one) and updates the running one with one luna call. While hello.switches.notes is off,
 the cursor still moves (nothing is caught up later), sentences are not collected, and open
-conversations still close by rule; no model call is made.
+conversations still close by rule; no model call is made. The same while hello is paused (mind/pause.py: nobody
+there, or today's cap reached).
 """
 import argparse
 import os
 import time
 
-from . import notes, runlog, selfvoice, settings, speech_settings
+from . import notes, pause, runlog, selfvoice, settings, speech_settings
 from .records import Records
 from .settings_store import SettingsStore
 from .store import Store
@@ -99,7 +100,7 @@ def tick(db, store, records, s, env, now_ms):
         handled([x])
     late = {tuple(x["ref"]) for x in sentences if tuple(x["ref"]) in {tuple(r[:3]) for r in seen_rows}}
     sentences = [x for x in sentences if tuple(x["ref"]) not in late]
-    if not switch_on(db) or env is None:
+    if not switch_on(db) or env is None or pause.paused(db, now_ms):
         handled(sentences)
         if conv and until - conv["last_ms"] > CLOSE_MS:
             _close(db, conv)
@@ -157,7 +158,7 @@ def main():
                 print(f"notes: switch {'on' if on else 'off'}", flush=True)
                 last_on, last_status = on, 0.0
             if time.monotonic() - last_status >= 30:
-                write_status(db, on and env is not None, env is not None, int(time.time() * 1000))
+                write_status(db, on and env is not None and not pause.paused(db), env is not None, int(time.time() * 1000))
                 last_status = time.monotonic()
             s, _ = settings_store.current()
             selfvoice.refresh_spoken(db, int(time.time() * 1000))

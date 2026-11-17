@@ -27,11 +27,23 @@ DEFAULTS = {
     "persona": "",                # stored only, never sent to the perception prompt
     "sources": {"speech_text": True, "tingwu": True, "sounds": True, "vision": True},
     "fusion": {"enabled": True, "model": "gpt-6-luna", "prompt": "v3", "max_age_min": 60, "review_after_min": [5, 10, 20, 30]},
-    "budget_usd_per_day": 20.0,   # runaway guard only (user: cost is not a concern, but keep statistics)
+    # The one daily cap and the away pause (2026-11-17, mind/pause.py): today's spend over every paid item (the run
+    # log's ledger, USD at usd_cny) against cap_cny_per_day; nobody seen / known voice / owner input for away_min
+    # minutes pauses the paid items. Replaces budget_usd_per_day (mind's own model calls only), which is not read.
+    "pause": {"away_min": 10, "cap_cny_per_day": 20.0, "usd_cny": 7.2},
     "speech": speech_settings.defaults(),
     "memory": {"learning": True, "apply": True},
 }
+# Keys older settings versions still carry; dropped on every read and save, never an "unknown setting" error.
+LEGACY_KEYS = ("budget_usd_per_day",)       # replaced by pause.cap_cny_per_day (2026-11-17)
 MINUTE_MS = 60_000
+
+
+def drop_legacy(s):
+    if isinstance(s, dict):
+        for k in LEGACY_KEYS:
+            s.pop(k, None)
+    return s
 
 
 def _merge(base, extra):
@@ -50,7 +62,7 @@ def load(path):
                 data = json.load(f)
         except (OSError, ValueError):
             data = {}
-    return _merge(DEFAULTS, data if isinstance(data, dict) else {})
+    return drop_legacy(_merge(DEFAULTS, data if isinstance(data, dict) else {}))
 
 
 def load_checked(path, last_good):
@@ -65,7 +77,7 @@ def load_checked(path, last_good):
         return (last_good if last_good is not None else _merge(DEFAULTS, {})), f"{type(e).__name__} (JSON): {str(e)[:160]}"
     if not isinstance(data, dict):
         return (last_good if last_good is not None else _merge(DEFAULTS, {})), "settings must be a JSON object"
-    return _merge(DEFAULTS, data), ""
+    return drop_legacy(_merge(DEFAULTS, data)), ""
 
 
 def load_env(path):

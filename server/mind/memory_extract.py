@@ -33,8 +33,9 @@ Gates, checked before every call and again before writing a paid answer:
   on-demand run during the day does not count; its unchanged chunks are skipped for free), only while the room is
   quiet (no sentence and no chat turn for IDLE_MS); an on-demand request (page button) runs at once.
   backfill (command line): model access, the 记忆整理 switch, all-time backfill spend < BACKFILL_CAP_USD.
-  The overall daily model budget (budget_usd_per_day) still applies through run_json. A cap can be overshot by at most
-  one call (a few tenths of a cent).
+  The one daily cap over every paid item (mind/pause.py, pause.cap_cny_per_day) still applies through run_json. A cap
+  can be overshot by at most one call (a few tenths of a cent). The away pause (nobody there) does NOT stop it: the
+  daily consolidation is meant to run in a quiet room.
 
 Command line (on the server, as the mind units run; never prints memory text, only counts and cost):
   python3 -m mind.memory_extract backfill --from 2026-11-07 --to 2026-11-14 --dry-run    # material and estimate only

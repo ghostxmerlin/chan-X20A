@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mind_fixtures import FakeDB, T0, session, speech, tingwu
+from mind_fixtures import FakeDB, T0, budget_pause, session, speech, tingwu
 from mind import settings, selfvoice, speak
 from mind.store import Store
 from test_mind_fusion import FakeChat
@@ -313,7 +313,7 @@ class SpeechPipelineTest(SpeechCase):
     def test_budget_zero_calls_no_model_or_tts(self):
         self.modules()
         calls=importlib.import_module('mind.model_calls')
-        self.heard(); fake=FakeChat(); self.s['budget_usd_per_day']=0
+        self.heard(); fake=FakeChat(); budget_pause(self.db)
         attention,_=self.modules()
         with self.assertRaises(calls.BudgetExceeded):
             attention.choose(ENV,self.store,self.s,self.context(),self.now,chat=fake)

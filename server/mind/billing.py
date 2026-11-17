@@ -4,7 +4,8 @@ Owner 2026-11-14 evening (verbatim): "计费开关是这样，启动默认全开
 取消。" So billing is NOT a gate any more. It is only the last whole action:
   on   = preset 9's server half: 听悟 / 识别 / 纪要 / 情景 on (+ 围观 realtime; mind start leaves it as stored), 嘴 -> TTS, 提前写 + 连续说 on when the mirrored mode is talk.
   off  = preset 0's server half: 听悟 / 识别 / 纪要 / 情景 / 围观 realtime off, 连续说 / 提前写 off, stop what hello is saying.
-A mind start changes no switch (owner 2026-11-15; hello's power-on sends 9 itself since collector-0.4.96). Single switches always
+A mind start changes no switch (owner 2026-11-15; hello's power-on sends 9 itself since collector-0.4.96). hello's
+power-on 9 changes no switch either (2026-11-17, see power_on): a reboot only restores. Single switches always
 work whatever billing shows; speech is held only by the mode (only_talk), never by billing. Turning things off tries
 every step and returns the failed step names (logged) instead of raising.
 
@@ -71,8 +72,37 @@ class Billing:
         return apply_preset(9 if on else 0, self, source=source, now_ms=now_ms)
 
     def preset(self, n, *, source, now_ms, meta=None):
-        """ModeStore preset_fn."""
+        """ModeStore preset_fn. hello's power-on 9 (power_on) only answers ok: every switch stays as stored."""
+        if n == 9 and self.power_on(source, meta):
+            return power_on_result(source)
         return apply_preset(n, self, source=source, now_ms=now_ms)
+
+    def power_on(self, source, meta):
+        """Is this digit hello's power-on 9 rather than an owner's 9? (2026-11-17: an unexplained reboot must not undo
+        the owner's 闭嘴 / 0 / single switches off.)
+
+        Since collector-0.4.96 hello owes mind a 9 at every power-on and sends it, behind the first boot report, with
+        source quick (as the quick page's 全开) until mind answers ok (new input seq on each retry). The wire carries
+        no "power-on" flag, so: a quick 9 from a device is the power-on 9 while mind has answered no digit from that
+        robot boot with ok yet (hello.mode_log keeps every answer, so this survives a mind restart). After the first
+        ok, every quick 9 of that boot is the owner's (the quick page's 全开). A source "boot" digit (a later
+        firmware may say so) is always the power-on 9. Edge cases, both rare: a 9 the owner said offline before the
+        first link of a boot counts as the power-on 9 (kept); a power-on 9 whose ok answer was lost on the way and
+        that hello sends again counts as the owner's (turns everything on, as before 2026-11-17)."""
+        meta = meta or {}
+        device, boot = meta.get('device'), meta.get('boot')
+        if not (isinstance(device, str) and device and isinstance(boot, str) and boot):
+            return False
+        if source == 'boot':
+            return True
+        if source != 'quick':
+            return False
+        try:
+            seen = self.ms.db['mode_log'].find_one({'device': device, 'boot': boot, 'input': 'digit', 'code': 'ok'})
+        except Exception as e:                 # noqa: BLE001 - unknown: treat it as the owner's 9 (the old behaviour)
+            _log(f'power-on check failed ({type(e).__name__}): this 9 runs as an owner\'s 9')
+            return False
+        return seen is None
 
     # ---- talk_enter (owner 14) ----
     def talk_enter(self, now_ms, *, is_current):
@@ -162,6 +192,17 @@ def _realtime_toggle(b, source, now_ms, out):
     failed = b._run_all('realtime toggle', [(REALTIME, lambda: b.ctx.set_switch(REALTIME, on))])
     out['failed'] += failed
     return None, ('MEET ON' if on else 'MEET QUIET') if not failed else None
+
+
+def power_on_result(source):
+    """hello's power-on 9: nothing changes on the server (her own senses came on by themselves); ok stops her resends.
+    One preset.apply record (extra.power_on)."""
+    res = result('ok', 'POWER ON: SWITCHES KEPT')
+    with hello_log.scope(trace=log_trace()):
+        hello_log.emit('preset.apply', by=source, sum='预设 9：开机，开关保持原样',
+                       extra={'n': 9, 'code': res['code'], 'toast': res['toast'], 'failed': [], 'robot': {},
+                              'power_on': True})
+    return {'result': res, 'robot': {}, 'power_on': True}
 
 
 ACTIONS = {'realtime_toggle': _realtime_toggle, 'billing_off': _billing_off, 'billing_on': _billing_on, 'paid_senses_on': _paid_senses_on,

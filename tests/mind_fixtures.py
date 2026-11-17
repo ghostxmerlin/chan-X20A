@@ -260,3 +260,23 @@ def vision(sess, event, at, face=None, person=None, name=None, t_us=None, gender
         if v is not None:
             d[k] = v
     return d
+
+
+def budget_pause(db, until=None):
+    """hello.switches.pause as mind's pause.Controller writes it for today's cap (mind/pause.py)."""
+    clear_pause(db)
+    db["switches"].docs.append({"_id": "pause", "on": True, "why": "budget", "reasons": ["budget"],
+                                "budget_until": until if until is not None else 10 ** 13})
+    return db
+
+
+def away_pause(db, since=0):
+    clear_pause(db)
+    db["switches"].docs.append({"_id": "pause", "on": True, "why": "away", "reasons": ["away"], "since": since,
+                                "away_since": since})
+    return db
+
+
+def clear_pause(db):
+    db["switches"].docs[:] = [d for d in db["switches"].docs if d.get("_id") != "pause"]
+    return db

@@ -170,6 +170,29 @@ class HubBase(unittest.IsolatedAsyncioTestCase):
 
 
 class SessionTest(HubBase):
+    async def test_a_pause_closes_the_session_and_a_face_reopens_it(self):
+        """mind/pause.py (2026-11-17): paused = the switch seen through presence.Gated is off (the owner's switch stays
+        on); a face this ear sees lifts an away pause here at once."""
+        import presence as pr
+        ws = await self.open_ready()
+        seen = pr.Presence(clock_ms=lambda: int(self.t[0] * 1000))
+        doc = {"on": True, "why": "away", "reasons": ["away"], "since": 5, "away_since": 5}
+        pause = pr.Pause(lambda: doc, seen, clock_ms=lambda: int(self.t[0] * 1000))
+        pause.update()
+        self.hub.switch = pr.Gated(self.switch, pause)
+        whys, close = [], self.hub.close
+        self.hub.close = lambda why, **kw: (whys.append(why), close(why, **kw))[1]
+        self.hub.step()
+        await settle()
+        self.assertEqual((self.hub.state, ws.closed, whys, self.switch.on), ("closed", True, ["paused"], True))
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(len(self.connects), 1)                  # no re-open on new speech while away
+        seen.vision(1, {"event": "face_found", "face": 3})
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(len(self.connects), 2)
+
     async def test_recent_replies_go_into_the_instructions(self):
         # owner 2026-11-15: meet kept repeating one line; its recent replies are in the instructions, across sessions
         ws = await self.open_ready()
@@ -420,7 +443,7 @@ class GateTest(HubBase):
         ws = await self.open_ready()
         ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": "别说话了。"})
         await settle(20)
-        self.assertIn(("POST", "/switches", {"name": "realtime", "on": False}), calls)
+        self.assertIn(("POST", "/switches", {"name": "realtime", "on": False, "by": "hush"}), calls)
         self.assertEqual(self.hub.stats["hush"], 1)
 
 

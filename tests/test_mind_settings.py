@@ -54,7 +54,10 @@ class SettingsStoreTest(unittest.TestCase):
         self.assertTrue(any("unknown" in e for e in validate({**s, "colour": 1})))
         self.assertTrue(any("model" in e for e in validate({**s, "fusion": {**s["fusion"], "model": "gpt-x"}})))
         self.assertTrue(any("display" in e for e in validate({**s, "people": [{"display": "", "voice_names": [], "face_names": []}]})))
-        self.assertTrue(any("budget" in e for e in validate({**s, "budget_usd_per_day": "a"})))
+        self.assertTrue(any("pause.cap_cny_per_day" in e for e in validate({**s, "pause": {**s["pause"], "cap_cny_per_day": "a"}})))
+        self.assertTrue(any("pause.away_min" in e for e in validate({**s, "pause": {**s["pause"], "away_min": 0}})))
+        self.assertTrue(any("pause.usd_cny" in e for e in validate({**s, "pause": {**s["pause"], "usd_cny": 100}})))
+        self.assertEqual(validate({**s, "budget_usd_per_day": 20}), [])     # an older version's key: dropped, not an error
 
     def test_validate_types_tz_and_bools(self):
         s = settings.load(None)
@@ -87,7 +90,8 @@ class SettingsStoreTest(unittest.TestCase):
         s = settings.load(None)
         self.assertEqual(s["sources"]["speech_text"], True)
         self.assertEqual(s["fusion"]["review_after_min"], [5, 10, 20, 30])
-        self.assertEqual(s["budget_usd_per_day"], 20.0)
+        self.assertEqual(s["pause"], {"away_min": 10, "cap_cny_per_day": 20.0, "usd_cny": 7.2})
+        self.assertNotIn("budget_usd_per_day", s)
         self.assertIn("hello", s["self_facts"])
 
 

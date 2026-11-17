@@ -11,7 +11,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 
-from . import fusion, package, runlog, segments, selfvoice, settings, speak, strong, speech_settings
+from . import fusion, package, pause, runlog, segments, selfvoice, settings, speak, strong, speech_settings
 from .records import Records
 from .settings_store import SettingsStore
 from .store import LANE, Store
@@ -52,13 +52,14 @@ def day_start(ms, tz):
     return int(t.timestamp() * 1000)
 
 
-def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE, revise=False):
+def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE, revise=False, paused_fn=None):
     """Model fusion for these minutes, in order (packages must exist), then segment summaries.
-    Nothing is called while the mind switch is off; segment summaries only when a sense was on in
-    one of these minutes (both senses off: no model call of any kind)."""
+    Nothing is called while the mind switch is off or hello is paused (paused_fn, mind/pause.py: nobody there or
+    today's cap; those minutes are not caught up later); segment summaries only when a sense was on in one of these
+    minutes (both senses off: no model call of any kind)."""
     s = speech_settings.effective(s)
     minutes = [m for m in minutes if m >= speech_settings.scope(s)['since']]
-    if env is None or not s["fusion"]["enabled"] or not minutes or not store.enabled():
+    if env is None or not s["fusion"]["enabled"] or not minutes or not store.enabled() or (paused_fn and paused_fn()):
         return 0
     segs = segments.update(env, store, s, day_start(minutes[0], s["tz"]), now_ms, lane, summarize_now=False)
     titled = [{"start": g["start"], "end": g["end"], "cls": g["cls"], "title": (g.get("summary") or {}).get("title")}
@@ -80,7 +81,7 @@ def fuse(env, store, s, minutes, now_ms, settings_version=0, lane=LANE, revise=F
     return done
 
 
-def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000, env=None, settings_version=0):
+def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000, env=None, settings_version=0, paused_fn=None):
     """Process every ready minute after the cursor; fuse the new ones that are recent enough.
     Returns how many new minutes were processed."""
     last_ready = settings.minute_floor(now_ms - MIN_MS - PROCESS_DELAY_MS)
@@ -109,8 +110,8 @@ def tick(records, store, s, now_ms, max_catchup_ms=48 * 3600_000, env=None, sett
         store.set_state(last_run_ms=now_ms, last_error="", skipped_same=same)
         age_limit = s["fusion"]["max_age_min"] * MIN_MS + MIN_MS + PROCESS_DELAY_MS
         fuse(env, store, s, [m for m in rewritten if now_ms - m <= age_limit][-REVISE_MAX_PER_TICK:], now_ms,
-             settings_version, revise=True)
-        fuse(env, store, s, [m for m in new if now_ms - m <= age_limit], now_ms, settings_version)
+             settings_version, revise=True, paused_fn=paused_fn)
+        fuse(env, store, s, [m for m in new if now_ms - m <= age_limit], now_ms, settings_version, paused_fn=paused_fn)
     except Exception as e:                       # noqa: BLE001 - recorded, then the caller retries
         try:
             store.set_state(last_error=f"{type(e).__name__}: {str(e)[:200]}", last_run_ms=now_ms)
@@ -399,6 +400,17 @@ def main():
                                                  say_auto=say_auto_live, say_round_fn=say_round_live if env and tts else None,
                                                  chat=chat)
     say_worker.mode_fn = auto_worker.mode_fn = lambda: mode_store.current()["mode"]
+    # The pause (2026-11-17, mind/pause.py): nobody there for pause.away_min minutes, or today's spend over the one
+    # daily cap -> the paid items rest; the owner's switches stay as they are. mind owns it; the ear reports presence.
+    ledger = None
+    try:
+        import hello_log_query as log_query      # ~/soul-mind/hello_log_query.py (mind's deploy ships it)
+        ledger = lambda day: log_query.ledger(db, day)
+    except ImportError:
+        print("mind pause: hello_log_query not deployed, today's spend unknown (no budget pause)", flush=True)
+    pause_ctl = pause.Controller(db, settings_fn=lambda: settings_store.current()[0], ledger_fn=ledger)
+    say_worker.paused_fn = auto_worker.paused_fn = pause_ctl.paused
+    threading.Thread(target=pause_ctl.run, daemon=True).start()
     if env:
         threading.Thread(target=say_worker.run, daemon=True).start()
         if tts:
@@ -409,7 +421,7 @@ def main():
                                                                          "tts": tts, "say_worker": say_worker,
                                                                          "say_auto": say_auto_live, "mode_store": mode_store,
                                                                          "billing": billing, "round_gate": round_gate,
-                                                                         "chat": chat}), daemon=True).start()
+                                                                         "chat": chat, "pause": pause_ctl}), daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}, mode {mode_store.current()['mode']} "
           f"seq {mode_store.seq()}, billing {'on' if billing.allowed() else 'off'} (start = 全开)", flush=True)
@@ -418,7 +430,8 @@ def main():
             good, version = settings_store.current()      # settings are versioned in the database (phase 1)
             selfvoice.refresh_spoken(db, int(time.time() * 1000))   # hello's own lines count as her voice
             store.set_state(settings_version=version)
-            n = tick(records, store, good, int(time.time() * 1000), int(a.catch_up_max_hours * 3600_000), env, version)
+            n = tick(records, store, good, int(time.time() * 1000), int(a.catch_up_max_hours * 3600_000), env, version,
+                     paused_fn=pause_ctl.paused)
             if n:
                 print(f"processed {n} minute(s), cursor {store.state().get('cursor_minute')}", flush=True)
             time.sleep(5)

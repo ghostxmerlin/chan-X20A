@@ -2,7 +2,7 @@
 import json
 import threading
 
-from . import llm, settings
+from . import llm, pause, settings
 from .runlog import hello_log, trace as log_trace
 
 MODEL = 'gpt-6-luna'
@@ -24,11 +24,12 @@ def run_json(env, store, s, step, prompt, schema, messages, now_ms, chat=None, l
     body = {'model':model, 'messages':messages, 'temperature':temperature,
             'max_tokens':max_tokens, 'reasoning_effort':reasoning_effort,
             'response_format':{'type':'json_schema', 'json_schema':{'name':step, 'strict':True, 'schema':schema}}}
-    with _LOCK:
-        if store.cost_today(s['tz'],now_ms)>=s['budget_usd_per_day']:
-            raise BudgetExceeded('今天的模型预算已用完')
-    # The HTTP call runs outside the lock so a talk-show round can write its lines in parallel
-    # (2026-11-13). The budget check above may let a few concurrent calls through at the limit.
+    # The one daily cap (2026-11-17, mind/pause.py): today's spend over every paid item reached pause.cap_cny_per_day
+    # and the owner has not pressed 9 since. Replaces budget_usd_per_day (mind_runs only).
+    if pause.budget_stop(store.db, now_ms):
+        raise BudgetExceeded('今天的花费已到上限')
+    # The HTTP call runs outside any lock so a talk-show round can write its lines in parallel
+    # (2026-11-13). The cap is read from the run log's ledger every 30 s: a few calls can pass at the limit.
     # run log: call.<step> with _ as dots (say_line -> call.say.line, memory_extract -> call.memory.extract)
     with hello_log.scope('call.'+step.replace('_','.'), trace=log_trace(),
                          ref={'minute':settings.minute_floor(now_ms), 'lane':lane, 'step':step}):

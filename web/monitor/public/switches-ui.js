@@ -71,6 +71,23 @@ export function switchView(robot,fresh,mind,switches=null){
  return {hearing,vision,mind:m,notes,meet,cost};
 }
 
+// The pause (2026-11-17, server/mind/pause.py): mind pauses the paid items when nobody has been there for
+// pause.away_min minutes, or when today's spend over everything paid reached the one daily cap; the switches stay as
+// the owner left them. /api/mind/switches carries it as `pause`. Times in Beijing time, like the log page.
+const BJ_TIME=ms=>new Date(ms).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+const yuan=v=>typeof v==='number'?'¥'+v.toFixed(2):'未知';
+export function pauseView(switches){
+ const p=switches?.pause;
+ if(!p||!p.known)return {known:false,paused:false,spend:'今天花费：未知',text:'',cls:''};
+ const cap=typeof p.cap_cny==='number'?'¥'+(Number.isInteger(p.cap_cny)?p.cap_cny:p.cap_cny.toFixed(2)):'?';
+ const spend=`今天 ${yuan(p.spent_cny)} / ${cap}`+(p.override?'（已按 9 放行）':p.warn&&!p.over?'（已过 80%）':'');
+ if(!p.paused)return {known:true,paused:false,spend,text:'',cls:p.warn?'warn':''};
+ const why=[];
+ if(p.reasons?.includes('budget'))why.push('今天花费到上限（北京时间 0 点、按 9 或调高上限恢复）');
+ if(p.reasons?.includes('away'))why.push(`没人${typeof p.away_since==='number'?'（'+BJ_TIME(p.away_since)+' 起）':''}，有人出现、认识的声音或按任何开关就恢复`);
+ return {known:true,paused:true,spend,text:'暂停中：'+why.join('；'),cls:'paused'};
+}
+
 // 嘴 (2026-11-11): emotion clips (default) or soul-tts from the page buttons, never both.
 export function mouthView(switches){
  const mode=switches?.mouth?.mode;
@@ -156,7 +173,7 @@ export class SwitchBar{
   const mouth='<div class="switch switch-group" id="sw-mouth" role="group" aria-label="嘴"><b>嘴</b><span id="sw-mouth-state">—</span>'+
    MLEVELS.map(([k,label])=>`<button id="sw-mouth-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-mouth-detail">—</small></div>';
   root.innerHTML=hearing+vision+mouth+['mind','notes','meet'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
-   '<span id="sw-cost" class="switch-cost" role="status">—</span>';
+   '<span id="sw-pause" class="switch-pause" role="status">—</span><span id="sw-cost" class="switch-cost" role="status">—</span>';
   for(const [k] of LEVELS)doc.getElementById('sw-hearing-'+k).addEventListener('click',()=>this.setLevel(k));
   for(const [k] of VLEVELS)doc.getElementById('sw-vision-'+k).addEventListener('click',()=>this.setVision(k));
   for(const [k] of MLEVELS)doc.getElementById('sw-mouth-'+k).addEventListener('click',()=>this.setMouth(k));
@@ -249,7 +266,10 @@ export class SwitchBar{
    $('sw-'+k+'-state').textContent=this.pending===k?'发送中…':!s.known?'未知':s.on?'开':'关';
    $('sw-'+k+'-detail').textContent=s.detail;
   }
-  const c=$('sw-cost');c.textContent=this.msg||v.cost;c.classList.toggle('paying',v.cost.startsWith('正在花钱'));
+  const pv=pauseView(this.switches),pe=$('sw-pause');
+  pe.textContent=pv.paused?pv.text+' · '+pv.spend:pv.spend;pe.classList.toggle('paused',pv.paused);pe.classList.toggle('warn',pv.cls==='warn');
+  const cost=pv.paused?'暂停中：付费项都停着（开关保持原样）':v.cost;
+  const c=$('sw-cost');c.textContent=this.msg||cost;c.classList.toggle('paying',cost.startsWith('正在花钱'));
  }
 }
 

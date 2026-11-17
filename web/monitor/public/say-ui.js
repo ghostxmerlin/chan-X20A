@@ -54,7 +54,7 @@ const CHAT_SKIPS={not_chat:'不在对话模式',self:'hello 自己在出声',hel
  empty:'没听清',filler:'只有语气词',not_voice:'不像人声，声音也小',far_quiet:'太远（声音太小）',mouth_not_tts:'嘴不是 TTS',
  no_model:'没配模型',no_tts:'没配 TTS',replaced:'被下一句顶掉',stale:'等太久，过期了',superseded:'想的时候又来了新的一句，回新的',
  empty_reply:'模型没写出话',llm_error:'模型出错',left_chat:'已离开对话',cancelled:'被叫停',no_mouth:'嘴没连上',tts_error:'合成出错',
- budget:'今天的模型预算用完了',error:'出错了'};
+ budget:'今天花费到上限了',error:'出错了'};
 const CHAT_STATES={queued:'排队中',thinking:'正在想',answered:'回了'};
 const secs=ms=>Number.isFinite(ms)?`${(ms/1000).toFixed(1)} 秒`:null;
 export function chatTurnHtml(t){
@@ -160,7 +160,7 @@ export function earlierRoundsHtml(rows){
   return `<li>${said.length?said.map(escapeHtml).join(' / '):'<span class="muted">没出声</span>'}</li>`;}).join('')}</ul></details>`;
 }
 const PREFETCH_WHY={off:'条件不满足（嘴不在 TTS 或不是一轮模式）',no_speech:'最近没有听清的话',waiting:'等这段话说完（静 5 秒）',
- nothing_new:'说完后没有新话',spacing:'离上一轮不到 30 秒',same_moment:'还是同一时刻，不重写',budget:'本小时已到 0.6 美元上限',wrote:'刚写完一轮'};
+ nothing_new:'说完后没有新话',spacing:'离上一轮不到 30 秒',same_moment:'还是同一时刻，不重写',budget:'本小时已到 0.6 美元上限',paused:'暂停中（没人 / 今天花费到上限）',wrote:'刚写完一轮'};
 const AUTO_WHY={no_stock:'没有可用的提前写',no_high_score:'没有高分句',checked_none:'核对新话后都不合适',thin:'最近一分钟没人说话',
  off:'条件不满足（嘴不在 TTS 或不是一轮模式）',no_mouth:'hello 的嘴没连上',busy:'正在说别的或正在提前写，跳过',stopped:'被叫停，没说',error:'出错'};
 export function autoStatusHtml(st){

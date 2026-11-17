@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mind_fixtures import FakeDB, T0, session, speech, tingwu   # noqa: E402
+from mind_fixtures import FakeDB, T0, away_pause, budget_pause, clear_pause, session, speech, tingwu   # noqa: E402
 from mind import notes, notes_runner, selfvoice, settings       # noqa: E402
 from mind.records import Records                                # noqa: E402
 from mind.store import Store                                    # noqa: E402
@@ -134,8 +134,8 @@ class UpdateTest(unittest.TestCase):
         self.assertEqual((len(self.fake.calls), len(conv["refs"])), (2, 2))          # backing off: no call
 
     def test_budget_reached_no_call(self):
-        s = copy.deepcopy(S); s["budget_usd_per_day"] = 0.0
-        conv = notes.update(ENV, self.store, s, None, [sent(T0)], T0 + MIN + 10_000)
+        budget_pause(self.db)                    # the one daily cap (mind/pause.py)
+        conv = notes.update(ENV, self.store, S, None, [sent(T0)], T0 + MIN + 10_000)
         self.assertEqual((self.fake.calls, len(conv["refs"])), ([], 1))
 
     def test_environment_and_owner_reach_the_prompt(self):
@@ -205,6 +205,17 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(len(self.fake.calls), n)
         self.assertIsNotNone(self.convs()[0]["end_ms"])
         self.assertEqual(len(self.convs()), 1)
+
+    def test_a_pause_makes_no_calls_and_keeps_the_switch(self):
+        """mind/pause.py (2026-11-17): a TV talking to an empty room writes no notes; back -> as before."""
+        away_pause(self.db, since=T0)
+        self.say(T0 + 5000, "s-1")
+        notes_runner.tick(self.db, self.store, self.rec, S, ENV, T0 + MIN + 10_000)
+        self.assertEqual(self.fake.calls, [])
+        self.assertTrue(notes_runner.switch_on(self.db))
+        clear_pause(self.db)
+        self.say(T0 + MIN + 5000, "s-2")
+        self.assertEqual(self.tick(T0 + 2 * MIN + 10_000), 1)
 
     # ---- final review fixes ----
     def test_close_waits_a_margin_for_rows_written_after_a_long_utterance(self):

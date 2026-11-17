@@ -7,7 +7,7 @@ deterministic); only the summaries are stored (mind_segments, versioned).
 """
 import json
 
-from . import fusion, llm
+from . import fusion, llm, pause
 from . import settings as settings_mod
 from .runlog import hello_log, trace as log_trace
 
@@ -109,7 +109,7 @@ def update(env, store, s, day_start_ms, now_ms, lane="live", summarize_now=True)
             need = existing is None or existing["scenes_count"] < n or existing.get("end") != seg["end"]
         else:
             need = existing is None or existing["scenes_count"] < n
-        if need:
+        if need and not pause.budget_stop(store.db, now_ms):      # the one daily cap (mind/pause.py)
             scenes = [d for d in store.scenes_range(lane, seg["start"], seg["end"] or now_ms) if d.get("scene")]
             got = summarize(env, store, s, seg, scenes, lane, now_ms)
             if got:

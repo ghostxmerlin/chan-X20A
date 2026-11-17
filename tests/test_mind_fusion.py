@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mind_fixtures import FakeDB, T0   # noqa: E402
+from mind_fixtures import FakeDB, T0, budget_pause, clear_pause   # noqa: E402
 from mind import fusion, llm, probe, settings   # noqa: E402
 from mind.store import Store   # noqa: E402
 
@@ -171,13 +171,15 @@ class FusionTest(unittest.TestCase):
         self.assertEqual(rec["source"], "model")
         self.assertIn("JSON", self.fake.calls[1]["messages"][-1]["content"])
 
-    def test_budget_limits_to_every_30_minutes(self):
-        s = copy.deepcopy(S); s["budget_usd_per_day"] = 0.001
-        self.run_at(T, s=s)                               # spends ~$0.0002
-        for _ in range(10):
-            self.db["mind_runs"].docs.append({"lane": "live", "at": T + MIN, "cost_usd": 0.001, "step": "fusion"})
-        self.assertEqual(self.run_at(T + MIN, s=s)["reason"], "budget")
-        self.assertEqual(self.run_at(T + 30 * MIN, s=s)["source"], "model")
+    def test_the_daily_cap_carries_until_it_lifts(self):
+        """The one daily cap (mind/pause.py, 2026-11-17): no :00 / :30 exception any more."""
+        self.run_at(T)
+        budget_pause(self.db)
+        self.assertEqual(self.run_at(T + MIN)["reason"], "budget")
+        self.assertEqual(self.run_at(T + 30 * MIN)["reason"], "budget")
+        budget_pause(self.db, until=T + 31 * MIN)          # midnight: the stored pause ends by itself
+        self.assertNotEqual(self.run_at(T + 32 * MIN).get("reason"), "budget")
+        clear_pause(self.db)
 
     def test_rerun_skips_the_gate_and_writes_its_own_lane(self):
         self.run_at(T, same=True)

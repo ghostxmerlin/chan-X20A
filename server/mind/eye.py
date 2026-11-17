@@ -3,14 +3,14 @@ frames (hello.frames, at most 6) plus the M12 events, written to hello.eye_minut
 
 No frames in a minute → no call and no record: frames are only uploaded when the picture changed,
 so a minute without frames is either unchanged or the camera is off. Runs are logged in mind_runs
-(step "eye") and share mind's daily budget. The switch (hello.switches.eye) is checked by eye_runner.
+(step "eye") and stop at the one daily cap (mind/pause.py). The switch (hello.switches.eye) is checked by eye_runner.
 """
 import base64
 import json
 import os
 import time
 
-from . import llm, place, speech_settings, settings as settings_mod
+from . import llm, pause, place, speech_settings, settings as settings_mod
 from .runlog import hello_log, trace as log_trace
 
 CHAT = llm.chat                       # injectable in tests
@@ -210,7 +210,7 @@ def run_minute(env, store, s, minute_ms, recordings_root, now_ms=None):
     base = {"frames": [{k: f[k] for k in ("seq", "session", "at", "path")} for f in inputs["frames"]],
             "skipped": inputs["skipped"], "events_n": len(inputs["events"]), "prompt": EYE_PROMPT, "model": EYE_MODEL,
             "at": now_ms, "run_id": None, "result": None, "error": None}
-    if store.cost_today(s["tz"], now_ms) >= s["budget_usd_per_day"]:
+    if pause.budget_stop(db, now_ms):            # the one daily cap (mind/pause.py)
         return _put(db, minute_ms, {**base, "source": "budget"})
     if (_state(db).get("backoff_until") or 0) > now_ms:
         return _put(db, minute_ms, {**base, "source": "backoff"})

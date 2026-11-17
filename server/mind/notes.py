@@ -6,7 +6,7 @@ running conversation, and on its first update says whether it continues one from
 """
 import json
 
-from . import llm, package, place, prompts, selfvoice, speech_settings, settings as settings_mod
+from . import llm, package, pause, place, prompts, selfvoice, speech_settings, settings as settings_mod
 from .runlog import hello_log, trace as log_trace
 
 GAP_MS = 60_000                  # no one spoke for a minute: the conversation is over (user 2026-11-11)
@@ -215,7 +215,7 @@ def update(env, store, s, conv, sentences, now_ms, recent=None, until_ms=None, c
                 "title": "", "notes": "", "confidence": "low", "version": 0, "prompt": NOTES_PROMPT}
     conv = dict(conv, refs=list(conv["refs"]) + [list(x["ref"]) for x in sentences],
                 last_ms=max([conv["last_ms"]] + [x["at"] for x in sentences]))
-    if not call or store.cost_today(s["tz"], now_ms) >= s["budget_usd_per_day"] or (_state(db).get("backoff_until") or 0) > now_ms:
+    if not call or pause.budget_stop(db, now_ms) or (_state(db).get("backoff_until") or 0) > now_ms:
         _save(db, conv, None, now_ms, False)
         return conv
     cands = candidates(db, max(day_start(conv["start_ms"], s["tz"]), speech_settings.scope(s)['since']), conv["start_ms"],

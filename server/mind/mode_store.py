@@ -252,7 +252,8 @@ class ModeStore:
         dup = self._claim(key, 'apply')
         if dup:
             return dup
-        meta = {'source': source, 'input': input, 'value': value, 'device': device, 'sid': sid, 'mode': None}
+        meta = {'source': source, 'input': input, 'value': value, 'device': device, 'sid': sid, 'mode': None,
+                'boot': boot, 'dev_seq': dev_seq}
         base = {'at': now, 'source': source, 'device': device, 'boot': boot, 'dev_seq': dev_seq, 'sid': sid,
                 'input': input, 'value': value}
         try:

@@ -46,7 +46,7 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
   - `svc.error`：顶层异常处理接住的异常（mind / eye / notes / memory 主循环的 "… error:"，memory 每轮 tick 的兜底；ear 的后台任务失败："realtime: task failed"、"vision burst: task failed"、"mode: background task failed"、识别任务失败）。`ok: false`，`err` = `类型: 消息` 一行（先整行脱敏再截到 300 字，不带调用栈），`extra.where` 是出处（`mind.loop`、`eye.loop`、`notes.loop`、`memory.tick` / `memory.loop` / `memory.extract`、`realtime.task`、`burst.task`、`mode.task`、`ear.inference`）。memory 的只记异常类型、不记消息（消息里可能有私人内容）。同一出处同一句话每分钟最多一条，其余只数进心跳的 `errors_throttled`。
   - `svc.beat` 的 `rejected`：库拒收、被跳过的记录累计数（见「写入」）；ear 的 `refused`：上一分钟里被限流、没单独记 `link.open` 的拒绝连接数（令牌不对的连接每个来源 IP 每分钟只记一条 `link.open ok:false`）。
 - **连接**：`link.open` / `link.close`（ear 每条机器人链路）、`link.upstream`（ear 到听悟、realtime、soul-tts 的上游连接）。
-- **开关 / 模式 / 预设**：`switch.set`、`mode.input`（mind 的 `mode_log` 每行一条）、`mode.change`、`preset.apply`、`billing.set`、`robot.state`（机器人上报的开关）。
+- **开关 / 模式 / 预设**：`switch.set`、`switch.pause`、`switch.resume`、`budget.warn`（暂停和每日上限，见 mind 一侧）、`mode.input`（mind 的 `mode_log` 每行一条）、`mode.change`、`preset.apply`、`billing.set`、`robot.state`（机器人上报的开关）。
 - **触发与闸门**：`trigger.*`（`trigger.burst`、`trigger.hush`、`trigger.greet`）、`gate.rescue`、`gate.realtime`（放行 / muted_quiet / muted_unclear / muted_repeat / muted_blind / muted_wait_look / rescue……及理由）、`filler.play`。
 - **业务调用**（正文里存系统输入 / 背景 / 用户输入 / 输出全文）：
   - `call.eye`、`call.look`；
@@ -63,8 +63,14 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 
 - **模型调用**都在 `mind/llm.py` 的 `chat()` 里记：`model`、`ms`、`ok`/`err`、`usage`、`cost`（`basis: "llm.PRICES 2026-11-15"`，按 `llm.PRICES` 标价估算）、`key`、`sum`（最后一条用户消息的最后 60 字）、正文 `system`（系统消息文本的列表）/ `input`（其余消息原样，图片已换掉）/ `output`（回复文字，或 tool_calls 的 JSON）/ `params`（除 messages 外实际发出的一切：`response_format` 的 JSON schema 连同字段说明、`tools` / `tool_choice`、`temperature`、`max_tokens`、`reasoning_effort` 等；同一份 schema 同月只存一份）。`kind` 和 `ref` 来自调用方：`call.eye` / `call.fusion` / `call.segment` / `call.notes` 带 `ref.minute`（纪要另有 `cid`，情景另有 `lane`、`prompt`）；`run_json` 的 `call.<step>` 带 `minute`、`lane`、`step`；`call.chat` 带 `ref.tid`（`chat_turns`）和 ear 传来的 `trace`。重试和第一次共用 `trace`，一轮脱口秀（各句 + 裁判）共用一个 `trace`。
 - **`switch.set`**：`extra = {name, before, after}`，`by` = page / mode / extract……，`sum` 如 "听悟 开→关"；写库失败时 `ok: false` + `err`。`name` 有 tingwu、eye、notes、realtime、mouth（值是模式）、mind（情景）、memory_extract、say_prefetch（提前写）、say_auto（连续说）。
+- **暂停（2026-11-17，`server/mind/pause.py`）**：暂停是独立的状态，不改任何开关；恢复后一切照主人原来的设置。
+  - `switch.pause`：开始暂停，或暂停中原因变了。`by: rule`，`sum` 如 "暂停：没人"、"暂停：超出今天的花费上限"。`extra = {why（主要原因：budget 先于 away）, reasons（away / budget，可同时有）, added, lifted（这次去掉的原因）, lifted_by, away_since, last_presence, spent_cny, cap_cny}`。
+  - `switch.resume`：不再有任何原因。`extra = {why, was（之前的原因）, paused_ms, spent_cny, cap_cny}`；`why` = 谁解除的：`face`（M12 看到脸）、`voice`（听到认识的声音）、`owner:<来源>`（主人的明确操作，如 `owner:page`、`owner:touch:tap`、`owner:asr:digit`、`owner:dualkey`）、`midnight`（北京时间 0 点）、`nine`（主人按 9，当天不再按上限暂停）、`cap`（上限调高了）、`start`（mind 刚启动、还没有任何在场记录）。
+  - `budget.warn`：今天花费到上限的 80%，每天一次。`extra = {spent_cny, cap_cny, day}`。
+  - 今天的花费 = 本页「总账」`ledger(db, 北京时间今天)` 的 `total`：CNY 原样，USD × `pause.usd_cny`（默认 7.2）。听悟的花费记在流结束（`call.tingwu` 的 stop）那一刻，所以一条还在跑的听悟流要等它停了才算进去。
+  - `preset.apply` 带 `extra.power_on: true`：hello 开机补发的 9（见 `server/mind/billing.py` 的 `power_on`），什么开关都不改，只回 ok。
 - **`mode.input`**：`by` = 来源，`mode` = 之后的模式，`extra` = `{input, value, from, to, code, device, boot, dev_seq, sid, seq, effects, toast}`。**`mode.change`**：`extra = {from, to, seq, input}`（`from`/`to` 是 mode、dir、host、return_to）。**`billing.set`**：`extra = {before, after}`。**`preset.apply`**：`extra = {n, code, toast, failed, robot}`，`ok` = 没有失败的步骤。一次输入和它引起的预设、开关变化共用一个 `trace`。
-- **心跳** `svc.beat` 的 `state`：`switches` 表里每个开关的值（`*_status` 除外）加 `mind`（情景开关）。
+- **心跳** `svc.beat` 的 `state`：`switches` 表里每个开关的值（`*_status` 除外）加 `mind`（情景开关）；其中 `pause` 是暂停与否（`switches` 表的 `{_id: pause}` 文档，`on` = 暂停中）。ear 的心跳 `state.paused` 是 ear 此刻认的暂停原因（`[]` = 没暂停）。
 
 ## ear 一侧的记录
 

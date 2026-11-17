@@ -191,3 +191,20 @@ test('mouth mode: clips by default, tts and off silence the clips', ()=>{
  assert.equal(sw.mouthView({mouth:{mode:'off'}}).mode,'off');
  assert.deepEqual(sw.mouthRequest('tts'),{kind:'switch',body:{name:'mouth',mode:'tts'}});
 });
+
+// The pause (2026-11-17, server/mind/pause.py): shown next to the switches, which keep their own state.
+const PAUSE=(p)=>({...SW(true,['s1']),pause:{known:true,paused:false,reasons:[],cap_cny:20,spent_cny:3.456,warn:false,over:false,override:false,...p}});
+test('today\'s spend against the cap is one number', ()=>{
+ assert.equal(sw.pauseView(PAUSE({})).spend,'今天 ¥3.46 / ¥20');
+ assert.match(sw.pauseView(PAUSE({spent_cny:16.2,warn:true})).spend,/¥16\.20 \/ ¥20（已过 80%）/);
+ assert.equal(sw.pauseView(PAUSE({spent_cny:null})).spend,'今天 未知 / ¥20');
+ assert.equal(sw.pauseView(null).known,false);
+});
+test('paused: why and since when, in Beijing time', ()=>{
+ const at=Date.UTC(2026,10,17,6,5);                      // 14:05 Beijing
+ const v=sw.pauseView(PAUSE({paused:true,reasons:['away'],away_since:at}));
+ assert.equal(v.paused,true);assert.match(v.text,/^暂停中：没人（14:05 起）/);
+ const b=sw.pauseView(PAUSE({paused:true,reasons:['budget'],spent_cny:20.4,over:true}));
+ assert.match(b.text,/今天花费到上限/);assert.match(b.spend,/¥20\.40 \/ ¥20/);
+ assert.match(sw.pauseView(PAUSE({spent_cny:22,over:true,override:true})).spend,/已按 9 放行/);
+});

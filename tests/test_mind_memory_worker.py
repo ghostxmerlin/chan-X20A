@@ -6,7 +6,7 @@ from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from mind_fixtures import FakeDB, T0, session, speech, tingwu
+from mind_fixtures import FakeDB, T0, budget_pause, clear_pause, session, speech, tingwu
 from mind import settings
 from mind.settings_store import SettingsStore
 from mind.store import Store
@@ -237,10 +237,10 @@ class MemoryWorkerTest(unittest.TestCase):
 
     def test_budget_failure_can_resume_without_skipping_window(self):
         self.tick(T0); self.data()
-        s,v=self.ss.current(); s['budget_usd_per_day']=0; self.ss.save(s,expected_version=v)
+        budget_pause(self.db)                    # today's cap (mind/pause.py): run_json refuses, the window waits
         self.assertEqual(self.tick(T0+W+30_000)['error'],'BudgetExceeded')
         self.assertEqual(self.fake.calls,[])
-        s,v=self.ss.current(); s['budget_usd_per_day']=20; self.ss.save(s,expected_version=v)
+        clear_pause(self.db)
         self.tick(T0+W+360_000)
         self.assertEqual(len(self.fake.calls),1)
         self.assertEqual(self.db.count('mind_memory_evidence'),1)

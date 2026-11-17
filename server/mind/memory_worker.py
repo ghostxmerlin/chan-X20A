@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 
-from . import memory_extract, runlog, selfvoice, settings, speech_settings
+from . import memory_extract, pause, runlog, selfvoice, settings, speech_settings
 from .library import Library
 from .memory import MemoryStore, WINDOW, fingerprint
 from .model_calls import BudgetExceeded, object_schema, run_json
@@ -132,10 +132,14 @@ def tick(db,store,settings_store,env,now_ms,chat=None):
     s,settings_version=settings_store.current()
     scope=speech_settings.scope(s)
     ready=(now_ms-20_000)//WINDOW*WINDOW-WINDOW
-    if not env or not store.enabled() or not s['memory']['learning']:
+    # away (mind/pause.py: nobody there): the windows are skipped like with 情景 off (TV talk is no habit of the
+    # owner's). Today's cap is run_json's BudgetExceeded as before (the window is retried, never skipped). The daily
+    # consolidation (memory_extract) is not paused while away.
+    held=pause.away(db,now_ms)
+    if not env or not store.enabled() or not s['memory']['learning'] or held:
         jobs.update_one({'_id':'worker:live'},{'$set':{'cursor_window':max(state['cursor_window'],ready),
-                        'state':'off','last_tick':now_ms,'last_error':''}},upsert=True)
-        return {'state':'off','processed':0}
+                        'state':'paused' if held else 'off','last_tick':now_ms,'last_error':''}},upsert=True)
+        return {'state':'paused' if held else 'off','processed':0}
     owner=uuid.uuid4().hex
     try:
         lease=jobs.find_one_and_update({'_id':'lease:live','$or':[{'expires':{'$lte':now_ms}},{'owner':owner}]},

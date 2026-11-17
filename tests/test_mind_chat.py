@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mind_fixtures import FakeDB, T0
+from mind_fixtures import FakeDB, T0, budget_pause
 from mind import api, chat as chat_mod, runner, selfvoice, speak, speech_settings
 from mind.library import Library
 from mind.settings_store import SettingsStore, validate
@@ -240,11 +240,7 @@ class TurnTest(ChatBase):
         self.assertEqual(self.tts.said, [])
 
     def test_the_daily_budget_guard_stops_chat_calls(self):
-        s, v = self.ss.current()
-        s = copy.deepcopy(s)
-        s['budget_usd_per_day'] = 0.5
-        self.ss.save(s, 'test', expected_version=v)
-        self.db.add('mind_runs', {'at': self.now[0] - 1000, 'cost_usd': 0.6, 'step': 'fusion'})
+        budget_pause(self.db)                    # today's cap (mind/pause.py)
         tid = self.chat.heard(heard())['tid']
         self.chat.process_once()
         self.assertEqual((self.turn(tid)['skip'], self.model.bodies), ('budget', []))
@@ -564,11 +560,7 @@ class StreamTest(ChatBase):
 
     def test_over_budget_opens_nothing(self):
         """review v1 M5: the budget check runs before the open."""
-        s, v = self.ss.current()
-        s = copy.deepcopy(s)
-        s['budget_usd_per_day'] = 0.5
-        self.ss.save(s, 'test', expected_version=v)
-        self.db.add('mind_runs', {'at': self.now[0] - 1000, 'cost_usd': 0.6, 'step': 'fusion'})
+        budget_pause(self.db)                    # today's cap (mind/pause.py)
         tid = self.chat.heard(heard())['tid']
         self.chat.process_once()
         self.assertEqual((self.turn(tid)['skip'], self.order), ('budget', []))

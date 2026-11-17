@@ -335,5 +335,66 @@ class TalkEnterTest(unittest.TestCase):
         self.assertEqual(self.ctx.prefetch, False)
 
 
+class PowerOnNineTest(unittest.TestCase):
+    """2026-11-17: hello's power-on 9 (source quick, the first digit of a robot boot mind has not answered ok yet)
+    changes no switch: an unexplained reboot keeps the owner's 闭嘴 / 0 / single switches off. Any later 9 is the
+    owner's and turns everything on, as before."""
+    def setUp(self):
+        self.ctx = FakeCtx(mode='crowd', mouth='clips')       # everything off, as the owner left it
+        self.b = Billing(self.ctx)
+        self.ms = self.ctx.mode_store
+        self.seq = 0
+
+    def nine(self, source='quick', boot='b1', device='robot'):
+        self.seq += 1
+        return self.ms.apply('digit', 9, source=source, device=device, boot=boot, dev_seq=self.seq, now_ms=self.seq)
+
+    def test_power_on_nine_keeps_every_switch(self):
+        r = self.nine()
+        self.assertEqual((r['result'], r.get('power_on')), ({'code': 'ok', 'toast': 'POWER ON: SWITCHES KEPT'}, True))
+        self.assertEqual(self.ctx.calls, [])
+        self.assertEqual((self.ctx.realtime, self.ctx.mouth), (False, 'clips'))
+        self.assertEqual(self.ms.db['mode_log'].docs[-1]['code'], 'ok')        # hello stops resending
+
+    def test_the_next_quick_nine_of_that_boot_is_the_owners(self):
+        self.nine()
+        r = self.nine()                                       # the quick page's 全开, pressed after the reboot
+        self.assertNotIn('power_on', r)
+        self.assertEqual((self.ctx.tingwu, self.ctx.realtime, self.ctx.mouth), (True, True, 'tts'))
+
+    def test_an_asr_nine_is_always_the_owners(self):
+        r = self.nine(source='asr')
+        self.assertNotIn('power_on', r)
+        self.assertEqual((self.ctx.tingwu, self.ctx.realtime), (True, True))
+
+    def test_any_ok_digit_of_the_boot_ends_the_power_on_window(self):
+        self.seq += 1
+        self.ms.apply('digit', 0, source='asr', device='robot', boot='b1', dev_seq=self.seq, now_ms=self.seq)
+        self.assertNotIn('power_on', self.nine())
+        self.assertEqual(self.ctx.tingwu, True)
+
+    def test_a_new_boot_and_a_mind_restart(self):
+        self.nine()
+        self.assertTrue(self.nine(boot='b2').get('power_on'))            # the next reboot keeps them again
+        b = Billing(self.ctx)                                              # mind restarted: the log still knows
+        self.ctx.mode_store.preset_fn = b.preset
+        self.assertNotIn('power_on', self.nine(boot='b2'))
+
+    def test_an_unanswered_power_on_nine_resent_is_still_kept(self):
+        self.ms.db['mode_log'].docs.append({'device': 'robot', 'boot': 'b1', 'dev_seq': 99, 'input': 'digit',
+                                            'code': 'busy'})
+        self.assertTrue(self.nine().get('power_on'))
+
+    def test_source_boot_is_always_the_power_on_nine(self):
+        self.nine()
+        self.assertTrue(self.nine(source='boot').get('power_on'))
+        self.assertEqual(self.ctx.tingwu, False)
+
+    def test_the_page_nine_is_never_a_power_on(self):
+        r = self.ms.apply('digit', 9, source='quick', now_ms=1)               # no device: not hello's link
+        self.assertNotIn('power_on', r)
+        self.assertEqual(self.ctx.tingwu, True)
+
+
 if __name__ == '__main__':
     unittest.main()

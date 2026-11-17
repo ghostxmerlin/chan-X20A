@@ -943,7 +943,9 @@ class RealtimeHub:
             self._need_speech, self._greet, self._appear = False, None, None
         if not self.want():
             if self.state != "closed":
-                self.close("switch_off" if not self.switch.on else "left_crowd" if not self.in_crowd() else "robot_gone")
+                # paused: mind/pause.py (nobody there / today's cap), the switch itself is still on (presence.Gated)
+                self.close("paused" if getattr(self.switch, "paused", False) else "switch_off" if not self.switch.on
+                           else "left_crowd" if not self.in_crowd() else "robot_gone")
         elif self.state == "closed":
             if now >= self._retry_at and not self._need_speech:
                 self._open(now, "crowd")
@@ -1719,7 +1721,9 @@ class RealtimeHub:
     async def _post_hush(self):
         loop = asyncio.get_running_loop()
         try:
-            fut = loop.run_in_executor(self._pool, self.call, "POST", "/switches", {"name": "realtime", "on": False},
+            # by hush: not an owner's input for the pause (a TV can say 闭嘴; mind/api.py note_owner)
+            fut = loop.run_in_executor(self._pool, self.call, "POST", "/switches", {"name": "realtime", "on": False,
+                                                                                    "by": "hush"},
                                        self.cfg.context_timeout_s)
             status, _ = await asyncio.wait_for(fut, self.cfg.context_timeout_s + 0.5)
         except Exception:                              # noqa: BLE001 - mind slow / down

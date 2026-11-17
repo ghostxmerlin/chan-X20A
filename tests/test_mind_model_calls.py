@@ -6,7 +6,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from mind_fixtures import FakeDB, T0
+from mind_fixtures import FakeDB, T0, budget_pause
 from mind import model_calls, settings
 from mind.store import Store
 
@@ -45,7 +45,7 @@ class ModelCallsTest(unittest.TestCase):
         self.assertEqual(self.db.count('mind_runs'), 5)
 
     def test_budget_checked_before_each_call(self):
-        self.s['budget_usd_per_day'] = 0.0
+        budget_pause(self.db)                    # the one daily cap (mind/pause.py)
         chat = SlowChat(0)
         with self.assertRaises(model_calls.BudgetExceeded):
             self.call(chat)

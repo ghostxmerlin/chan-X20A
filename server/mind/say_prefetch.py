@@ -36,6 +36,7 @@ class Worker:
         self._attempt = {}                 # scope -> last write attempt (ms), successful or not
         self.last = None                   # {reason, at} of the latest step, shown on the page
         self.on_change = []                # f(on, now_ms) after every switch (连续说 follows it off)
+        self.paused_fn = lambda: False     # mind/pause.py (runner sets it): nobody there / today's cap -> no write
         self.store.set_state(say_prefetch={'on': False, 'since': None})       # a restart always starts off
 
     # ---- switch ----
@@ -91,6 +92,8 @@ class Worker:
             return 'off'
         if self.mode_fn() != 'talk':
             return 'not_talk'
+        if self.paused_fn():                # the pause keeps the switch as the owner left it
+            return 'paused'
         s = self.settings_fn()
         if (s.get('speech') or {}).get('pipeline') != 'round' or self.mouth_fn() != 'tts':
             return 'off'
