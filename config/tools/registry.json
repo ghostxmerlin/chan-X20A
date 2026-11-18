@@ -9,6 +9,7 @@
   "world": "外面的世界",
   "express": "说与表达",
   "move": "动",
+  "daily": "日常",
   "settings": "设置"
  },
  "levels": {
@@ -789,7 +790,7 @@
    "latency": "分钟级",
    "cost": "较高，按任务封顶",
    "needs": [],
-   "notes": ""
+   "notes": "花钱多：主人亲口要求即执行，否则生成提议；按任务封顶"
   },
   {
    "name": "say",
@@ -1124,6 +1125,311 @@
    "notes": ""
   },
   {
+   "name": "reminder_set",
+   "title": "设提醒",
+   "group": "daily",
+   "level": "A",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "主人说“X 分钟后 / 几点提醒我…”时用；到时 hello 说出来（不在场就留着等主人回来）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "when": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（10分钟后、明天早上8点）",
+      "maxLength": 40
+     },
+     "text": {
+      "type": "string",
+      "maxLength": 80
+     },
+     "repeat": {
+      "type": "string",
+      "enum": [
+       "none",
+       "daily",
+       "weekdays",
+       "weekly"
+      ]
+     }
+    },
+    "required": [
+     "when",
+     "text"
+    ]
+   },
+   "returns": "reminder_id、at",
+   "source": "新：mind 提醒表 + 到点触发说话",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": "也当计时器用"
+  },
+  {
+   "name": "reminder_list",
+   "title": "有哪些提醒",
+   "group": "daily",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "被问“我有什么提醒 / 今天要做什么”时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（10分钟后、明天早上8点）",
+      "maxLength": 40
+     },
+     "to": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（10分钟后、明天早上8点）",
+      "maxLength": 40
+     }
+    }
+   },
+   "returns": "reminders[{id, at, text, repeat}]",
+   "source": "新：mind 提醒表",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "reminder_cancel",
+   "title": "取消提醒",
+   "group": "daily",
+   "level": "A",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "主人要取消或改某个提醒时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "maxLength": 40
+     },
+     "query": {
+      "type": "string",
+      "description": "按内容找",
+      "maxLength": 40
+     }
+    }
+   },
+   "returns": "cancelled",
+   "source": "新：mind 提醒表",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "schedule_add",
+   "title": "记日程",
+   "group": "daily",
+   "level": "A",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "主人说有个安排（会、约、出行）时记下，可带提前提醒。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "start": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（10分钟后、明天早上8点）",
+      "maxLength": 40
+     },
+     "end": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（10分钟后、明天早上8点）",
+      "maxLength": 40
+     },
+     "title": {
+      "type": "string",
+      "maxLength": 60
+     },
+     "place": {
+      "type": "string",
+      "maxLength": 40
+     },
+     "remind_before_min": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1440
+     }
+    },
+    "required": [
+     "start",
+     "title"
+    ]
+   },
+   "returns": "event_id",
+   "source": "新：mind 日程表（以后可接外部日历）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "schedule_list",
+   "title": "查日程",
+   "group": "daily",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "被问“今天 / 明天有什么安排”时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（10分钟后、明天早上8点）",
+      "maxLength": 40
+     },
+     "to": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（10分钟后、明天早上8点）",
+      "maxLength": 40
+     }
+    }
+   },
+   "returns": "events[{id, start, end, title, place}]",
+   "source": "新：mind 日程表",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "watch_start",
+   "title": "帮忙盯着",
+   "group": "daily",
+   "level": "A",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "主人让 hello 帮忙留意某件事时用：有人来、某人出现或离开、某种声音（敲门、哭声、水开了）、画面变化；发生时告诉主人。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "what": {
+      "type": "string",
+      "enum": [
+       "person_enter",
+       "person_leave",
+       "named_person",
+       "sound",
+       "scene_change",
+       "owner_back"
+      ]
+     },
+     "who": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "sound": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 600
+     },
+     "how": {
+      "type": "string",
+      "enum": [
+       "say",
+       "notify"
+      ]
+     }
+    },
+    "required": [
+     "what"
+    ]
+   },
+   "returns": "watch_id、until",
+   "source": "新：mind 规则 + ear 事件（M12 来去、声音种类、即时画面）",
+   "latency": "<100 ms",
+   "cost": "看画面的会用识图",
+   "needs": [],
+   "notes": "到时间自动结束"
+  },
+  {
+   "name": "watch_list",
+   "title": "在盯什么",
+   "group": "daily",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "被问“你在帮我盯着什么”时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "watches[{id, what, until}]",
+   "source": "新",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "watch_stop",
+   "title": "别盯了",
+   "group": "daily",
+   "level": "A",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "主人让停止留意时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "maxLength": 40
+     }
+    }
+   },
+   "returns": "stopped",
+   "source": "新",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "notify_owner",
+   "title": "通知主人",
+   "group": "daily",
+   "level": "C",
+   "runs_on": "external",
+   "status": "new",
+   "description": "主人不在跟前时把事情发到他手机上（提醒、盯着的事发生了）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "maxLength": 200
+     },
+     "urgent": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "text"
+    ]
+   },
+   "returns": "sent",
+   "source": "新：推送渠道待定（主人选）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": "对外发消息，按 C 级；主人预先同意的提醒 / 盯梢可免确认"
+  },
+  {
    "name": "switch_propose",
    "title": "提议开关",
    "group": "settings",
@@ -1303,7 +1609,63 @@
    "needs": [
     "机器人在线"
    ],
-   "notes": ""
+   "notes": "现在的写法会存 NVS：主人亲口要求即执行，否则生成提议；加了不存版后降到 A"
+  },
+  {
+   "name": "set_voice",
+   "title": "换声音",
+   "group": "settings",
+   "level": "C",
+   "runs_on": "ear",
+   "status": "new",
+   "description": "主人要 hello 换一个声音（音色、语气）时用；Docking 换声音要重开会话。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "voice": {
+      "type": "string",
+      "description": "声音名，如 鹿野、无限",
+      "maxLength": 20
+     },
+     "style": {
+      "type": "string",
+      "description": "语气，如 平稳清冷",
+      "maxLength": 40
+     }
+    }
+   },
+   "returns": "voice、style、applied_at",
+   "source": "新：Docking 会话的 voice（开会话时设）+ soul-tts voices.json 的 instruction",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": "主人亲口要求即执行，否则生成提议"
+  },
+  {
+   "name": "set_quiet",
+   "title": "安静一会儿",
+   "group": "settings",
+   "level": "A",
+   "runs_on": "ear",
+   "status": "new",
+   "description": "主人让 hello 安静时用：不主动说话、不回答，直到再被叫（hello / Dynames / 唤醒词）或到时间。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 240,
+      "description": "可空 = 直到被叫"
+     }
+    }
+   },
+   "returns": "quiet、until",
+   "source": "新：Docking 静默状态（被叫窗口解除）；现有「闭嘴」是关掉整个 Docking",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": "临时，不存设置；屏幕显示安静中"
   }
  ]
 }

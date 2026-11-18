@@ -49,10 +49,11 @@ class RegistryTest(unittest.TestCase):
             self.assertIsInstance(t["needs"], list, t["name"])
             check_schema(self, t["name"], t["parameters"])
 
-    def test_c_level_tools_only_propose(self):
+    def test_c_level_tools_say_how_they_are_confirmed(self):
+        # docs/hello-tools.md §2: a C tool proposes; the owner asking in person counts as the confirmation
         for t in REG["tools"]:
-            if t["level"] == "C" and t["group"] == "settings" and t["name"] != "set_volume":
-                self.assertTrue(t["name"].endswith("_propose"), t["name"])
+            if t["level"] == "C" and not t["name"].endswith("_propose"):
+                self.assertTrue(any(w in t["notes"] for w in ("提议", "确认", "C 级")), t["name"])
 
     def test_export_shape_for_function_calling(self):
         live = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
