@@ -11,7 +11,7 @@ import re
 from . import mode_table, recall, segments, selfvoice, settings as settings_mod, tool_time
 from .library import Library
 from .store import LANE
-from .tools import ToolError
+from .tools import Paid, ToolError
 
 BJ = timezone(timedelta(hours=8))
 SWITCH_TITLES = {"tingwu": "听悟（第二路转写）", "eye": "识别（看画面）", "notes": "纪要", "realtime": "Docking（实时对话）",
@@ -500,3 +500,170 @@ def ear_asker(token, url=EAR_ASK_URL, timeout=32):
 
 def ear_tools(ask):
     return {name: (lambda args, _n=name: ask(_n, args)) for name in EAR_TOOLS}
+
+
+# ---- L2: live data (free sources, 2026-11-18 server test) and a cross-checked search ----
+COINS = {"btc": "bitcoin", "比特币": "bitcoin", "eth": "ethereum", "以太坊": "ethereum", "以太": "ethereum",
+         "sol": "solana", "doge": "dogecoin", "狗狗币": "dogecoin", "usdt": "tether", "bnb": "binancecoin",
+         "xrp": "ripple", "瑞波": "ripple", "ton": "the-open-network", "ada": "cardano"}
+CURRENCIES = {"美元": "USD", "人民币": "CNY", "港币": "HKD", "港元": "HKD", "日元": "JPY", "欧元": "EUR", "英镑": "GBP",
+              "韩元": "KRW", "新台币": "TWD", "澳元": "AUD", "加元": "CAD", "新加坡元": "SGD", "泰铢": "THB"}
+CITIES = {"北京": "Beijing", "上海": "Shanghai", "广州": "Guangzhou", "深圳": "Shenzhen", "杭州": "Hangzhou",
+          "香港": "Hong Kong", "成都": "Chengdu", "南京": "Nanjing", "武汉": "Wuhan", "西安": "Xian", "天津": "Tianjin",
+          "重庆": "Chongqing", "苏州": "Suzhou", "东京": "Tokyo", "纽约": "New York", "伦敦": "London"}
+VERIFY_MODEL = "gemini-3-flash-preview-search"      # aihubmix: Google search inside; $0.5 / $3 per M + a search fee
+VERIFY_SEARCH_FEE_USD = 0.014                       # estimate per call (aihubmix folds Google's fee into the bill)
+VERIFY_PRICE = (0.5, 3.0)                           # aihubmix public model list, 2026-11-18
+JUDGE_MODEL = "gpt-6-luna"
+
+
+def _get_json(url, timeout=12):
+    import json
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "hello-robot/1.0", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+def live_tools(*, fetch=None, clock_ms=None, tz="Asia/Shanghai", ear_search=None, llm_env=None, chat=None):
+    """live_data (CoinGecko / frankfurter.dev / wttr.in, free, no key) and search_verify (the ear's DashScope search +
+    Google search through aihubmix, then a luna judge)."""
+    fetch = fetch or _get_json
+    now_ms = clock_ms or (lambda: int(time.time() * 1000))
+
+    def price(symbol):
+        sym = (symbol or "btc").strip().lower()
+        cid = COINS.get(sym) or COINS.get(symbol.strip()) if symbol else "bitcoin"
+        if not cid:
+            hit = fetch(f"https://api.coingecko.com/api/v3/search?query={urllib_quote(sym)}").get("coins") or []
+            if not hit:
+                raise ToolError("not_available", f"查不到「{symbol}」这个币")
+            cid = hit[0]["id"]
+        d = fetch(f"https://api.coingecko.com/api/v3/simple/price?ids={cid}&vs_currencies=usd,cny"
+                  "&include_24hr_change=true&include_last_updated_at=true").get(cid)
+        if not d:
+            raise ToolError("not_available", f"查不到「{symbol}」的价格")
+        ch = d.get("usd_24h_change")
+        return {"what": cid, "usd": d.get("usd"), "cny": d.get("cny"),
+                "change_24h_pct": round(ch, 2) if isinstance(ch, (int, float)) else None,
+                "at": tool_time.label(int(d["last_updated_at"]) * 1000, tz) if d.get("last_updated_at") else None,
+                "source": "CoinGecko"}
+
+    def fx(symbol):
+        t = (symbol or "USD/CNY").upper().replace(" ", "")
+        for zh, code in CURRENCIES.items():
+            t = t.replace(zh.upper(), code + "/")
+        parts = [p for p in re.split(r"[/\-:兑对换成到]+", t) if p]
+        base, to = (parts + ["CNY", "CNY"])[:2] if parts else ("USD", "CNY")
+        if base == to:
+            to = "CNY" if base != "CNY" else "USD"
+        d = fetch(f"https://api.frankfurter.dev/v1/latest?base={base}&symbols={to}")
+        rate = (d.get("rates") or {}).get(to)
+        if rate is None:
+            raise ToolError("not_available", f"查不到 {base} 对 {to} 的汇率")
+        return {"base": base, "to": to, "rate": rate, "date": d.get("date"), "source": "frankfurter（欧洲央行每日价）"}
+
+    def weather(place):
+        city = (place or "上海").strip()
+        q = CITIES.get(city, city)
+        d = fetch(f"https://wttr.in/{urllib_quote(q)}?format=j1&lang=zh-cn", timeout=15)
+        cur = (d.get("current_condition") or [{}])[0]
+        days = d.get("weather") or []
+        desc = ((cur.get("lang_zh-cn") or cur.get("lang_zh") or [{}])[0].get("value") or
+                (cur.get("weatherDesc") or [{}])[0].get("value"))
+        desc = _weather_zh(desc)
+        out = {"place": city, "now": {"temp_c": _num(cur.get("temp_C")), "feels_c": _num(cur.get("FeelsLikeC")),
+                                      "desc": desc, "humidity": _num(cur.get("humidity")),
+                                      "wind_kmh": _num(cur.get("windspeedKmph"))},
+               "days": [{"date": x.get("date"), "min_c": _num(x.get("mintempC")), "max_c": _num(x.get("maxtempC")),
+                         "rain_pct": max([_num(h.get("chanceofrain")) or 0 for h in x.get("hourly") or []] or [0])}
+                        for x in days[:3]], "source": "wttr.in"}
+        return out
+
+    def live_data(args):
+        kind = args["kind"]
+        try:
+            if kind == "price":
+                return price(args.get("symbol") or "BTC")
+            if kind == "fx":
+                return fx(args.get("symbol") or "USD/CNY")
+            return weather(args.get("place") or args.get("symbol") or "上海")
+        except ToolError:
+            raise
+        except Exception as e:                         # noqa: BLE001 - one free source down
+            raise ToolError("failed", f"数据源没响应（{type(e).__name__}），可以改用联网搜索") from None
+
+    def search_verify(args):
+        q = args["question"]
+        if llm_env is None or chat is None:
+            raise ToolError("not_available", "第二个搜索来源没有配置")
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            a_f = pool.submit(lambda: ear_search(q) if ear_search else None)
+            today = tool_time.label(now_ms(), tz)
+            body = {"model": VERIFY_MODEL, "messages": [
+                {"role": "system", "content": f"现在是北京时间 {today}。用中文简短回答（1–3 句），给出具体数字、时间和来源网站名。"},
+                {"role": "user", "content": q}]}
+            b_f = pool.submit(chat, llm_env["base_url"], llm_env["api_key"], body, 45)
+            try:
+                a = (a_f.result(timeout=40) or {}).get("answer")
+            except Exception:                          # noqa: BLE001
+                a = None
+            resp, _, err = b_f.result(timeout=50)
+        b = None
+        cost = 0.0
+        if resp and not err:
+            b = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content")
+            u = resp.get("usage") or {}
+            cost += (u.get("prompt_tokens", 0) * VERIFY_PRICE[0] + u.get("completion_tokens", 0) * VERIFY_PRICE[1]) / 1e6
+            cost += VERIFY_SEARCH_FEE_USD
+        if not a and not b:
+            raise ToolError("failed", "两个来源都没查到")
+        if not (a and b):
+            return Paid({"answer": a or b, "agree": None, "note": "只有一个来源查到了，没法对照",
+                         "sources": {"千问搜索": a, "Google 搜索": b}}, {"amount": round(cost, 5), "cur": "USD"})
+        judge = {"model": JUDGE_MODEL, "response_format": {"type": "json_object"}, "messages": [
+            {"role": "system", "content": "比较两个搜索结果对同一个问题的回答。只输出 JSON："
+             '{"agree": "yes|partly|no", "answer": "合并后的一两句中文回答（有出入时说明两个说法）", "note": "出入在哪（没有就空）"}'},
+            {"role": "user", "content": f"问题：{q}\n来源A（千问搜索）：{a}\n来源B（Google 搜索）：{b}"}]}
+        resp, _, err = chat(llm_env["base_url"], llm_env["api_key"], judge, 30)
+        out = {"agree": None, "answer": a, "note": "对照失败，先给千问搜索的结果"}
+        if resp and not err:
+            import json
+            try:
+                j = json.loads(((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "{}")
+                out = {"agree": j.get("agree"), "answer": j.get("answer") or a, "note": j.get("note") or ""}
+            except ValueError:
+                pass
+            # the judge (luna) is priced in its own call.llm row; the tool's cost is only the Google search call, which
+            # llm.PRICES does not know (its row has no amount): counted once in the ledger
+        out["sources"] = {"千问搜索": a, "Google 搜索": b}
+        return Paid(out, {"amount": round(cost, 5), "cur": "USD"})
+
+    return {"live_data": live_data, "search_verify": search_verify}
+
+
+WEATHER_ZH = (("thunder", "雷阵雨"), ("heavy snow", "大雪"), ("snow", "雪"), ("sleet", "雨夹雪"), ("heavy rain", "大雨"),
+              ("moderate rain", "中雨"), ("patchy rain", "零星小雨"), ("light rain", "小雨"), ("drizzle", "毛毛雨"),
+              ("shower", "阵雨"), ("rain", "雨"), ("smoke", "霾"), ("haze", "霾"), ("fog", "雾"), ("mist", "薄雾"),
+              ("overcast", "阴"), ("partly", "多云"), ("cloudy", "多云"), ("sunny", "晴"), ("clear", "晴"))
+
+
+def _weather_zh(desc):
+    """wttr.in leaves many conditions in English even with lang=zh-cn."""
+    if not desc or re.search(r"[\u4e00-\u9fff]", desc):
+        return desc
+    d = desc.lower()
+    return next((zh for en, zh in WEATHER_ZH if en in d), desc)
+
+
+def _num(v):
+    try:
+        return float(v) if "." in str(v) else int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def urllib_quote(s):
+    import urllib.parse
+    return urllib.parse.quote(str(s), safe="")

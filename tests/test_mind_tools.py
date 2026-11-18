@@ -380,3 +380,51 @@ class EarToolsTest(unittest.TestCase):
         with self.assertRaises(ToolError) as e:
             down("who_is_here", {})
         self.assertEqual(e.exception.code, "not_available")
+
+
+class LiveToolsTest(unittest.TestCase):
+    def test_live_data(self):
+        urls = []
+
+        def fetch(url, timeout=12):
+            urls.append(url)
+            if "coingecko" in url:
+                return {"bitcoin": {"usd": 64252, "cny": 428306, "usd_24h_change": -1.234, "last_updated_at": NOW // 1000}}
+            if "frankfurter" in url:
+                return {"date": "2026-11-17", "rates": {"CNY": 6.6661}}
+            return {"current_condition": [{"temp_C": "9", "FeelsLikeC": "7", "lang_zh": [{"value": "小雨"}],
+                                           "humidity": "80", "windspeedKmph": "11"}],
+                    "weather": [{"date": "2026-11-18", "mintempC": "6", "maxtempC": "12",
+                                 "hourly": [{"chanceofrain": "40"}, {"chanceofrain": "85"}]}]}
+        t = tool_impls.live_tools(fetch=fetch, clock_ms=lambda: NOW)
+        d = t["live_data"]({"kind": "price", "symbol": "比特币"})
+        self.assertEqual((d["what"], d["usd"], d["change_24h_pct"]), ("bitcoin", 64252, -1.23))
+        d = t["live_data"]({"kind": "fx", "symbol": "美元兑人民币"})
+        self.assertEqual((d["base"], d["to"], d["rate"]), ("USD", "CNY", 6.6661))
+        self.assertIn("base=USD&symbols=CNY", urls[-1])
+        d = t["live_data"]({"kind": "weather", "place": "上海"})
+        self.assertEqual((d["now"]["desc"], d["days"][0]["rain_pct"]), ("小雨", 85))
+        self.assertIn("Shanghai", urls[-1])
+
+        def down(url, timeout=12):
+            raise OSError("down")
+        with self.assertRaises(ToolError) as e:
+            tool_impls.live_tools(fetch=down)["live_data"]({"kind": "price"})
+        self.assertEqual(e.exception.code, "failed")
+
+    def test_search_verify(self):
+        calls = []
+
+        def chat(base, key, body, timeout=90):
+            calls.append(body["model"])
+            if body["model"] == tool_impls.VERIFY_MODEL:
+                return {"choices": [{"message": {"content": "比特币约 6.4 万美元（CoinDesk）"}}],
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 50}}, 900, None
+            return {"choices": [{"message": {"content": '{"agree": "yes", "answer": "约 6.4 万美元", "note": ""}'}}],
+                    "usage": {"prompt_tokens": 200, "completion_tokens": 30}}, 300, None
+        t = tool_impls.live_tools(ear_search=lambda q: {"answer": "比特币 64003 美元"}, llm_env={"base_url": "x", "api_key": "k"},
+                                  chat=chat, clock_ms=lambda: NOW)
+        out = t["search_verify"]({"question": "比特币多少钱"})
+        self.assertEqual((out.data["agree"], out.data["answer"]), ("yes", "约 6.4 万美元"))
+        self.assertEqual(calls, [tool_impls.VERIFY_MODEL, tool_impls.JUDGE_MODEL])
+        self.assertGreater(out.cost["amount"], 0.014)

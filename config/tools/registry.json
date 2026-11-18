@@ -755,7 +755,7 @@
    "group": "world",
    "level": "R",
    "runs_on": "external",
-   "status": "new",
+   "status": "live",
    "description": "答案要准时用（数字、价格、事实核对）：多来源对照，带来源和时间，说明分歧。",
    "parameters": {
     "type": "object",
@@ -770,9 +770,9 @@
     ]
    },
    "returns": "answer、sources[{title, url, time}]、agree",
-   "source": "新：enable_source + 两次检索对照",
+   "source": "耳朵的千问搜索 + aihubmix gemini-3-flash-preview-search（Google 搜索），gpt-6-luna 对照；POST /tool/call",
    "latency": "3–8 s",
-   "cost": "约 2–3 次搜索",
+   "cost": "约 $0.015–0.02 一次（Google 搜索费按 $0.014 估）+ 千问搜索一次",
    "needs": [],
    "notes": "",
    "example": {
@@ -785,7 +785,7 @@
    "group": "world",
    "level": "R",
    "runs_on": "external",
-   "status": "new",
+   "status": "live",
    "description": "查价格、汇率、天气这类实时数值时用，比通用搜索准。",
    "parameters": {
     "type": "object",
@@ -812,11 +812,11 @@
     ]
    },
    "returns": "value、unit、time、source",
-   "source": "新：专门数据接口",
+   "source": "CoinGecko（币价）/ frankfurter.dev（欧洲央行汇率）/ wttr.in（天气），免费无密钥；POST /tool/call（server/mind/tool_impls.py live_tools）",
    "latency": "<100 ms",
    "cost": "视接口",
    "needs": [],
-   "notes": "",
+   "notes": "symbol：币（BTC、比特币）或货币对（USD/CNY、美元兑人民币）；place：城市（中文常见城市自动换成英文名）。数据源挂了返回 failed，可以改用联网搜索",
    "example": {
     "kind": "price",
     "symbol": "BTC"
