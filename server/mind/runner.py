@@ -448,7 +448,7 @@ def main():
         if tts:
             threading.Thread(target=auto_worker.run, daemon=True).start()
     # 按意思找 (semantic.py): the tool embeds its query with DashScope; the incremental vector sync every 10 min runs
-    # only with MIND_SEMANTIC_SYNC=1 in the unit's environment (default off; first backfill: python3 -m mind.semantic)
+    # on by default, MIND_SEMANTIC_SYNC=0 turns it off ( first backfill: python3 -m mind.semantic)
     from . import semantic
     embed = semantic.embedder(os.environ.get("DASHSCOPE_API_KEY") or hub.get("DASHSCOPE_API_KEY"))
     if embed and semantic.sync_enabled():

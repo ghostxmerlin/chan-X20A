@@ -547,7 +547,7 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "按意思（不是字面）在记忆、纪要、片段、知识里找相关内容；关键词查不到、或只记得大概意思时用。",
    "parameters": {
     "type": "object",
@@ -1264,7 +1264,7 @@
    "group": "daily",
    "level": "A",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "主人说“X 分钟后 / 几点提醒我…”时用；到时 hello 说出来（不在场就留着等主人回来）。",
    "parameters": {
     "type": "object",
@@ -1310,7 +1310,7 @@
    "group": "daily",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "被问“我有什么提醒 / 今天要做什么”时用。",
    "parameters": {
     "type": "object",
@@ -1343,7 +1343,7 @@
    "group": "daily",
    "level": "A",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "主人要取消或改某个提醒时用。",
    "parameters": {
     "type": "object",
@@ -1375,7 +1375,7 @@
    "group": "daily",
    "level": "A",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "主人说有个安排（会、约、出行）时记下，可带提前提醒。",
    "parameters": {
     "type": "object",
@@ -1427,7 +1427,7 @@
    "group": "daily",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "被问“今天 / 明天有什么安排”时用。",
    "parameters": {
     "type": "object",
@@ -1460,7 +1460,7 @@
    "group": "daily",
    "level": "A",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "主人让 hello 帮忙留意某件事时用：有人来、某人出现或离开、某种声音（敲门、哭声、水开了）、画面变化；发生时告诉主人。",
    "parameters": {
     "type": "object",
@@ -1519,7 +1519,7 @@
    "group": "daily",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "被问“你在帮我盯着什么”时用。",
    "parameters": {
     "type": "object",
@@ -1539,7 +1539,7 @@
    "group": "daily",
    "level": "A",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "主人让停止留意时用。",
    "parameters": {
     "type": "object",

@@ -417,7 +417,9 @@ def search_tool(db, embed_fn, settings_fn, names_of, clock_ms=None):
 # ---- the periodic incremental sync (runner, behind MIND_SEMANTIC_SYNC=1) -------------------------------------------
 
 def sync_enabled():
-    return os.environ.get("MIND_SEMANTIC_SYNC", "").strip().lower() in ("1", "true", "on", "yes")
+    """On by default since the owner approved RAG (2026-11-18; the first backfill: 518 items, 0.014 CNY);
+    MIND_SEMANTIC_SYNC=0 turns it off. Each round is capped (SYNC_BUDGET_CNY), skipped while paused."""
+    return os.environ.get("MIND_SEMANTIC_SYNC", "1").strip().lower() not in ("0", "false", "off", "no")
 
 
 def periodic(db, embed_fn, paused_fn=None, every_s=SYNC_EVERY_S, budget_cny=SYNC_BUDGET_CNY, sleep=time.sleep, rounds=None):

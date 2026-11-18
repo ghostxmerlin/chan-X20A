@@ -140,11 +140,11 @@ class SyncTest(unittest.TestCase):
         semantic.periodic(self.db, self.embed, paused_fn=lambda: next(paused), sleep=sleeps.append, rounds=2)
         self.assertEqual((sleeps, self.db.count("vectors")), ([semantic.SYNC_EVERY_S], 6))
 
-    def test_sync_flag_defaults_off(self):
+    def test_sync_flag_defaults_on(self):              # owner approved RAG 2026-11-18
         with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertFalse(semantic.sync_enabled())
-        with mock.patch.dict("os.environ", {"MIND_SEMANTIC_SYNC": "1"}):
             self.assertTrue(semantic.sync_enabled())
+        with mock.patch.dict("os.environ", {"MIND_SEMANTIC_SYNC": "0"}):
+            self.assertFalse(semantic.sync_enabled())
 
 
 class SearchTest(unittest.TestCase):
@@ -239,7 +239,7 @@ class ToolTest(unittest.TestCase):
         bad = tools.call("semantic_search", {"query": "x", "kinds": ["person_note"]})
         self.assertEqual(bad["error"]["code"], "bad_args")
         spec = next(t for t in load_registry()["tools"] if t["name"] == "semantic_search")
-        self.assertEqual(spec["status"], "new")                                             # the main agent marks it live
+        self.assertEqual(spec["status"], "live")                                            # deployed + backfilled 2026-11-18
         self.assertTrue(tools.call("semantic_search", spec["example"])["ok"])
 
 
