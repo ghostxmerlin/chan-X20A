@@ -139,3 +139,9 @@ th { color: var(--muted); font-weight: 600; }
 .band-l.think { fill: var(--think-ink); } .band-l.note { fill: var(--note-ink); }
 .card.note { border-left-color: var(--note); }
 .card.note h2 { color: var(--note-ink); }
+
+/* tools page (2026-11-18) */
+.tools-filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.tools-filter button { font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+.tools-filter button[aria-pressed="true"] { border-color: var(--think); color: var(--think-ink); }
+.card table td:first-child { min-width: 8em; }

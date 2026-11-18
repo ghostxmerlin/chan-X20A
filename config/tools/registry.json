@@ -1,0 +1,1309 @@
+{
+ "version": 1,
+ "updated": "2026-11-18",
+ "doc": "docs/hello-tools.md",
+ "groups": {
+  "sense": "感知",
+  "recall": "回顾与查询",
+  "self": "解释自己",
+  "world": "外面的世界",
+  "express": "说与表达",
+  "move": "动",
+  "settings": "设置"
+ },
+ "levels": {
+  "R": "只读，随时可调",
+  "A": "会被看到或听到，有频率上限",
+  "C": "要主人确认，工具只生成提议"
+ },
+ "statuses": {
+  "live": "已接入并测过",
+  "have": "已有接口，包一层就行",
+  "wrap": "代码里有，要先开接口",
+  "new": "要新做"
+ },
+ "tools": [
+  {
+   "name": "who_is_here",
+   "title": "现在谁在",
+   "group": "sense",
+   "level": "R",
+   "runs_on": "ear",
+   "status": "wrap",
+   "description": "想知道眼前或身边现在有谁时用：脸、声音、画面合起来。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "people[{who, seen_by: 脸|声音|画面, last}]、owner_state",
+   "source": "FaceView.recent + presence + 即时画面（server/ear）",
+   "latency": "<50 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "scene_now",
+   "title": "此刻的情景",
+   "group": "sense",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "想知道现在在干什么、在聊什么、什么环境时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "time、doing、summary、topics、sound、people",
+   "source": "GET /now + 最新画面",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "look_now",
+   "title": "现在看一眼",
+   "group": "sense",
+   "level": "R",
+   "runs_on": "ear",
+   "status": "wrap",
+   "description": "需要亲眼看清某样东西时用（“他手里拿的是什么”）；问题会交给识图。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "question": {
+      "type": "string",
+      "description": "想看清什么，可空",
+      "maxLength": 60
+     }
+    }
+   },
+   "returns": "answer、scene、photo_at",
+   "source": "snap + 识图（vision_burst）",
+   "latency": "2–4 s",
+   "cost": "约 0.0004 元/张",
+   "needs": [
+    "realtime 或 eye 开关",
+    "机器人相机开"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "recent_speech",
+   "title": "刚才听到的话",
+   "group": "sense",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "wrap",
+   "description": "想知道最近几分钟有人说了什么（不含 hello 自己）时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+     },
+     "who": {
+      "type": "string",
+      "description": "只看某人，可空",
+      "maxLength": 20
+     }
+    }
+   },
+   "returns": "lines[{time, who, text}]",
+   "source": "Records.window + selfvoice",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "recent_sounds",
+   "title": "刚才的声音",
+   "group": "sense",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "wrap",
+   "description": "想知道最近有什么声音事件（音乐、敲门、咳嗽…）时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+     }
+    }
+   },
+   "returns": "events[{time, kind, dur_s}]",
+   "source": "hello.sounds（缺时间索引）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "robot_status",
+   "title": "身体状态",
+   "group": "sense",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "被问到电量、温度、亮不亮、头朝哪、音量、相机开没开时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "battery、charging、chip_c、lux、yaw、pitch、tracking、volume、camera_on、m12_online、mode、firmware",
+   "source": "新：机器人遥测精简上行",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "review_period",
+   "title": "回顾一段时间",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "wrap",
+   "description": "被问“上午 / 昨天 / 这一小时发生了什么、聊了什么”时用；超过 24 小时自动分天。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "to": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "detail": {
+      "type": "string",
+      "enum": [
+       "brief",
+       "full"
+      ]
+     }
+    },
+    "required": [
+     "from"
+    ]
+   },
+   "returns": "segments、notes、highlights、range",
+   "source": "memory_extract.gather / Records.window + /segments /notes",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "notes_search",
+   "title": "查对话纪要",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "找某次谈话的纪要（按时间或关键词）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string",
+      "maxLength": 30
+     },
+     "from": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "to": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+     }
+    }
+   },
+   "returns": "conversations[{start, end, title, notes}]",
+   "source": "GET /notes（关键词要补）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "speech_search",
+   "title": "查谁说过什么",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "查某人或某个关键词说过的原话，带时间和录音位置；谁的话都能查。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "who": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "query": {
+      "type": "string",
+      "maxLength": 30
+     },
+     "from": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "to": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+     }
+    }
+   },
+   "returns": "lines[{time, who, text, session, pos}]、total",
+   "source": "新：speech / tingwu 查询 + speaker.name 索引",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": "敏感内容只对主人讲（第 4 节）"
+  },
+  {
+   "name": "memory_search",
+   "title": "查记忆",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "想起和某事、某人有关的记忆。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string",
+      "maxLength": 30
+     },
+     "person": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "returns": "memories[{statement, when, kind, source}]",
+   "source": "recall + Library.memories（两字词重合）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "knowledge_search",
+   "title": "查知识",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "查地点、工作、约定、术语、关于 hello 自己的知识。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string",
+      "maxLength": 30
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "place",
+       "work",
+       "commitment",
+       "life",
+       "term",
+       "self",
+       "other"
+      ]
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "returns": "items[{name, statement}]",
+   "source": "GET /db/knowledge",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "person_lookup",
+   "title": "查一个人",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "想了解某个人（称呼、关系、笔记、最近的记忆）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "who": {
+      "type": "string",
+      "maxLength": 20
+     }
+    },
+    "required": [
+     "who"
+    ]
+   },
+   "returns": "display、kind、notes、recent_memories",
+   "source": "GET /db/person",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "people_list",
+   "title": "认识哪些人",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "被问“你认识谁”时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "people[{display, kind}]",
+   "source": "GET /db/people",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "hello_said",
+   "title": "hello 说过什么",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "wrap",
+   "description": "查 hello 自己说过的话（Docking、对话、台词）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "to": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "query": {
+      "type": "string",
+      "maxLength": 30
+     },
+     "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+     }
+    }
+   },
+   "returns": "lines[{time, mode, heard, said}]",
+   "source": "realtime_turns / chat_turns / utterances（前者没接口）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "db_query",
+   "title": "查数据库",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "以上工具都不合适时，按集合、时间段和白名单字段做只读查询。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "collection": {
+      "type": "string",
+      "maxLength": 30
+     },
+     "from": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "to": {
+      "type": "string",
+      "description": "时间：绝对（2026-11-18 09:00）或相对（1小时前、今天上午、昨天）",
+      "maxLength": 40
+     },
+     "fields": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 30
+      }
+     },
+     "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+     }
+    },
+    "required": [
+     "collection"
+    ]
+   },
+   "returns": "rows、total",
+   "source": "新：受限只读查询",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": "集合与字段白名单；不返回密钥类字段"
+  },
+  {
+   "name": "semantic_search",
+   "title": "按意思找",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "按意思（不是字面）在记忆、纪要、片段、知识里找相关内容。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string",
+      "maxLength": 60
+     },
+     "kinds": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "memory",
+        "notes",
+        "segment",
+        "knowledge",
+        "person_note"
+       ]
+      }
+     },
+     "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "returns": "hits[{kind, id, text, when, score}]",
+   "source": "新：向量模型 + 可重建的向量表（RAG）",
+   "latency": "<100 ms",
+   "cost": "向量化按量计费",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "switches_status",
+   "title": "开关状态",
+   "group": "self",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "被问“你现在开着什么 / 为什么不看不听 / 是不是暂停了”时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "tingwu、eye、notes、realtime、mouth、billing、pause{paused, why, spent_cny, cap_cny}",
+   "source": "GET /switches",
+   "latency": "<20 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "mode_status",
+   "title": "模式状态",
+   "group": "self",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "被问现在是什么模式、怎么切换时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "mode、name、since、how_to_switch",
+   "source": "GET /mode + mode_table",
+   "latency": "<20 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "cost_today",
+   "title": "今天花了多少",
+   "group": "self",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "have",
+   "description": "被问今天花了多少钱时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "day": {
+      "type": "string",
+      "description": "YYYY-MM-DD，可空=今天",
+      "maxLength": 10
+     }
+    }
+   },
+   "returns": "total、by[{svc, model, amount}]",
+   "source": "GET /log/ledger",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "why_last_turn",
+   "title": "刚才为什么",
+   "group": "self",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "wrap",
+   "description": "被问“你刚才为什么没回答 / 为什么这么说”时用：读那一轮的判定链。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+     }
+    }
+   },
+   "returns": "turns[{time, heard, verdict, reason, said}]",
+   "source": "运行日志 /log + /log/chain（gate.realtime、heard.called…）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "capabilities",
+   "title": "我能做什么",
+   "group": "self",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "被问“你能做什么 / 你会不会…”时用：读这份注册表和当前开关。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "group": {
+      "type": "string",
+      "enum": [
+       "sense",
+       "recall",
+       "self",
+       "world",
+       "express",
+       "move",
+       "settings"
+      ]
+     }
+    }
+   },
+   "returns": "tools[{title, group, available, why_not}]",
+   "source": "新：读 config/tools/registry.json + 开关",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "web_search",
+   "title": "联网搜一次",
+   "group": "world",
+   "level": "R",
+   "runs_on": "ear",
+   "status": "have",
+   "description": "要查新闻、天气、比分、某件事的最新情况时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string",
+      "maxLength": 80
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "returns": "answer（1–2 句）或没查到",
+   "source": "server/ear/web_search.py（qwen3.8-flash 强制搜索）",
+   "latency": "1.7–2.4 s",
+   "cost": "0.004 元/次 + token",
+   "needs": [
+    "DashScope 密钥"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "search_verify",
+   "title": "查证",
+   "group": "world",
+   "level": "R",
+   "runs_on": "external",
+   "status": "new",
+   "description": "答案要准时用（数字、价格、事实核对）：多来源对照，带来源和时间，说明分歧。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "question": {
+      "type": "string",
+      "maxLength": 80
+     }
+    },
+    "required": [
+     "question"
+    ]
+   },
+   "returns": "answer、sources[{title, url, time}]、agree",
+   "source": "新：enable_source + 两次检索对照",
+   "latency": "3–8 s",
+   "cost": "约 2–3 次搜索",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "live_data",
+   "title": "实时数据",
+   "group": "world",
+   "level": "R",
+   "runs_on": "external",
+   "status": "new",
+   "description": "查价格、汇率、天气这类实时数值时用，比通用搜索准。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "price",
+       "fx",
+       "weather"
+      ]
+     },
+     "symbol": {
+      "type": "string",
+      "maxLength": 30
+     },
+     "place": {
+      "type": "string",
+      "maxLength": 30
+     }
+    },
+    "required": [
+     "kind"
+    ]
+   },
+   "returns": "value、unit、time、source",
+   "source": "新：专门数据接口",
+   "latency": "<100 ms",
+   "cost": "视接口",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "deep_research",
+   "title": "深入研究",
+   "group": "world",
+   "level": "C",
+   "runs_on": "external",
+   "status": "new",
+   "description": "主人要求研究一个问题时用：后台跑几分钟，做完汇报。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "question": {
+      "type": "string",
+      "maxLength": 200
+     },
+     "depth": {
+      "type": "string",
+      "enum": [
+       "quick",
+       "normal",
+       "deep"
+      ]
+     }
+    },
+    "required": [
+     "question"
+    ]
+   },
+   "returns": "job_id（结果稍后汇报）",
+   "source": "新：后台任务 + 强模型多轮搜索",
+   "latency": "分钟级",
+   "cost": "较高，按任务封顶",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "say",
+   "title": "说一句话",
+   "group": "express",
+   "level": "A",
+   "runs_on": "ear",
+   "status": "wrap",
+   "description": "让 hello 用当前的声音说出一句话（技能的结果、主动提醒）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "maxLength": 200
+     },
+     "interrupt": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "text"
+    ]
+   },
+   "returns": "spoken、ms",
+   "source": "Docking 插话（内部已有）/ 其他模式经 TTS",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": "频率上限：同一技能 10 秒内最多 2 句"
+  },
+  {
+   "name": "stop_speaking",
+   "title": "别说了",
+   "group": "express",
+   "level": "A",
+   "runs_on": "ear",
+   "status": "have",
+   "description": "主人让停下时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "stopped",
+   "source": "Docking _interrupt / POST /say/stop",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "express_eyes",
+   "title": "做个表情",
+   "group": "express",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "配合说的话做一次表情。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "state": {
+      "type": "string",
+      "maxLength": 20
+     }
+    },
+    "required": [
+     "state"
+    ]
+   },
+   "returns": "accepted",
+   "source": "新：服务器→机器人命令线（eyes play once）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线",
+    "0.5.x 命令线"
+   ],
+   "notes": "每句最多 1 个，不许循环"
+  },
+  {
+   "name": "show_word",
+   "title": "眼睛下面出字",
+   "group": "express",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "在眼睛下面显示几个字（2 秒）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "maxLength": 8
+     }
+    },
+    "required": [
+     "text"
+    ]
+   },
+   "returns": "accepted",
+   "source": "新：服务器→机器人命令线",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线",
+    "字在固件字库里"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "play_clip",
+   "title": "放台词片段",
+   "group": "express",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "放一段本地录好的声音（笑、叹气……）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 80
+     },
+     "emotion": {
+      "type": "string",
+      "maxLength": 20
+     }
+    }
+   },
+   "returns": "accepted、clip_id",
+   "source": "新：命令线 → voice_play",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线"
+   ],
+   "notes": "hello 在说话时不放"
+  },
+  {
+   "name": "set_length",
+   "title": "回答长短",
+   "group": "express",
+   "level": "A",
+   "runs_on": "ear",
+   "status": "wrap",
+   "description": "主人要详细点 / 简单点时用（保持 10 分钟）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "type": "string",
+      "enum": [
+       "detail",
+       "brief",
+       "normal"
+      ]
+     }
+    },
+    "required": [
+     "mode"
+    ]
+   },
+   "returns": "mode、until",
+   "source": "realtime_link._length_from",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "turn_head",
+   "title": "转头",
+   "group": "move",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "转向某个方向。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "to": {
+      "type": "string",
+      "enum": [
+       "left90",
+       "left45",
+       "front",
+       "right45",
+       "right90"
+      ]
+     }
+    },
+    "required": [
+     "to"
+    ]
+   },
+   "returns": "accepted",
+   "source": "新：命令线 → yaw_step slot",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线",
+    "舵机可用"
+   ],
+   "notes": "会关掉追踪；5 秒最多 1 次"
+  },
+  {
+   "name": "face_front",
+   "title": "回正",
+   "group": "move",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "把头转回正前方。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "accepted",
+   "source": "新：命令线 → yaw_step slot 0",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "turn_around",
+   "title": "转过身去",
+   "group": "move",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "主人明确要求时转身（或转回来）。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "accepted、facing",
+   "source": "新：命令线 → yaw_turn",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线"
+   ],
+   "notes": "转身时看不到人"
+  },
+  {
+   "name": "tracking",
+   "title": "跟着人转",
+   "group": "move",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "开 / 关人脸追踪。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "on": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "on"
+    ]
+   },
+   "returns": "tracking",
+   "source": "新：命令线 → interaction tracking",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线",
+    "M12 在线"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "nod",
+   "title": "点头",
+   "group": "move",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "点一两下头表示同意。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "times": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2
+     }
+    }
+   },
+   "returns": "accepted",
+   "source": "新：固件里加不存 NVS 的小动作（pitch 会存 NVS，不能用）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "新固件"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "shake_head",
+   "title": "摇头",
+   "group": "move",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "摇一两下头表示不同意。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "times": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2
+     }
+    }
+   },
+   "returns": "accepted",
+   "source": "新：固件小动作",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "新固件"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "switch_propose",
+   "title": "提议开关",
+   "group": "settings",
+   "level": "C",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "提议打开或关掉听悟、识别、纪要、情景、Docking；主人确认后才执行。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "enum": [
+       "tingwu",
+       "eye",
+       "notes",
+       "mind",
+       "realtime"
+      ]
+     },
+     "on": {
+      "type": "boolean"
+     },
+     "why": {
+      "type": "string",
+      "maxLength": 40
+     }
+    },
+    "required": [
+     "name",
+     "on"
+    ]
+   },
+   "returns": "proposal_id",
+   "source": "新：确认列表（页面 / 口头）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "memory_propose",
+   "title": "提议记一件事",
+   "group": "settings",
+   "level": "C",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "想记下一件事时提议，主人确认后写进记忆库。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "statement": {
+      "type": "string",
+      "maxLength": 120
+     },
+     "about": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 20
+      }
+     },
+     "why": {
+      "type": "string",
+      "maxLength": 40
+     }
+    },
+    "required": [
+     "statement"
+    ]
+   },
+   "returns": "proposal_id",
+   "source": "新：确认后走 Library.put",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "person_note_propose",
+   "title": "提议给人记笔记",
+   "group": "settings",
+   "level": "C",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "想给某人记一条笔记（喜好、关系…）时提议。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "who": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "trait",
+       "fact",
+       "preference",
+       "boundary",
+       "relation"
+      ]
+     },
+     "text": {
+      "type": "string",
+      "maxLength": 80
+     }
+    },
+    "required": [
+     "who",
+     "text"
+    ]
+   },
+   "returns": "proposal_id",
+   "source": "新：确认后写 people_notes",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": ""
+  },
+  {
+   "name": "face_learn_propose",
+   "title": "提议学一张脸",
+   "group": "settings",
+   "level": "C",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "有人让 hello 记住他的脸时提议。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "maxLength": 32
+     }
+    },
+    "required": [
+     "name"
+    ]
+   },
+   "returns": "proposal_id",
+   "source": "新：确认后 m12_request learn",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "M12 在线"
+   ],
+   "notes": ""
+  },
+  {
+   "name": "set_volume",
+   "title": "调音量",
+   "group": "settings",
+   "level": "C",
+   "runs_on": "robot",
+   "status": "new",
+   "description": "主人要调大调小时用（现在的写法会存 NVS，所以先按 C 级）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "level": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 100
+     },
+     "step": {
+      "type": "integer",
+      "minimum": -30,
+      "maximum": 30
+     }
+    }
+   },
+   "returns": "volume",
+   "source": "新：命令线 → volume（要加不存版才能降到 A）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "机器人在线"
+   ],
+   "notes": ""
+  }
+ ]
+}

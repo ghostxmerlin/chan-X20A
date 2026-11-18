@@ -22,7 +22,8 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/mode-ui.js', ['mode-ui.js', 'text/javascript; charset=utf-8']], ['/mode.css', ['mode.css', 'text/css; charset=utf-8']],
     ['/log.html', ['log.html', 'text/html; charset=utf-8']], ['/log-ui.js', ['log-ui.js', 'text/javascript; charset=utf-8']], ['/log.css', ['log.css', 'text/css; charset=utf-8']],
     ['/crowd-flow.html', ['crowd-flow.html', 'text/html; charset=utf-8']], ['/crowd-flow.css', ['crowd-flow.css', 'text/css; charset=utf-8']],
-    ['/crowd-plan.html', ['crowd-plan.html', 'text/html; charset=utf-8']], ['/crowd-plan.css', ['crowd-plan.css', 'text/css; charset=utf-8']], ['/crowd-plan.js', ['crowd-plan.js', 'text/javascript; charset=utf-8']]]);
+    ['/crowd-plan.html', ['crowd-plan.html', 'text/html; charset=utf-8']], ['/crowd-plan.css', ['crowd-plan.css', 'text/css; charset=utf-8']], ['/crowd-plan.js', ['crowd-plan.js', 'text/javascript; charset=utf-8']],
+    ['/tools.html', ['tools.html', 'text/html; charset=utf-8']], ['/tools-ui.js', ['tools-ui.js', 'text/javascript; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -91,6 +92,11 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
         res.writeHead(r.status, { 'Content-Type': r.status === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });
         res.end(r.body);
       }, () => respond(502, '情景服务出错'));
+      return;
+    }
+    if (url.pathname === '/api/tools') {             // A2 (2026-11-18): the tool registry, config/tools/registry.json
+      try { res.setHeader('Content-Type', 'application/json'); res.end(fs.readFileSync(path.join(root, 'config/tools/registry.json'))); }
+      catch { respond(503, '读不到工具注册表'); }
       return;
     }
     if (url.pathname === '/api/state') {
