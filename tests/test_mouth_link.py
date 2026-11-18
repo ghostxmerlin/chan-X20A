@@ -47,7 +47,8 @@ class MouthLinkTest(unittest.IsolatedAsyncioTestCase):
 
     def make_link(self, ws):
         return self.mouth_link.MouthLink(ws, upstream_url=self.up_url, token="device-token", retry_s=0.3,
-                                         connect=self.connect_override, burst=getattr(self, "burst", None))
+                                         connect=self.connect_override, burst=getattr(self, "burst", None),
+                                         robots=getattr(self, "robots", None))
 
     def _skip(self, m):
         self.skipped.append(m)
@@ -174,6 +175,53 @@ class MouthLinkTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(got[0][0], self.links[-1])
         self.assertTrue(any("tts.done" in t for t in self.upstream_text))
         self.assertNotIn("snap_result", "".join(self.upstream_text))
+
+    async def wait_robot_link(self):
+        for _ in range(100):
+            if self.robots.current() is not None:
+                return self.robots.current()
+            await asyncio.sleep(0.02)
+        self.fail("no robot link")
+
+    async def test_robot_command_round_trip_never_to_soul_tts(self):
+        self.robots = self.mouth_link.RobotLinks()
+        async with self.robot() as ws:
+            await ws.send(json.dumps({**ROBOT_HELLO, "cmd": 1}))
+            await asyncio.wait_for(ws.recv(), 2)
+            await self.wait_upstream_hello()
+            await self.wait_robot_link()
+            task = asyncio.create_task(self.robots.send_cmd("nod", {"times": 1}))
+            cmd = await self.recv_type(ws, "cmd")
+            self.assertEqual((cmd["do"], cmd["args"]), ("nod", {"times": 1}))
+            await ws.send(json.dumps({"type": "cmd_result", "id": cmd["id"] + 99, "ok": True}))   # not ours: ignored
+            await ws.send(json.dumps({"type": "cmd_result", "id": cmd["id"], "ok": False, "error": "busy", "data": {"x": 1}}))
+            self.assertEqual(await asyncio.wait_for(task, 2), {"ok": False, "error": "busy", "data": {"x": 1}})
+            task = asyncio.create_task(self.robots.send_cmd("status", {}, timeout=0.2))
+            await self.recv_type(ws, "cmd")
+            with self.assertRaises(self.mouth_link.CmdError) as e:
+                await task
+            self.assertEqual(e.exception.code, "timeout")
+            task = asyncio.create_task(self.robots.send_cmd("status", {}, timeout=5))
+            await self.recv_type(ws, "cmd")
+        with self.assertRaises(self.mouth_link.CmdError) as e:                 # the robot left: robot_offline at once
+            await asyncio.wait_for(task, 2)
+        self.assertEqual(e.exception.code, "robot_offline")
+        await self.wait_result()
+        self.assertIsNone(self.robots.current())
+        with self.assertRaises(self.mouth_link.CmdError) as e:
+            await self.robots.send_cmd("status")
+        self.assertEqual(e.exception.code, "robot_offline")
+        self.assertNotIn("cmd", [json.loads(t).get("type") for t in self.upstream_text])
+        self.assertNotIn("cmd_result", "".join(self.upstream_text))
+
+    async def test_older_robot_has_no_command_line(self):
+        self.robots = self.mouth_link.RobotLinks()
+        async with self.robot() as ws:
+            await self.handshake(ws)                                           # no "cmd": 1 in its hello
+            await self.wait_robot_link()
+            with self.assertRaises(self.mouth_link.CmdError) as e:
+                await self.robots.send_cmd("status")
+            self.assertEqual(e.exception.code, "not_available")
 
     async def test_snap_result_without_a_burst_is_dropped(self):
         async with self.robot() as ws:
@@ -396,7 +444,8 @@ class MouthModeTest(MouthLinkTest):
         self.conn_no += 1
         return self.mouth_link.MouthLink(ws, upstream_url=self.up_url, token="device-token", retry_s=0.3,
                                          connect=self.connect_override, conn=self.conn_no, modes=self.hub,
-                                         burst=getattr(self, "burst", None), presence=getattr(self, "presence", None))
+                                         burst=getattr(self, "burst", None), presence=getattr(self, "presence", None),
+                                         robots=getattr(self, "robots", None))
 
     def _skip(self, m):                       # mode results are expected here, not "unexpected"
         if isinstance(m, str) and json.loads(m).get("type") == "mode_result":

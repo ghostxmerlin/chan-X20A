@@ -477,8 +477,8 @@ class ProposalTest(unittest.TestCase):
                                   write_switch=lambda n, on: writes.append((n, on)))
         self.assertEqual(t["switch_propose"]({"name": "eye", "on": True}), {"switch": "识别", "on": True})
         self.assertEqual(writes, [("eye", True)])
-        with self.assertRaises(ToolError):
-            t["face_learn_propose"]({"name": "小王"})
+        self.assertNotIn("face_learn_propose", t)                # the ear's robot command line runs it (0.5.10)
+        self.assertIn("face_learn_propose", tool_impls.ear_tools(lambda n, a: None))
         m = t["memory_propose"]({"statement": "主人喜欢喝美式咖啡", "about": ["主人"]})
         self.assertTrue(m["saved"])
         row = db["memory_items"].find_one({"statement": "主人喜欢喝美式咖啡"})

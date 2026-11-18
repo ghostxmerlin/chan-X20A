@@ -5,6 +5,7 @@
 #include "hearing.h"
 #include "hearing_socket.h"
 #include "psram_task.h"
+#include "robot_cmd.h"
 #include "vision_snap.h"
 #include "vision_uplink.h"
 #include <esp_heap_caps.h>
@@ -121,6 +122,10 @@ void on_message(const char* data, size_t n, bool binary)
         uint32_t id = 0;
         if (!snap::parse(doc.as<ArduinoJson::JsonObjectConst>(), n, id)) { std::lock_guard<std::mutex> lock(mutex); ++bad_messages; return; }
         vision_snap_request(id);
+        return;
+    }
+    if (kind == Text::Cmd) {                // 0.5.10 robot command line: parsed and queued, never run on this task
+        cmd::submit(doc.as<ArduinoJson::JsonObjectConst>(), n);
         return;
     }
     if (kind == Text::Burst) {              // 0.5.00 视觉爆发 indicator: one word for the screen, nothing sent back
@@ -245,6 +250,18 @@ bool send_order(hearing::HearingSocket& socket)
     return true;
 }
 
+// 0.5.10: the robot command line's cmd_result lines, at most 4 a pass, sent without any lock held.
+bool send_cmds(hearing::HearingSocket& socket)
+{
+    for (int i = 0; i < 4; ++i) {
+        char line[cmd::kResultMax];
+        size_t n = 0;
+        if (!cmd::take_result(line, sizeof line, n)) return true;
+        if (!socket.Send(line, n, false)) return false;
+    }
+    return true;
+}
+
 bool send_snaps(hearing::HearingSocket& socket)
 {
     for (int i = 0; i < 4; ++i) {
@@ -277,6 +294,7 @@ void run(void*)
             hello["type"] = "hello"; hello["device_id"] = device; hello["boot_id"] = boot;
             auto codecs = hello["codecs"].to<ArduinoJson::JsonArray>(); codecs.add("opus");
             hello["sample_rate"] = 24000; hello["buffer_ms"] = int(kSlots) * kFrameMs; hello["fw"] = FIRMWARE_VERSION;
+            if (cmd::ready()) hello["cmd"] = 1;       // 0.5.10: the robot command line is here
             std::string text; ArduinoJson::serializeJson(hello, text);
             ok = socket.Send(text);
         }
@@ -317,6 +335,7 @@ void run(void*)
             }
             if (ok) ok = send_modes(socket);
             if (ok) ok = send_snaps(socket);
+            if (ok) ok = send_cmds(socket);
             if (ok) ok = send_wake(socket);
             if (ok) ok = send_order(socket);
             const int64_t now = esp_timer_get_time();
@@ -333,6 +352,7 @@ void run(void*)
         drop_modes();
         vision_snap_link_down();
         burst_link_down();
+        cmd::link_down();
         if (!ok || !err.empty()) {
             { std::lock_guard<std::mutex> lock(mutex); ++failures; }
             set_state("retry", silent ? "silent" : err.empty() ? (ok ? "closed" : "hello") : err);

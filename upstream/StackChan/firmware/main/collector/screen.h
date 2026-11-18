@@ -113,6 +113,10 @@ void screen_show_toast(const char* text, uint32_t now_ms);
 // 0.5.03 M12 words (m12_words.h): busy = a toast is on screen now; a word replaces nothing that is showing
 bool screen_toast_busy();
 void screen_show_word(const char* text, uint32_t now_ms);
+// 0.5.10 robot command line: the same row for hold_ms (0 = the toast's 2 s); screen_hide_toast hides whatever the
+// row shows now (a word that stays was cleared).
+void screen_show_word_for(const char* text, uint32_t now_ms, uint32_t hold_ms);
+void screen_hide_toast();
 // 0.4.93 chat stage dots (chat_stage.h), home page top row, left: visible only in chat / crowd; lit = -1 none,
 // 0 / 1 / 2 = listen / think / speak in `color`; grey = all three grey (skip).
 // 0.4.98: drawn as three narrow blocks as tall as the mode badge (same semantics and timing) by the home top row, one

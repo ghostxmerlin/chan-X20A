@@ -500,15 +500,20 @@ void playback_worker(void*) {
 }
 int playback_volume() { return volume_now.load(); }
 // NVS is written here, in the requesting HTTP or ASR task, never in the playback worker.
-esp_err_t playback_set_volume(int volume, const char* source)
+// persist = false (0.5.10 robot command line): RAM only, no flash access (safe from a PSRAM-stack task); the saved
+// volume comes back at the next boot.
+esp_err_t playback_set_volume(int volume, const char* source, bool persist)
 {
     if (!volume_valid(volume)) return ESP_ERR_INVALID_ARG;
     volume_now = volume;
-    nvs_handle_t nvs; esp_err_t err = nvs_open("collector", NVS_READWRITE, &nvs);
-    if (err == ESP_OK) { err = nvs_set_u8(nvs, "volume", static_cast<uint8_t>(volume)); if (err == ESP_OK) err = nvs_commit(nvs); nvs_close(nvs); }
+    esp_err_t err = ESP_ERR_NOT_SUPPORTED;
+    if (persist) {
+        nvs_handle_t nvs; err = nvs_open("collector", NVS_READWRITE, &nvs);
+        if (err == ESP_OK) { err = nvs_set_u8(nvs, "volume", static_cast<uint8_t>(volume)); if (err == ESP_OK) err = nvs_commit(nvs); nvs_close(nvs); }
+    }
     std::lock_guard<std::mutex> lock(status_mutex);
     volume_source = source; volume_changed_us = esp_timer_get_time(); volume_saved = err == ESP_OK;
-    ESP_LOGI("Playback", "volume %d from %s%s", volume, source, err == ESP_OK ? "" : " (not saved)");
+    ESP_LOGI("Playback", "volume %d from %s%s", volume, source, err == ESP_OK ? "" : persist ? " (not saved)" : " (RAM only)");
     return ESP_OK;
 }
 void playback_init() {

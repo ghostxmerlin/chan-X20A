@@ -1213,7 +1213,8 @@ def main():
     print(f"keyword ear: {kws.url if kws else 'off (no SOUL_KWS_URL, no kws.url)'}", flush=True)
 
     import ask_api                                 # mind's tools ask the ear (L1 2026-11-18), 127.0.0.1 only
-    asks = ask_api.Asks(hub=rt_hub, burst=burst, presence=presence,
+    robots = mouth_link.RobotLinks()               # the robot command line (collector-0.5.10): newest /mouth link
+    asks = ask_api.Asks(hub=rt_hub, burst=burst, presence=presence, robot=robots,
                         searcher=rt_hub.searcher if rt_hub is not None and getattr(rt_hub, "searcher", None) else
                         (web_search.dashscope_search(secrets["DASHSCOPE_API_KEY"]) if secrets.get("DASHSCOPE_API_KEY") else None),
                         paused=pause.reasons,
@@ -1243,7 +1244,8 @@ def main():
             print(f"+ {peer} mouth m{mouth_no[0]}", flush=True)
             t0 = ear_log.link_open("mouth", conn=f"m{mouth_no[0]}", peer=peer)
             link = mouth_link.MouthLink(ws, upstream_url=mouth_link.UPSTREAM, token=token_value, conn=mouth_no[0],
-                                        modes=mode_hub, realtime=rt_hub, burst=burst, presence=presence)
+                                        modes=mode_hub, realtime=rt_hub, burst=burst, presence=presence,
+                                        robots=robots)
             why = "error"
             try:
                 why = await link.run()

@@ -41,8 +41,13 @@ esp_err_t remote_yaw_slot(int slot, int speed, uint32_t* request_seq);
 // Spoken yaw: |notches| 45-degree slots from the nearest slot, clipped at ±90 degrees.
 // ESP_ERR_INVALID_STATE when not idle/enabled/fed back or already at the limit.
 esp_err_t remote_yaw_notches(int notches, int speed, uint32_t* request_seq);
-// Locked copy of the yaw owner's state for the ASR word plan; no UART access.
+// Locked copy of the yaw owner's state for the ASR word plan; no UART access. A nod / shake counts as manual_busy.
 AsrYawStatus remote_yaw_status();
+// 0.5.10 nod (pitch) / shake (yaw), head_gesture.h: cycles 1..2 of +-8 degrees from the measured angle, back to it.
+// Never writes NVS. Queued for motor_task; ESP_OK = accepted (not finished). Refused (ESP_ERR_INVALID_STATE, why =
+// motor_off | busy | facing_back | facing_unknown | no_feedback | no_room) while another motion runs on that axis.
+// A stop, a web / ASR / remote move on the axis or a pitch setting ends it where the head is.
+esp_err_t remote_gesture(bool nod, int cycles, const char** why, uint32_t* request_seq = nullptr);
 const char* remote_display_state();
 // Commit one collector setting, then queue one explicit pitch attempt. ESP_OK
 // confirms persistence/acceptance, not measured arrival. Disabled returns

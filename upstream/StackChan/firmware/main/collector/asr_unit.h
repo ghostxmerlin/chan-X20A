@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #include "asr_protocol.h"
+#include "asr_motion.h"
 #include <ArduinoJson.hpp>
 #include <cstdint>
 
@@ -15,5 +16,10 @@ void asr_init();
 // "AsrUnit", so it shows on the robot's own log page.
 uint32_t asr_latest();
 void asr_json(ArduinoJson::JsonObject out,uint32_t after=0);
+// 0.5.10 robot command line: one yaw word (front, back, tracking on / off) or, with word None, an absolute slot
+// (-2..2 without 0) through the ASR task's own plan: the same admission, busy state and two-stage turns as a spoken
+// word. Blocks the caller up to wait_ms (the ASR task takes it within ~100 ms); {nullptr, "timeout"} otherwise.
+// One caller at a time (others wait for it). Never call it from the ASR task.
+AsrMotionOutcome asr_yaw_request(AsrMotionWord word, int slot, uint32_t wait_ms);
 void asr_info_json(ArduinoJson::JsonObject out);
 }

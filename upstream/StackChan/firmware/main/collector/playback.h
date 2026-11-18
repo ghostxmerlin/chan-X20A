@@ -15,9 +15,10 @@ bool playback_reaction(RemoteReaction reaction);
 void playback_set_audio_ready();
 esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id = nullptr, int* selected_id = nullptr);
 void playback_asr_command(uint8_t id, bool has_value);
-// Speaker volume (10..100) for every following playback; saved in NVS by the caller's task.
+// Speaker volume (10..100) for every following playback; saved in NVS by the caller's task (persist = false:
+// RAM only, no flash access, 0.5.10 robot command line).
 int playback_volume();
-esp_err_t playback_set_volume(int volume, const char* source);
+esp_err_t playback_set_volume(int volume, const char* source, bool persist = true);
 void playback_json(ArduinoJson::JsonObject target);
 bool playback_output_enabled();
 esp_err_t playback_hearing(int clip,uint32_t session);

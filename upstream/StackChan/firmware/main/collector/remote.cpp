@@ -13,6 +13,7 @@
 #include "timed_yaw_turn.h"
 #include "motion_trace.h"
 #include "servo_tuning.h"
+#include "head_gesture.h"
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
 #include <espnow.h>
@@ -97,6 +98,13 @@ M12Target track_target;          // face/person being tracked (motor_task only)
 uint32_t track_target_seq = 0;
 uint32_t reaction_seq = 0;
 int64_t reaction_timestamp = 0;
+// 0.5.10 nod / shake (head_gesture.h): one at a time, motor_task runs it; remote_gesture only queues the plan.
+HeadGesture head_motion;
+GesturePlan gesture_plan;
+bool gesture_pending = false, gesture_nod = false;   // the running (or queued) one's axis: pitch (nod) or yaw
+uint32_t gesture_seq = 0;
+int64_t gesture_settle_until = 0;                    // keep updating the axis after the last leg (hold / release)
+bool gesture_busy_locked() { return gesture_pending || head_motion.active(); }
 
 void load_pitch_setting()
 {
@@ -252,7 +260,8 @@ void motor_task(void*)
                 !manual_yaw_idle(yaw_command_started, motion.yawServo().isTrajectoryComplete()) ||
                 motion.yawServo().holdPending() || motion.pitchServo().holdPending() ||
                 !strcmp(startup.state(), "waiting_feedback") || !strcmp(startup.state(), "moving") ||
-                pitch_requests.current().sequence != pitch_request.sequence;
+                pitch_requests.current().sequence != pitch_request.sequence ||
+                gesture_busy_locked() || now < gesture_settle_until;
             if (busy) axes_busy_us = now;
             feedback_period_us = now - axes_busy_us < kFeedbackBusyHoldUs ? kFeedbackFastUs : kFeedbackIdleUs;
         }
@@ -293,7 +302,8 @@ void motor_task(void*)
             pitch_cancelled = pitch_requests.cancelled(latest_pitch);
         }
         if (stop_pending) {
-            { std::lock_guard<std::mutex> lock(mutex); yaw_tracking_torque.beforeCancel(motion.yawServo()); yaw_trace.close(now); pitch_trace.close(now); }
+            { std::lock_guard<std::mutex> lock(mutex); yaw_tracking_torque.beforeCancel(motion.yawServo()); yaw_trace.close(now); pitch_trace.close(now);
+              gesture_pending = false; head_motion.cancel("stopped"); gesture_settle_until = 0; }
             apply_remote_stop(startup, motion, now);
             was_enabled = false;
             yaw_command_started = false;
@@ -373,7 +383,8 @@ void motor_task(void*)
                 motion.pitchServo().cancelMotion();
             }
             enabled = false;
-            { std::lock_guard<std::mutex> lock(mutex); motor_state = motion.yawServo().rotationPowerFaulted() ? "power_cut" : "disarmed"; }
+            { std::lock_guard<std::mutex> lock(mutex); motor_state = motion.yawServo().rotationPowerFaulted() ? "power_cut" : "disarmed";
+              gesture_pending = false; head_motion.cancel("motor_off"); gesture_settle_until = 0; }
         } else {
             enabled = true;
             // The M12 snapshot is passive; mode requests belong to interaction.
@@ -410,7 +421,8 @@ void motor_task(void*)
                         input.face_count = static_cast<unsigned>(std::max<size_t>(camera.count, 1));   // a person counts as one
                     }
                 }
-                const auto action = tracking.step(input);
+                // 0.5.10: a shake owns the yaw axis while it runs; tracking waits (it stays requested).
+                const auto action = head_motion.active() && !gesture_nod ? FaceTracking::Action::None : tracking.step(input);
                 if (action == FaceTracking::Action::Cancel) {
                     // cancelMotion removes torque; it is not a physical hold.
                     yaw_tracking_torque.beforeCancel(motion.yawServo());
@@ -463,22 +475,67 @@ void motor_task(void*)
                 }
             }
             {
+                // 0.5.10 nod / shake (head_gesture.h): start a queued one, end it when anything else takes the axis,
+                // else run its legs. Pitch legs use the gesture's own spring, then the pitch profile is restored.
+                std::lock_guard<std::mutex> lock(mutex);
+                const int64_t t = esp_timer_get_time();
+                if (gesture_pending) {
+                    gesture_pending = false;
+                    head_motion.begin(gesture_plan, t);
+                    gesture_settle_until = 0;
+                    if (!gesture_nod) { web_yaw_active = false; yaw_trace.begin("shake", gesture_seq, gesture_plan.points[0], yaw_feedback, t); }
+                    else pitch_trace.begin("nod", gesture_seq, gesture_plan.points[0], pitch_feedback, t);
+                }
+                const bool was_running = head_motion.active();
+                if (was_running && (!control_requested || yaw_turn.busy() ||
+                        (!gesture_nod && (manual_yaw.pending || web_yaw_active)) ||
+                        (gesture_nod && latest_pitch.sequence != pitch_request.sequence))) head_motion.cancel("superseded");
+                if (head_motion.active()) {
+                    auto& servo = gesture_nod ? motion.pitchServo() : motion.yawServo();
+                    const auto& fb = gesture_nod ? pitch_feedback : yaw_feedback;
+                    const int64_t fb_us = gesture_nod ? feedback_timestamp : yaw_feedback_timestamp;
+                    int target = 0;
+                    const auto step = head_motion.step(t, servo.isTrajectoryComplete(), target);
+                    if (step == HeadGesture::Action::Move) {
+                        const bool fresh = fb.valid && fb_us > 0 && t - fb_us < 300000;
+                        bool ok = true;
+                        if (gesture_nod) servo.setSpeedSpringOverride(kNodStiffness, kNodDamping);
+                        const int speed = gesture_nod ? StartupPose::kSpeed : kShakeSpeed;
+                        if (fresh) ok = servo.moveFromFeedbackWithSpeed(fb, target, speed, gesture_nod ? kPitchSettingLowerMargin : 0);
+                        else servo.moveWithSpeed(target, speed);
+                        if (gesture_nod) configure_pitch_motion(servo);
+                        else yaw_command_started = true;
+                        if (!ok) head_motion.cancel("rejected");
+                    }
+                }
+                if (was_running && !head_motion.active()) {          // done, timed out, superseded or rejected
+                    gesture_settle_until = t + 3000000;
+                    ESP_LOGI("CollectorRemote", "%s %lu: %s after %d legs", gesture_nod ? "nod" : "shake",
+                             static_cast<unsigned long>(gesture_seq), head_motion.result(), head_motion.legs_done());
+                } else if (!head_motion.active() && gesture_settle_until && t >= gesture_settle_until) {
+                    gesture_settle_until = 0;
+                }
+            }
+            {
                 // Serialize explicit stop with the final update, not only with
                 // admission. No stale tracking action can write after stop wins.
                 std::lock_guard<std::mutex> lock(mutex);
+                const bool shaking = !gesture_nod && (head_motion.active() || gesture_settle_until);
                 if (yaw_turn.busy()) {
                     motor_state = yaw_turn.state();
-                } else if (control_requested && (tracking.active() || web_yaw_active)) {
+                } else if (control_requested && (tracking.active() || web_yaw_active || shaking)) {
                     motion.yawServo().update();
                     yaw_tracking_torque.afterUpdate(motion.yawServo());
-                    motor_state = tracking.active() ? "tracking" : "web_yaw";
+                    motor_state = head_motion.active() ? (gesture_nod ? "nod" : "shake") : tracking.active() ? "tracking" : "web_yaw";
                 } else {
                     motor_state = strcmp(startup.state(), "moving") == 0 ?
                         (pitch_request.from_boot ? "startup_pose" : "pitch_setting") : "waiting_for_input";
                 }
             }
             // Retain spring updates and factory torque release for either owner.
-            if (pose_action == StartupPose::Action::Start || pose_action == StartupPose::Action::Update)
+            bool nodding;
+            { std::lock_guard<std::mutex> lock(mutex); nodding = gesture_nod && (head_motion.active() || gesture_settle_until); }
+            if (pose_action == StartupPose::Action::Start || pose_action == StartupPose::Action::Update || nodding)
                 motion.pitchServo().update();
         }
         // One read-only configuration probe per axis, after boot has settled and
@@ -981,7 +1038,7 @@ AsrYawStatus remote_yaw_status()
     s.turn_complete = yaw_turn.phase == TimedYawTurn::Phase::Complete;
     s.turn_seq = yaw_turn.sequence;
     s.manual_seq = manual_yaw.sequence;
-    s.manual_busy = manual_yaw.pending || manual_yaw.state == ManualYaw::moving;
+    s.manual_busy = manual_yaw.pending || manual_yaw.state == ManualYaw::moving || gesture_busy_locked();
     s.manual_failed = !strcmp(manual_yaw.state, "cancelled") || !strcmp(manual_yaw.state, "expired") ||
         !strcmp(manual_yaw.state, "superseded") || !strcmp(manual_yaw.state, "feedback_unavailable");
     s.settled = yaw_trajectory_complete;
@@ -989,6 +1046,36 @@ AsrYawStatus remote_yaw_status()
         now - yaw_feedback_timestamp < 1000000 && yaw_feedback.angle >= -1280 && yaw_feedback.angle <= 1280;
     s.angle = yaw_feedback.angle;
     return s;
+}
+
+esp_err_t remote_gesture(bool nod, int cycles, const char** why, uint32_t* request_seq)
+{
+    const char* no = nullptr;
+    if (!why) why = &no;
+    if (cycles < 1 || cycles > 2) { *why = "bad_args"; return ESP_ERR_INVALID_ARG; }
+    // Serialize with pitch commits like a turn: no pitch request appears while the plan is made.
+    std::lock_guard<std::mutex> storage_lock(pitch_storage_mutex);
+    std::lock_guard<std::mutex> lock(mutex);
+    const int64_t now = esp_timer_get_time();
+    if (!control_requested || !enabled || !motor_ready) { *why = "motor_off"; return ESP_ERR_INVALID_STATE; }
+    if (gesture_busy_locked() || yaw_turn.busy() || tune_pending || manual_yaw.pending || manual_yaw.state == ManualYaw::moving ||
+        (nod && (!strcmp(pitch_state, "queued") || !strcmp(pitch_state, "moving") || !strcmp(pitch_state, "waiting_feedback"))) ||
+        (!nod && (tracking.moving() || !yaw_trajectory_complete))) { *why = "busy"; return ESP_ERR_INVALID_STATE; }
+    if (!nod && yaw_turn.facing != YawFacing::Front) { *why = yaw_turn.facing == YawFacing::Back ? "facing_back" : "facing_unknown"; return ESP_ERR_INVALID_STATE; }
+    const auto& fb = nod ? pitch_feedback : yaw_feedback;
+    const int64_t fb_us = nod ? feedback_timestamp : yaw_feedback_timestamp;
+    if (!fb.valid || fb_us <= 0 || now - fb_us > 1000000) { *why = "no_feedback"; return ESP_ERR_INVALID_STATE; }
+    auto& motion = GetStackChan().motion();
+    const auto limits = nod ? motion.pitchServo().getAngleLimit() : motion.yawServo().getAngleLimit();
+    // Pitch: never below the saved-angle floor; yaw: inside the web slots' range.
+    const int lower = nod ? std::max<int>(limits.x, kPitchSettingMinimum) : std::max<int>(limits.x, -kWebYawRangeTenths);
+    const int upper = nod ? std::min<int>(limits.y, kPitchSettingMaximum) : std::min<int>(limits.y, kWebYawRangeTenths);
+    GesturePlan plan;
+    if (!plan_gesture(fb.angle, kGestureAmpTenths, cycles, lower, upper, plan)) { *why = "no_room"; return ESP_ERR_INVALID_STATE; }
+    gesture_plan = plan; gesture_nod = nod; gesture_pending = true; ++gesture_seq;
+    if (request_seq) *request_seq = gesture_seq;
+    *why = nullptr;
+    return ESP_OK;
 }
 
 esp_err_t remote_yaw_slot(int slot, int speed, uint32_t* request_seq)
@@ -1209,6 +1296,9 @@ void remote_json(ArduinoJson::JsonObject target, uint32_t after, bool include_hi
     motor["feedback_valid"] = yaw_feedback.valid && pitch_feedback.valid;
     motor["state"] = motor_state;
     motor["timestamp_us"] = feedback_timestamp;
+    auto g = motor["gesture"].to<ArduinoJson::JsonObject>();     // 0.5.10 nod / shake (robot command line)
+    g["seq"] = gesture_seq; g["kind"] = gesture_seq ? (gesture_nod ? "nod" : "shake") : "";
+    g["busy"] = gesture_busy_locked(); g["result"] = gesture_pending ? "queued" : head_motion.result();
     if (include_servo_diagnostics) {
         motor["feedback_age_ms"] = feedback_timestamp ? (esp_timer_get_time() - feedback_timestamp) / 1000 : -1;
         motor["feedback_period_ms"] = feedback_period_us / 1000;
