@@ -16,6 +16,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -47,7 +48,17 @@ struct RemoteYawPort {
     bool notches(int n, uint32_t& seq) { return remote_yaw_notches(n, kWebYawDefaultSpeed, &seq) == ESP_OK; }
     bool centre(uint32_t& seq) { return remote_yaw_slot(0, kWebYawDefaultSpeed, &seq) == ESP_OK; }
     bool turn(uint32_t& seq) { return remote_turn_yaw(TimedYawTurn::kDefaultMs, &seq) == ESP_OK; }
+    bool slot(int s, uint32_t& seq) { return remote_yaw_slot(s, kWebYawDefaultSpeed, &seq) == ESP_OK; }
 };
+// 0.5.10 robot command line (asr_yaw_request): one ask at a time, taken by asr_task between UART reads.
+std::mutex ask_caller;                     // one caller at a time
+std::mutex ask_mutex;                      // the fields below
+SemaphoreHandle_t ask_done = nullptr;      // given by asr_task after each answer
+StaticSemaphore_t ask_done_buffer;
+uint32_t ask_token = 0, ask_taken = 0, ask_answered = 0;
+AsrMotionWord ask_word = AsrMotionWord::None;
+int ask_slot = 0;
+AsrMotionOutcome ask_outcome;
 AsrYawPlan yaw_plan;
 BootTracking boot_tracking; // only asr_task changes it; asr_json reads the result string
 
@@ -127,6 +138,30 @@ void asr_task(void*)
             }
             if (boot_tracking.done()) ESP_LOGI(kTag, "boot tracking: %s", boot_tracking.result());
         }
+        {
+            // 0.5.10: a robot command's yaw word / slot, through the same plan as a spoken word.
+            AsrMotionWord word = AsrMotionWord::None;
+            int slot = 0;
+            uint32_t token = 0;
+            {
+                std::lock_guard<std::mutex> lock(ask_mutex);
+                if (ask_token != ask_taken) { ask_taken = token = ask_token; word = ask_word; slot = ask_slot; }
+            }
+            if (token) {
+                if (word != AsrMotionWord::None) boot_tracking.cancel();
+                const auto outcome = word == AsrMotionWord::None ? yaw_plan.slot(slot, port)
+                                                                 : yaw_plan.command(word, port, esp_timer_get_time());
+                {
+                    std::lock_guard<std::mutex> lock(history_mutex);
+                    if (outcome.action)
+                        motion_state = MotionState{0, "cmd", outcome.action, outcome.result, yaw_plan.stage_name(),
+                                                   yaw_plan.stage() == AsrYawPlan::Stage::Idle ? "" : yaw_plan.last_result()};
+                }
+                ESP_LOGI(kTag, "cmd %s -> %s", outcome.action ? outcome.action : "?", outcome.result ? outcome.result : "?");
+                { std::lock_guard<std::mutex> lock(ask_mutex); ask_outcome = outcome; ask_answered = token; }
+                xSemaphoreGive(ask_done);
+            }
+        }
         if (const char* done = yaw_plan.tick(port, esp_timer_get_time())) {
             ESP_LOGI(kTag, "#%lu %s plan -> %s", static_cast<unsigned long>(motion_state.seq), motion_state.action, done);
             std::lock_guard<std::mutex> lock(history_mutex);
@@ -189,11 +224,37 @@ void asr_task(void*)
 
 void asr_init()
 {
+    ask_done = xSemaphoreCreateBinaryStatic(&ask_done_buffer);
     if (xTaskCreatePinnedToCore(asr_task, "collector_asr", 4096, nullptr, 2, nullptr, 1) != pdPASS)
         ESP_LOGE(kTag, "ASR task unavailable");
 }
 
 uint32_t asr_latest() { return latest.load(); }
+
+AsrMotionOutcome asr_yaw_request(AsrMotionWord word, int slot, uint32_t wait_ms)
+{
+    if (!ask_done || !driver_ok.load()) return {nullptr, "unavailable"};
+    std::lock_guard<std::mutex> caller(ask_caller);
+    uint32_t token;
+    {
+        std::lock_guard<std::mutex> lock(ask_mutex);
+        token = ++ask_token ? ask_token : ++ask_token;      // 0 means "nothing asked"
+        ask_word = word; ask_slot = slot;
+    }
+    xSemaphoreTake(ask_done, 0);                             // an older answer's give
+    const TickType_t until = xTaskGetTickCount() + pdMS_TO_TICKS(wait_ms);
+    for (;;) {
+        const TickType_t now = xTaskGetTickCount();
+        const TickType_t left = int32_t(until - now) > 0 ? until - now : 0;
+        const bool given = xSemaphoreTake(ask_done, left) == pdTRUE;
+        std::lock_guard<std::mutex> lock(ask_mutex);
+        if (ask_answered == token) return ask_outcome;
+        if (!given) {
+            if (ask_taken != token) ask_taken = token;        // withdrawn: asr_task never runs it
+            return {nullptr, "timeout"};
+        }
+    }
+}
 
 void asr_json(ArduinoJson::JsonObject out,uint32_t after)
 {

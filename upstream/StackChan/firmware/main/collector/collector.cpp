@@ -10,6 +10,7 @@
 #include "hearing.h"
 #include "vision_uplink.h"
 #include "mouth_link.h"
+#include "robot_cmd.h"
 #include "burst_indicator.h"
 #include "camera_frames.h"
 #include "interaction.h"
@@ -1158,6 +1159,7 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     }
     vision_uplink_json(doc["m12"]["uplink"].to<JsonObject>());
     mouth::json(doc["mouth"].to<JsonObject>());
+    cmd::json(doc["robot_cmd"].to<JsonObject>());     // 0.5.10 robot command line counters
     mouth::mode_json(doc["mode"].to<JsonObject>());   // hello modes step 1b: hello owns the mode
     interaction::json(doc["interaction"].to<JsonObject>());
     health["servo_commands_enabled"] = remote_enabled();
@@ -1740,6 +1742,29 @@ const Route kAudioRoutes[] = {{"/v1/audio", HTTP_GET, audio_handler}};
     }
 }
 
+// 0.5.10 robot command line "status" (robot_cmd.cpp): battery, charging, chip temperature, light, camera, Wi-Fi.
+// Runs on the command worker (PSRAM stack): copies and getters only, no flash access.
+void robot_status_fill(JsonObject d)
+{
+    int level = 0;
+    bool charging = false;
+    int64_t power_us = 0;
+    if (hal_bridge::board_get_power_snapshot(level, charging, power_us)) { d["battery"] = level; d["charging"] = charging; }
+    else { d["battery"] = nullptr; d["charging"] = nullptr; }
+    environment::LightSample light;
+    { std::lock_guard<std::mutex> lock(sensor_mutex); light = light_sample; }
+    if (light.valid) d["lux"] = static_cast<int>(light.lux + 0.5f); else d["lux"] = nullptr;
+    {
+        JsonDocument t;
+        temperature_json(t.to<JsonObject>());
+        if (t["celsius"].is<float>()) d["chip_c"] = static_cast<int>(t["celsius"].as<float>() * 10 + 0.5f) / 10.0f;
+        else d["chip_c"] = nullptr;
+    }
+    d["camera"] = camera_enabled.load();
+    wifi_ap_record_t ap{};
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) d["rssi"] = ap.rssi; else d["rssi"] = nullptr;
+}
+
 void update_screen(const std::string& ip, const std::string& ssid = {}, bool rssi_valid = false, int rssi = 0)
 {
     const int64_t now = esp_timer_get_time();
@@ -1880,6 +1905,25 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                         screen_update_billing(view.result_digit, view.result.code, static_cast<uint32_t>(view.result_at_us / 1000));
                     if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
                     if (cd) { cd->in_chat = mouth::dots_mode(view.state.mode); cd->color = view.look.color; cd->state = view.chat; }
+                }
+                {   // 0.5.10 robot command line words (robot_cmd.h): shown now; a word held longer than a toast
+                    // (安静中, 少插话) stays, and comes back after another toast took the row, until it ends or is cleared.
+                    static cmd::StickyWord* sticky = nullptr;
+                    if (!sticky) if (void* m = heap_caps_calloc(1, sizeof(cmd::StickyWord), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) sticky = new (m) cmd::StickyWord();
+                    const auto ms = static_cast<uint32_t>(now / 1000);
+                    char text[cmd::kWordBytes + 1];
+                    uint32_t hold = 0;
+                    if (cmd::take_word(text, hold)) {
+                        if (!*text) {
+                            if (sticky && sticky->on) screen_hide_toast();
+                            if (sticky) sticky->clear();
+                        } else {
+                            screen_show_word_for(text, ms, hold);
+                            if (sticky && hold > cmd::kWordDefaultMs) sticky->set(text, ms, hold);
+                        }
+                    } else if (sticky) {
+                        if (const char* w = sticky->due(ms, screen_toast_busy())) screen_show_word_for(w, ms, sticky->until_ms - ms);
+                    }
                 }
                 {   // 0.5.06: the ASR unit heard "hello": 在呢 under the eyes at once (the server decides the rest)
                     static uint32_t wakes_seen = mouth::asr_wakes();
@@ -2084,6 +2128,8 @@ void run()
     playback_init();
     hearing::init(device_id,boot_id);
     vision_uplink_init(device_id, boot_id);
+    cmd::set_status_hook(robot_status_fill);
+    cmd::init();             // 0.5.10 robot command line: before /mouth, whose hello says "cmd":1 when it is ready
     mouth::init(device_id, boot_id);
     update_screen({});
     ESP_ERROR_CHECK(create_psram_task(sensor_task, "collector_sensors", 6144, nullptr, 3) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);

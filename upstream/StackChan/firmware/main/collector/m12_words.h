@@ -124,8 +124,13 @@ inline const char* const* words(const Ev& e, uint8_t& count)
 // hello's own was refused because someone was speaking (chat_stage busy).
 constexpr const char* kQwenAside = "不是跟我说的";
 constexpr const char* kQwenBusy = "等你说完";
-// Every character any word uses: the glyph set of collector_words_20 (scripts/generate-words-font.sh).
-constexpr const char* kGlyphs = "你好嗨在呢嗯好呀吧不要吗？怎么啦看见黑的找到哇来欢迎拜太近别走亮了是跟我说等完";
+// 0.5.10 robot command line (robot_cmd.h "word"): the words mind may put under the eyes. Any text whose characters
+// are all in kGlyphs is shown; these are the ones the font was made for (hello's quiet modes, research done, reminders).
+constexpr const char* kCmdWords[] = {"安静中", "少插话", "查好了", "提醒", "收到", "好的", "我在听", "想想", "等等",
+                                     "晚安", "早安", "谢谢", "加油", "对不起", "没关系", "记住了", "学会了", "在呢"};
+// Every character any word uses: the glyph set of collector_words_20 (scripts/generate-words-font.sh, which reads
+// this one line: keep it a single string literal).
+constexpr const char* kGlyphs = "你好嗨在呢嗯好呀吧不要吗？怎么啦看见黑的找到哇来欢迎拜太近别走亮了是跟我说等完安静中少插话查提醒收听想晚早谢加油对起没关系记住学会";
 
 class Picker {
 public:

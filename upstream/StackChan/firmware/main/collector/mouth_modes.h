@@ -42,7 +42,8 @@ namespace collector::mouth {
 // ear's {"type":"mode"} snapshot is one of them now).
 // 0.4.99: Snap = the ear's {"type":"snap","id"} (vision burst, vision_snap.h; its own 200 B limit is checked there).
 // 0.5.00: Burst = the ear's {"type":"burst","on",..} (the burst indicator, burst_indicator.h; its 200 B limit there).
-enum class Text : uint8_t { TooLong, Bad, Hello, TtsStart, TtsEnd, TtsStop, ModeResult, ChatStage, Snap, Burst, Other };
+// 0.5.10: Cmd = the ear's {"type":"cmd","id","do","args"} (robot command line, robot_cmd.h; its 512 B limit there).
+enum class Text : uint8_t { TooLong, Bad, Hello, TtsStart, TtsEnd, TtsStop, ModeResult, ChatStage, Snap, Burst, Cmd, Other };
 inline Text read_text(const char* data, size_t n, ArduinoJson::JsonDocument& doc)
 {
     doc.clear();
@@ -55,7 +56,7 @@ inline Text read_text(const char* data, size_t n, ArduinoJson::JsonDocument& doc
     static constexpr struct { const char* name; Text kind; } kTypes[] = {
         {"hello", Text::Hello}, {"tts.start", Text::TtsStart}, {"tts.end", Text::TtsEnd}, {"tts.stop", Text::TtsStop},
         {"mode_result", Text::ModeResult}, {"chat_stage", Text::ChatStage}, {"snap", Text::Snap},
-        {"burst", Text::Burst}};
+        {"burst", Text::Burst}, {"cmd", Text::Cmd}};
     for (const auto& t : kTypes) if (!std::strcmp(type, t.name)) return t.kind;
     return Text::Other;
 }

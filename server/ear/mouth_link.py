@@ -66,6 +66,11 @@ ok|bad_choice|busy,"toast":ASCII<=32}; on ok every link gets the new place frame
 视觉爆发 (2026-11-15, spec docs/superpowers/specs/2026-11-15-vision-burst-snap.md; MouthLink(burst=VisionBurst)): the
 burst sends {"type":"snap","id":N} with send_from_realtime(); the robot's {"type":"snap_result",...} goes to
 burst.on_snap_result(link, m) and never to soul-tts (dropped when there is no burst).
+Robot commands (collector-0.5.10, MouthLink(robots=RobotLinks)): a robot whose hello has "cmd":1 takes
+{"type":"cmd","id":N,"do":<verb>,"args":{..}} (verbs in the firmware's robot_cmd.h: eyes, word, clip, yaw, front,
+turn_around, tracking, nod, shake, volume, face_learn, status) and answers {"type":"cmd_result","id":N,"ok":bool,
+"error":<code|null>,"data":{..}} on the same link (never to soul-tts). send_cmd() awaits that answer; the link
+dropping fails every waiting command with robot_offline. ask_api.py (mind's robot tools) uses the newest link.
 Writers: several tasks send() to the robot socket (the upstream loop, input results). websockets writes each whole
 message atomically, so that is safe; never use fragmented sends (async iterators) on the robot ws.
 An unexpected error is logged with its traceback: in the mode path it is caught there and /mouth goes on; a task
@@ -106,7 +111,42 @@ PLACE_CHOICE_BYTES = 24                             # UTF-8 bytes per choice (8 
 PLACE_CURRENT_BYTES = 48                            # the current place in the frame (mind allows 40 characters)
 PLACE_FRAME_MAX = 1600                              # the robot's /mouth text limit (kMaxMessage)
 PLACE_BY = ("page", "robot", "voice")
+# Robot commands (collector-0.5.10, mind's robot tools via ask_api.py): {"type":"cmd","id":N,"do":<verb>,"args":{..}}
+# down on /mouth, the robot answers {"type":"cmd_result","id":N,"ok":bool,"error":<code>,"data":{..}} on the same link.
+CMD_TIMEOUT_S = 3.0
+CMD_PENDING_MAX = 8
 log = print                                         # tests silence it
+
+
+class CmdError(Exception):
+    """send_cmd failed before the robot answered: code robot_offline | timeout | not_available | busy."""
+    def __init__(self, code, message=""):
+        super().__init__(message or code)
+        self.code = code
+
+
+class RobotLinks:
+    """The robot's /mouth links, newest last (a reconnect may overlap the old link for a moment). The robot command
+    line (send_cmd) always uses the newest one."""
+    def __init__(self):
+        self._links = []
+
+    def add(self, link):
+        if link not in self._links:
+            self._links.append(link)
+
+    def remove(self, link):
+        if link in self._links:
+            self._links.remove(link)
+
+    def current(self):
+        return self._links[-1] if self._links else None
+
+    async def send_cmd(self, do, args=None, timeout=CMD_TIMEOUT_S):
+        link = self.current()
+        if link is None:
+            raise CmdError("robot_offline", "no /mouth link")
+        return await link.send_cmd(do, args, timeout)
 
 
 def _trace(what):
@@ -476,7 +516,7 @@ class _RobotGone(Exception):
 
 class MouthLink:
     def __init__(self, client, *, upstream_url, token, connect=None, retry_s=5, conn=0, modes=None, realtime=None,
-                 burst=None, presence=None):
+                 burst=None, presence=None, robots=None):
         if connect is None:
             from websockets.asyncio.client import connect
         self.client, self.upstream_url, self.token, self.connect = client, upstream_url, token, connect
@@ -499,6 +539,50 @@ class MouthLink:
         self.place_busy = False             # one place_select at a time per link
         self._up = None
         self._lock = asyncio.Lock()         # robot reports wait while a fresh upstream is being greeted
+        self.robots = robots                # RobotLinks: this link joins it after the hello (robot commands)
+        self.cmd_ok = False                 # the robot's hello says "cmd":1 (collector-0.5.10+)
+        self._cmd_id = 0
+        self._cmd_pending = {}              # id -> future of the robot's cmd_result
+
+    async def send_cmd(self, do, args=None, timeout=CMD_TIMEOUT_S):
+        """One robot command -> the robot's {"ok","error","data"}. CmdError: not_available (older firmware), busy (too
+        many waiting), robot_offline (the link is gone or goes before the answer), timeout."""
+        if not self.cmd_ok:
+            raise CmdError("not_available", "robot firmware has no command line")
+        if len(self._cmd_pending) >= CMD_PENDING_MAX:
+            raise CmdError("busy", "too many robot commands waiting")
+        self._cmd_id = self._cmd_id % 0x7FFFFFFF + 1
+        cid = self._cmd_id
+        fut = asyncio.get_running_loop().create_future()
+        self._cmd_pending[cid] = fut
+        try:
+            try:
+                await self.client.send(json.dumps({"type": "cmd", "id": cid, "do": do, "args": args or {}},
+                                                  ensure_ascii=False))
+            except Exception:                           # noqa: BLE001 - robot gone: run() ends via the reader
+                raise CmdError("robot_offline", "send failed") from None
+            try:
+                m = await asyncio.wait_for(fut, timeout)
+            except asyncio.TimeoutError:
+                raise CmdError("timeout", f"no cmd_result within {timeout:g} s") from None
+        finally:
+            self._cmd_pending.pop(cid, None)
+        return {"ok": m.get("ok") is True, "error": m.get("error") if isinstance(m.get("error"), str) else None,
+                "data": m.get("data") if isinstance(m.get("data"), dict) else {}}
+
+    def _cmd_result(self, m):
+        fut = self._cmd_pending.get(m.get("id")) if _is_int(m.get("id")) else None
+        if fut is not None and not fut.done():
+            fut.set_result(m)
+
+    def _cmd_drop(self):
+        """The link ended: every waiting command fails with robot_offline."""
+        if self.robots is not None:
+            self.robots.remove(self)
+        pending, self._cmd_pending = self._cmd_pending, {}
+        for fut in pending.values():
+            if not fut.done():
+                fut.set_exception(CmdError("robot_offline", "link closed"))
 
     @property
     def upstream_up(self):
@@ -509,6 +593,8 @@ class MouthLink:
         why = await self._hello()
         if why:
             return why
+        if self.robots is not None:
+            self.robots.add(self)                       # robot commands go on the newest link
         reader = asyncio.create_task(self._from_robot())
         upper = asyncio.create_task(self._upstream_loop())
         aux = []
@@ -522,6 +608,7 @@ class MouthLink:
             await asyncio.wait({reader, upper}, return_when=asyncio.FIRST_COMPLETED)
         finally:                                        # also when the ear cancels this handler
             first_upper = upper.done() and not reader.done()
+            self._cmd_drop()                            # waiting robot commands: robot_offline
             for task in (reader, upper, *aux):
                 task.cancel()
             await asyncio.gather(reader, upper, *aux, return_exceptions=True)   # a dropped link ends one with ConnectionClosed
@@ -568,6 +655,7 @@ class MouthLink:
             await self.client.close(code=4400, reason="first message must be hello")
             return "bad_hello"
         self.hello_text, self.boot, self.device = first, m.get("boot_id"), m.get("device_id")
+        self.cmd_ok = m.get("cmd") == 1                 # collector-0.5.10+: the robot command line
         try:
             await self.client.send(EAR_HELLO)
         except ConnectionClosed:                        # robot left right after its hello
@@ -580,6 +668,9 @@ class MouthLink:
     async def _from_robot(self):
         async for message in self.client:
             m = _parse(message)
+            if m is not None and m.get("type") == "cmd_result":     # robot command line: never for soul-tts
+                self._cmd_result(m)
+                continue
             if m is not None and m.get("type") == "snap_result":
                 if self.burst is not None:              # vision burst (2026-11-15): never for soul-tts
                     try:

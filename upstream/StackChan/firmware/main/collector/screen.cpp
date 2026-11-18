@@ -1589,14 +1589,23 @@ void screen_show_toast(const char* text, uint32_t now_ms)
 }
 // 0.5.03: a word for an M12 event (m12_words.h) in the toast row, drawn in collector_words_20.
 bool screen_toast_busy() { return toast_shown; }
-void screen_show_word(const char* text, uint32_t now_ms)
+void screen_show_word(const char* text, uint32_t now_ms) { screen_show_word_for(text, now_ms, kToastMs); }
+// 0.5.10: the robot command line's word, shown for hold_ms (a word that stays is shown again by the caller after
+// another toast replaced it, robot_cmd.h StickyWord).
+void screen_show_word_for(const char* text, uint32_t now_ms, uint32_t hold_ms)
 {
     if (!mode_toast || !enabled || !text || !*text) return;
     use_font(mode_toast, &collector_words_20);
     set_text(mode_toast, text);
     lv_obj_remove_flag(mode_toast, LV_OBJ_FLAG_HIDDEN);
-    toast_until_ms = now_ms + kToastMs;
+    toast_until_ms = now_ms + (hold_ms ? hold_ms : kToastMs);
     toast_shown = true;
+}
+void screen_hide_toast()
+{
+    if (!mode_toast || !toast_shown) return;
+    lv_obj_add_flag(mode_toast, LV_OBJ_FLAG_HIDDEN);
+    toast_shown = false;
 }
 void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color, bool aside)
 {

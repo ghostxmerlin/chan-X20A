@@ -106,5 +106,103 @@ class AskApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["error"]["code"], "paused")
 
 
+class FakeRobot:
+    """mouth_link.RobotLinks stand-in: records (do, args, timeout), answers from `replies` (do -> result or CmdError)."""
+    def __init__(self):
+        self.sent, self.replies = [], {}
+
+    async def send_cmd(self, do, args=None, timeout=3.0):
+        self.sent.append((do, args, timeout))
+        r = self.replies.get(do, {"ok": True, "error": None, "data": {"done": do}})
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+
+class RobotAsksTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.robot, self.t = FakeRobot(), [0.0]
+        self.asks = ask_api.Asks(robot=self.robot, clock=lambda: self.t[0])
+
+    async def ask(self, name, args=None):
+        try:
+            return "ok", await self.asks.handle(name, dict(args or {}))
+        except ask_api.AskError as e:
+            return e.code, e.message
+
+    async def test_tools_map_to_robot_commands(self):
+        cases = [("express_eyes", {"state": "happy"}, "eyes", {"state": "happy"}),
+                 ("show_word", {"text": "安静中", "hold_s": 600}, "word", {"text": "安静中", "hold_ms": 600_000}),
+                 ("show_word", {"text": "查好了"}, "word", {"text": "查好了", "hold_ms": 2000}),
+                 ("show_word", {"clear": True}, "word", {"text": "", "hold_ms": 2000}),
+                 ("play_clip", {"emotion": "happy"}, "clip", {"emotion": "happy"}),
+                 ("play_clip", {"clip_id": 7, "emotion": "sad"}, "clip", {"clip_id": 7}),
+                 ("turn_head", {"to": "left45"}, "yaw", {"to": "left45"}),
+                 ("face_front", {}, "front", {}),
+                 ("turn_around", {}, "turn_around", {}),
+                 ("tracking", {"on": False}, "tracking", {"on": False}),
+                 ("nod", {}, "nod", {"times": 2}),
+                 ("shake_head", {"times": 1}, "shake", {"times": 1}),
+                 ("set_volume", {"step": -10}, "volume", {"step": -10}),
+                 ("set_volume", {"level": 60}, "volume", {"level": 60})]
+        for name, args, do, sent in cases:
+            self.t[0] += 10
+            code, data = await self.ask(name, args)
+            self.assertEqual((code, data), ("ok", {"done": do}), name)
+            self.assertEqual(self.robot.sent[-1][:2], (do, sent), name)
+        await self.ask("face_learn_propose", {"name": "小王"})
+        self.assertEqual(self.robot.sent[-1], ("face_learn", {"name": "小王"}, ask_api.LEARN_TIMEOUT_S))
+        self.assertIn("robot_status", ask_api.Asks.NAMES)
+
+    async def test_bad_args_never_reach_the_robot(self):
+        for name, args in [("express_eyes", {}), ("show_word", {"text": "一二三四五六七八九"}), ("show_word", {}),
+                           ("show_word", {"text": "嗨", "hold_s": 4000}), ("play_clip", {"clip_id": 81}),
+                           ("turn_head", {"to": "up"}), ("tracking", {"on": "yes"}), ("nod", {"times": 3}),
+                           ("set_volume", {}), ("set_volume", {"level": 50, "step": 10}), ("set_volume", {"level": 5}),
+                           ("face_learn_propose", {"name": ""}), ("face_learn_propose", {"name": "长" * 11})]:
+            self.assertEqual((await self.ask(name, args))[0], "bad_args", (name, args))
+        self.assertEqual(self.robot.sent, [])
+
+    async def test_turn_head_gap_on_the_ear(self):
+        self.assertEqual((await self.ask("turn_head", {"to": "right90"}))[0], "ok")
+        self.t[0] += 4.9
+        self.assertEqual((await self.ask("turn_head", {"to": "front"}))[0], "refused")
+        self.t[0] += 0.2
+        self.assertEqual((await self.ask("turn_head", {"to": "front"}))[0], "ok")
+        self.assertEqual(self.robot.sent[-1][0], "front")
+
+    async def test_errors(self):
+        import mouth_link
+        self.robot.replies["nod"] = mouth_link.CmdError("robot_offline")
+        self.assertEqual((await self.ask("nod"))[0], "robot_offline")
+        self.robot.replies["nod"] = mouth_link.CmdError("timeout")
+        self.assertEqual((await self.ask("nod"))[0], "timeout")
+        self.robot.replies["nod"] = mouth_link.CmdError("not_available")
+        self.assertEqual((await self.ask("nod"))[0], "not_available")
+        for robot_code, code in [("busy", "refused"), ("rate_limited", "refused"), ("speaking", "refused"),
+                                 ("no_glyph", "bad_args"), ("motor_off", "not_available"), ("weird", "failed")]:
+            self.robot.replies["nod"] = {"ok": False, "error": robot_code, "data": {}}
+            got = await self.ask("nod")
+            self.assertEqual(got[0], code, robot_code)
+            self.assertTrue(got[1])
+        with self.assertRaises(ask_api.AskError) as e:
+            await ask_api.Asks().handle("robot_status", {})
+        self.assertEqual(e.exception.code, "not_available")
+
+    async def test_robot_status_view(self):
+        self.robot.replies["status"] = {"ok": True, "error": None, "data": {
+            "fw": "collector-0.5.10", "mode": "DOCK", "volume": 60, "yaw": -2.5, "pitch": 10.1, "facing": "front",
+            "tracking": True, "motor": True, "moving": False, "m12": True, "camera": False, "speaking": False,
+            "battery": 82, "charging": True, "chip_c": 61.4, "lux": None, "rssi": -55, "up_s": 3720,
+            "heap": 40960, "psram": 4 * 1024 * 1024}}
+        code, d = await self.ask("robot_status")
+        self.assertEqual(code, "ok")
+        self.assertEqual((d["firmware"], d["battery"], d["facing"], d["uptime_min"], d["free_heap_kb"]),
+                         ("collector-0.5.10", 82, "正前方", 62, 40))
+        self.assertNotIn("lux", d)
+        self.assertIn("电量 82%（在充电）", d["summary"])
+        self.assertIn("在跟着人转", d["summary"])
+
+
 if __name__ == "__main__":
     unittest.main()

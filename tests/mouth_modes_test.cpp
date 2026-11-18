@@ -90,6 +90,7 @@ void text_frames()
         {R"({"type":"mode","seq":3,"mode":"chat"})", Text::Other},          // mind no longer pushes snapshots
         {R"({"type":"mode_report","seq":1})", Text::Other}, {R"({"type":7})", Text::Other}, {R"({})", Text::Other},
         {R"({"type":"snap","id":7})", Text::Snap}, {R"({"type":"place","current":null})", Text::Other},
+        {R"({"type":"cmd","id":1,"do":"status"})", Text::Cmd}, {R"({"type":"cmd_result","id":1})", Text::Other},
         {R"({"type":"burst","on":false})", Text::Burst}};
     for (const auto& t : types) assert(read_text(t.text, std::strlen(t.text), doc) == t.kind);
 }

@@ -501,9 +501,6 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
             raise ToolError("bad_args", str(e)) from None
         return {"saved": True, "who": args["who"], "note_id": (out or {}).get("note_id") if isinstance(out, dict) else None}
 
-    def face_learn_propose(args):
-        raise ToolError("not_available", "学人脸要等服务器到机器人的命令线做好（下一步）")
-
     # ---- L5: a read-only query over whitelisted collections and fields (no memory / people: their own tools) ----
     def db_query(args):
         c = args["collection"]
@@ -564,7 +561,7 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
              "people_list": people_list, "speech_search": speech_search, "recent_speech": recent_speech,
              "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
              "capabilities": capabilities, "switch_propose": switch_propose, "memory_propose": memory_propose,
-             "person_note_propose": person_note_propose, "face_learn_propose": face_learn_propose,
+             "person_note_propose": person_note_propose,
              "semantic_search": semantic_gated, "db_query": db_query}
     if research is not None:                     # 深入研究 (mind/research.py Runner): deep_research, research_status
         from . import research as research_mod
@@ -600,7 +597,10 @@ DESCRIBE = {   # one line for the 待确认 list (Tools.describe)
 
 
 # ---- L1: the ear's tools (server/ear/ask_api.py, 127.0.0.1 only) ----
-EAR_TOOLS = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role")
+EAR_TOOLS = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role",
+             # the robot's tools over the ear's /mouth command line (collector-0.5.10); face_learn_propose is C level
+             "express_eyes", "show_word", "play_clip", "turn_head", "face_front", "turn_around", "tracking", "nod",
+             "shake_head", "set_volume", "face_learn_propose", "robot_status")
 EAR_ASK_URL = "http://127.0.0.1:52743/ask"
 
 

@@ -121,6 +121,22 @@ public:
         return {action, port.turn(seq) ? "accepted" : "rejected"};
     }
 
+    // 0.5.10 robot command line "yaw": an absolute 45-degree slot (-2..2, not 0: front is the Front word, which
+    // also handles a turned-around head). Same admission as a spoken notch. Port: slot(int, uint32_t&).
+    template<class Port> AsrMotionOutcome slot(int target, Port& port)
+    {
+        constexpr const char* action = "yaw_slot";
+        if (target == 0 || target < -kWebYawSlots || target > kWebYawSlots) return {action, "bad_args"};
+        if (stage_ != Stage::Idle) return {action, "busy"};
+        const AsrYawStatus s = port.status();
+        if (s.turn_busy || s.manual_busy) return {action, "busy"};
+        if (!s.control) return {action, "motor_off"};
+        if (s.facing == YawFacing::Back) return {action, "facing_back"};
+        if (!s.feedback) return {action, "no_feedback"};
+        uint32_t seq = 0;
+        return {action, port.slot(target, seq) ? "accepted" : "rejected"};
+    }
+
     // Returns the plan's final result on the tick that ends it, otherwise nullptr.
     template<class Port> const char* tick(Port& port, int64_t now)
     {
