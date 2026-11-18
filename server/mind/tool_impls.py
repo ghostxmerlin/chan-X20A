@@ -6,7 +6,9 @@ what a model needs, in short keys with Chinese titles, and never a key, token or
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import mode_table, recall, segments, settings as settings_mod, tool_time
+import re
+
+from . import mode_table, recall, segments, selfvoice, settings as settings_mod, tool_time
 from .library import Library
 from .store import LANE
 from .tools import ToolError
@@ -266,7 +268,123 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
         return {"people": [{"display": c.get("display"), "kind": KIND_ZH.get(c.get("kind"), c.get("kind")),
                             "notes": c.get("notes", 0)} for c in cards()]}
 
+    # ---- B4: 说过的话（主人 2026-11-18：谁的话都能查） ----
+    for coll, keys in (("speech", [("speaker.name", 1), ("t", 1)]), ("sounds", [("t", 1)]), ("utterances", [("at", 1)])):
+        try:                                           # idempotent; the queries below would scan without them
+            db[coll].create_index(keys)
+        except Exception:                              # noqa: BLE001 - a missing index is slower, never wrong
+            pass
+
+    def voice_table(s):
+        """voice name -> how hello calls the person (settings + library cards' voice links)."""
+        owner = s.get("owner") or {}
+        table = {n: owner.get("display") or "主人" for n in owner.get("voice_names") or []}
+        for p in s.get("people") or []:
+            for n in p.get("voice_names") or []:
+                table[n] = p.get("display") or n
+        for c in cards():
+            for n in ((c.get("links") or {}).get("voice_names") or []):
+                table[n] = c.get("display") or n
+        return table
+
+    def voices_of(s, who):
+        pid = resolve(who)
+        names = set()
+        if pid == "owner":
+            names |= set((s.get("owner") or {}).get("voice_names") or [])
+        for c in cards():
+            if c["person_id"] == pid:
+                names |= set((c.get("links") or {}).get("voice_names") or [])
+        if not names:
+            raise ToolError("not_available", f"还没有「{who}」的声纹，认不出他的声音")
+        return sorted(names)
+
+    def speaker_of(d, table):
+        sp = d.get("speaker") or {}
+        if sp.get("band") == "known" and sp.get("name"):
+            return table.get(sp["name"], sp["name"])
+        if sp.get("band") == "unsure" and sp.get("best"):
+            return f"不确定（像{table.get(sp['best'], sp['best'])}）"
+        return "不认识的声音"
+
+    def lines(lo, hi, who=None, query=None, limit=10, newest_first=True):
+        s = settings()
+        table = voice_table(s)
+        flt = {"t": {"$gte": lo, "$lt": hi}, "text": {"$nin": ["", None]}}
+        if who:
+            flt["speaker.name"] = {"$in": voices_of(s, who)}
+        if query:
+            flt["text"] = {"$regex": re.escape(query), "$options": "i"}
+        rows = list(db["speech"].find(flt, {"_id": 0, "t": 1, "text": 1, "speaker": 1, "session": 1, "pos": 1, "self": 1,
+                                            "emotion": 1}).sort("t", -1 if newest_first else 1).limit(2000))
+        out = []
+        for d in rows:                                 # hello's own voice is not what somebody said
+            me = d.get("self") or {}
+            if selfvoice.is_hello(d.get("text") or "", bool(me.get("sounding"))):
+                continue
+            out.append({"time": tool_time.label(d["t"], s["tz"]), "who": speaker_of(d, table), "text": d.get("text"),
+                        "session": d.get("session"), "pos": d.get("pos")})
+        return {"total": len(out), "lines": out[:limit]}
+
+    def speech_search(args):
+        s, now = settings(), now_ms()
+        if not (args.get("who") or args.get("query")):
+            raise ToolError("bad_args", "要说查谁（who）或查什么词（query），至少一个")
+        lo, hi = tool_time.span(args.get("from"), args.get("to"), now, s["tz"], default_ms=7 * 86400_000)
+        return {"range": [tool_time.label(lo, s["tz"]), tool_time.label(hi, s["tz"])],
+                **lines(lo, hi, args.get("who"), args.get("query"), args.get("limit") or 10)}
+
+    def recent_speech(args):
+        now = now_ms()
+        minutes = args.get("minutes") or 5
+        d = lines(now - minutes * 60_000, now, args.get("who"), None, 40, newest_first=False)
+        return {"minutes": minutes, **d}
+
+    def recent_sounds(args):
+        s, now = settings(), now_ms()
+        minutes = args.get("minutes") or 10
+        rows = list(db["sounds"].find({"t": {"$gte": now - minutes * 60_000, "$lt": now}},
+                                      {"_id": 0, "t": 1, "kind": 1, "label": 1, "dur": 1, "self": 1}).sort("t", 1).limit(500))
+        rows = [r for r in rows if not (r.get("self") or {}).get("sounding")]     # not hello's own sound
+        events = []                                    # back-to-back events of one kind: one entry with a count
+        for r in rows:
+            kind = r.get("label") or r.get("kind")
+            dur = r["dur"] if isinstance(r.get("dur"), (int, float)) else 0
+            if events and events[-1]["kind"] == kind and r["t"] - events[-1]["_last"] <= 60_000:
+                e = events[-1]
+                e["times"] += 1
+                e["dur_s"] = round(e["dur_s"] + dur, 1)
+                e["until"], e["_last"] = tool_time.label(r["t"], s["tz"], with_day=False), r["t"]
+            else:
+                t = tool_time.label(r["t"], s["tz"], with_day=False)
+                events.append({"time": t, "until": t, "kind": kind, "times": 1, "dur_s": round(dur, 1), "_last": r["t"]})
+        for e in events:
+            e.pop("_last")
+        return {"minutes": minutes, "total": len(rows), "events": events[-40:]}
+
+    def hello_said(args):
+        s, now = settings(), now_ms()
+        lo, hi = tool_time.span(args.get("from"), args.get("to"), now, s["tz"])
+        q = (args.get("query") or "").lower()
+        out = []
+        for d in db["realtime_turns"].find({"at": {"$gte": lo, "$lt": hi}, "state": "done"},
+                                           {"_id": 0, "at": 1, "kind": 1, "heard": 1, "reply": 1}):
+            out.append({"at": d["at"], "mode": "Docking", "heard": d.get("heard"), "said": d.get("reply")})
+        for d in db["chat_turns"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0, "at": 1, "text": 1, "reply": 1}):
+            if d.get("reply"):
+                out.append({"at": d["at"], "mode": "对话", "heard": d.get("text"), "said": d.get("reply")})
+        for d in db["utterances"].find({"at": {"$gte": lo, "$lt": hi}, "state": {"$in": ["sent", "played", "done"]}},
+                                       {"_id": 0, "at": 1, "role": 1, "text": 1}):
+            out.append({"at": d["at"], "mode": "台词", "heard": None, "said": d.get("text")})
+        out = [o for o in out if o.get("said") and (not q or q in str(o["said"]).lower() or q in str(o.get("heard") or "").lower())]
+        out.sort(key=lambda o: -o["at"])
+        limit = args.get("limit") or 10
+        return {"range": [tool_time.label(lo, s["tz"]), tool_time.label(hi, s["tz"])], "total": len(out),
+                "lines": [{"time": tool_time.label(o["at"], s["tz"]), "mode": o["mode"], "heard": o["heard"], "said": o["said"]}
+                          for o in out[:limit]]}
+
     return {"switches_status": switches_status, "mode_status": mode_status, "cost_today": cost_today,
             "scene_now": scene_now, "notes_search": notes_search, "review_period": review_period,
             "memory_search": memory_search, "knowledge_search": knowledge_search, "person_lookup": person_lookup,
-            "people_list": people_list}
+            "people_list": people_list, "speech_search": speech_search, "recent_speech": recent_speech,
+            "recent_sounds": recent_sounds, "hello_said": hello_said}

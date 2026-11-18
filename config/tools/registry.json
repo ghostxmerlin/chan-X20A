@@ -101,7 +101,7 @@
    "group": "sense",
    "level": "R",
    "runs_on": "mind",
-   "status": "wrap",
+   "status": "live",
    "description": "想知道最近几分钟有人说了什么（不含 hello 自己）时用。",
    "parameters": {
     "type": "object",
@@ -119,7 +119,7 @@
     }
    },
    "returns": "lines[{time, who, text}]",
-   "source": "Records.window + selfvoice",
+   "source": "Records.window + selfvoice；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -134,7 +134,7 @@
    "group": "sense",
    "level": "R",
    "runs_on": "mind",
-   "status": "wrap",
+   "status": "live",
    "description": "想知道最近有什么声音事件（音乐、敲门、咳嗽…）时用。",
    "parameters": {
     "type": "object",
@@ -147,7 +147,7 @@
     }
    },
    "returns": "events[{time, kind, dur_s}]",
-   "source": "hello.sounds（缺时间索引）",
+   "source": "hello.sounds（缺时间索引）；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -271,7 +271,7 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "查某人或某个关键词说过的原话，带时间和录音位置；谁的话都能查。",
    "parameters": {
     "type": "object",
@@ -302,7 +302,7 @@
     }
    },
    "returns": "lines[{time, who, text, session, pos}]、total",
-   "source": "新：speech / tingwu 查询 + speaker.name 索引",
+   "source": "新：speech / tingwu 查询 + speaker.name 索引；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -450,7 +450,7 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "wrap",
+   "status": "live",
    "description": "查 hello 自己说过的话（Docking、对话、台词）。",
    "parameters": {
     "type": "object",
@@ -477,7 +477,7 @@
     }
    },
    "returns": "lines[{time, mode, heard, said}]",
-   "source": "realtime_turns / chat_turns / utterances（前者没接口）",
+   "source": "realtime_turns / chat_turns / utterances（前者没接口）；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],

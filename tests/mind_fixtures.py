@@ -1,6 +1,7 @@
 """Test helpers for server/mind: an in-memory stand-in for the pymongo database and record
 factories whose fields match what server/ear/hello_db.py writes."""
 import copy
+import re
 import sys
 from pathlib import Path
 
@@ -69,6 +70,9 @@ def _match(doc, flt):
                 elif op == "$in" and not (any(v in arg for v in value) if isinstance(value, list) else value in arg):
                     return False
                 elif op == "$ne" and value == arg: return False
+                elif op == "$nin" and value in arg: return False
+                elif op == "$regex" and not (isinstance(value, str) and re.search(
+                        arg, value, re.I if "i" in str(cond.get("$options", "")) else 0)): return False
         elif isinstance(value, list) and not isinstance(cond, list):
             if cond not in value:          # Mongo: a scalar matches an array field that contains it
                 return False

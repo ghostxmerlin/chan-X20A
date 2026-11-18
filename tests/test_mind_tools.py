@@ -273,3 +273,47 @@ class PeopleMemoryToolsTest(unittest.TestCase):
         only_wang = self.t["memory_search"]({"query": "咖啡", "person": "小王"})
         self.assertEqual(only_wang["person"], "小王")
         self.assertTrue(all("小王" in x["people"] for x in only_wang["memories"]))
+
+
+class SpeechToolsTest(unittest.TestCase):
+    def setUp(self):
+        self.db = FakeDB()
+        sp = lambda band, name=None, best=None: {"band": band, "name": name, "best": best}
+        rows = [(NOW - 3600_000, "比特币涨了吗", sp("known", "me"), False),
+                (NOW - 3000_000, "我觉得比特币要跌", sp("unsure", None, "me"), False),
+                (NOW - 120_000, "中午吃什么", sp("unknown"), False),
+                (NOW - 60_000, "这个板子还是识别不了", sp("known", "me"), False),
+                (NOW - 50_000, "", sp("known", "me"), False)]
+        for i, (t, text, speaker, sounding) in enumerate(rows):
+            self.db["speech"].insert_one({"session": "s1", "id": f"s-{i}", "t": t, "pos": [i, i + 1], "text": text,
+                                          "speaker": speaker, "self": {"sounding": sounding}})
+        self.db["sounds"].insert_one({"t": NOW - 30_000, "kind": "knock", "label": "敲门", "dur": 1.24, "self": {"sounding": False}})
+        self.db["sounds"].insert_one({"t": NOW - 20_000, "kind": "speech", "label": "说话", "dur": 2.0, "self": {"sounding": True}})
+        self.db["realtime_turns"].insert_one({"at": NOW - 600_000, "state": "done", "heard": "你好", "reply": "在呢"})
+        self.db["realtime_turns"].insert_one({"at": NOW - 500_000, "state": "muted_quiet", "heard": "x", "reply": "嗯"})
+        self.db["chat_turns"].insert_one({"at": NOW - 400_000, "text": "几点了", "reply": "七点半"})
+        self.t = tool_impls.mind_tools(switches=lambda: {}, store=Store(self.db), clock_ms=lambda: NOW)
+
+    def test_speech_search(self):
+        d = self.t["speech_search"]({"query": "比特币"})
+        self.assertEqual([(x["text"], x["who"]) for x in d["lines"]],
+                         [("我觉得比特币要跌", "不确定（像主人）"), ("比特币涨了吗", "主人")])
+        d = self.t["speech_search"]({"who": "主人", "from": "今天"})
+        self.assertEqual([x["text"] for x in d["lines"]], ["这个板子还是识别不了", "比特币涨了吗"])   # known only, no empty text
+        with self.assertRaises(ToolError):
+            self.t["speech_search"]({})
+
+    def test_recent_speech_and_sounds(self):
+        d = self.t["recent_speech"]({"minutes": 5})
+        self.assertEqual([x["text"] for x in d["lines"]], ["中午吃什么", "这个板子还是识别不了"])   # oldest first
+        self.assertEqual(d["lines"][0]["who"], "不认识的声音")
+        s = self.t["recent_sounds"]({"minutes": 5})
+        self.assertEqual(s["events"], [{"time": "19:29", "until": "19:29", "kind": "敲门", "times": 1, "dur_s": 1.2}])
+        for i in range(3):                                                      # a run of typing: one entry
+            self.db["sounds"].insert_one({"t": NOW - 15_000 + i * 2000, "kind": "typing", "label": "键盘打字", "dur": 1.0})
+        s = self.t["recent_sounds"]({"minutes": 5})
+        self.assertEqual((s["events"][-1]["kind"], s["events"][-1]["times"], s["events"][-1]["dur_s"]), ("键盘打字", 3, 3.0))
+
+    def test_hello_said(self):
+        d = self.t["hello_said"]({"from": "1小时前"})
+        self.assertEqual([(x["mode"], x["said"]) for x in d["lines"]], [("对话", "七点半"), ("Docking", "在呢")])
