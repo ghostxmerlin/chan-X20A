@@ -1,0 +1,31 @@
+{
+ "_note": "Docking 的技能（主人 2026-11-18：模型先找技能，再找工具）。第一层只给模型这张目录（open_skill），打开一个技能才把它的工具和用法交给模型。tools 里的名字必须是 config/tools/registry.json 里 live 的工具。guide 是这个技能的用法，打开时交给模型。",
+ "keep_min": 10,
+ "max_open": 3,
+ "skills": [
+  {"id": "look", "title": "看和听", "when": "问谁在、看到了什么、刚才听到什么声音或谁说了什么",
+   "tools": ["who_is_here", "look_now", "scene_now", "recent_speech", "recent_sounds"],
+   "guide": "先用已经有的（谁在、此刻的情景），看不清再 look_now 拍一张。回答说你看到的、听到的，认得的人叫名字，不确定就说不确定。"},
+  {"id": "recall", "title": "回忆", "when": "问以前、昨天、上次聊过什么，某人说过什么，记得什么，某个人是谁",
+   "tools": ["memory_search", "semantic_search", "knowledge_search", "notes_search", "review_period", "speech_search", "hello_said", "person_lookup", "people_list"],
+   "guide": "关键词明确用 memory_search / speech_search，说不清用 semantic_search，按时间问用 review_period。带上大概时间回答；查不到就说不记得，不要编。标了只对主人讲的，旁边有别人时不说细节。"},
+  {"id": "world", "title": "查外面", "when": "问价格、汇率、天气、新闻、外面的事实，或者要深入研究一个问题",
+   "tools": ["live_data", "web_search", "deep_research", "research_status"],
+   "guide": "币价、汇率、天气先用 live_data，别的用 web_search。先给结论，带上数字、时间和来源。要花很久的大问题才用 deep_research（会先变成待确认），告诉对方做完会说。"},
+  {"id": "daily", "title": "日常", "when": "要提醒、记日程、帮忙盯着有人来或某种声音，或者查、取消这些",
+   "tools": ["reminder_set", "reminder_list", "reminder_cancel", "schedule_add", "schedule_list", "watch_start", "watch_list", "watch_stop"],
+   "guide": "设好后用一句话复述时间和内容（比如「好，8点提醒你带伞」）。时间用对方的原话（10分钟后、明天早上8点）。取消前确认是哪一条。"},
+  {"id": "body", "title": "身体", "when": "要转头、看过来、转过去、点头、摇头、做表情、在屏幕上出字、放声音、调音量、问身体状态",
+   "tools": ["turn_head", "face_front", "turn_around", "tracking", "nod", "shake_head", "express_eyes", "show_word", "play_clip", "set_volume", "robot_status"],
+   "guide": "动完不用解释动作本身，最多一句话。同一个动作不要连着做。音量按对方说的调一档（step 10）。"},
+  {"id": "manner", "title": "说话方式", "when": "让你说详细点、简单点、先安静、别插话、扮演一个角色、恢复原样",
+   "tools": ["set_length", "set_quiet", "set_role"],
+   "guide": "照着设，然后用很短的一句话确认（比如「好，我先不说话了」）；安静模式设完就不再说话。"},
+  {"id": "self", "title": "解释自己", "when": "问你为什么没回答、刚才为什么那么说、你能做什么、开关和花费",
+   "tools": ["why_last_turn", "capabilities", "switches_status", "mode_status", "cost_today"],
+   "guide": "照查到的说原因，不编；能做的挑三五样相关的说，不念清单。"},
+  {"id": "note", "title": "记下来", "when": "要你记住一件事、记住某人的喜好习惯、或者提议开关某个功能",
+   "tools": ["memory_propose", "person_note_propose", "switch_propose"],
+   "guide": "主人以外的人让你记、或你自己想记，会先变成待确认，告诉对方「我先记下，等主人确认」。"}
+ ]
+}

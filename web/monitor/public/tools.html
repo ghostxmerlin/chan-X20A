@@ -25,7 +25,10 @@
 <section class="try-panel" aria-live="polite">
   <h2>千问用工具</h2>
   <p class="small">打开后，Docking 里的千问可以自己调用上面「已接入」的工具（查东西、看一眼、设提醒…），调用时先说「我查查」垫着；C 级的只会变成「待确认」。下一次 Docking 会话开始时生效。</p>
-  <label><input type="checkbox" id="rt-tools"> 让千问直接调用工具</label> <span id="rt-tools-state" class="small"></span>
+  <label for="rt-tools">千问用工具：</label>
+  <select id="rt-tools"><option value="off">关</option><option value="all">全部工具（每轮多约 5600 token）</option>
+    <option value="skills">技能（先找技能再找工具，每轮多约 300 token）</option></select>
+  <span id="rt-tools-state" class="small"></span>
 </section>
 <section id="proposals" class="try-panel" aria-live="polite">
   <h2>待确认</h2>

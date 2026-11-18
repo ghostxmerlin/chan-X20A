@@ -82,14 +82,17 @@ async function rtTools() {
   try {
     const r = await fetch('/api/mind/switches', { cache: 'no-store' });
     const sw = r.ok ? await r.json() : {};
-    box.checked = !!(sw.realtime_tools && sw.realtime_tools.on);
+    const t = sw.realtime_tools || {};
+    box.value = t.on ? (t.mode === 'skills' ? 'skills' : 'all') : 'off';
   } catch { st.textContent = '读不到开关'; }
+  let last = box.value;
   box.addEventListener('change', async () => {
     st.textContent = '保存中…';
+    const v = box.value;
     const r = await fetch('/api/mind/switches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'realtime_tools', on: box.checked }) });
-    st.textContent = r.ok ? (box.checked ? '已打开（下次会话生效）' : '已关') : `没成功：${r.status}`;
-    if (!r.ok) box.checked = !box.checked;
+      body: JSON.stringify(v === 'off' ? { name: 'realtime_tools', on: false } : { name: 'realtime_tools', on: true, mode: v }) });
+    if (r.ok) { st.textContent = v === 'off' ? '已关' : '已改（下次 Docking 会话生效）'; last = v; }
+    else { st.textContent = `没成功：${r.status}`; box.value = last; }
   });
 }
 

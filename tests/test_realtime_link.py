@@ -834,6 +834,55 @@ class LengthTest(HubBase):
         self.assertIn("眼前有 3 个人", self.hub._length_line())
 
 
+class SkillModeTest(HubBase):
+    """Owner 2026-11-18: the model finds a skill first, then its tools (5668 vs ~300 input tokens a turn, measured)."""
+    async def test_open_skill_then_its_tool(self):
+        calls = []
+
+        def call(method, path, body=None, timeout=5):
+            calls.append((path, body))
+            if path == "/tools":
+                return 200, {"tools": [{"type": "function", "function": {"name": n, "description": n, "parameters": {"type": "object", "properties": {}}}}
+                                       for n in ("live_data", "web_search", "nod", "reminder_set")]}
+            if path == "/tool/call":
+                return 200, {"ok": True, "data": {"usd": 64143}, "error": None}
+            return 200, json.loads(json.dumps(CTX))
+        self.hub.call = call
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch = sw
+        self.hub.tools_mode_fn = lambda: "skills"
+        self.hub.search_fillers = [("我查查哈", b"\x00\x00" * 2400)]
+        ws = await self.open_ready()
+        first = [m for m in ws.sent if m["type"] == "session.update"][0]["session"]["tools"]
+        self.assertEqual([t["name"] for t in first], ["open_skill"])
+        self.assertIn("world=查外面", first[0]["description"])
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": "r1", "call_id": "c1",
+                 "name": "open_skill", "arguments": '{"skill": "world"}'})
+        ws.push({"type": "response.done", "response": {"id": "r1"}})
+        await settle(30)
+        upd = [m for m in ws.sent if m["type"] == "session.update" and "tools" in m["session"]][-1]["session"]["tools"]
+        self.assertEqual([t["name"] for t in upd], ["open_skill", "live_data", "web_search"])
+        out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
+        self.assertIn("来源", json.loads(out[-1]["item"]["output"])["data"]["guide"])
+        self.assertNotIn("/tool/call", [p for p, _ in calls])                       # opening is local
+        ws.push({"type": "response.created", "response": {"id": "r2"}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": "r2", "call_id": "c2",
+                 "name": "live_data", "arguments": '{"kind": "price"}'})
+        ws.push({"type": "response.done", "response": {"id": "r2"}})
+        await settle(30)
+        self.assertEqual([b["name"] for p, b in calls if p == "/tool/call"], ["live_data"])
+        self.assertEqual(self.hub.stats["search_fillers"], 1)                       # one 我查查 for the chain
+        ws.push({"type": "response.created", "response": {"id": "r3"}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": "r3", "call_id": "c3",
+                 "name": "nod", "arguments": "{}"})                                  # body not opened: refused
+        ws.push({"type": "response.done", "response": {"id": "r3"}})
+        await settle(30)
+        out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
+        self.assertEqual(json.loads(out[-1]["item"]["output"])["error"]["code"], "not_available")
+
+
 class VoiceTest(HubBase):
     async def test_set_voice_reopens_with_the_voice_and_persona(self):
         ws = await self.open_ready()

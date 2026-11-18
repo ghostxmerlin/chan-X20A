@@ -249,7 +249,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         out["mouth"] = {"mode": mouth_mode(), "at": (db["switches"].find_one({"_id": "mouth"}) or {}).get("at")}
         for name in TOGGLES:                           # free flags (no status, not paid)
             sw = db["switches"].find_one({"_id": name}) or {}
-            out[name] = {"on": sw.get("on") is True, "at": sw.get("at")}
+            out[name] = {"on": sw.get("on") is True, "at": sw.get("at"), "mode": sw.get("mode") or "all"}
         if ctx.get("mode_store"):
             last = db["mode_log"].find_one({"input": "billing", "device": None, "code": "ok"}, sort=[("at", -1)]) or {}
             out["billing"] = {"on": ctx["mode_store"].billing(), "at": last.get("at")}
@@ -929,8 +929,12 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == "/switches" and body.get("name") in TOGGLES:
             if not isinstance(body.get("on"), bool):
                 raise BadRequest("on (true/false) required")
+            mode = body.get("mode")
+            if mode is not None and mode not in ("all", "skills"):
+                raise BadRequest("mode: all / skills")
             with runlog.switch(body["name"], runlog.read_switch(db, body["name"]), body["on"], "page"):
-                db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page"}}, upsert=True)
+                db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page",
+                                                                          **({"mode": mode} if mode else {})}}, upsert=True)
             return switches()
         if path == "/switches":
             if body.get("name") not in SWITCHES or not isinstance(body.get("on"), bool):

@@ -566,6 +566,35 @@ TOOL_TIMEOUT_S = 30.0
 TOOL_OUTPUT_CHARS = 3000
 
 
+SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
+SKILL_DEPTH = 5                                        # skills mode: open_skill + its tool calls for one sentence
+
+
+SKILLS_REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config", "skills", "skills.json")
+
+
+def load_skills(path=None):
+    """config/skills/skills.json (the ear's deploy copies it next to this file; the repository copy otherwise) -> dict,
+    or {} when missing."""
+    for p in ([path] if path else [SKILLS_FILE, SKILLS_REPO]):
+        try:
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d.get("skills"), list) else {}
+        except (OSError, ValueError, AttributeError):
+            continue
+    return {}
+
+
+def open_skill_spec(skills):
+    """The one tool of the first layer (owner 2026-11-18: the model finds a skill first, then its tools)."""
+    ids = [s["id"] for s in skills]
+    menu = "；".join(f"{s['id']}={s['title']}（{s['when']}）" for s in skills)
+    return {"type": "function", "name": "open_skill",
+            "description": f"要用工具时先打开对应的技能，拿到它的工具和用法，再调用那些工具。闲聊不用打开。技能：{menu}",
+            "parameters": {"type": "object", "properties": {"skill": {"type": "string", "enum": ids}}, "required": ["skill"]}}
+
+
 def realtime_tools(mind_tools):
     """mind's function list ({type: function, function: {name, description, parameters}}) -> the realtime format."""
     out = []
@@ -941,6 +970,13 @@ class RealtimeHub:
         self.screen_word = None                        # fn(text, hold_s): a word under the eyes (robot command line)
         self.voice_key = None
         self._tool_specs = []                          # this session's tools (realtime format)
+        self.tools_mode_fn = lambda: "all"             # 千问用工具: "all" (every live tool) / "skills" (open_skill first)
+        self._tools_mode = "all"
+        self._all_specs = {}                           # skills mode: name -> spec of every live tool
+        self._skills = {}                              # skills mode: id -> skill (skills.json)
+        self._skill_cfg = {}
+        self._open_skills = {}                         # skills mode: id -> opened at (clock)
+        self._filler_traces = collections.deque(maxlen=16)
         self._next_depth = 0
         self._tool_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="rt-tool")
         self.fillers = list(fillers or [])             # [(text, pcm 24 kHz)]: "我看看哈" while waiting (load_fillers)
@@ -1607,14 +1643,54 @@ class RealtimeHub:
     async def _load_tools(self):
         loop = asyncio.get_running_loop()
         try:
+            self._tools_mode = await loop.run_in_executor(self._tool_pool, self.tools_mode_fn)
+        except Exception:                              # noqa: BLE001
+            self._tools_mode = "all"
+        try:
             status, body = await asyncio.wait_for(loop.run_in_executor(self._pool, self.call, "GET", "/tools", None,
                                                                        self.cfg.context_timeout_s),
                                                   self.cfg.context_timeout_s + 0.5)
         except Exception:                              # noqa: BLE001 - no tools this session
             return []
         specs = realtime_tools((body or {}).get("tools")) if status == 200 and isinstance(body, dict) else []
+        if self._tools_mode == "skills":
+            cfg = load_skills()
+            self._all_specs = {t["name"]: t for t in specs}
+            self._skills = {sk["id"]: sk for sk in cfg.get("skills", []) if any(n in self._all_specs for n in sk.get("tools", []))}
+            self._skill_cfg, self._open_skills = cfg, {}
+            if self._skills:
+                log(f"realtime: session skills: {len(self._skills)} (of {len(specs)} tools)", flush=True)
+                return [open_skill_spec(list(self._skills.values()))]
         log(f"realtime: session tools: {len(specs)}", flush=True)
         return specs
+
+    def _open_skill(self, sid, now):
+        """Open a skill: its tools join the session (session.update), kept keep_min, at most max_open at once."""
+        sk = self._skills.get(sid)
+        if sk is None:
+            return {"ok": False, "error": {"code": "bad_args", "message": f"没有 {str(sid)[:20]} 这个技能"}}
+        keep = float(self._skill_cfg.get("keep_min") or 10) * 60
+        self._open_skills = {k: at for k, at in self._open_skills.items() if now - at < keep}
+        self._open_skills[sid] = now
+        cap = int(self._skill_cfg.get("max_open") or 3)
+        for k in sorted(self._open_skills, key=self._open_skills.get)[:-cap]:
+            del self._open_skills[k]
+        names = []
+        for k in self._open_skills:
+            names += [n for n in self._skills[k].get("tools", []) if n in self._all_specs and n not in names]
+        self._tool_specs = [open_skill_spec(list(self._skills.values()))] + [self._all_specs[n] for n in names]
+        self._send_soon({"type": "session.update", "session": {"tools": self._tool_specs}})
+        self.stats["skills_opened"] += 1
+        mine = [n for n in sk.get("tools", []) if n in self._all_specs]
+        return {"ok": True, "data": {"skill": sk["title"], "tools": mine, "guide": sk.get("guide") or "",
+                                     "next": "现在直接调用上面的工具来回答"}, "error": None}
+
+    def _filler_in_chain(self, trace):
+        """One "我查查" per sentence: a tool chain (open_skill, then the tool) shares the sentence's trace."""
+        if trace in self._filler_traces:
+            return True
+        self._filler_traces.append(trace)
+        return False
 
     async def _run_tool(self, turn):
         fc = turn["fc"]
@@ -1625,15 +1701,20 @@ class RealtimeHub:
         except ValueError:
             args = None
         self.stats["tool_calls"] += 1
-        if depth == 1 and fc["name"] not in ("set_length", "set_quiet", "set_role", "who_is_here", "switches_status",
-                                             "mode_status", "capabilities"):
+        quick = ("open_skill", "set_length", "set_quiet", "set_role", "who_is_here", "switches_status", "mode_status",
+                 "capabilities")
+        if fc["name"] not in quick and not turn.get("filler_played") and not self._filler_in_chain(trace):
             self._play_filler(self.search_fillers or self.fillers, "search_filler", trace)   # "我查查哈" meanwhile
         t0 = self.clock()
-        if fc["name"] not in {t["name"] for t in self._tool_specs}:     # only what this session was given
+        limit = SKILL_DEPTH if self._tools_mode == "skills" else TOOL_DEPTH
+        if fc["name"] == "open_skill" and self._skills:
+            env = self._open_skill((args or {}).get("skill") if isinstance(args, dict) else None, self.clock()) \
+                if depth <= limit else {"ok": False, "error": {"code": "refused", "message": "先回答吧"}}
+        elif fc["name"] not in {t["name"] for t in self._tool_specs}:     # only what this session was given
             env = {"ok": False, "error": {"code": "not_available", "message": f"没有给你 {fc['name'][:30]} 这个工具"}}
         elif args is None or not isinstance(args, dict):
             env = {"ok": False, "error": {"code": "bad_args", "message": "参数不是合法的 JSON"}}
-        elif depth > TOOL_DEPTH:
+        elif depth > limit:
             env = {"ok": False, "error": {"code": "refused", "message": "这句话已经连着用了好几次工具，先回答吧"}}
         else:
             loop = asyncio.get_running_loop()

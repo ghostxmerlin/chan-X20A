@@ -1198,6 +1198,9 @@ def main():
     tools_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("realtime_tools")) if database else (lambda: None))
     if rt_hub is not None:
         rt_hub.tools_switch = tools_switch
+        # all = every live tool in the session; skills = only open_skill first (owner 2026-11-18), read at session open
+        rt_hub.tools_mode_fn = lambda: ((database.read_switch("realtime_tools") or {}).get("mode") or "all") \
+            if database else "all"
     live_eye = None
     if secrets.get("DASHSCOPE_API_KEY"):
         live_eye = vision_burst.LiveEye(vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]),
