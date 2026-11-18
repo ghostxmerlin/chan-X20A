@@ -938,6 +938,7 @@ class RealtimeHub:
         self.search_fillers = []                       # [(text, pcm)]: "我查查哈" (load_fillers, <voice>-search)
         self.tools_switch = None                       # 千问用工具 (realtime_tools): .on; None = off
         self.persona = None                            # set_voice: the persona that goes with the voice (None = PERSONA)
+        self.screen_word = None                        # fn(text, hold_s): a word under the eyes (robot command line)
         self.voice_key = None
         self._tool_specs = []                          # this session's tools (realtime format)
         self._next_depth = 0
@@ -1065,6 +1066,7 @@ class RealtimeHub:
             ear_log.emit("trigger.quiet", trace=trace or ear_log.new_trace(), by=source, sum="安静结束：被叫醒",
                          extra={"mode": "off", "why": "called"})
             self._write_status(now)
+            self._show_mode_word()
         self._send_until = max(self._send_until, now + CALLED_S)
         if not merged:
             self._stage("listen")
@@ -1533,7 +1535,21 @@ class RealtimeHub:
                                                               **({"heard": str(heard)[:200]} if heard else {})})
         self._refresh_instructions("quiet", trace)
         self._write_status(now)
+        self._show_mode_word()
         return until
+
+    def _show_mode_word(self):
+        """安静中 / 少插话 stay under the eyes while the mode lasts (owner: short words, not states; these two are what
+        hello is doing). Cleared when both are off."""
+        if self.screen_word is None:
+            return
+        now = self.clock()
+        word, until = ("安静中", self._quiet_mode) if self.quiet_on(now) else ("少插话", self._low) if self.low_on(now) \
+            else ("", None)
+        try:
+            self.screen_word(word, int(until - now) if until else 0)
+        except Exception:                              # noqa: BLE001 - the screen is a courtesy
+            pass
 
     def set_role(self, text, minutes=None, trace=None, by="tool"):
         now = self.clock()

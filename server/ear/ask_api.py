@@ -198,13 +198,13 @@ class Asks:
         level = args.get("level") or "quiet"
         hub = self._hub()
         until = hub.set_quiet(level, args.get("minutes"), trace=args.get("_trace"))
-        return {"level": level, "minutes": int((until - hub.clock()) // 60) if until else None,
+        return {"level": level, "minutes": round((until - hub.clock()) / 60) if until else None,
                 "ends": "被叫 hello / Dynames 就结束" if level == "quiet" else "说「可以说话了」或到时间" if level == "low" else None}
 
     async def set_role(self, args):
         hub = self._hub()
         until = hub.set_role(args.get("role") or None, args.get("minutes"), trace=args.get("_trace"))
-        return {"role": args.get("role") or None, "minutes": int((until - hub.clock()) // 60) if until else None}
+        return {"role": args.get("role") or None, "minutes": round((until - hub.clock()) / 60) if until else None}
 
     async def set_voice(self, args):
         hub = self._hub()
@@ -341,7 +341,20 @@ class Asks:
         return await getattr(self, name)(args)
 
 
-FACING = {"front": "正前方", "back": "背对（转过身了）", "unknown": "不确定"}
+FACING = {"front": "前面", "back": "背对（转过身了）", "unknown": "不确定"}
+
+
+def head_direction(facing, yaw):
+    """facing is only front / back (turned round); left / right comes from yaw (negative = left, 2026-11-18 test:
+    left45 -> -42°)."""
+    if facing == "back":
+        return FACING["back"]
+    if not isinstance(yaw, (int, float)):
+        return FACING.get(facing, facing)
+    if abs(yaw) < 12:
+        return "正前方"
+    side = "左" if yaw < 0 else "右"
+    return f"偏{side} {abs(yaw):.0f}°"
 
 
 def status_view(d):
@@ -349,7 +362,7 @@ def status_view(d):
     d = d if isinstance(d, dict) else {}
     num = lambda k: d[k] if isinstance(d.get(k), (int, float)) and not isinstance(d.get(k), bool) else None  # noqa: E731
     out = {"firmware": d.get("fw"), "mode": d.get("mode"), "volume": num("volume"),
-           "yaw": num("yaw"), "pitch": num("pitch"), "facing": FACING.get(d.get("facing"), d.get("facing")),
+           "yaw": num("yaw"), "pitch": num("pitch"), "facing": head_direction(d.get("facing"), num("yaw")),
            "tracking": d.get("tracking"), "motor_on": d.get("motor"), "moving": d.get("moving"),
            "m12_online": d.get("m12"), "camera_on": d.get("camera"), "speaking": d.get("speaking"),
            "battery": num("battery"), "charging": d.get("charging"), "chip_c": num("chip_c"), "lux": num("lux"),

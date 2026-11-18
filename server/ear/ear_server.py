@@ -1214,6 +1214,15 @@ def main():
 
     import ask_api                                 # mind's tools ask the ear (L1 2026-11-18), 127.0.0.1 only
     robots = mouth_link.RobotLinks()               # the robot command line (collector-0.5.10): newest /mouth link
+    if rt_hub is not None:                         # 安静中 / 少插话 under the eyes while the mode lasts
+        def _mode_word(text, hold_s):
+            async def send():
+                try:
+                    await robots.send_cmd("word", {"text": text, "hold_ms": min(max(hold_s, 0), 3600) * 1000}, 5.0)
+                except Exception:                  # noqa: BLE001 - old firmware / no link: no word
+                    pass
+            asyncio.get_running_loop().create_task(send())
+        rt_hub.screen_word = _mode_word
     asks = ask_api.Asks(hub=rt_hub, burst=burst, presence=presence, robot=robots,
                         searcher=rt_hub.searcher if rt_hub is not None and getattr(rt_hub, "searcher", None) else
                         (web_search.dashscope_search(secrets["DASHSCOPE_API_KEY"]) if secrets.get("DASHSCOPE_API_KEY") else None),

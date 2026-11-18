@@ -418,9 +418,16 @@ def main():
     from . import daily as daily_mod, tool_impls as _ti
     _ask = _ti.ear_asker(token, timeout=10)
 
+    def _word(text, hold_s):
+        try:
+            _ask("show_word", {"text": text, "hold_s": hold_s})
+        except Exception:                        # noqa: BLE001 - old firmware / robot away: no word
+            pass
+
     def _daily_say(text):
         try:
             _ask("say", {"text": text})
+            _word("提醒", 6)
             return True
         except Exception:                        # noqa: BLE001 - busy / not in Docking / ear down: try again later
             return False
@@ -433,6 +440,7 @@ def main():
         ans = job.get("answer") or {}
         spoken = ans.get("spoken") if isinstance(ans, dict) else None
         if job.get("state") == "done" and spoken:
+            _word("查好了", 600)                  # under the eyes until it is said (or 10 min)
             daily.announce(f"主人，你让我研究的「{str(job.get('topic'))[:20]}」查好了：{spoken}", by="research")
         else:
             daily.announce(f"主人，「{str(job.get('topic'))[:20]}」没研究出来，原因记在工具页里了。", by="research")

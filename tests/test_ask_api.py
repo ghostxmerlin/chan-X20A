@@ -231,3 +231,11 @@ class VoiceBookTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("【这会儿的语气】急一点", got[0][2])
         with self.assertRaises(ask_api.AskError):
             await asks.set_voice({"voice": "无限"})
+
+
+class HeadDirectionTest(unittest.TestCase):
+    def test_left_right_from_yaw(self):
+        self.assertEqual(ask_api.head_direction("front", -42.1), "偏左 42°")
+        self.assertEqual(ask_api.head_direction("front", 30), "偏右 30°")
+        self.assertEqual(ask_api.head_direction("front", -2.8), "正前方")
+        self.assertEqual(ask_api.head_direction("back", 0), "背对（转过身了）")

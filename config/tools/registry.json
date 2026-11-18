@@ -162,7 +162,7 @@
    "group": "sense",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "被问到电量、温度、亮不亮、头朝哪、音量、相机开没开时用。",
    "parameters": {
     "type": "object",
@@ -970,7 +970,7 @@
    "group": "express",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "配合说的话做一次表情。",
    "parameters": {
     "type": "object",
@@ -1003,7 +1003,7 @@
    "group": "express",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "在眼睛下面显示几个字（2 秒）。",
    "parameters": {
     "type": "object",
@@ -1011,11 +1011,19 @@
      "text": {
       "type": "string",
       "maxLength": 8
+     },
+     "hold_s": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600,
+      "description": "停多久（秒），默认 2；超过 2 秒的字会常驻，被别的提示盖住后再回来"
+     },
+     "clear": {
+      "type": "boolean",
+      "description": "清掉常驻的字（不带 text）"
      }
     },
-    "required": [
-     "text"
-    ]
+    "required": []
    },
    "returns": "accepted",
    "source": "新：服务器→机器人命令线",
@@ -1036,7 +1044,7 @@
    "group": "express",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "放一段本地录好的声音（笑、叹气……）。",
    "parameters": {
     "type": "object",
@@ -1104,7 +1112,7 @@
    "group": "move",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "转向某个方向。",
    "parameters": {
     "type": "object",
@@ -1143,7 +1151,7 @@
    "group": "move",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "把头转回正前方。",
    "parameters": {
     "type": "object",
@@ -1165,7 +1173,7 @@
    "group": "move",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "主人明确要求时转身（或转回来）。",
    "parameters": {
     "type": "object",
@@ -1187,7 +1195,7 @@
    "group": "move",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "开 / 关人脸追踪。",
    "parameters": {
     "type": "object",
@@ -1219,7 +1227,7 @@
    "group": "move",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "点一两下头表示同意。",
    "parameters": {
     "type": "object",
@@ -1249,7 +1257,7 @@
    "group": "move",
    "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "摇一两下头表示不同意。",
    "parameters": {
     "type": "object",
@@ -1779,9 +1787,9 @@
    "name": "set_volume",
    "title": "调音量",
    "group": "settings",
-   "level": "C",
+   "level": "A",
    "runs_on": "robot",
-   "status": "new",
+   "status": "live",
    "description": "主人要调大调小时用（现在的写法会存 NVS，所以先按 C 级）。",
    "parameters": {
     "type": "object",
@@ -1805,7 +1813,7 @@
    "needs": [
     "机器人在线"
    ],
-   "notes": "现在的写法会存 NVS：主人亲口要求即执行，否则生成提议；加了不存版后降到 A",
+   "notes": "0.5.10 起不存 NVS（重启回到原音量），所以是 A 级；频率上限 10 秒 2 次",
    "example": {
     "step": 10
    }
