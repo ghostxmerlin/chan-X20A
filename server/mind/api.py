@@ -297,6 +297,9 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         | (daily_tools(ctx["daily"]) if ctx.get("daily") else {}),
         proposals=proposals, describe=tool_impls.DESCRIBE)
 
+    if ctx.get("chat") is not None and getattr(ctx["chat"], "tools", "x") is None:
+        ctx["chat"].tools = tools                   # 模型用工具: chat mode's model may call tools too
+
     def note_owner(path, body, reply):
         """After a POST went through: tell the pause about an explicit owner input (never raises)."""
         pc = ctx.get("pause")

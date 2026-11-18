@@ -22,7 +22,7 @@ from .runlog import hello_log
 
 CODES = ("bad_args", "not_available", "switch_off", "paused", "budget", "robot_offline", "timeout", "refused",
          "failed")
-MODEL_CALLERS = ("qwen",)                         # callers that are models (security review 2026-11-18)
+MODEL_CALLERS = ("qwen", "chat")                         # callers that are models (security review 2026-11-18)
 _HERE = Path(__file__).resolve()
 REGISTRY_PATHS = (_HERE.parents[1] / "tools" / "registry.json",                # deployed: ~/soul-mind/tools/
                   _HERE.parents[2] / "config" / "tools" / "registry.json")     # repository: config/tools/

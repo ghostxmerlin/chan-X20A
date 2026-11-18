@@ -1005,3 +1005,38 @@ class ThreadedTest(ChatBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ChatToolsTest(ChatBase):
+    """模型用工具 (owner 2026-11-18): chat mode's model calls tools through Tools.call (caller chat)."""
+    def test_tool_round_then_answer(self):
+        from mind.tools import Tools
+        reg = {"tools": [{"name": "live_data", "title": "实时数据", "level": "R", "status": "live", "description": "币价",
+                          "parameters": {"type": "object", "properties": {"kind": {"type": "string"}}}},
+                         {"name": "say", "title": "说", "level": "A", "status": "live", "description": "x",
+                          "parameters": {"type": "object", "properties": {}}}]}
+        ran = []
+        self.chat.tools = Tools(reg, {"live_data": lambda a: (ran.append(a), {"usd": 64143})[1], "say": lambda a: {}},
+                                log=lambda *a, **k: None)
+        replies = iter([{"choices": [{"message": {"content": None, "tool_calls": [
+                            {"id": "c1", "type": "function", "function": {"name": "live_data", "arguments": '{"kind": "price"}'}}]}}],
+                         "usage": {}},
+                        {"choices": [{"message": {"content": "比特币六万四千多美元。"}}], "usage": {}}])
+        bodies = []
+        self.chat.chat_fn = lambda base, key, body, timeout=90: (bodies.append(copy.deepcopy(body)), (next(replies), 300, None))[1]
+        self.db["switches"].update_one({"_id": "realtime_tools"}, {"$set": {"on": True}}, upsert=True)
+        self.chat.heard(heard(text="比特币现在多少钱"))
+        self.mono[0] += 0.2
+        out = self.chat.process_once()
+        self.assertEqual(out["reply"], "比特币六万四千多美元。")
+        self.assertEqual(ran, [{"kind": "price"}])
+        self.assertEqual([t["function"]["name"] for t in bodies[0]["tools"]], ["live_data"])   # say is hello's own
+        self.assertEqual(bodies[1]["messages"][-1]["role"], "tool")
+
+    def test_switch_off_no_tools(self):
+        from mind.tools import Tools
+        self.chat.tools = Tools({"tools": []}, {})
+        self.chat.heard(heard())
+        self.mono[0] += 0.2
+        self.chat.process_once()
+        self.assertNotIn("tools", self.model.bodies[-1])
