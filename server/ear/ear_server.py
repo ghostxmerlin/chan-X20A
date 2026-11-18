@@ -716,7 +716,7 @@ class Ear:
             self.presence.heard(ev)    # a known voice (owner / family) = someone is here; before 围观 sees the words
         if self.realtime is not None and self.device_profile and text:
             try:                       # 围观: the ear's own words for the 「嗯」 rescue, burst words and 闭嘴
-                self.realtime.local_heard(text, trace=ev.get("trace"))
+                self.realtime.local_heard(text, trace=ev.get("trace"), speaker=sp)
             except Exception as error:     # noqa: BLE001 - never costs a sentence
                 print(f"realtime: local heard failed: {type(error).__name__}", flush=True)
         if self.chat is not None and self.device_profile and text:

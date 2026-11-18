@@ -115,7 +115,7 @@ HEARD_KEEP = 8                                      # candidates come from the l
 # old (against now). An onset the server VAD never turned into a segment (noise) must not stretch a later segment's
 # window back or collect later sentences' consequences; a cold open slower than this loses its opening sentence.
 COLD_MAX_S = 5.0
-GATE_REASONS = {"tool_gated": "闲聊里想用工具，挡回去了（没执行、没放垫话）", "play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
+GATE_REASONS = {"body_gated": "不认识的人叫它动，没动", "tool_gated": "闲聊里想用工具，挡回去了（没执行、没放垫话）", "play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
                 "unclear": "a didn't-hear question", "repeat": "word for word a recent reply",
                 "blind": "看不清 without a fresh look", "wait_look": "a look question: the answer comes from the next photo",
                 "wait_search": "a search question (查一下 / 新闻 …): the answer comes from the ear's own web search",
@@ -569,7 +569,9 @@ TOOL_OUTPUT_CHARS = 3000
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
 SKILL_DEPTH = 5                                        # skills mode: open_skill + its tool calls for one sentence
 PRELOAD_KEEP_S = 120.0
-TOOL_GATE_TEXT_S = 8.0                                 # the ear's own ASR texts this recent count for the tool gate                                 # auto: a skill preloaded for a sentence, never used, goes after this
+TOOL_GATE_TEXT_S = 8.0
+BODY_TOOLS = frozenset(("turn_head", "face_front", "turn_around", "tracking", "nod", "shake_head", "express_eyes",
+                        "show_word", "play_clip", "set_volume"))      # move / express (robot_status only reads)                                 # the ear's own ASR texts this recent count for the tool gate                                 # auto: a skill preloaded for a sentence, never used, goes after this
 
 
 SKILLS_REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config", "skills", "skills.json")
@@ -577,14 +579,24 @@ SKILLS_REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..
 
 def load_skills(path=None):
     """config/skills/skills.json (the ear's deploy copies it next to this file; the repository copy otherwise) -> dict,
-    or {} when missing."""
+    or {} when missing. A skill's full text (config/skills/skills/<id>.md, owner 2026-11-18: a skill is complete -
+    when, steps, how to call each tool, the answer, examples) replaces its short guide when the file is there."""
     for p in ([path] if path else [SKILLS_FILE, SKILLS_REPO]):
         try:
             with open(p, encoding="utf-8") as f:
                 d = json.load(f)
-            return d if isinstance(d.get("skills"), list) else {}
         except (OSError, ValueError, AttributeError):
             continue
+        if not isinstance(d.get("skills"), list):
+            return {}
+        folder = os.path.join(os.path.dirname(p), "skills")
+        for sk in d["skills"]:
+            try:
+                with open(os.path.join(folder, f"{sk['id']}.md"), encoding="utf-8") as f:
+                    sk["guide"] = f.read().strip()[:4000]
+            except (OSError, KeyError):
+                pass
+        return d
     return {}
 
 
@@ -597,12 +609,15 @@ def open_skill_spec(skills):
             "parameters": {"type": "object", "properties": {"skill": {"type": "string", "enum": ids}}, "required": ["skill"]}}
 
 
-def realtime_tools(mind_tools):
+SKILL_TOOL_SKIP = frozenset(("say", "stop_speaking", "db_query"))   # inside a skill set_voice (a proposal) is fine
+
+
+def realtime_tools(mind_tools, skip=TOOL_SKIP):
     """mind's function list ({type: function, function: {name, description, parameters}}) -> the realtime format."""
     out = []
     for t in mind_tools or []:
         f = t.get("function") or {}
-        if f.get("name") and f["name"] not in TOOL_SKIP:
+        if f.get("name") and f["name"] not in skip:
             out.append({"type": "function", "name": f["name"], "description": f.get("description") or "",
                         "parameters": f.get("parameters") or {"type": "object", "properties": {}}})
     return out
@@ -980,6 +995,7 @@ class RealtimeHub:
         self._open_skills = {}                         # skills mode: id -> opened at (clock)
         self._filler_traces = collections.deque(maxlen=16)
         self._tool_ok_traces = collections.deque(maxlen=16)   # sentences whose tool calls passed the tool gate
+        self._speakers = collections.deque(maxlen=16)  # (at, band, voice name) of the ear's recent sentences
         self.intent = None                             # intent.Auto (自动档): decides before the model answers
         self._preloaded = {}                           # auto: skill id -> preloaded at (clock), not used yet
         self._next_depth = 0
@@ -1666,10 +1682,11 @@ class RealtimeHub:
                                                   self.cfg.context_timeout_s + 0.5)
         except Exception:                              # noqa: BLE001 - no tools this session
             return []
-        specs = realtime_tools((body or {}).get("tools")) if status == 200 and isinstance(body, dict) else []
+        ok = status == 200 and isinstance(body, dict)
+        specs = realtime_tools((body or {}).get("tools")) if ok else []
         if self._tools_mode in ("skills", "auto"):
             cfg = load_skills()
-            self._all_specs = {t["name"]: t for t in specs}
+            self._all_specs = {t["name"]: t for t in (realtime_tools(body.get("tools"), SKILL_TOOL_SKIP) if ok else [])}
             self._skills = {sk["id"]: sk for sk in cfg.get("skills", []) if any(n in self._all_specs for n in sk.get("tools", []))}
             self._skill_cfg, self._open_skills = cfg, {}
             if self._skills:
@@ -1718,7 +1735,9 @@ class RealtimeHub:
             d = self.intent.decide(text)
         except Exception:                              # noqa: BLE001 - no preload, the directory still works
             return None
-        new = [sid for sid in d.get("skills") or [] if sid in self._skills and sid not in self._open_skills]
+        groups = d.get("skills") or []                 # the classifier's classes = skill groups (skills.json group)
+        new = [sid for g in groups for sid, sk in self._skills.items()
+               if (sk.get("group") or sid) == g and sid not in self._open_skills]
         self.stats["intent_checked"] += 1
         if new:
             self.stats["intent_preloaded"] += 1
@@ -1745,6 +1764,32 @@ class RealtimeHub:
         mine = [n for n in sk.get("tools", []) if n in self._all_specs]
         return {"ok": True, "data": {"skill": sk["title"], "tools": mine, "guide": sk.get("guide") or "",
                                      "next": "现在直接调用上面的工具来回答"}, "error": None}
+
+    def _speaker_now(self, now):
+        """The voiceprint of the newest sentence the ear heard in the last TOOL_GATE_TEXT_S, or (None, None)."""
+        for at, band, name in reversed(self._speakers):
+            if now - at <= TOOL_GATE_TEXT_S:
+                return band, name
+        return None, None
+
+    def owner_in_person(self, now=None):
+        """Owner 2026-11-18 "亲口算本人": the sentence was in the owner's own voice (voiceprint band known, one of the
+        owner's voice names) -> a C tool runs at once."""
+        band, name = self._speaker_now(self.clock() if now is None else now)
+        owner = self.ctx.get("owner") or {}
+        return band == "known" and bool(name) and name in (owner.get("voice_names") or [])
+
+    def known_person(self, now=None):
+        """Owner 2026-11-18 "身体可以只是认识的人才响应，认人策略可以考虑多种": a known voice (any enrolled voiceprint:
+        owner, family) on the newest sentence, or a face M12 named in view right now."""
+        now = self.clock() if now is None else now
+        band, _ = self._speaker_now(now)
+        if band == "known":
+            return True
+        try:
+            return any(f.get("name") for f in self.watch.recent(now))
+        except Exception:                              # noqa: BLE001
+            return False
 
     def _tool_allowed(self, turn, trace):
         """The tool gate: True for a call window, a chain already allowed (same trace), or a sentence the classifier
@@ -1790,6 +1835,18 @@ class RealtimeHub:
         # a chain already let through. Otherwise the call goes back quietly and the model answers as in chat (its
         # reply then passes the 嗯 gate like any speech turn).
         given = fc["name"] == "open_skill" or fc["name"] in {t["name"] for t in self._tool_specs}
+        if given and fc["name"] in BODY_TOOLS and not self.known_person():
+            # owner 2026-11-18: the body moves only for people hello knows (voice or face)
+            self.stats["body_gated"] += 1
+            self._log_gate(turn.get("rid"), turn, "body_gated", True, tool=fc["name"])
+            if self._ws is not None and self._ready.is_set():
+                self._next_kind, self._next_trace, self._next_prompt, self._next_depth = "tool_refused", trace, None, depth
+                self._send_soon({"type": "conversation.item.create", "item": {
+                    "type": "function_call_output", "call_id": fc["call_id"],
+                    "output": json.dumps({"ok": False, "error": {"code": "refused", "message":
+                        "只有认识的人叫我动我才动：不做这个动作，可以友好地说一句还不认识他。"}}, ensure_ascii=False)}})
+                self._send_soon({"type": "response.create"})
+            return
         if given and fc["name"] != "open_skill" and not self._tool_allowed(turn, trace):
             self.stats["tool_gated"] += 1
             self._log_gate(turn.get("rid"), turn, "tool_gated", True, tool=fc["name"])
@@ -1824,7 +1881,8 @@ class RealtimeHub:
             try:
                 status, body = await asyncio.wait_for(loop.run_in_executor(
                     self._tool_pool, self.call, "POST", "/tool/call",
-                    {"name": fc["name"], "args": args, "trace": trace, "caller": "qwen"}, TOOL_TIMEOUT_S),
+                    {"name": fc["name"], "args": args, "trace": trace, "caller": "qwen",
+                     "owner": self.owner_in_person()}, TOOL_TIMEOUT_S),
                     TOOL_TIMEOUT_S + 1)
                 env = body if status == 200 and isinstance(body, dict) else \
                     {"ok": False, "error": {"code": "failed", "message": f"工具服务回了 {status}"}}
@@ -2587,7 +2645,7 @@ class RealtimeHub:
                      extra={"source": "usage" if ear_log.search_count(usage) else "events", "events": events})
 
     # ---- what was heard: the session's transcript and the ear's own ASR ----
-    def local_heard(self, text, trace=None):
+    def local_heard(self, text, trace=None, speaker=None):
         """Ear: a sentence of its own ASR (SenseVoice) at the speech end, on the event loop. Live, the session's own
         transcript was often missing; this one feeds the 「嗯」 rescue, the burst words and 闭嘴 too. Not in the console
         log. trace: its heard.asr trace (run log): listed in extra.heard of the turn whose window it falls into (R17); what it
@@ -2596,6 +2654,8 @@ class RealtimeHub:
             return
         now = self.clock()
         self._local_texts.append((now, str(text)[:300]))
+        if isinstance(speaker, dict):                  # who said it (the ear's voiceprint): 亲口 / 认识的人
+            self._speakers.append((now, speaker.get("band"), speaker.get("name")))
         self._heard_log.append((now, {"trace": trace, "text": str(text)[:300], "at": self.wall_ms()}))
         self._preload(str(text)[:300], now, trace=self._trace_now(trace))   # 自动档: before _heard_text's gates
         self._heard_text(str(text)[:300], now, trace=self._trace_now(trace))

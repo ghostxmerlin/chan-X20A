@@ -68,7 +68,7 @@ class ContextTest(Base):
                      '看到的人（M12 认出）：客人小王、主人（阿大）', '画面：主人桌前笑。', '认识的人：客人小王（喜欢猫）。不要调侃他。'):
             self.assertIn(want, t)
         self.assertNotIn('同事甲', t)
-        self.assertEqual(b['owner'], {'face_names': ['boss_face'], 'call': '阿大'})
+        self.assertEqual(b['owner'], {'face_names': ['boss_face'], 'call': '阿大', 'voice_names': ['me']})   # 亲口算本人
         self.assertEqual(b['names'], {'colleague_face': '同事甲', 'guest_face': '客人小王'})
         self.assertLessEqual(len(t), rt.MAX_CHARS)
 

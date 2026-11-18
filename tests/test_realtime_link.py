@@ -890,6 +890,46 @@ class ToolGateTest(HubBase):
         self.assertIn("/tool/call", self.calls)
 
 
+class OwnerAndBodyTest(HubBase):
+    """Owner 2026-11-18: 亲口算本人 (owner's voice -> owner: true); the body only for people hello knows."""
+    async def test_owner_flag_and_body_gate(self):
+        posted = []
+
+        def call(method, path, body=None, timeout=5):
+            if path == "/tools":
+                return 200, {"tools": [{"type": "function", "function": {"name": n, "description": n, "parameters": {"type": "object", "properties": {}}}}
+                                       for n in ("nod", "switch_propose")]}
+            if path == "/tool/call":
+                posted.append(body)
+                return 200, {"ok": True, "data": {}, "error": None}
+            return 200, {**json.loads(json.dumps(CTX)), "owner": {"face_names": ["me"], "call": "主人", "voice_names": ["me01v"]}}
+        self.hub.call = call
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch = sw
+        ws = await self.open_ready()
+        self.hub.local_heard("点点头", speaker={"band": "unknown", "name": None})
+        self.push_fc(ws, "r1", "nod")
+        await settle(30)
+        self.assertEqual(posted, [])                                                    # a stranger: no nod
+        self.assertEqual(self.hub.stats["body_gated"], 1)
+        self.t[0] += 10
+        self.hub.local_heard("帮我把听悟打开", speaker={"band": "known", "name": "me01v"})
+        self.hub.called("asr")
+        self.push_fc(ws, "r2", "switch_propose")
+        await settle(30)
+        self.assertEqual((posted[-1]["name"], posted[-1]["owner"]), ("switch_propose", True))  # 亲口 = in person
+        self.push_fc(ws, "r3", "nod")
+        await settle(30)
+        self.assertEqual(posted[-1]["name"], "nod")                                     # a known voice: it nods
+
+    def push_fc(self, ws, rid, name):
+        ws.push({"type": "response.created", "response": {"id": rid}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": rid, "call_id": "c" + rid,
+                 "name": name, "arguments": "{}"})
+        ws.push({"type": "response.done", "response": {"id": rid}})
+
+
 class SkillModeTest(HubBase):
     """Owner 2026-11-18: the model finds a skill first, then its tools (5668 vs ~300 input tokens a turn, measured)."""
     async def test_open_skill_then_its_tool(self):
@@ -913,10 +953,10 @@ class SkillModeTest(HubBase):
         self.hub.local_heard("比特币现在多少钱")                                          # a sentence that earns tools
         first = [m for m in ws.sent if m["type"] == "session.update"][0]["session"]["tools"]
         self.assertEqual([t["name"] for t in first], ["open_skill"])
-        self.assertIn("world=查外面", first[0]["description"])
+        self.assertIn("realtime=实时数据", first[0]["description"])
         ws.push({"type": "response.created", "response": {"id": "r1"}})
         ws.push({"type": "response.function_call_arguments.done", "response_id": "r1", "call_id": "c1",
-                 "name": "open_skill", "arguments": '{"skill": "world"}'})
+                 "name": "open_skill", "arguments": '{"skill": "realtime"}'})
         ws.push({"type": "response.done", "response": {"id": "r1"}})
         await settle(30)
         upd = [m for m in ws.sent if m["type"] == "session.update" and "tools" in m["session"]][-1]["session"]["tools"]
@@ -994,7 +1034,7 @@ class ToolCallTest(HubBase):
         ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed"}})
         await settle(30)
         self.assertIn(("POST", "/tool/call", {"name": "live_data", "args": {"kind": "price", "symbol": "BTC"},
-                                              "trace": calls[-1][2]["trace"], "caller": "qwen"}), calls)
+                                              "trace": calls[-1][2]["trace"], "caller": "qwen", "owner": False}), calls)
         out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
         self.assertEqual((out[0]["item"]["call_id"], json.loads(out[0]["item"]["output"])["data"]), ("c1", {"usd": 64143}))
         self.assertEqual(ws.sent[-1]["type"], "response.create")
@@ -1968,7 +2008,7 @@ class AutoModeTest(HubBase):
         await settle(5)
         upd = [m for m in ws.sent if m["type"] == "session.update" and "tools" in m["session"]][-1]["session"]["tools"]
         self.assertEqual([t["name"] for t in upd], ["open_skill", "live_data", "web_search"])
-        self.assertIn("world", self.hub._preloaded)
+        self.assertEqual(set(self.hub._preloaded), {"realtime", "verify"})          # the world group's skills
         self.t[0] += self.rl.PRELOAD_KEEP_S + 1                                 # never used: it goes again
         self.hub.step()
         await settle(5)

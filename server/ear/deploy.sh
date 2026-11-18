@@ -40,8 +40,11 @@ rsync -aic -e "$SSH" "$PERSONA" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/persona.md"
 rsync -aic -e "$SSH" "$(dirname "$PERSONA")/" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/personas/"   # every persona + voices.json (set_voice, 2026-11-18)
 rsync -aic -e "$SSH" "$HERE/../../config/skills/skills.json" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/skills.json"   # Docking skills (2026-11-18)
 rsync -aic -e "$SSH" "$HERE/../../config/skills/examples.json" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/skill_examples.json"
+rsync -aic --delete -e "$SSH" "$HERE/../../config/skills/skills/" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/skills/"   # each skill's full text
 $SSH "$SOUL_SERVER_SSH" "mkdir -p $SOUL_SERVER_DIR/intent-tools"   # (relative = from the home directory)
 rsync -aic -e "$SSH" "$HERE/../../tools/intent/train.py" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/intent-tools/train.py"   # nightly retraining of the auto mode
+$SSH "$SOUL_SERVER_SSH" "mkdir -p $SOUL_SERVER_DIR/skills-tools"
+rsync -aic -e "$SSH" "$HERE/../../tools/skills/eval.py" "$HERE/../../tools/skills/cases.json" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/skills-tools/"   # skill acceptance test
 printf '%s\n' "$VER" | $SSH "$SOUL_SERVER_SSH" "cat > '$SOUL_SERVER_DIR/CODE_VERSION'"
 $SSH "$SOUL_SERVER_SSH" "mkdir -p '$SOUL_SERVER_DIR/log-spool' && chmod 700 '$SOUL_SERVER_DIR/log-spool'"
 $SSH "$SOUL_SERVER_SSH" "

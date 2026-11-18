@@ -217,5 +217,7 @@ class RealtimeContext:
             L.append(line)
         text = '\n'.join(L)[:MAX_CHARS]
         names = {**others, **{n: c['display'] for n, c in cards.items() if c.get('display')}}
-        return {'text': text, 'owner': {'face_names': owner_faces, 'call': call}, 'names': names,
+        return {'text': text, 'owner': {'face_names': owner_faces, 'call': call,
+                                        # owner 2026-11-18 "亲口算本人": the ear knows the owner's own voice
+                                        'voice_names': [n for n in owner.get('voice_names') or [] if n]}, 'names': names,
                 'visible': list(dict.fromkeys(visible)), 'at': now}
