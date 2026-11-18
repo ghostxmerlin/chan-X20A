@@ -77,13 +77,23 @@ struct Shared {
     M12ChangeTracker tracker;
     M12VisionEvent vision[kVision];
     uint32_t vision_seq[kVision] = {};
+    M12Event vision_ev[kVision];         // the event of an m12_ev entry, same slot
     size_t vision_head = 0, vision_count = 0;
     uint32_t vision_total = 0, vision_dropped = 0;
+    // m12d 0.2.0 event lines (2026-11-17, shown only): the newest kRecentEv for telemetry m12.events
+    static constexpr size_t kRecentEv = 12;
+    M12Event recent_ev[kRecentEv];
+    int64_t recent_ev_us[kRecentEv] = {};
+    uint32_t recent_ev_seq[kRecentEv] = {};
+    size_t recent_ev_next = 0;
+    m12words::Feed words_feed;          // 0.5.03: the screen's words under the eyes (lock free)
+    uint32_t ev_total = 0, ev_unknown = 0;
     // tx side (tx_mutex)
     M12Requests pending;
     Waiting waiting[M12Requests::kSlots];
 };
 Shared* shared = nullptr;
+std::atomic<const m12words::Feed*> words_feed_ptr{nullptr};
 std::mutex state_mutex, tx_mutex, request_mutex;
 std::atomic<uint32_t> mode_request{0}, view_request{0};
 std::atomic<bool> uart_ready{false};
@@ -118,12 +128,13 @@ bool install_uart()
     return true;
 }
 
-void push_vision_locked(const M12VisionEvent& e)
+void push_vision_locked(const M12VisionEvent& e, const M12Event* ev = nullptr)
 {
     auto& s = *shared;
     if (s.vision_count == Shared::kVision) { s.vision_head = (s.vision_head + 1) % Shared::kVision; --s.vision_count; ++s.vision_dropped; }
     const size_t at = (s.vision_head + s.vision_count) % Shared::kVision;
     s.vision[at] = e;
+    if (ev) s.vision_ev[at] = *ev;
     s.vision_seq[at] = ++s.vision_total;
     ++s.vision_count;
 }
@@ -133,6 +144,20 @@ void status_event_locked(M12VisionKind kind, int64_t now)
     push_vision_locked(e);
 }
 const auto vision_sink = [](const M12VisionEvent& e) { push_vision_locked(e); };
+// One m12d event line: kept for telemetry and queued for the vision uplink as m12_ev. state_mutex held.
+void event_locked(const M12Event& ev, int64_t rx_us)
+{
+    auto& s = *shared;
+    const size_t at = s.recent_ev_next;
+    s.recent_ev[at] = ev;
+    s.recent_ev_us[at] = rx_us;
+    s.recent_ev_seq[at] = ++s.ev_total;
+    s.recent_ev_next = (at + 1) % Shared::kRecentEv;
+    s.words_feed.push(ev);
+    M12VisionEvent e;
+    e.kind = M12VisionKind::m12_ev; e.t_us = rx_us; e.f = ev.fr; e.face = ev.face; e.person = ev.person;
+    push_vision_locked(e, &ev);
+}
 
 void put_record_locked(const Record& r)
 {
@@ -517,8 +542,15 @@ void m12_task(void*)
                 ask_who(who, msg.det, want_det, rx_us);   // ask who only while detection is what we asked for
                 continue;
             }
+            if (msg.kind == M12Kind::event) {
+                std::lock_guard<std::mutex> lock(state_mutex);
+                ++shared->lines;
+                event_locked(msg.ev, rx_us);
+                continue;
+            }
             std::lock_guard<std::mutex> lock(state_mutex);
             ++shared->lines;
+            if (msg.ev_unknown) ++shared->ev_unknown;
         }
         std::lock_guard<std::mutex> lock(state_mutex);
         shared->state.rx_bytes += count;
@@ -533,6 +565,7 @@ void m12_init()
         void* memory = heap_caps_malloc(sizeof(Shared), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!memory) { ESP_LOGE(kTag, "PSRAM state unavailable"); return; }
         shared = new (memory) Shared();
+        words_feed_ptr.store(&shared->words_feed, std::memory_order_release);
     }
     if (create_psram_task(m12_task, "collector_m12", 8192, nullptr, 2, 1) != pdPASS)
         ESP_LOGE(kTag, "M12 task unavailable");
@@ -593,7 +626,7 @@ int32_t m12_request(M12Op op, const M12RequestArgs& args, M12Callback callback, 
     return send_request(op, args, 0, callback, context, true, false);
 }
 
-size_t m12_peek_vision_events(M12VisionEvent* out, uint32_t* seq, size_t max)
+size_t m12_peek_vision_events(M12VisionEvent* out, uint32_t* seq, size_t max, M12Event* ev_out)
 {
     if (!shared) return 0;
     std::lock_guard<std::mutex> lock(state_mutex);
@@ -602,9 +635,12 @@ size_t m12_peek_vision_events(M12VisionEvent* out, uint32_t* seq, size_t max)
     for (; n < max && n < s.vision_count; ++n) {
         const size_t at = (s.vision_head + n) % Shared::kVision;
         out[n] = s.vision[at]; seq[n] = s.vision_seq[at];
+        if (ev_out && s.vision[at].kind == M12VisionKind::m12_ev) ev_out[n] = s.vision_ev[at];
     }
     return n;
 }
+
+const m12words::Feed* m12_words_feed() { return words_feed_ptr.load(std::memory_order_acquire); }
 
 void m12_commit_vision_events(uint32_t through_seq)
 {
@@ -678,6 +714,9 @@ void m12_json(ArduinoJson::JsonObject out)
         if (f.age >= 0) face["age"] = f.age;
         if (f.age_group != M12AgeGroup::none) face["age_group"] = m12_age_group_name(f.age_group);
         if (f.name[0]) face["name"] = std::string(f.name);
+        if (f.has_pose) { face["yaw"] = f.yaw; face["pitch"] = f.pitch; face["roll"] = f.roll; }
+        if (f.look >= 0) face["look"] = f.look == 1;
+        if (f.dist_cm >= 0) face["dist"] = f.dist_cm / 100.0f;
     }
     auto persons = out["persons"].to<ArduinoJson::JsonArray>();
     for (size_t i = 0; i < s.persons; ++i) {
@@ -710,6 +749,16 @@ void m12_json(ArduinoJson::JsonObject out)
     auto vision = out["vision_events"].to<ArduinoJson::JsonObject>();
     vision["queued"] = shared->vision_count; vision["total"] = shared->vision_total; vision["dropped"] = shared->vision_dropped;
     vision["faces_in_view"] = shared->tracker.faces_in_view(); vision["persons_in_view"] = shared->tracker.persons_in_view();
+    // m12d 0.2.0 events, newest first; at_us = robot clock when the line arrived (stable, so deltas stay small)
+    auto events = out["events"].to<ArduinoJson::JsonObject>();
+    events["total"] = shared->ev_total; events["unknown"] = shared->ev_unknown;
+    auto recent = events["recent"].to<ArduinoJson::JsonArray>();
+    for (size_t k = 1; k <= Shared::kRecentEv && k <= shared->ev_total; ++k) {
+        const size_t at = (shared->recent_ev_next + Shared::kRecentEv - k) % Shared::kRecentEv;
+        auto e = recent.add<ArduinoJson::JsonObject>();
+        e["seq"] = shared->recent_ev_seq[at]; e["at_us"] = shared->recent_ev_us[at]; e["f"] = shared->recent_ev[at].fr;
+        m12_event_json(shared->recent_ev[at], e);
+    }
     auto counters = out["counters"].to<ArduinoJson::JsonObject>();
     counters["lines"] = shared->lines; counters["invalid"] = shared->invalid_lines; counters["overflow"] = shared->overflow_lines;
     counters["replies"] = shared->replies; counters["errors"] = shared->errors; counters["timeouts"] = shared->timeouts;
@@ -732,7 +781,7 @@ void m12_info_json(ArduinoJson::JsonObject out)
     out["frame_width"] = kM12FrameWidth;
     out["frame_height"] = kM12FrameHeight;
     out["max_faces"] = kM12MaxFaces;
-    out["protocol"] = "one JSON object per line; push {f..}/{hb..}; request {id,do}; reply {id,ok[,err]}";
+    out["protocol"] = "one JSON object per line; push {f..}/{hb..}/{ev..}; request {id,do}; reply {id,ok[,err]}";
     out["heartbeat_timeout_ms"] = kM12HeartbeatTimeoutUs / 1000;
     out["reply_timeout_ms"]["learn_who"] = kM12SlowReplyUs / 1000;
     out["reply_timeout_ms"]["other"] = kM12FastReplyUs / 1000;
@@ -747,5 +796,7 @@ void m12_info_json(ArduinoJson::JsonObject out)
     policy["look"] = "crowd tap: who for every unnamed face in view (largest first) and face_attrs again, then the "
                      "tap's mode_report (at most 0.8 s later)";
     policy["temperature"] = "hb.t shown and logged only; M12 pauses detection itself at 90 C (tier 3)";
+    policy["events"] = "m12d 0.2.0 ev lines: shown in telemetry m12.events and sent up as vision m12_ev; nothing "
+                       "reacts to them yet; unknown types ignored";
 }
 } // namespace collector

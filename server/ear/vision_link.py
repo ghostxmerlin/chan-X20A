@@ -4,6 +4,16 @@ The robot opens this connection on its own, independent of continuous hearing, w
 is online or vision events are waiting. Messages:
   {"type":"hello","source":"stackchan-<mac>","device":{...}}   first message; opens a session
   {"type":"vision","event":"face_found","seq":N,"t_us":...,"now_us":...,...}   one change event
+  {"type":"vision","event":"m12_ev","ev":"nod","seq":N,"t_us":...,"now_us":...,"f":8542,"face":3,"n":2}
+         one m12d 0.2.0 event line (collector-0.5.02+), its fields flat beside "ev" (the m12d type; only what the line
+         had): face / person (ids; enter/leave/near/far keep the enter id), n (nod / shake count), side ("l"/"r", tilt),
+         dur (s: uncover / leave / look_end), d ([before, after] m, near / far of a face), lum ([before, after] 0-255:
+         cover / uncover / light), on (light), and for wake (standby only): area [x,y,w,h], amt (0..1), cd (cooldown
+         s), pan / hot (true when set), faces [{box, name?, sim?}] and persons [[x,y,w,h]] (at most 3 each;
+         faces_seen / persons_seen when m12d saw more). Boxes are 640x480. "ev" may be missing (the robot found no
+         memory for it). Types: wake cover uncover light dark bright enter leave near far look look_end nod shake tilt
+         smile; the robot drops any other. Stored like every vision event and one run-log row seen.m12 each; nothing
+         reacts to them yet (owner 2026-11-17: 先呈现事件出来).
   {"type":"ping"}
   binary "SVF1" + u16le header length + JSON {"type":"frame","seq","t_us","now_us","w","h","diff","bytes"}
          + JPEG: one body-camera frame (collector-0.4.75+), saved under <recordings>/frames/<session>/
@@ -23,6 +33,47 @@ import time
 import ear_log
 
 IDLE_TIMEOUT = 60
+# m12d event types -> the run log's sum (Chinese, like the page's labels in web/monitor/public/log-ui.js)
+M12_EV_NAMES = {"wake": "待机唤醒", "cover": "捂住镜头", "uncover": "拿开遮挡", "light": "灯光变化", "dark": "变暗",
+                "bright": "变亮", "enter": "有人来了", "leave": "有人走了", "near": "靠近", "far": "离远",
+                "look": "脸朝着我", "look_end": "脸转开", "nod": "点头", "shake": "摇头", "tilt": "歪头", "smile": "笑了"}
+M12_EV_EXTRA = ("ev", "f", "face", "person", "n", "side", "dur", "d", "lum", "on", "area", "amt", "cd", "pan", "hot",
+                "faces", "persons", "faces_seen", "persons_seen")
+
+
+def m12_ev_sum(m):
+    """One m12_ev message -> a short Chinese line for the run log ("点头 脸#3 2 下")."""
+    ev = m.get("ev")
+    name = M12_EV_NAMES.get(ev, f"M12 {str(ev)[:16]}" if ev else "M12 事件")
+    if ev == "light" and isinstance(m.get("on"), bool):
+        name = "开灯" if m["on"] else "关灯"
+    parts = [name]
+    if isinstance(m.get("face"), int):
+        parts.append(f"脸#{m['face']}")
+    elif isinstance(m.get("person"), int):
+        parts.append(f"人形#{m['person']}")
+    num = lambda k: m.get(k) if isinstance(m.get(k), (int, float)) and not isinstance(m.get(k), bool) else None  # noqa: E731
+    if num("n") is not None:
+        parts.append(f"{num('n')} 下")
+    if m.get("side") in ("l", "r"):
+        parts.append("向画面左" if m["side"] == "l" else "向画面右")
+    d = m.get("d")
+    if isinstance(d, list) and len(d) == 2 and all(isinstance(v, (int, float)) for v in d):
+        parts.append(f"{d[0]}→{d[1]} 米")
+    if num("dur") is not None:
+        parts.append(f"{num('dur')} 秒")
+    if ev == "wake":
+        faces, persons = m.get("faces"), m.get("persons")
+        if m.get("pan") is True:
+            parts.append("转动")
+        if m.get("hot") is True:
+            parts.append("过热未分析")
+        elif isinstance(faces, list) or isinstance(persons, list):
+            names = [f.get("name") for f in faces or [] if isinstance(f, dict) and isinstance(f.get("name"), str)]
+            nf = m.get("faces_seen") if isinstance(m.get("faces_seen"), int) else len(faces or [])
+            np_ = m.get("persons_seen") if isinstance(m.get("persons_seen"), int) else len(persons or [])
+            parts.append(f"脸 {nf} 人形 {np_}" + (f"（{'、'.join(names)}）" if names else ""))
+    return " ".join(str(p) for p in parts)[:120]
 # the robot's camera / M12 state as its vision events report it (run log robot.state, only on a change)
 STATE_EVENTS = {"m12_online": ("m12", "online"), "m12_offline": ("m12", "offline"),
                 "vision_on": ("vision", "on"), "vision_off": ("vision", "off")}
@@ -151,6 +202,9 @@ class VisionLink:
                 carried = None
             if msg["event"] in STATE_EVENTS:
                 ear_log.robot_state(*STATE_EVENTS[msg["event"]], device=self.source, session=self.session)
+            elif msg["event"] == "m12_ev":
+                ear_log.emit("seen.m12", by="m12", sum=m12_ev_sum(msg), ref={"session": self.session},
+                             extra={"device": self.source, **{k: msg[k] for k in M12_EV_EXTRA if msg.get(k) is not None}})
             for m in (msg, carried) if carried else (msg,):
                 self.events += 1
                 if self.db is not None:

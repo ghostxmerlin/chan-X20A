@@ -176,6 +176,10 @@ std::atomic<int> quick_volume_request{-1}, quick_hearing_request{-1};
 // the main loop does it (NVS write on the main task's internal stack). 1 = on, 0 = off, -1 = nothing.
 std::atomic<int> senses_request{-1};
 void queue_senses(bool on) { senses_request = on ? 1 : 0; }
+// 0.5.03 M12 words under the eyes: count, last word (static strings of m12_words.h), when (us), for telemetry
+std::atomic<uint32_t> m12_words_shown{0};
+std::atomic<const char*> m12_words_last{nullptr};
+std::atomic<int64_t> m12_words_last_us{0};
 std::atomic<uint32_t> quick_hearing_refused{0};   // +1 when hearing could not start (no ear configured)
 void wifi_json(JsonObject target);
 void control_info_json(JsonObject target);
@@ -1144,6 +1148,14 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     eyes::status_json(doc["eyes"].to<JsonObject>());
     asr_json(doc["asr"].to<JsonObject>());
     m12_json(doc["m12"].to<JsonObject>());
+    {   // 0.5.03: the words shown under the eyes for M12 events
+        auto words = doc["m12"]["words"].to<JsonObject>();
+        words["shown"] = m12_words_shown.load(std::memory_order_relaxed);
+        if (const char* w = m12_words_last.load(std::memory_order_relaxed)) {
+            words["last"] = w;
+            words["last_age_ms"] = (esp_timer_get_time() - m12_words_last_us.load(std::memory_order_relaxed)) / 1000;
+        }
+    }
     vision_uplink_json(doc["m12"]["uplink"].to<JsonObject>());
     mouth::json(doc["mouth"].to<JsonObject>());
     mouth::mode_json(doc["mode"].to<JsonObject>());   // hello modes step 1b: hello owns the mode
@@ -1891,6 +1903,26 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                         ESP_LOGI(kTag, "burst off (%s): %lu looks", burst::why_name(bt->why()), (unsigned long)bt->stopped_looks());
                     }
                     screen_update_burst(bv.on, bv.looks, bv.left_s, bv.total_s);
+                }
+                // 0.5.03 M12 words under the eyes (m12_words.h): new m12d events, read lock free; the picker (PSRAM,
+                // made once) keeps the cooldowns; a toast already on screen wins.
+                static m12words::Picker* wp = nullptr;
+                static uint32_t words_seen = 0;
+                if (!wp) if (void* m = heap_caps_calloc(1, sizeof(m12words::Picker), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) wp = new (m) m12words::Picker();
+                if (const m12words::Feed* feed = m12_words_feed(); feed && wp) {
+                    const uint32_t head = feed->head();
+                    if (head - words_seen > m12words::Feed::kSlots) words_seen = head - m12words::Feed::kSlots;
+                    for (; words_seen != head; ) {
+                        m12words::Ev e;
+                        if (!feed->get(++words_seen, e)) continue;
+                        if (const char* w = wp->pick(e, static_cast<uint32_t>(now / 1000), screen_toast_busy())) {
+                            screen_show_word(w, static_cast<uint32_t>(now / 1000));
+                            m12_words_shown.store(wp->shown(), std::memory_order_relaxed);
+                            m12_words_last.store(w, std::memory_order_relaxed);
+                            m12_words_last_us.store(now, std::memory_order_relaxed);
+                            ESP_LOGI(kTag, "m12 word: %s (%s)", w, m12_ev_type_name(e.type));
+                        }
+                    }
                 }
             }
             static uint32_t reaction_seen = 0;

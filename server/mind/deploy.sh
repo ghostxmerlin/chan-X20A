@@ -40,6 +40,8 @@ $SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$SPOOL && chmod 700 ~/$SPOOL"
 # hello's voice clip texts (selfvoice), built locally and never committed:
 #   python3 server/mind/selfvoice.py <voice library>/stackchan_playable_80.json .private/clip_texts.json
 rsync -aic -e "$SSH" "$HERE/../../config/roles/" "$SOUL_SERVER_SSH:$MIND_DIR/roles/"     # hello's speaking roles
+PERSONA="$HERE/../../config/persona/$(cat "$HERE/../../config/persona/active")"            # hello's persona (config/persona/README.md)
+rsync -aic -e "$SSH" "$PERSONA" "$SOUL_SERVER_SSH:$MIND_DIR/persona.md"
 CLIPS="$HERE/../../.private/clip_texts.json"
 if [ -s "$CLIPS" ]; then rsync -aic -e "$SSH" "$CLIPS" "$SOUL_SERVER_SSH:$MIND_DIR/clip_texts.json"; else echo "no .private/clip_texts.json: hello's own voice is not matched by text"; fi
 $SSH "$SOUL_SERVER_SSH" "MIND_DIR=$MIND_DIR UNIT=$UNIT EAR_UNIT=${SOUL_SERVER_UNIT:-soul-spike} bash -s" < "$HERE/remote_setup.sh"

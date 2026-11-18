@@ -204,12 +204,14 @@ def related_memories(statements, text, limit=MAX_MEMORIES, person_id=None):
 def messages(ctx, item, history, cfg, who):
     """The prompt: hello's persona + rules + context in the system message, recent turns, then the sentence."""
     role = ctx.get('persona') or {}
-    L = [ctx.get('self_facts') or '我叫 hello，是主人的宠物机器人，主人常带着我走。']
-    if role.get('persona'):
+    text = role.get('persona_text')            # the persona file (owner 2026-11-18: 鹿野), else the role's 性格
+    L = ['【人设】\n' + text] if text else []
+    L.append(ctx.get('self_facts') or '我叫 hello，是主人的宠物机器人，主人常带着我走。')
+    if role.get('persona') and not text:
         L.append('【性格】' + role['persona'])
     L.append('【现在是对话模式】有人在跟你说话，你直接回答他。')
     L.append('【要求】\n' + '\n'.join('- ' + r for r in (
-        f'用一两句口语回答，最多 {cfg["max_chars"]} 字，越短越好；像宠物，有自己的脾气，可以带一点冷幽默。',
+        f'用一两句口语回答，最多 {cfg["max_chars"]} 字，越短越好；' + ('照【人设】的性格和语气说话。' if text else '像宠物，有自己的脾气，可以带一点冷幽默。'),
         '只输出要说出口的话：不加引号、括号、动作描写和表情符号，不说“作为AI”“我是语言模型”。',
         '不给医疗、健康、用药方面的建议；纪要或记忆里提到身体情况，也不要劝人看医生、注意身体。',
         '听不清、没头没尾，就简短反问一句；不确定的事不要编。',
@@ -276,8 +278,9 @@ class Chat:
     threaded=False (tests, demo): nothing runs by itself, process_once() answers the pending sentence."""
 
     def __init__(self, db, store, *, settings_fn, roles_fn, tts, env, mode_fn=lambda: None, mouth_fn=None,
-                 chat_fn=None, clock_ms=None, mono=time.monotonic, log=print, threaded=True):
+                 chat_fn=None, clock_ms=None, mono=time.monotonic, log=print, threaded=True, persona_path=None):
         self.db, self.store, self.settings_fn, self.roles_fn = db, store, settings_fn, roles_fn
+        self.persona_path = persona_path
         self.tts, self.env, self.mode_fn = tts, env, mode_fn
         self.mouth_fn = mouth_fn or (lambda: (db['switches'].find_one({'_id': 'mouth'}) or {}).get('mode', 'clips'))
         self.chat_fn = chat_fn or llm.chat
@@ -785,7 +788,14 @@ class Chat:
         return self.store.cost_today(self.settings_fn()['tz'], now_ms)
 
     def _load_persona(self, now_ms):
-        return dict((self.roles_fn() or {}).get(ROLE) or FALLBACK_ROLE)
+        role = dict((self.roles_fn() or {}).get(ROLE) or FALLBACK_ROLE)
+        if self.persona_path:
+            try:
+                with open(self.persona_path, encoding='utf-8') as f:
+                    role['persona_text'] = f.read().strip()[:4000]
+            except OSError:
+                pass
+        return role
 
     def _load_scene(self, now_ms):
         row = self.store.latest_scene_any(LANE)

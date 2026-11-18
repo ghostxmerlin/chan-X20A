@@ -280,3 +280,12 @@ test('mount: one page of up to 1000 records, heartbeats hidden, categories count
  assert.equal(seen.filter(p=>p.startsWith('/log/ledger')).length,2);
  assert.equal(els['log-to'].value,'2026-11-16T00:30');
 });
+
+test('seen.m12 (m12d 0.2.0 events): category 看, own character, title says what M12 saw', ()=>{
+ assert.equal(ui.category('seen.m12'),'see');
+ assert.equal(ui.kindGlyph('seen.m12'),'见');
+ assert.equal(ui.kindTitle({kind:'seen.m12',extra:{ev:'nod',face:3,n:2}}),'M12 看到：点头');
+ assert.equal(ui.kindTitle({kind:'seen.m12',extra:{ev:'light',on:true}}),'M12 看到：开灯');
+ assert.equal(ui.kindTitle({kind:'seen.m12',extra:{ev:'zzz'}}),'M12 看到：zzz');
+ assert.equal(ui.kindTitle({kind:'seen.m12'}),'M12 看到');
+});

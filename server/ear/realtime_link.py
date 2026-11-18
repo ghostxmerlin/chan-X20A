@@ -146,11 +146,32 @@ def _run_log(fn):
             return None
     return wrapper
 
-PERSONA = (
+# The persona file (owner 2026-11-18: 鹿野; config/persona/<active>, deployed next to this module as persona.md):
+# character and voice only, read once at import (the ear restarts on deploy). Without it, the old built-in identity.
+PERSONA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persona.md")
+BODY = ("你住在主人的桌面机器人 Dynames（デュナメス）里，主人去哪常带着你（办公室、家里、车上、饭店、户外都有可能）。"
+        "有人叫 Dynames 就是在叫你。")
+OLD_IDENTITY = (
     "你是 hello，主人的小宠物机器人，主人去哪常带着你（办公室、家里、车上、饭店、户外都有可能）。"
-    "你现在在哪，看背景里的“现在的地点”；写着不知道就别假定在办公室或桌上。"
     # owner 2026-11-16: 傲娇霸气 (was 小孩子的语气：活泼、好奇、爱凑热闹，有点小脾气)
-    "说话傲娇又霸气：嘴硬、自信、爱逞强，有点不屑，被夸了也不承认，其实很在意主人；也爱凑热闹。"
+    "说话傲娇又霸气：嘴硬、自信、爱逞强，有点不屑，被夸了也不承认，其实很在意主人；也爱凑热闹。")
+
+
+def load_persona(path=PERSONA_FILE):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()[:4000]
+    except OSError:
+        return ""
+
+
+def build_persona(text):
+    head = f"【人设】\n{text}\n\n{BODY}" if text else OLD_IDENTITY
+    return head + PERSONA_RULES
+
+
+PERSONA_RULES = (
+    "你现在在哪，看背景里的“现在的地点”；写着不知道就别假定在办公室或桌上。"
     "说话用普通话。"
     "现在是围观模式：大家围着你看，跟你聊天，你就跟他们聊。\n"
     "【要求】\n"
@@ -165,10 +186,10 @@ PERSONA = (
     "- 背景只在跟话题有关时才用，不要硬扯，不要每句都提同一件事。\n"
     "- 背景里有“【可以问地点】”这一行时，可以找个自然的时候问一句现在在哪儿，只问一次；没有这一行就不要问地点。"
     "有人告诉你在哪了，就按他说的来。\n"
-    "- 收到“[事件] 主人（名字）出现在你面前了，长招呼”时：用这个名字大声、热情地喊主人，开心地打招呼，"
+    "- 收到“[事件] 主人（名字）出现在你面前了，长招呼”时：用这个名字喊主人、打招呼（照你的性格来，不用夸张），"
     "再顺口说一句你看到的情景或想到的事，两三句。每次都换新说法，不要跟事件里列的“之前说过”的一样。\n"
     "- 收到“[事件] 主人又出现了，短招呼：只说「…」”时：刚才已经见过，只原样说「」里那个词，一个字都不多说，不喊名字。\n"
-    "- 收到“[事件] 有人点了你一下，让你跟面前的人打招呼”时：按事件里说的称呼主动打招呼，嘴甜一点、热情一点；"
+    "- 收到“[事件] 有人点了你一下，让你跟面前的人打招呼”时：按事件里说的称呼主动打招呼，友好一点；"
     "认识的人叫名字，不认识的就用事件给的称呼（美女、帅哥、小朋友、爷爷、奶奶）。只夸，不评论长相的缺点，不开人身玩笑。"
     "事件说没看到人脸，就自然地说一句没看到人（每次换个说法），再友好地问声好。\n"
     "- 你有眼睛：头上的摄像头和人脸识别，看到的都写在最后的【你的眼睛】里：人脸识别是实时认出的人，"
@@ -178,6 +199,7 @@ PERSONA = (
     "两样都没有，就说现在没看清。不要说自己没有眼睛、看不见。\n"
     "- 有人问刚才、最近、今天早些时候发生了什么、聊了什么，先照背景里的“最近的情景”和“最近的纪要”回答，"
     "可以带上大概的时间；里面没有的就说不记得了，不要编。")
+PERSONA = build_persona(load_persona())
 
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE00-\U0000FE0F\U0001F1E6-\U0001F1FF"
                     "\U0000200D\U000020E3\U00002B00-\U00002BFF\U000E0020-\U000E007F]")
@@ -399,7 +421,7 @@ def seen_text(faces, names, owner_faces, owner_call):
     return f"眼前有 {len(faces)} 个人：" + "、".join(parts) + more + "。"
 
 
-def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False):
+def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False, turn="server_vad"):
     # search (owner 2026-11-15 "可以支持搜索吗"): DashScope's built-in web search; the model searches only when it needs
     # to (strategy agent: measured 2026-11-15, "你好" no search 0.4 s, weather / news one search 3.5-4.5 s, ~1.9k more
     # text input tokens plus the search fee).
@@ -407,6 +429,11 @@ def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False):
            "input_audio_format": "pcm", "output_audio_format": "pcm",
            "input_audio_transcription": {"language": "zh"},
            "turn_detection": {"type": "server_vad", "threshold": threshold, "silence_duration_ms": silence_ms}}
+    if turn != "server_vad":
+        # smart_turn_v2 (owner 2026-11-18 "自动判断受话人…开一下试试"): DashScope judges, from sound and meaning, whether
+        # a turn is meant for the model (multi-person scenes); a turn it rejects gets no response, only an
+        # ambient_audio_transcription event. Fields: type, threshold only (no silence_duration_ms). Set at open only.
+        cfg["turn_detection"] = {"type": turn, "threshold": threshold}
     if search:
         cfg["enable_search"] = True
     return cfg
@@ -641,6 +668,7 @@ class Config:
     # can never cancel a reply (no interrupt option is documented for this model); guard_s after it ends.
     silence_ms = 1000
     vad_threshold = 0.6
+    turn = "smart_turn_v2"       # owner 2026-11-18: try DashScope's addressee judgement ("server_vad" = before)
     guard_s = 0.6
     gate = "vad"                 # "vad": only around the ear's own speech (no silence billed); "all": everything
     preroll_s = 0.8
@@ -1043,12 +1071,13 @@ class RealtimeHub:
             await self._take_context(ctx_fut)
             instr = self._instructions()
             await ws.send(json.dumps({"type": "session.update", "session": session_config(
-                self.voice, instr, self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search)}))
+                self.voice, instr, self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search, self.cfg.turn)}))
             self._live_instr = instr
             ear_log.emit("call.realtime.session", ok=True, model=self.cfg.model, key=self.key, sum=f"围观会话打开 {why}",
                          body={"system": instr}, ref={"session": n},
                          extra={"state": "open", "why": why, "search": bool(self.cfg.search),
-                                "silence_ms": self.cfg.silence_ms, "vad_threshold": self.cfg.vad_threshold})
+                                "silence_ms": self.cfg.silence_ms, "vad_threshold": self.cfg.vad_threshold,
+                                "turn": self.cfg.turn})
             self._ctx_at = self.clock()
             log(f"realtime: session {n} open ({why}), context {len(self.ctx.get('text') or '')} chars", flush=True)
             self.stats["sessions"] += 1
@@ -1421,6 +1450,20 @@ class RealtimeHub:
             if self.on_transcript:
                 self.on_transcript("heard", text)
             self._heard_text(text, now, told=True, trace=(self._heard_turn or {}).get("trace"))
+        elif t == "conversation.item.ambient_audio_transcription.completed":
+            # smart_turn_v2 judged this turn not meant for hello: no response comes. Logged (gate.realtime ambient),
+            # the waiting turn is dropped and the dots go back; not in the anti-repeat or rescue paths.
+            text = strip_emoji(e.get("transcript"))
+            turn, self._heard_turn = self._heard_turn, None
+            if self._turn is turn:
+                self._turn = None
+            self.stats["ambient"] += 1
+            if self.on_transcript:
+                self.on_transcript("ambient", text)
+            ear_log.emit("gate.realtime", trace=(turn or {}).get("trace") or ear_log.new_trace(),
+                         sum=f"ambient {text[:40]}".strip(), extra={"verdict": "ambient", "heard": text[:300],
+                                                                    "turn": self.cfg.turn})
+            self._stage("skip")
         elif t == "response.created":
             rid = str((e.get("response") or {}).get("id") or f"r{now}")
             self._resp = rid

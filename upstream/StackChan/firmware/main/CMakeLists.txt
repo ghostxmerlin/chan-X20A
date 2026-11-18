@@ -41,7 +41,7 @@ list(APPEND STACK_CHAN_SOURCES collector/eyes/player.cpp collector/eyes/eyes.cpp
 list(APPEND STACK_CHAN_SOURCES collector/eyes/http.cpp)
 # Basic profile: retain the experimental detector source, but do not link or run it.
 list(APPEND STACK_CHAN_SOURCES collector/face_detection_disabled.cpp)
-list(APPEND STACK_CHAN_SOURCES collector/screen.cpp collector/laughing_man.c collector/collector_mono_15.c)
+list(APPEND STACK_CHAN_SOURCES collector/screen.cpp collector/laughing_man.c collector/collector_mono_15.c collector/collector_words_20.c)
 
 # Define source files
 set(SOURCES "audio/audio_codec.cc"

@@ -31,6 +31,101 @@ export function m12ErrorText(command) {
 const genders = {m:'男', f:'女', '?':'性别不确定'};
 const ages = {child:'儿童', young:'青年', adult:'成年', elder:'老年'};
 const attrs = f => [genders[f.gender], ages[f.age_group]].filter(Boolean).join(' · ');
+// m12d 0.2.0 pose fields (each optional; approximate): yaw + = face turned to frame right, pitch + = head up, roll + =
+// crown towards frame right.
+const signed = v => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v)}°`;
+export function poseText(f) {
+  const parts = [];
+  if ([f?.yaw, f?.pitch, f?.roll].every(Number.isFinite)) parts.push(`转头 ${signed(f.yaw)} · 抬头 ${signed(f.pitch)} · 歪头 ${signed(f.roll)}`);
+  if (typeof f?.look === 'boolean') parts.push(f.look ? '脸朝着机器人' : '脸没朝机器人');
+  if (Number.isFinite(f?.dist)) parts.push(`约 ${f.dist.toFixed(1)} 米`);
+  return parts.join(' · ');
+}
+const clock = ms => { const d = new Date(ms); return [d.getHours(), d.getMinutes(), d.getSeconds()].map(v => String(v).padStart(2, '0')).join(':'); };
+// Serial bandwidth from the heartbeat (fps, drop) and the bytes the robot received.
+export function serialText(serial) {
+  if (!serial || serial.fps == null) return { text: '尚无心跳', warn: false };
+  const rate = serial.bytesPerSecond, minute = serial.dropMinute;
+  const parts = [`心跳帧率 ${serial.fps.toFixed(1)}`, `丢行 ${serial.drop ?? '—'}${minute != null ? `（近 1 分钟 +${minute}）` : ''}`];
+  if (rate != null) parts.push(`接收 ${(rate / 1024).toFixed(1)} KB/s（上限约 ${(serial.capacity / 1024).toFixed(1)}）`);
+  return { text: parts.join(' · '), warn: (minute ?? 0) > 0 || (rate != null && rate >= serial.capacity * 0.85) };
+}
+// M12 event list (newest first): time, type, face / person id, key fields.
+export function renderM12Events(list, summary, doc = document) {
+  list.replaceChildren();
+  const events = summary?.events || [];
+  if (!events.length) {
+    const li = doc.createElement('li'); li.className = 'empty';
+    li.textContent = !summary ? '数据未连接' : summary.eventsTotal == null ? '机器人固件 0.5.02 起才有（m12d 0.2.0 事件）' : '还没有事件';
+    list.append(li); return;
+  }
+  for (const e of events) {
+    const li = doc.createElement('li');
+    const time = doc.createElement('time'); time.textContent = clock(e.at);
+    const kind = doc.createElement('b'); kind.className = `ev-${e.group}`; kind.textContent = e.label;
+    const who = doc.createElement('span'); who.className = 'who'; who.textContent = e.who || '';
+    const detail = doc.createElement('span'); detail.className = 'detail'; detail.textContent = e.detail || '';
+    li.append(time, kind, who, detail); list.append(li);
+  }
+}
+// M12 events near the eye (2026-11-18): for EVENT_SHOW_MS after an event, a bubble on the detection canvas — over
+// its face / person box when that box is in view, else a banner at the top (wake, cover, light, or a box gone) —
+// plus the newest few under the eye. Colours = the event groups of the details list.
+export const EVENT_SHOW_MS = 3000;
+export const EV_COLORS = { wake:'#f4bd72', light:'#ff8fd0', presence:'#72d8ff', head:'#d3a7ff', other:'#82a58b' };
+// events: newest first, each {at (wall ms), label, group, face?, person?, n?, who}; -> what to draw now
+export function eventOverlays(events, now, faces = [], persons = []) {
+  const byFace = new Map(), byPerson = new Map(), banner = [];
+  const add = (map, id, item) => { const l = map.get(id) || []; if (l.length < 2) l.push(item); map.set(id, l); };
+  for (const e of events || []) {
+    const age = now - e.at;
+    if (!(age >= -1000 && age <= EVENT_SHOW_MS)) continue;      // the robot clock maps to the monitor's, allow a little skew
+    const item = { text: `${e.label}${Number.isFinite(e.n) && e.n > 1 ? ` ×${e.n}` : ''}`, group: e.group, fade: Math.min(1, 1 - age / EVENT_SHOW_MS) };
+    if (Number.isInteger(e.face) && faces.some(f => f.id === e.face)) add(byFace, e.face, item);
+    else if (Number.isInteger(e.person) && persons.some(p => p.id === e.person)) add(byPerson, e.person, item);
+    else if (banner.length < 2) banner.push({ ...item, text: e.who ? `${item.text} ${e.who}` : item.text });
+  }
+  return { byFace, byPerson, banner };
+}
+const secondsAgo = ms => ms < 60000 ? `${Math.max(0, Math.round(ms / 1000))} 秒前` : `${Math.floor(ms / 60000)} 分钟前`;
+// the newest few events under the M12 eye
+export function renderEyeEvents(list, summary, now = Date.now(), doc = document, n = 4) {
+  list.replaceChildren();
+  const events = (summary?.events || []).slice(0, n);
+  if (!events.length) {
+    const li = doc.createElement('li'); li.className = 'empty';
+    li.textContent = !summary ? '事件：数据未连接' : summary.eventsTotal == null ? '事件：固件 0.5.02 起才有' : '事件：还没有';
+    list.append(li); return;
+  }
+  for (const e of events) {
+    const li = doc.createElement('li'); li.classList?.toggle('fresh', now - e.at <= EVENT_SHOW_MS);
+    const kind = doc.createElement('b'); kind.className = `ev-${e.group}`; kind.textContent = e.label;
+    const who = doc.createElement('span'); who.textContent = [e.who, e.n > 1 ? `${e.n} 下` : ''].filter(Boolean).join(' ');
+    const time = doc.createElement('time'); time.textContent = secondsAgo(now - e.at);
+    li.append(kind, who, time); list.append(li);
+  }
+}
+function bubble(c, text, color, fade, x, y, w, h) {
+  c.save(); c.font = '600 11px ui-monospace,Menlo,"PingFang SC",monospace';
+  const tw = c.measureText(text).width + 10, bh = 17;
+  const bx = Math.max(2, Math.min(x - tw / 2, w - tw - 2)), by = Math.max(2, Math.min(y, h - bh - 2));
+  c.globalAlpha = 0.35 + 0.65 * fade;
+  c.fillStyle = '#020604e6'; c.strokeStyle = color; c.lineWidth = 1.5;
+  c.beginPath(); c.roundRect ? c.roundRect(bx, by, tw, bh, 8) : c.rect(bx, by, tw, bh); c.fill(); c.stroke();
+  c.fillStyle = color; c.textBaseline = 'middle'; c.fillText(text, bx + 5, by + bh / 2 + 0.5);
+  c.restore(); return bh + 3;
+}
+// face pose: an arrow from the box centre the way the face is turned (yaw → right, pitch + = up); a glow while it faces us (head pose, not eye gaze)
+function drawPose(c, f, x, y, bw, bh) {
+  if (f.look === true) { c.save(); c.strokeStyle = EV_COLORS.head; c.lineWidth = 3; c.globalAlpha = 0.55; c.strokeRect(x - 3, y - 3, bw + 6, bh + 6); c.restore(); }
+  if (![f.yaw, f.pitch].every(Number.isFinite)) return;
+  const cx = x + bw / 2, cy = y + bh / 2, k = v => Math.max(-1, Math.min(1, v / 45));
+  const ex = cx + k(f.yaw) * bw * 0.6, ey = cy - k(f.pitch) * bh * 0.6;
+  c.save(); c.strokeStyle = c.fillStyle = f.look ? EV_COLORS.head : '#79ff97'; c.lineWidth = 1.5;
+  c.beginPath(); c.arc(cx, cy, 2, 0, Math.PI * 2); c.fill();
+  if (Math.hypot(ex - cx, ey - cy) > 3) { c.beginPath(); c.moveTo(cx, cy); c.lineTo(ex, ey); c.stroke(); }
+  c.restore();
+}
 export function renderM12(state, fresh, bridge = true) {
   const summary = fresh ? state?.m12 : null, m = fresh ? state?.telemetry?.m12 : null;
   const status = summary?.status || 'disconnected';
@@ -74,9 +169,24 @@ export function renderM12(state, fresh, bridge = true) {
     const x=f.x/640*w,y=f.y/480*h,bw=f.w/640*w,bh=f.h/480*h;
     c2.strokeStyle=f.name?'#ffd36b':'#79ff97';c2.lineWidth=2;c2.strokeRect(x,y,bw,bh);
     c2.fillStyle=c2.strokeStyle;c2.fillText(`#${f.id} ${f.name || `${(f.prob*100).toFixed(0)}%`}`,Math.max(4,Math.min(x,w-120)),Math.max(18,y-7));
-    const row=document.createElement('p');row.textContent=`#${f.id} ${f.name || '未认出'}${attrs(f) ? ' · ' + attrs(f) : ''}${Number.isFinite(f.age) ? ` · 约 ${f.age} 岁` : ''} · 位置 ${Math.round(f.x)}, ${Math.round(f.y)} · 尺寸 ${Math.round(f.w)}×${Math.round(f.h)} · ${(f.prob*100).toFixed(1)}%`;details.append(row);
+    drawPose(c2,f,x,y,bw,bh);
+    const pose=poseText(f);
+    const row=document.createElement('p');row.textContent=`#${f.id} ${f.name || '未认出'}${attrs(f) ? ' · ' + attrs(f) : ''}${Number.isFinite(f.age) ? ` · 约 ${f.age} 岁` : ''} · 位置 ${Math.round(f.x)}, ${Math.round(f.y)} · 尺寸 ${Math.round(f.w)}×${Math.round(f.h)} · ${(f.prob*100).toFixed(1)}%${pose ? ' · ' + pose : ''}`;details.append(row);
   });
+  const now = Date.now(), ov = eventOverlays(summary?.events, now, faces, persons);
+  const under = (id, list, box) => { let y = box.y / 480 * h + box.h / 480 * h + 4; for (const it of ov[list].get(id) || []) y += bubble(c2, it.text, EV_COLORS[it.group] || EV_COLORS.other, it.fade, (box.x + box.w / 2) / 640 * w, y, w, h); };
+  faces.forEach(f => under(f.id, 'byFace', f)); persons.forEach(p => under(p.id, 'byPerson', p));
+  { let y = 6; for (const it of ov.banner) y += bubble(c2, it.text, EV_COLORS[it.group] || EV_COLORS.other, it.fade, w / 2, y, w, h); }
+  renderEyeEvents($('m12-eye-events'), summary, now);
   persons.forEach(p=>{const row=document.createElement('p');row.textContent=`人形 #${p.id}${p.face>=0?` · 对应脸 #${p.face}`:''} · 位置 ${Math.round(p.x)}, ${Math.round(p.y)} · 尺寸 ${Math.round(p.w)}×${Math.round(p.h)}`;details.append(row);});
+  const serial=serialText(summary?.serial);
+  text('m12-serial', serial.text); $('m12-serial').classList.toggle('warn', serial.warn);
+  const notes=[];
+  if (summary?.eventsTotal != null) notes.push(`共 ${summary.eventsTotal} 条`);
+  if (summary?.eventsUnknown) notes.push(`不认识的 ${summary.eventsUnknown} 条已忽略`);
+  if (summary?.eventsMissed) notes.push(`网页漏看 ${summary.eventsMissed} 条`);
+  text('m12-events-note', notes.join(' · '));
+  renderM12Events($('m12-events'), summary);
 }
 const opNames = {learn:'学习', forget:'删除', faces:'刷新列表', who:'认一下', ping:'ping'};
 // Face library on the M12 (learn / forget / faces / who). Results come back through telemetry

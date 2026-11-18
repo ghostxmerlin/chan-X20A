@@ -57,6 +57,7 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
   - `call.tingwu`；
   - `call.tts`。
 - **听到的话**：`heard.asr`（文字、session、pos），链路从它开始。
+- **看到的事件**：`seen.m12`（M12 的 m12d 0.2.0 事件，每条一行，只记录不反应）。
 - 没有包在任何 scope 里的模型调用记成 `call.llm`。
 
 ## mind 一侧的记录（eye / notes / memory 同）
@@ -79,6 +80,8 @@ hello 的六个服务（ear / mind / eye / notes / memory / tts）把每件事�
 - **链路** `link.open` / `link.close`：`extra = {link: mouth|signal|vision|hearing, conn（m3 / v4 / c12 / DualKey 设备名）, peer（ip:port）, boot, why, counts}`，`link.close` 的 `ms` 是连接时长。`counts`：mouth `{upstream_drops}`，signal `{signals}`，vision `{events, frames}`，hearing `{utterances, sounds, rx_bytes, session}`。token 不对、连接已满时只记一条 `link.open`，`ok: false`，`why` = bad_token / busy；token 不对的每个来源 IP 每分钟最多记一条，其余数进下一条心跳的 `extra.refused`。`link.upstream`：ear 到 soul-tts 的连接起落，`extra = {to: "soul-tts", state: up|down, conn, code, drops}`（连不上时不重复记，只记起落）。
 - **`robot.state`**：机器人报上来的状态变了才记，按机器人（`device` = 它的 source，模式为 `null`）分开，`extra = {part, device, before, after, …}`。`hearing` 由这台机器人还活着的听觉链路决定：重连时新旧链路重叠，旧的关掉不记 off，最后一条关掉才记 off（`extra.links` = 还连着的条数）。拒绝的连接（`link.open ok:false`）的 `extra.link` 按路由取 mouth / signal / vision / hearing，不记路径。`part`：`mode`（mode_report 里的 `{mode, dir, host, return_to}`，`by` = 报告的 by，另带 `conn`、`seq`、`input`）、`hearing`（机器人的听觉链路 on / off）、`m12`（online / offline）、`vision`（on / off，来自 vision 事件）。
 - **`heard.asr`**：本地识别出有字的每一句。新的 `trace`，`by: asr`，`sum` = 前 60 字，正文 `input` = 全文，`ref = {session, pos, id}`，`extra = {lang, emotion, dur, speaker {band, name（只在 known 时）}, voice, self}`。同一个 `trace` 写回这句的事件（`speech` 表里也有 `trace`），并随 `/chat/heard` 的 `trace` 字段带给 mind。
+- **`heard.keyword`**（听到关键词，2026-11-17）：关键词耳朵（`server/kws`，按声音比对，不经文字）对一句话命中或差一点命中一个关键词。`by: kws`，`trace` = 这句的 `heard.asr` trace（这句没转出字时为空），`sum` = 「标签 分数」（差一点时标「（差一点）」），`ref = {session, pos, id}`，`extra = {keyword, score（越低越像）, hit, sample（最像的那段样本）, text, ms}`。
+- **`seen.m12`**（M12 看到，2026-11-17，collector-0.5.02）：机器人从 vision 链路送来的每一条 m12d 0.2.0 事件（`event: m12_ev`）记一条，归「看」。`by: m12`，`sum` = 中文一句（如「点头 脸#3 2 下」「待机唤醒 脸 1 人形 1（me）」），`ref = {session}`（vision 会话），`extra = {device, ev（m12d 的事件类型：wake / cover / uncover / light / enter / leave / near / far / look / look_end / nod / shake / tilt……）, f（M12 帧号）, 以及这条事件带的字段：face, person, n, side, dur, d, lum, on, area, amt, cd, pan, hot, faces, persons}`。现在只记录和显示，没有任何功能据此反应。
 - **`call.tingwu`**：每个听悟流一个 `trace`。`extra.state` = start / stop / error。stop 那条带 `usage = {audio_s}`、`ms`（流的时长）、`cost`（`prices.TINGWU_CNY_PER_HOUR` × 小时，按送上去的音频时长计费）、`ref = {session, stream, data_id}`、`extra.sentences`。
 - **围观 realtime**（`model` = qwen-audio-3.1-realtime-flash，`key` = 指纹，从不记声音 id）：
   - `call.realtime.session`：`extra.state` = open（正文 `system` = 完整 instructions，`extra = {why, search, silence_ms, vad_threshold}`）/ close（`extra.why`，`ms` = 会话时长）/ connect_failed（`ok: false`）。`ref.session` = 本进程的会话编号。

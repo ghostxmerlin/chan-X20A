@@ -59,7 +59,7 @@ function ago(ms){
 // Grouped by what hello was doing; each group one strong colour and one character.
 export const CATS=[
  {key:'hear',glyph:'听',name:'听',hint:'识别、听悟、纪要'},
- {key:'see',glyph:'看',name:'看',hint:'画面、识图'},
+ {key:'see',glyph:'看',name:'看',hint:'画面、识图、M12 事件'},
  {key:'think',glyph:'想',name:'想',hint:'情景判断、分段'},
  {key:'speak',glyph:'说',name:'说',hint:'围观、聊天、语音'},
  {key:'mem',glyph:'记',name:'记',hint:'记忆'},
@@ -71,7 +71,7 @@ const CAT_BY_KEY=Object.fromEntries(CATS.map(c=>[c.key,c]));
 const CAT_RULES=[
  ['speak',/^(call\.realtime|call\.tts|call\.chat|call\.say|gate\.|filler\.|trigger\.(greet|hush))/],
  ['hear',/^(heard\.|call\.tingwu|call\.notes)/],
- ['see',/^(call\.eye|call\.look|trigger\.burst)/],
+ ['see',/^(call\.eye|call\.look|trigger\.burst|seen\.)/],
  ['mem',/^call\.memory/],
  ['think',/^call\./],
  ['ctl',/^(switch|mode|preset|billing|budget)\./],
@@ -83,8 +83,8 @@ export function category(kind){
  return 'sys';
 }
 export const KIND_LABELS={
- 'heard.asr':'听到一句话','call.tingwu':'听悟转写','call.notes':'写听觉纪要',
- 'call.eye':'看这一分钟的画面','call.look':'识别一张照片','trigger.burst':'视觉爆发',
+ 'heard.asr':'听到一句话','heard.keyword':'听到关键词','call.tingwu':'听悟转写','call.notes':'写听觉纪要',
+ 'call.eye':'看这一分钟的画面','call.look':'识别一张照片','trigger.burst':'视觉爆发','seen.m12':'M12 看到',
  'call.fusion':'判断当前情景','call.segment':'划分情景段','call.attention':'判断注意力','call.llm':'模型调用',
  'call.chat':'聊天回答','call.say':'想一句话','call.say.speak':'说一句','call.say.line':'写脱口秀台词','call.say.huyu':'写兜底的一句',
  'call.say.judge':'脱口秀挑台词','call.say.check':'开口前复核',
@@ -97,17 +97,21 @@ export const KIND_LABELS={
 };
 const LINKS={mouth:'嘴',signal:'信号',vision:'视觉',hearing:'听觉'};
 const PARTS={mode:'模式',hearing:'听觉',m12:'M12',vision:'视觉'};
+// seen.m12 (m12d 0.2.0 events, 2026-11-17): extra.ev → what it saw
+const M12_EV={wake:'待机唤醒',cover:'捂住镜头',uncover:'拿开遮挡',light:'灯光变化',dark:'变暗',bright:'变亮',enter:'有人来了',
+ leave:'有人走了',near:'靠近',far:'离远',look:'脸朝着我',look_end:'脸转开',nod:'点头',shake:'摇头',tilt:'歪头',smile:'笑了'};
 export function kindTitle(r){
  const base=KIND_LABELS[r.kind]||r.kind;
  if(r.kind==='link.open'||r.kind==='link.close')return `${base}${LINKS[r.extra?.link]?'：'+LINKS[r.extra.link]:r.extra?.link?'：'+r.extra.link:''}`;
  if(r.kind==='link.upstream'&&r.extra?.to)return `${base}：${r.extra.to}`;
  if(r.kind==='robot.state'&&r.extra?.part)return `${base}：${PARTS[r.extra.part]||r.extra.part}`;
+ if(r.kind==='seen.m12'&&r.extra?.ev)return `${base}：${r.extra.ev==='light'&&typeof r.extra.on==='boolean'?(r.extra.on?'开灯':'关灯'):M12_EV[r.extra.ev]||r.extra.ev}`;
  return base;
 }
 // One character per kind, so kinds of the same colour still look different.
 export const KIND_GLYPHS={
- 'heard.asr':'听','call.tingwu':'悟','call.notes':'纪',
- 'call.eye':'看','call.look':'图','trigger.burst':'爆',
+ 'heard.asr':'听','heard.keyword':'键','call.tingwu':'悟','call.notes':'纪',
+ 'call.eye':'看','call.look':'图','trigger.burst':'爆','seen.m12':'见',
  'call.fusion':'景','call.segment':'段','call.attention':'注','call.llm':'模',
  'call.chat':'聊','call.say':'拟','call.say.speak':'句','call.say.line':'台','call.say.huyu':'兜','call.say.judge':'评','call.say.check':'核',
  'call.realtime.session':'会','call.realtime.context':'令','call.realtime.turn':'答','call.realtime.search':'搜',

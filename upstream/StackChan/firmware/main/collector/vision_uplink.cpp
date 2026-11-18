@@ -59,11 +59,16 @@ bool send_doc(hearing::HearingSocket& socket, ArduinoJson::JsonDocument& doc)
     return socket.Send(text);
 }
 
-void fill(ArduinoJson::JsonDocument& msg, const M12VisionEvent& v, uint32_t seq)
+// ev: the m12d event of an m12_ev entry (its fields go flat into the message, "ev" = its type).
+void fill(ArduinoJson::JsonDocument& msg, const M12VisionEvent& v, uint32_t seq, const M12Event* ev = nullptr)
 {
     msg["type"] = "vision"; msg["event"] = m12_vision_kind_name(v.kind); msg["seq"] = seq;
     msg["t_us"] = v.t_us; msg["now_us"] = esp_timer_get_time();
     if (v.f) msg["f"] = v.f;
+    if (v.kind == M12VisionKind::m12_ev) {
+        if (ev) m12_event_json(*ev, msg.as<ArduinoJson::JsonObject>());
+        return;
+    }
     if (v.face >= 0) msg["face"] = v.face;
     if (v.person >= 0) msg["person"] = v.person;
     if (v.w > 0) {
@@ -116,6 +121,11 @@ bool send_frame(hearing::HearingSocket& socket, const CameraFrame& f, int diff, 
 void run(void*)
 {
     int backoff_ms = 2000;
+    // m12d event payloads of one batch (~0.25 KB each): PSRAM, not this task's stack. Without it m12_ev still goes,
+    // with its type unknown to the server ("ev" missing).
+    auto* batch_ev = static_cast<M12Event*>(heap_caps_calloc(kBatch, sizeof(M12Event), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (batch_ev) for (size_t i = 0; i < kBatch; ++i) new (&batch_ev[i]) M12Event();
+    else ESP_LOGE(kTag, "no memory for the event batch");
     for (;;) {
         std::string url, token;
         if (!hearing::backend(url, token) || !wanted()) {
@@ -159,10 +169,10 @@ void run(void*)
             socket.Poll();
             M12VisionEvent events[kBatch];
             uint32_t seq[kBatch];
-            const size_t n = m12_peek_vision_events(events, seq, kBatch);
+            const size_t n = m12_peek_vision_events(events, seq, kBatch, batch_ev);
             for (size_t i = 0; ok && i < n; ++i) {
                 ArduinoJson::JsonDocument msg;
-                fill(msg, events[i], seq[i]);
+                fill(msg, events[i], seq[i], batch_ev && events[i].kind == M12VisionKind::m12_ev ? &batch_ev[i] : nullptr);
                 ok = send_doc(socket, msg);
                 if (ok) {                     // only what reached the socket leaves the queue
                     m12_commit_vision_events(seq[i]);

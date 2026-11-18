@@ -190,3 +190,16 @@ summary{cursor:pointer;width:fit-content}
 .chat-marks{display:flex;flex-wrap:wrap;gap:2px 10px;list-style:none;margin:0 0 4px;padding:0;font-size:10px;color:var(--muted)}
 .chat-marks b{color:var(--green);font-weight:500}.chat-marks .m-sound_at b{color:#ff8fd0}
 .chat-skips{list-style:none;margin:2px 0 4px;padding:0;font-size:11px;overflow-wrap:anywhere}
+/* M12 events (collector-0.5.02, m12d 0.2.0): one colour per group */
+.m12-events-head{display:flex;align-items:baseline;gap:8px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px}.m12-events-head h3{margin:0;font-size:12px;font-weight:600}.m12-events-head span{font-size:11px}
+.m12-events{list-style:none;margin:4px 0;padding:0;max-height:220px;overflow:auto;scrollbar-width:thin;font-size:11px}
+.m12-events li{display:grid;grid-template-columns:58px 64px 52px minmax(0,1fr);gap:6px;padding:3px 0;border-bottom:1px solid #17291e;line-height:1.4}
+.m12-events li.empty{display:block;color:var(--muted)}.m12-events time,.m12-events .who{color:var(--muted)}.m12-events .detail{overflow-wrap:anywhere}
+.m12-events b{font-weight:500}.m12-events .ev-wake{color:var(--warn)}.m12-events .ev-light{color:#ff8fd0}.m12-events .ev-presence{color:var(--cyan)}.m12-events .ev-head{color:var(--purple)}.m12-events .ev-other{color:var(--muted)}
+
+/* M12 events under the M12 eye (2026-11-18) */
+.eye-events{list-style:none;margin:3px 0 0;padding:0;font-size:10px;line-height:1.45;min-height:58px}
+.eye-events li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:5px;padding:0 2px;border-radius:3px;opacity:.7}
+.eye-events li.fresh{opacity:1;background:#12241a}.eye-events li.empty{display:block;color:var(--muted);text-align:center}
+.eye-events span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.eye-events time{color:var(--muted)}
+.eye-events b{font-weight:600}.eye-events .ev-wake{color:var(--warn)}.eye-events .ev-light{color:#ff8fd0}.eye-events .ev-presence{color:var(--cyan)}.eye-events .ev-head{color:var(--purple)}.eye-events .ev-other{color:var(--muted)}

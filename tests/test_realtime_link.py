@@ -210,8 +210,10 @@ class SessionTest(HubBase):
         upd = ws.sent[0]
         self.assertEqual(upd["type"], "session.update")
         s = upd["session"]
-        self.assertEqual((s["voice"], s["turn_detection"]["type"], s["turn_detection"]["silence_duration_ms"],
-                          s["turn_detection"]["threshold"]), ("v-secret", "server_vad", 1000, 0.6))
+        # owner 2026-11-18: smart_turn_v2 (addressee judgement), threshold only; server_vad keeps its silence
+        self.assertEqual((s["voice"], s["turn_detection"]), ("v-secret", {"type": "smart_turn_v2", "threshold": 0.6}))
+        self.assertEqual(self.rl.session_config("v", "i", 1000, 0.6)["turn_detection"],
+                         {"type": "server_vad", "threshold": 0.6, "silence_duration_ms": 1000})
         self.assertIn("此刻的情景：大家在聊午饭", s["instructions"])
         self.assertIs(s.get("enable_search"), True)               # owner 2026-11-15: web search on
         self.assertEqual(self.rl.session_config("v", "i").get("enable_search"), None)
@@ -445,6 +447,20 @@ class GateTest(HubBase):
         await settle(20)
         self.assertIn(("POST", "/switches", {"name": "realtime", "on": False, "by": "hush"}), calls)
         self.assertEqual(self.hub.stats["hush"], 1)
+
+    async def test_a_turn_smart_turn_rejects_is_dropped(self):
+        # smart_turn_v2: speech that is not for hello comes back as an ambient transcript and no response
+        ws = await self.open_ready()
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        await settle(10)
+        self.assertIsNotNone(self.hub._heard_turn)
+        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "他们在聊午饭。"})
+        await settle(10)
+        self.assertIsNone(self.hub._heard_turn)
+        self.assertIsNone(self.hub._turn)
+        self.assertEqual(self.hub.stats["ambient"], 1)
+        self.assertEqual(self.link.sent, [])
 
 
 class RescueTest(HubBase):

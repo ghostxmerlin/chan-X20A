@@ -99,6 +99,23 @@ class HelloDBTest(unittest.TestCase):
         self.assertEqual(doc["name"], "person-a"); self.assertNotIn("junk", doc); self.assertNotIn("type", doc)
         self.assertEqual(doc2["at"], 50)
 
+    def test_m12_events_keep_their_fields_and_same_time_events_stay_apart(self):
+        fake = FakeDB()                          # collector-0.5.02: m12d 0.2.0 event lines (vision m12_ev)
+        db = hello_db.HelloDB("unused", client_factory=lambda: fake)
+        db.vision("s1", {"type": "vision", "event": "m12_ev", "ev": "look", "t_us": 5, "now_us": 5, "f": 9, "face": 3,
+                         "junk": 1}, received_ms=10)
+        db.vision("s1", {"type": "vision", "event": "m12_ev", "ev": "enter", "t_us": 5, "face": 3}, received_ms=10)
+        db.vision("s1", {"type": "vision", "event": "m12_ev", "ev": "wake", "t_us": 6, "area": [0, 0, 640, 480], "amt": 1,
+                         "pan": True, "cd": 30, "faces": [], "persons": []}, received_ms=10)
+        db.flush()
+        keys = [k for _, _, k, _ in fake.ops]
+        self.assertEqual(keys[0], {"session": "s1", "t_us": 5, "event": "m12_ev", "face": 3, "person": None, "ev": "look"})
+        self.assertEqual(keys[1]["ev"], "enter")         # same serial read, same t_us: still two rows
+        wake = fake.ops[2][3]
+        self.assertEqual((wake["ev"], wake["area"], wake["amt"], wake["pan"], wake["cd"], wake["faces"], wake["persons"]),
+                         ("wake", [0, 0, 640, 480], 1, True, 30, [], []))
+        self.assertNotIn("junk", fake.ops[0][3]); self.assertEqual(fake.ops[0][3]["f"], 9)
+
     def test_only_known_speakers_get_a_name(self):
         row = hello_db.speech_doc("s", {"id": "s-1", "speaker": {"band": "unsure", "name": "person-a", "score": 0.45}})
         self.assertIsNone(row["speaker"]["name"]); self.assertEqual(row["speaker"]["best"], "person-a")

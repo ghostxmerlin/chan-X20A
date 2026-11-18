@@ -110,6 +110,9 @@ void screen_update_mode(const char* label, uint32_t color, bool online);
 void screen_set_cjk_font(const lv_font_t* small, const lv_font_t* large);
 // A short ASCII line at the bottom for 2 s (the mode's toast). Empty text shows nothing.
 void screen_show_toast(const char* text, uint32_t now_ms);
+// 0.5.03 M12 words (m12_words.h): busy = a toast is on screen now; a word replaces nothing that is showing
+bool screen_toast_busy();
+void screen_show_word(const char* text, uint32_t now_ms);
 // 0.4.93 chat stage dots (chat_stage.h), home page top row, left: visible only in chat / crowd; lit = -1 none,
 // 0 / 1 / 2 = listen / think / speak in `color`; grey = all three grey (skip).
 // 0.4.98: drawn as three narrow blocks as tall as the mode badge (same semantics and timing) by the home top row, one

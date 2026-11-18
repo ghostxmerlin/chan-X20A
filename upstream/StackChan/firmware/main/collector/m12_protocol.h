@@ -16,6 +16,7 @@ namespace collector {
 // line. Protocol: m12d docs/protocol.md; migration notes: docs/m12d-migration.md.
 //   push   (no "id"):  detection line {"f":..,"num":..,"face":[..],"person":[..]}
 //                      heartbeat {"hb":{"t":..,"fps":..,"tier":..,"up":..,...}} every 2 s
+//                      event {"ev":{"t":"nod","fr":..,...}} (m12d 0.2.0+, §3.3; unknown t ignored)
 //   request:           {"id":N,"do":"ping|ver|status|cfg|learn|who|forget|faces",...}
 //   reply:             {"id":N,"ok":true,...} or {"id":N,"ok":false,"err":"<code>"}
 // Replies and pushes interleave; match replies by id. Unknown fields are ignored.
@@ -49,6 +50,12 @@ struct M12Face {
     int16_t age = -1;
     M12AgeGroup age_group = M12AgeGroup::none;
     char name[kM12NameBytes + 1] = {};    // set once who/learn recognised this face
+    // Head pose (m12d 0.2.0+, cfg pose:true, faces with an id; all optional, approximate).
+    int16_t yaw = 0, pitch = 0, roll = 0; // degrees; valid when has_pose. yaw +: face turned to frame right,
+                                          // pitch +: head up, roll +: crown towards frame right
+    bool has_pose = false;
+    int8_t look = -1;                     // facing StackChan (|yaw|, |pitch| <= 15): 1 / 0; -1 = not reported
+    int16_t dist_cm = -1;                 // rough distance from the face width (uncalibrated); -1 = not reported
 };
 struct M12Person {
     int16_t x = 0, y = 0, w = 0, h = 0;
@@ -98,12 +105,63 @@ struct M12Reply {
     uint8_t library_count = 0;
     M12LibraryEntry library[kM12LibraryMax];
 };
-enum class M12Kind : uint8_t { invalid, detection, heartbeat, reply, other };
+// ---------- events (m12d 0.2.0+, protocol §3.3) ----------
+// One {"ev":{"t":..,"fr":..,...}} push line: what happened in view (2026-11-17: shown only, nothing reacts yet).
+// Known types only; a line with any other t parses as M12Kind::other (ignored, counted). Field sentinels: -1 /
+// 0 / false = not in the line.
+enum class M12EvType : uint8_t {
+    wake, cover, uncover, light, dark, bright, enter, leave, near, far, look, look_end, nod, shake, tilt, smile, count
+};
+inline const char* m12_ev_type_name(M12EvType t)
+{
+    static const char* const names[] = {"wake", "cover", "uncover", "light", "dark", "bright", "enter", "leave",
+                                        "near", "far", "look", "look_end", "nod", "shake", "tilt", "smile"};
+    static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(M12EvType::count), "one name per type");
+    return t < M12EvType::count ? names[static_cast<size_t>(t)] : "";
+}
+inline bool m12_ev_type_from_name(const char* s, M12EvType& out)
+{
+    if (!s) return false;
+    for (uint8_t i = 0; i < static_cast<uint8_t>(M12EvType::count); ++i)
+        if (!std::strcmp(s, m12_ev_type_name(static_cast<M12EvType>(i)))) { out = static_cast<M12EvType>(i); return true; }
+    return false;
+}
+constexpr size_t kM12EvFaces = 3, kM12EvPersons = 3;   // kept per wake / light analysis (count of all in *_seen)
+struct M12EvBox { int16_t x = 0, y = 0, w = 0, h = 0; };
+struct M12EvFace {
+    M12EvBox box;
+    float sim = -1;                       // with a name: who similarity
+    char name[kM12NameBytes + 1] = {};
+};
+struct M12Event {
+    M12EvType type = M12EvType::wake;
+    uint32_t fr = 0;                      // m12d frame number (same count as the detection line's f)
+    int32_t face = -1, person = -1;       // ids: look/nod/... face; enter/leave/near/far face or person
+    int16_t n = -1;                       // nod / shake: how many
+    char side = 0;                        // tilt: 'l' / 'r'
+    int8_t on = -1;                       // light: 1 on / 0 off
+    bool pan = false, hot = false;        // wake: the M12 was turned / analysis skipped (too hot)
+    bool has_area = false, has_scan = false;   // wake: area given / faces or persons given
+    float dur = -1;                       // uncover / leave / look_end: seconds
+    float amt = -1;                       // wake: changed share of pixels, 0..1
+    float d[2] = {-1, -1};                // near / far (faces): estimated distance before, after, m
+    int16_t lum[2] = {-1, -1};            // cover / uncover / light / dark / bright: mean brightness before, after
+    int16_t cd = -1;                      // wake: cooldown from now, s
+    M12EvBox area;                        // wake: changed region, 640x480
+    uint8_t faces_seen = 0, persons_seen = 0;   // wake / light analysis: how many m12d reported
+    uint8_t faces = 0, persons = 0;             // ... and kept here
+    M12EvFace face_list[kM12EvFaces];
+    M12EvBox person_list[kM12EvPersons];
+};
+
+enum class M12Kind : uint8_t { invalid, detection, heartbeat, reply, other, event };
 struct M12Message {
     M12Kind kind = M12Kind::invalid;
     M12Detection det;
     M12Heartbeat hb;
     M12Reply reply;
+    M12Event ev;
+    bool ev_unknown = false;              // an {"ev":...} line whose t this build does not know (kind other)
 };
 
 // Newline-terminated lines from the byte stream, assembled in caller-provided storage
@@ -173,6 +231,124 @@ inline void read_hb(ArduinoJson::JsonObjectConst o, M12Heartbeat& hb)
     hb.up = o["up"] | 0u; hb.mem = o["mem"] | 0u; hb.frames = o["frames"] | 0u;
     hb.reopens = o["reopens"] | 0u; hb.drop = o["drop"] | 0u; hb.mhz = o["mhz"] | 0u;
 }
+inline bool number(ArduinoJson::JsonVariantConst v, float& out)
+{
+    if (!v.is<float>() || v.is<bool>()) return false;
+    const float f = v.as<float>();
+    if (!std::isfinite(f)) return false;
+    out = f;
+    return true;
+}
+inline int32_t id(ArduinoJson::JsonVariantConst v)
+{
+    if (!v.is<long long>()) return -1;
+    const long long n = v.as<long long>();
+    return n < 0 || n > 2147483647LL ? -1 : static_cast<int32_t>(n);
+}
+inline M12EvBox box(ArduinoJson::JsonObjectConst o)
+{
+    M12EvBox b;
+    b.x = coord(o["x"], kM12FrameWidth);
+    b.y = coord(o["y"], kM12FrameHeight);
+    b.w = coord(o["w"], kM12FrameWidth - b.x);
+    b.h = coord(o["h"], kM12FrameHeight - b.y);
+    return b;
+}
+// The five 0.2.0 pose fields of one detection-line face; each optional (cfg pose:false sends none).
+inline void read_pose(ArduinoJson::JsonObjectConst item, M12Face& f)
+{
+    float yaw, pitch, roll, dist;
+    if (number(item["yaw"], yaw) && number(item["pitch"], pitch) && number(item["roll"], roll)) {
+        f.has_pose = true;
+        f.yaw = static_cast<int16_t>(std::clamp<long>(std::lround(yaw), -180, 180));
+        f.pitch = static_cast<int16_t>(std::clamp<long>(std::lround(pitch), -180, 180));
+        f.roll = static_cast<int16_t>(std::clamp<long>(std::lround(roll), -180, 180));
+    }
+    if (item["look"].is<bool>()) f.look = item["look"].as<bool>() ? 1 : 0;
+    if (number(item["dist"], dist) && dist >= 0) f.dist_cm = static_cast<int16_t>(std::min<long>(std::lround(dist * 100), 10000));
+}
+// {"ev":{...}} → event. false: a type this build does not know (ignored).
+inline bool read_event(ArduinoJson::JsonObjectConst o, M12Event& e)
+{
+    using namespace ArduinoJson;
+    if (!m12_ev_type_from_name(o["t"].as<const char*>(), e.type)) return false;
+    e.fr = o["fr"] | 0u;
+    e.face = id(o["face"]);
+    e.person = id(o["person"]);
+    if (o["n"].is<int>()) e.n = static_cast<int16_t>(std::clamp(o["n"].as<int>(), 0, 1000));
+    if (const char* s = o["side"]; s && (s[0] == 'l' || s[0] == 'r') && !s[1]) e.side = s[0];
+    if (o["on"].is<bool>()) e.on = o["on"].as<bool>() ? 1 : 0;
+    e.pan = o["pan"] | false;
+    e.hot = o["hot"] | false;
+    float v;
+    if (number(o["dur"], v) && v >= 0) e.dur = std::min(v, 86400.0f);
+    if (number(o["amt"], v) && v >= 0) e.amt = std::min(v, 1.0f);
+    if (number(o["cd"], v) && v >= 0) e.cd = static_cast<int16_t>(std::min<long>(std::lround(v), 32767));
+    if (JsonArrayConst d = o["d"]; d.size() == 2) {
+        float a, b;
+        if (number(d[0], a) && number(d[1], b) && a >= 0 && b >= 0) { e.d[0] = a; e.d[1] = b; }
+    }
+    auto level = [](JsonVariantConst x) -> int16_t {
+        float f;
+        return number(x, f) ? static_cast<int16_t>(std::clamp<long>(std::lround(f), 0, 255)) : -1;
+    };
+    if (JsonArrayConst lum = o["lum"]; !lum.isNull()) { if (lum.size() >= 1) e.lum[0] = level(lum[0]); if (lum.size() >= 2) e.lum[1] = level(lum[1]); }
+    else if (o["lum"].is<float>()) e.lum[1] = level(o["lum"]);   // a single value: the brightness now
+    if (JsonObjectConst a = o["area"]; !a.isNull()) { e.area = box(a); e.has_area = e.area.w > 0 && e.area.h > 0; }
+    JsonArrayConst faces = o["faces"], persons = o["persons"];
+    e.has_scan = !faces.isNull() || !persons.isNull();
+    e.faces_seen = static_cast<uint8_t>(std::min<size_t>(faces.size(), 255));
+    e.persons_seen = static_cast<uint8_t>(std::min<size_t>(persons.size(), 255));
+    for (JsonObjectConst item : faces) {
+        if (e.faces == kM12EvFaces) break;
+        M12EvFace f;
+        f.box = box(item);
+        if (f.box.w <= 0 || f.box.h <= 0) continue;
+        copy_name(f.name, item["name"]);
+        if (f.name[0] && number(item["sim"], v)) f.sim = v;
+        e.face_list[e.faces++] = f;
+    }
+    for (JsonObjectConst item : persons) {
+        if (e.persons == kM12EvPersons) break;
+        const M12EvBox b = box(item);
+        if (b.w > 0 && b.h > 0) e.person_list[e.persons++] = b;
+    }
+    return true;
+}
+}
+
+// Event fields as JSON (telemetry m12.events and the vision uplink's m12_ev). Only what the line had; "ev" = type.
+inline void m12_event_json(const M12Event& e, ArduinoJson::JsonObject out)
+{
+    auto box = [](ArduinoJson::JsonArray a, const M12EvBox& b) { a.add(b.x); a.add(b.y); a.add(b.w); a.add(b.h); };
+    out["ev"] = m12_ev_type_name(e.type);
+    if (e.face >= 0) out["face"] = e.face;
+    if (e.person >= 0) out["person"] = e.person;
+    if (e.n >= 0) out["n"] = e.n;
+    if (e.side) out["side"] = e.side == 'l' ? "l" : "r";
+    if (e.on >= 0) out["on"] = e.on == 1;
+    if (e.dur >= 0) out["dur"] = std::round(e.dur * 10) / 10;
+    if (e.d[0] >= 0) { auto d = out["d"].to<ArduinoJson::JsonArray>(); d.add(std::round(e.d[0] * 10) / 10); d.add(std::round(e.d[1] * 10) / 10); }
+    if (e.lum[0] >= 0 || e.lum[1] >= 0) { auto l = out["lum"].to<ArduinoJson::JsonArray>(); l.add(e.lum[0]); l.add(e.lum[1]); }
+    if (e.has_area) box(out["area"].to<ArduinoJson::JsonArray>(), e.area);
+    if (e.amt >= 0) out["amt"] = std::round(e.amt * 1000) / 1000;
+    if (e.cd >= 0) out["cd"] = e.cd;
+    if (e.pan) out["pan"] = true;
+    if (e.hot) out["hot"] = true;
+    if (e.has_scan) {
+        auto faces = out["faces"].to<ArduinoJson::JsonArray>();
+        for (uint8_t i = 0; i < e.faces; ++i) {
+            const auto& f = e.face_list[i];
+            auto o = faces.add<ArduinoJson::JsonObject>();
+            box(o["box"].to<ArduinoJson::JsonArray>(), f.box);
+            if (f.name[0]) o["name"] = std::string(f.name);
+            if (f.name[0] && f.sim >= 0) o["sim"] = std::round(f.sim * 1000) / 1000;
+        }
+        auto persons = out["persons"].to<ArduinoJson::JsonArray>();
+        for (uint8_t i = 0; i < e.persons; ++i) box(persons.add<ArduinoJson::JsonArray>(), e.person_list[i]);
+        if (e.faces_seen > e.faces) out["faces_seen"] = e.faces_seen;
+        if (e.persons_seen > e.persons) out["persons_seen"] = e.persons_seen;
+    }
 }
 
 // One line → message. `doc` may carry a PSRAM allocator; it is cleared here.
@@ -248,6 +424,7 @@ inline bool parse_m12_line(const char* line, size_t n, M12Message& out, ArduinoJ
                     !std::strcmp(a, "adult") ? M12AgeGroup::adult : !std::strcmp(a, "elder") ? M12AgeGroup::elder : M12AgeGroup::none;
             }
             m12_detail::copy_name(f.name, item["name"]);
+            m12_detail::read_pose(item, f);
             if (f.w <= 0 || f.h <= 0 || !std::isfinite(f.prob)) continue;
             d.faces[d.count++] = f;
         }
@@ -265,6 +442,12 @@ inline bool parse_m12_line(const char* line, size_t n, M12Message& out, ArduinoJ
             d.person[d.persons++] = p;
         }
         return true;
+    }
+    // m12d 0.2.0 event line: only "ev" at the top (no id / hb / f). Unknown t: ignored like any unknown line.
+    if (JsonObjectConst ev = o["ev"]; !ev.isNull()) {
+        if (m12_detail::read_event(ev, out.ev)) { out.kind = M12Kind::event; return true; }
+        out.ev = M12Event{};
+        out.ev_unknown = true;
     }
     out.kind = M12Kind::other;
     return true;
@@ -590,12 +773,14 @@ inline M12Target m12_track_target(const M12Detection& d, const M12Target& previo
 // (face_named) and gender / age group (face_attrs, ~0.6 s after the face appears), not at loss.
 enum class M12VisionKind : uint8_t {
     face_found, face_named, face_unknown, face_lost, person_found, person_lost,
-    vision_on, vision_off, m12_online, m12_offline, face_attrs
+    vision_on, vision_off, m12_online, m12_offline, face_attrs,
+    m12_ev                                // an m12d 0.2.0 event line, passed on as it came (M12VisionEvent::ev)
 };
 inline const char* m12_vision_kind_name(M12VisionKind k)
 {
     static const char* const names[] = {"face_found", "face_named", "face_unknown", "face_lost", "person_found",
-                                        "person_lost", "vision_on", "vision_off", "m12_online", "m12_offline", "face_attrs"};
+                                        "person_lost", "vision_on", "vision_off", "m12_online", "m12_offline", "face_attrs",
+                                        "m12_ev"};
     return names[static_cast<size_t>(k)];
 }
 struct M12VisionEvent {
@@ -610,6 +795,8 @@ struct M12VisionEvent {
     M12AgeGroup age_group = M12AgeGroup::none;
     char name[kM12NameBytes + 1] = {};
     char reason[12] = {};                 // lost: "timeout" or "vision_off"
+    // kind m12_ev: the event itself rides beside this one (m12_peek_vision_events' ev_out), so this struct, built on
+    // task stacks by the change tracker, stays small.
 };
 class M12ChangeTracker {
 public:

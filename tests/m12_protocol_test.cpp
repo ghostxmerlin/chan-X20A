@@ -382,5 +382,110 @@ int main()
         auto b = m12_to_screen(f);
         assert(b.x == 0 && b.y == 0 && b.w == 320 && b.h == 240);
     }
+    // --- m12d 0.2.0: pose fields on faces (§3.1, all optional) ---
+    {
+        auto old = parse(kDetection);                       // a 0.1.0 line: no pose, nothing invented
+        assert(old.kind == M12Kind::detection && !old.det.faces[0].has_pose && old.det.faces[0].look == -1 && old.det.faces[0].dist_cm == -1);
+        auto m = parse(R"({"f":20,"num":2,"face":[)"
+                       R"({"x":278.3,"y":143.9,"w":100.9,"h":140.6,"prob":0.97,"id":3,"yaw":-12,"pitch":4,"roll":-7,"look":true,"dist":0.7},)"
+                       R"({"x":10,"y":20,"w":30,"h":40,"prob":0.9,"id":4,"yaw":50,"pitch":-3,"roll":2,"look":false}]})");
+        assert(m.kind == M12Kind::detection && m.det.count == 2);
+        const auto& a = m.det.faces[0];
+        assert(a.has_pose && a.yaw == -12 && a.pitch == 4 && a.roll == -7 && a.look == 1 && a.dist_cm == 70);
+        assert(a.x == 278 && a.id == 3);                    // the old fields are unchanged
+        const auto& b = m.det.faces[1];
+        assert(b.has_pose && b.yaw == 50 && b.look == 0 && b.dist_cm == -1);   // dist left out at the frame edge
+        auto partial = parse(R"({"f":21,"num":1,"face":[{"x":1,"y":1,"w":10,"h":10,"prob":0.9,"id":5,"yaw":3,"look":"yes","dist":"far"}]})");
+        assert(!partial.det.faces[0].has_pose && partial.det.faces[0].look == -1 && partial.det.faces[0].dist_cm == -1);
+        auto wild = parse(R"({"f":22,"num":1,"face":[{"x":1,"y":1,"w":10,"h":10,"prob":0.9,"id":6,"yaw":999,"pitch":-999,"roll":0.4,"dist":-1}]})");
+        assert(wild.det.faces[0].yaw == 180 && wild.det.faces[0].pitch == -180 && wild.det.faces[0].roll == 0 && wild.det.faces[0].dist_cm == -1);
+    }
+    // --- m12d 0.2.0: event lines (§3.3) ---
+    {
+        auto nod = parse(R"({"ev":{"t":"nod","fr":8542,"face":3,"n":2}})");
+        assert(nod.kind == M12Kind::event && nod.ev.type == M12EvType::nod && nod.ev.fr == 8542 && nod.ev.face == 3 && nod.ev.n == 2);
+        assert(nod.ev.person == -1 && nod.ev.dur < 0 && !nod.ev.has_scan && !nod.ev.has_area);
+        auto cover = parse(R"({"ev":{"t":"cover","fr":8600,"lum":[140,8]}})");
+        assert(cover.ev.type == M12EvType::cover && cover.ev.lum[0] == 140 && cover.ev.lum[1] == 8);
+        auto uncover = parse(R"({"ev":{"t":"uncover","fr":8700,"lum":[8,139],"dur":3.4}})");
+        assert(uncover.ev.type == M12EvType::uncover && std::fabs(uncover.ev.dur - 3.4f) < 1e-4f);
+        auto light = parse(R"({"ev":{"t":"light","fr":1,"on":false,"lum":[120,20]}})");
+        assert(light.ev.type == M12EvType::light && light.ev.on == 0 && light.ev.lum[1] == 20);
+        auto tilt = parse(R"({"ev":{"t":"tilt","fr":2,"face":3,"side":"l"}})");
+        assert(tilt.ev.type == M12EvType::tilt && tilt.ev.side == 'l');
+        auto bad_side = parse(R"({"ev":{"t":"tilt","fr":2,"face":3,"side":"left"}})");
+        assert(bad_side.kind == M12Kind::event && bad_side.ev.side == 0);
+        auto near = parse(R"({"ev":{"t":"near","fr":3,"face":3,"d":[1.2,0.7]}})");
+        assert(near.ev.type == M12EvType::near && std::fabs(near.ev.d[0] - 1.2f) < 1e-4f && std::fabs(near.ev.d[1] - 0.7f) < 1e-4f);
+        auto far = parse(R"({"ev":{"t":"far","fr":4,"person":18}})");
+        assert(far.ev.type == M12EvType::far && far.ev.person == 18 && far.ev.face == -1 && far.ev.d[0] < 0);
+        auto leave = parse(R"({"ev":{"t":"leave","fr":5,"face":3,"dur":12.5}})");
+        assert(leave.ev.type == M12EvType::leave && std::fabs(leave.ev.dur - 12.5f) < 1e-4f);
+        auto look_end = parse(R"({"ev":{"t":"look_end","fr":6,"face":3,"dur":1.8}})");
+        assert(look_end.ev.type == M12EvType::look_end && look_end.ev.face == 3);
+        // wake: area, amount, analysis with a recognised face, cooldown
+        auto wake = parse(R"({"ev":{"t":"wake","fr":9000,"area":{"x":100,"y":50,"w":200,"h":300},"amt":0.12,)"
+                          R"("faces":[{"x":300,"y":100,"w":80,"h":100,"name":"me","sim":0.71},{"x":10,"y":10,"w":20,"h":20}],)"
+                          R"("persons":[{"x":250,"y":60,"w":200,"h":400}],"cd":30}})");
+        assert(wake.kind == M12Kind::event && wake.ev.type == M12EvType::wake && wake.ev.has_area && wake.ev.area.w == 200);
+        assert(std::fabs(wake.ev.amt - 0.12f) < 1e-4f && wake.ev.cd == 30 && !wake.ev.pan && !wake.ev.hot && wake.ev.has_scan);
+        assert(wake.ev.faces == 2 && wake.ev.faces_seen == 2 && !std::strcmp(wake.ev.face_list[0].name, "me"));
+        assert(std::fabs(wake.ev.face_list[0].sim - 0.71f) < 1e-4f && !wake.ev.face_list[1].name[0] && wake.ev.face_list[1].sim < 0);
+        assert(wake.ev.persons == 1 && wake.ev.person_list[0].h == 400);
+        auto pan = parse(R"({"ev":{"t":"wake","fr":9100,"area":{"x":0,"y":0,"w":640,"h":480},"amt":1,"pan":true,"hot":true,"cd":60}})");
+        assert(pan.ev.pan && pan.ev.hot && !pan.ev.has_scan && pan.ev.amt == 1.0f && pan.ev.area.w == 640);
+        std::string many = R"({"ev":{"t":"wake","fr":1,"faces":[)";
+        for (int i = 0; i < 5; ++i) many += std::string(i ? "," : "") + R"({"x":1,"y":1,"w":10,"h":10})";
+        many += R"(],"persons":[]}})";
+        auto crowd = parse(many);
+        assert(crowd.ev.faces == kM12EvFaces && crowd.ev.faces_seen == 5 && crowd.ev.persons == 0 && crowd.ev.has_scan);
+        // unknown t (more will be added), hand/wave/reach (retired), no t, ev not an object: ignored, never an error
+        for (const char* line : {R"({"ev":{"t":"hand","fr":1,"face":2}})", R"({"ev":{"t":"zzz_future","fr":1,"x":[1]}})",
+                                 R"({"ev":{"fr":1}})", R"({"ev":{"t":7}})"}) {
+            auto u = parse(line);
+            assert(u.kind == M12Kind::other && u.ev_unknown);
+        }
+        auto scalar = parse(R"({"ev":5})");
+        assert(scalar.kind == M12Kind::other && !scalar.ev_unknown);
+        // every known type round-trips its name
+        for (uint8_t i = 0; i < static_cast<uint8_t>(M12EvType::count); ++i) {
+            M12EvType t;
+            assert(m12_ev_type_from_name(m12_ev_type_name(static_cast<M12EvType>(i)), t) && t == static_cast<M12EvType>(i));
+        }
+        // the old lines still parse the same around event lines in one stream
+        auto msgs = stream(std::string(R"({"ev":{"t":"enter","fr":8541,"face":1}})") + "\n" + kDetection + "\n" +
+                           R"({"ev":{"t":"new_kind","fr":8542}})" + "\n" + kHeartbeat + "\n" + R"({"id":4,"ok":true})" + "\n");
+        assert(msgs.size() == 5);
+        assert(msgs[0].kind == M12Kind::event && msgs[0].ev.type == M12EvType::enter && msgs[0].ev.face == 1);
+        assert(msgs[1].kind == M12Kind::detection && msgs[1].det.faces[0].id == 1 && !std::strcmp(msgs[1].det.faces[0].name, "me"));
+        assert(msgs[2].kind == M12Kind::other && msgs[3].kind == M12Kind::heartbeat && msgs[4].kind == M12Kind::reply && msgs[4].reply.id == 4);
+        // a detection line is never taken for an event (ev ignored where f is present)
+        auto both = parse(R"({"f":30,"num":0,"face":[],"ev":{"t":"nod","fr":30}})");
+        assert(both.kind == M12Kind::detection);
+        // JSON for telemetry / uplink: only what the line had
+        ArduinoJson::JsonDocument out;
+        m12_event_json(nod.ev, out.to<ArduinoJson::JsonObject>());
+        std::string text;
+        ArduinoJson::serializeJson(out, text);
+        assert(text == R"({"ev":"nod","face":3,"n":2})");
+        out.clear(); text.clear();
+        m12_event_json(wake.ev, out.to<ArduinoJson::JsonObject>());
+        ArduinoJson::serializeJson(out, text);
+        assert(text == R"({"ev":"wake","area":[100,50,200,300],"amt":0.12,"cd":30,"faces":[{"box":[300,100,80,100],"name":"me","sim":0.71},)"
+                       R"({"box":[10,10,20,20]}],"persons":[[250,60,200,400]]})");
+        out.clear(); text.clear();
+        m12_event_json(near.ev, out.to<ArduinoJson::JsonObject>());
+        ArduinoJson::serializeJson(out, text);
+        assert(text == R"({"ev":"near","face":3,"d":[1.2,0.7]})");
+        out.clear(); text.clear();
+        m12_event_json(crowd.ev, out.to<ArduinoJson::JsonObject>());
+        ArduinoJson::serializeJson(out, text);
+        assert(text.find(R"("faces_seen":5)") != std::string::npos && text.find("persons_seen") == std::string::npos);
+        out.clear(); text.clear();
+        m12_event_json(uncover.ev, out.to<ArduinoJson::JsonObject>());
+        ArduinoJson::serializeJson(out, text);
+        assert(text == R"({"ev":"uncover","dur":3.4,"lum":[8,139]})");
+        assert(!std::strcmp(m12_vision_kind_name(M12VisionKind::m12_ev), "m12_ev"));
+    }
     std::cout << "m12 protocol tests passed\n";
 }

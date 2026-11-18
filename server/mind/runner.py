@@ -333,6 +333,8 @@ def main():
     ap.add_argument("--fusion", action="store_true", help="with --rebuild: also run the model over the range")
     ap.add_argument("--catch-up-max-hours", type=float, default=48)
     ap.add_argument("--roles", default=os.path.expanduser("~/soul-mind/roles"), help="hello's speaking roles (config/roles)")
+    ap.add_argument("--persona", default=os.path.expanduser("~/soul-mind/persona.md"),
+                    help="hello's persona file (config/persona, owner 2026-11-18); missing = the chat role's 性格")
     ap.add_argument("--tts-url", default="http://127.0.0.1:52750", help="soul-tts API on the loopback")
     ap.add_argument("--tts-token-file", default=os.path.expanduser("~/soul-tts/api.token"), help="soul-tts API token")
     ap.add_argument("--clip-texts", default=os.path.expanduser("~/soul-mind/clip_texts.json"),
@@ -394,7 +396,8 @@ def main():
     # Chat v0 (plan 2026-11-14-chat-v0): the ear POSTs /chat/heard in chat mode; the worker runs only in chat.
     from . import chat as chat_mod
     chat = chat_mod.Chat(db, store, settings_fn=lambda: settings_store.current()[0],
-                         roles_fn=lambda: speak.load_roles(a.roles), tts=tts, env=env, mouth_fn=mouth_fn)
+                         roles_fn=lambda: speak.load_roles(a.roles), tts=tts, env=env, mouth_fn=mouth_fn,
+                         persona_path=a.persona)
     chat.ensure_indexes()
     mode_store, billing, round_gate = wire_modes(db, store, settings_store=settings_store, tts=tts, say_worker=say_worker,
                                                  say_auto=say_auto_live, say_round_fn=say_round_live if env and tts else None,

@@ -33,6 +33,7 @@ h1 { font-size: 21px; margin: 0; letter-spacing: .01em; }
 .sw.note { border-color: var(--note); background: color-mix(in srgb, var(--note) 18%, var(--card)); }
 .sw.say { border-color: var(--say); background: color-mix(in srgb, var(--say) 18%, var(--card)); }
 .sw.dash { border: 0; height: 0; border-top: 2px dashed var(--muted); border-radius: 0; }
+.sw.plan { border: 2px dashed var(--muted); background: transparent; }
 
 main { max-width: 1320px; margin: 0 auto; padding: 0 16px 40px; }
 
@@ -40,6 +41,10 @@ main { max-width: 1320px; margin: 0 auto; padding: 0 16px 40px; }
 .flow { margin: 12px 0 0; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
 .scroller { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .flow svg { display: block; width: 100%; height: auto; min-width: 0; }
+.flow + .flow { margin-top: 16px; }
+.flow figcaption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 2px 4px 8px; }
+.fig-h { font-size: 17px; margin: 0; color: var(--think-ink); }
+.fig-sub { font-size: 13.5px; color: var(--muted); }
 .swipe { display: none; margin: 0 0 6px; font-size: 13px; color: var(--muted); }
 @media (max-width: 900px) {
   .flow { padding: 8px; }
@@ -62,6 +67,13 @@ main { max-width: 1320px; margin: 0 auto; padding: 0 16px 40px; }
 .box.think { fill: color-mix(in srgb, var(--think) 8%, var(--card)); stroke: var(--think); }
 .box.note { fill: color-mix(in srgb, var(--note) 10%, var(--card)); stroke: var(--note); }
 .box.say { fill: color-mix(in srgb, var(--say) 10%, var(--card)); stroke: var(--say); }
+.box.neutral { fill: color-mix(in srgb, var(--muted) 8%, var(--card)); stroke: var(--muted); }
+.box.plan { stroke-dasharray: 7 5; }
+.rule { stroke: var(--line); stroke-width: 1; }
+.st { font-size: 11.5px; font-weight: 650; }
+.st.live { fill: var(--see-ink); } .st.obs { fill: var(--hear-ink); }
+.st.wip { fill: var(--say-ink); } .st.plan { fill: var(--muted); }
+.neg-ink { fill: var(--say-ink); }
 .sec { fill: var(--card); stroke: color-mix(in srgb, var(--think) 35%, var(--line)); stroke-width: 1; }
 .chip { fill: var(--card); stroke: color-mix(in srgb, var(--say) 55%, var(--line)); stroke-width: 1; }
 
@@ -107,6 +119,7 @@ td, th { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom:
 th { color: var(--muted); font-weight: 600; }
 .why td:first-child { width: 6.5em; white-space: nowrap; }
 .cadence td:first-child { width: 8em; white-space: nowrap; color: var(--muted); }
+.phase td:first-child { width: 2.6em; font-weight: 700; color: var(--think-ink); }
 .tag { display: inline-block; font-size: 12px; font-weight: 700; padding: 0 6px; margin-right: 4px; border-radius: 6px; border: 1.5px solid; line-height: 18px; }
 .tag.hear { color: var(--hear-ink); border-color: var(--hear); }
 .tag.see { color: var(--see-ink); border-color: var(--see); }

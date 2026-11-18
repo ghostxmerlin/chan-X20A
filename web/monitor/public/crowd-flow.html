@@ -9,17 +9,18 @@
 <body>
 <header class="top">
   <div class="top-row">
-    <h1>围观模式现在怎么工作</h1>
+    <h1>围观模式怎么工作 · 怎么判断是不是在跟它说</h1>
     <a href="/">← 观察台</a>
   </div>
-  <p class="lead"><b>围观模式</b>（代码名 <code>crowd</code>，机器人屏幕上显示 <b>MEET</b>）：用听觉、视觉，再加上情景和纪要来聊天。这一页画的就是它：现在用鹿野（ly01）的声音，人设是“傲娇霸气”。</p>
+  <p class="lead"><b>围观模式</b>（代码名 <code>crowd</code>，机器人屏幕上显示 <b>MEET</b>）：用听觉、视觉，再加上情景和纪要来聊天。这一页画的就是它：现在用鹿野（ly01）的声音，人设是“傲娇霸气”。第一张图是线上现在的样子；第二张图是接下来要接上的“是不是在跟它说”的判断，多数还在计划里，每个框都标了状态。</p>
   <ul class="legend" aria-label="颜色">
     <li><i class="sw hear"></i>听</li>
     <li><i class="sw see"></i>看</li>
     <li><i class="sw think"></i>想 / 情景</li>
     <li><i class="sw note"></i>记 / 纪要</li>
     <li><i class="sw say"></i>说</li>
-    <li><i class="sw dash"></i>虚线：回头补进去（反馈）</li>
+    <li><i class="sw dash"></i>虚线箭头：回头补进去（反馈）</li>
+    <li><i class="sw plan"></i>虚线框：在做 / 计划，还没上线</li>
   </ul>
 </header>
 
@@ -131,8 +132,8 @@
 
     <rect x="30" y="380" width="160" height="80" rx="10" class="box see"/>
     <text x="110" y="406" class="t" text-anchor="middle">M12 人脸识别</text>
-    <text x="110" y="426" class="s" text-anchor="middle">认出名字</text>
-    <text x="110" y="444" class="s" text-anchor="middle">性别 · 年龄段</text>
+    <text x="110" y="426" class="s" text-anchor="middle">认出名字 · 性别年龄段</text>
+    <text x="110" y="444" class="st wip" text-anchor="middle">0.2.0 新事件：固件在做</text>
 
     <rect x="30" y="520" width="160" height="80" rx="10" class="box see"/>
     <text x="110" y="552" class="t" text-anchor="middle">机身摄像头</text>
@@ -142,6 +143,14 @@
     <text x="110" y="706" class="t" text-anchor="middle">闭嘴</text>
     <text x="110" y="726" class="s" text-anchor="middle">“围观”开关 → 关</text>
     <text x="110" y="744" class="s" text-anchor="middle">会话马上断开</text>
+
+    <!-- keyword ear (2026-11-17): raw mic, no sentence cutting -->
+    <path d="M110,210 V286 H278" class="ln hear" marker-end="url(#m-hear)"/>
+    <text x="196" y="279" class="lbl hear" text-anchor="middle">原始声音 · 不切句</text>
+    <rect x="280" y="250" width="190" height="72" rx="10" class="box hear"/>
+    <text x="375" y="273" class="t" text-anchor="middle">关键词耳朵</text>
+    <text x="375" y="292" class="s" text-anchor="middle">只认声音：デュナメス</text>
+    <text x="375" y="310" class="st obs" text-anchor="middle">已上线 · 只观察 → log.html</text>
 
     <!-- col2 -->
     <rect x="280" y="100" width="190" height="130" rx="10" class="box hear"/>
@@ -239,6 +248,131 @@
   </div>
 </figure>
 
+<figure class="flow">
+  <figcaption><h2 class="fig-h">它怎么判断“是不是在跟它说”</h2><span class="fig-sub">关键词耳朵 + M12 0.2.0 + 现有信号 → 每句话打分 → 各模式用法（多数是计划）</span></figcaption>
+  <p class="swipe">左右滑动看整张图</p>
+  <div class="scroller">
+  <svg viewBox="0 0 1290 560" role="img" aria-labelledby="flow2-title flow2-desc">
+    <title id="flow2-title">是不是在跟它说：信号、对齐、判定、各模式用法</title>
+    <desc id="flow2-desc">左边是六类信号：关键词耳朵、ear 句子、ASR 模块的 hello、M12 0.2.0 的注视和距离、它刚说完的时机、减分项；中间按麦克风时钟把它们对齐到每句话；再用一张权重表打分，分成对它说、说它、无关；右边是 IDLE、围观、陪伴、脱口秀和日志各自怎么用。</desc>
+    <defs>
+      <marker id="m2-think" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk think"/></marker>
+      <marker id="m2-say" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk say"/></marker>
+    </defs>
+    <text x="130" y="26" class="hdr" text-anchor="middle">① 信号（都是事实，ear 照报）</text>
+    <text x="430" y="26" class="hdr" text-anchor="middle">② 对齐到每句话（ear）</text>
+    <text x="725" y="26" class="hdr" text-anchor="middle">③ 打分判定</text>
+    <text x="1095" y="26" class="hdr" text-anchor="middle">④ 各模式怎么用</text>
+
+    <!-- bus: signals -> align -->
+    <path d="M230,87 H290 M230,173 H290 M230,252 H290 M230,339 H290 M230,426 H290 M230,498 H290 M290,87 V498" class="ln think"/>
+    <path d="M290,265 H328" class="ln think thick" marker-end="url(#m2-think)"/>
+    <!-- align -> judge -->
+    <path d="M530,265 H618" class="ln think thick" marker-end="url(#m2-think)"/>
+    <text x="574" y="255" class="lbl think" text-anchor="middle">每句的事实</text>
+    <!-- judge -> modes bus -->
+    <path d="M830,265 H885 M885,95 V434" class="ln say"/>
+    <path d="M885,95 H928" class="ln say" marker-end="url(#m2-say)"/>
+    <path d="M885,185 H928" class="ln say" marker-end="url(#m2-say)"/>
+    <path d="M885,275 H928" class="ln say" marker-end="url(#m2-say)"/>
+    <path d="M885,357 H928" class="ln say" marker-end="url(#m2-say)"/>
+    <path d="M885,434 H928" class="ln say" marker-end="url(#m2-say)"/>
+    <text x="858" y="255" class="lbl say" text-anchor="middle">三类</text>
+
+    <!-- col1: signals -->
+    <rect x="30" y="50" width="200" height="74" rx="10" class="box hear"/>
+    <text x="130" y="72" class="t" text-anchor="middle">关键词耳朵</text>
+    <text x="130" y="91" class="s" text-anchor="middle">叫了名字 · 句首还是句中</text>
+    <text x="130" y="111" class="st obs" text-anchor="middle">已上线 · 只观察 · 0.3–1.3 秒</text>
+
+    <rect x="30" y="136" width="200" height="74" rx="10" class="box hear"/>
+    <text x="130" y="158" class="t" text-anchor="middle">ear 句子</text>
+    <text x="130" y="177" class="s" text-anchor="middle">文字线索：你 / 它 / 问句 · 说话人</text>
+    <text x="130" y="197" class="st live" text-anchor="middle">已上线</text>
+
+    <rect x="30" y="222" width="200" height="60" rx="10" class="box hear"/>
+    <text x="130" y="246" class="t" text-anchor="middle">ASR 模块「hello」</text>
+    <text x="130" y="267" class="st live" text-anchor="middle">已上线 · 最强的“叫它”</text>
+
+    <rect x="30" y="294" width="200" height="90" rx="10" class="box see plan"/>
+    <text x="130" y="317" class="t" text-anchor="middle">M12 0.2.0</text>
+    <text x="130" y="336" class="s" text-anchor="middle">开口前后转过来看（look）</text>
+    <text x="130" y="353" class="s" text-anchor="middle">看了多久 · 距离 · 进出</text>
+    <text x="130" y="373" class="st wip" text-anchor="middle">固件在做 · 待刷机</text>
+
+    <rect x="30" y="396" width="200" height="60" rx="10" class="box say"/>
+    <text x="130" y="420" class="t" text-anchor="middle">时机</text>
+    <text x="130" y="441" class="s" text-anchor="middle">它刚说完 20 秒内接话</text>
+
+    <rect x="30" y="468" width="200" height="60" rx="10" class="box neutral"/>
+    <text x="130" y="491" class="t" text-anchor="middle">减分</text>
+    <text x="130" y="511" class="s" text-anchor="middle">几个人互相说 · 远处 / 电视</text>
+
+    <!-- col2: align -->
+    <rect x="330" y="140" width="200" height="250" rx="12" class="box think plan"/>
+    <text x="430" y="165" class="t" text-anchor="middle">对齐到每句话</text>
+    <text x="430" y="190" class="s" text-anchor="middle">关键词和句子用同一个</text>
+    <text x="430" y="207" class="s" text-anchor="middle">麦克风时钟，直接对上</text>
+    <text x="430" y="232" class="s" text-anchor="middle">M12 事件按到达时间</text>
+    <text x="430" y="249" class="s" text-anchor="middle">前后留 0.5 秒</text>
+    <text x="430" y="274" class="s" text-anchor="middle">关键词晚到时最多等 1.3 秒</text>
+    <line x1="350" y1="292" x2="510" y2="292" class="rule"/>
+    <text x="430" y="315" class="s2" text-anchor="middle">没切出句子的命中</text>
+    <text x="430" y="333" class="s2" text-anchor="middle">→ 单独一条「被叫」</text>
+    <text x="430" y="351" class="s" text-anchor="middle">（小声叫它也接得住）</text>
+    <text x="430" y="376" class="st plan" text-anchor="middle">计划 P0</text>
+
+    <!-- col3: judge -->
+    <rect x="620" y="96" width="210" height="338" rx="12" class="box think strong plan"/>
+    <text x="725" y="121" class="t" text-anchor="middle">是不是在跟它说</text>
+    <text x="725" y="138" class="mono" text-anchor="middle">addressed() + 权重表</text>
+    <rect x="632" y="148" width="186" height="118" rx="6" class="sec"/>
+    <text x="725" y="168" class="s2" text-anchor="middle">叫了名字 +60</text>
+    <text x="725" y="186" class="s2" text-anchor="middle">刚说完就接话 +30</text>
+    <text x="725" y="204" class="s2" text-anchor="middle">转过来看着它 +20</text>
+    <text x="725" y="222" class="s2" text-anchor="middle">问句 +10 · 说到你/它 +10</text>
+    <text x="725" y="240" class="s2" text-anchor="middle">主人或家人 +10</text>
+    <text x="725" y="258" class="s2 neg-ink" text-anchor="middle">几人互说 −30 · 远处 −30</text>
+    <rect x="632" y="274" width="186" height="80" rx="6" class="sec"/>
+    <text x="725" y="294" class="sh" text-anchor="middle">≥ 50 对它说 → 开口</text>
+    <text x="725" y="313" class="s2" text-anchor="middle">30–49 说它 → 只用表情</text>
+    <text x="725" y="332" class="s2" text-anchor="middle">&lt; 30 无关 → 只收集</text>
+    <text x="725" y="348" class="s" text-anchor="middle">纪要 · 情景 · 记忆照常</text>
+    <text x="725" y="378" class="s" text-anchor="middle">网页上能看、能调</text>
+    <text x="725" y="396" class="s" text-anchor="middle">代码归 mind，围观就地用</text>
+    <text x="725" y="420" class="st plan" text-anchor="middle">计划 · 现在只在计划页</text>
+
+    <!-- col4: modes -->
+    <rect x="930" y="60" width="330" height="70" rx="10" class="box neutral plan"/>
+    <text x="946" y="84" class="t">IDLE（不花钱）</text>
+    <text x="946" y="104" class="s">被叫 → 眼睛竖起来、转头看最近的脸</text>
+    <text x="946" y="121" class="st plan">计划 P2 · 要一条小的固件下行消息</text>
+
+    <rect x="930" y="142" width="330" height="86" rx="10" class="box say plan"/>
+    <text x="946" y="166" class="t">围观</text>
+    <text x="946" y="186" class="s">对它说 → 开口 · 说它 → 只用表情</text>
+    <text x="946" y="203" class="s">句子里叫了名字的「嗯」直接救回</text>
+    <text x="946" y="220" class="st plan">P1 名字分换成关键词耳朵 · P4 先打分再付费</text>
+
+    <rect x="930" y="240" width="330" height="70" rx="10" class="box say plan"/>
+    <text x="946" y="264" class="t">陪伴 / 聊天</text>
+    <text x="946" y="284" class="s">叫它打开对话窗 · 旁人聊天不插嘴</text>
+    <text x="946" y="301" class="st plan">计划 P3 · 先测别人的声音</text>
+
+    <rect x="930" y="322" width="330" height="70" rx="10" class="box say plan"/>
+    <text x="946" y="346" class="t">脱口秀</text>
+    <text x="946" y="366" class="s">被叫就停下接话 · 被说到当下一段素材</text>
+    <text x="946" y="383" class="st plan">计划 P4</text>
+
+    <rect x="930" y="404" width="330" height="60" rx="10" class="box think plan"/>
+    <text x="946" y="428" class="t">日志（先做这个）</text>
+    <text x="946" y="448" class="s">每句一行 gate.addressed：信号 · 分数 · 会不会开口</text>
+
+    <text x="30" y="550" class="s">实线框 = 已上线；虚线框 = 在做或计划。权重是起步值，要拿录音标注后再调；P0 只算“影子分”，行为不变。</text>
+  </svg>
+  </div>
+</figure>
+
 <section class="notes">
   <article class="card hear">
     <h2>① 听</h2>
@@ -248,6 +382,7 @@
       <li><b>不能打断：</b>hello 自己出声、在想、说完 0.6 秒内，一点声音都不送。</li>
       <li><b>模型断句：</b>模型那边再用自己的 VAD 断句（阈值 0.6，静 1 秒算说完）。</li>
       <li><b>ear 自己也识别</b>（SenseVoice），用来：写进库给纪要和情景用、找关键词（看图 / 查询 / 注意看 / 闭嘴）、救回「嗯」。</li>
+      <li><b>关键词耳朵</b>（新，只观察）：直接听原始声音，不靠切句子，按声音认名字「デュナメス」，命中写进 log.html。现在还没有人用它的结果，见下方 ⑦。</li>
     </ul>
   </article>
 
@@ -309,11 +444,49 @@
     </ul>
   </article>
 
+  <article class="card hear">
+    <h2>⑦ 关键词耳朵（已上线 · 只观察）</h2>
+    <p>名字「デュナメス」是夹在中文里的日语，SenseVoice 每次写成不同的字（Dナ、B南米、叮那米、点到名…），所以<b>只认声音、不经过文字</b>。</p>
+    <ul>
+      <li><b>怎么听：</b>直接拿原始麦克风声音，每 0.25 秒看一次最近 1.5 秒，不靠 VAD 切句子（小声叫它，VAD 常常切不出句子）。比背景高不到 4 dB 的不看。</li>
+      <li><b>怎么认：</b>中文 HuBERT 把声音变成特征，和录下的样本做 DTW 对齐；名字分 4 段，每段都要对上（「嗯」「Yeah」对不齐）。低于 0.50 命中，0.50–0.55 差一点。</li>
+      <li><b>实测（2026-11-17）：</b>主人当天 24 声 24 声认出（只用别的会话的样本）；下午 37 分钟会话回放 9/9 命中、其余 0 误报；前几天 1.9 小时说话 0 误报。<b>别人的声音还没测</b>。</li>
+      <li><b>延迟：</b>命中马上报，约 0.3–1.3 秒（服务器忙时更慢）。本地 CPU，不花钱，不受付费开关和暂停影响。</li>
+      <li><b>现在：</b>命中只写进 log.html（「听到关键词」），mind、围观都还没用它。</li>
+    </ul>
+  </article>
+
+  <article class="card see">
+    <h2>⑧ M12 0.2.0 能多做什么</h2>
+    <p>新增：每张脸的朝向和距离，和一串事件（有人进来 / 走了、转过来看、点头 / 摇头、歪头、靠近 / 走远、捂镜头、开关灯、待机时被叫醒）。固件正在接，<b>还没刷机</b>，先只把事件显示出来。</p>
+    <ol>
+      <li><b>有人 / 没人，省钱待机：</b>进出按人记编号，背对着也算在场，补上“主人在但没露脸”的漏洞；没人时 M12 真休息，有人进来马上醒、还能叫出名字。</li>
+      <li><b>捂眼睛：</b>短捂躲猫猫，长捂 = “别看我”，关掉视觉付费。判断的是镜头被挡，不受距离影响，是最稳的事件。</li>
+      <li><b>看着它 + 叫名字 = 在跟我说：</b>接进上面第二张图。</li>
+      <li>之后：点头 / 摇头当是 / 否（只在 0.5 米测过）、歪头模仿、靠近害羞、关灯道晚安（晚上没测）、同一个人编号不变 → 认人更稳。</li>
+    </ol>
+    <p class="small">上机先看心跳：版本 0.2.0、帧率不低于 14.7、丢包 0。姿态字段很占串口带宽，2 张脸加人形已接近上限。</p>
+  </article>
+
+  <article class="card think">
+    <h2>⑨ 分阶段（每步主人能看到什么）</h2>
+    <table class="phase">
+      <tr><td>P0</td><td><b>影子判定</b>（只改服务器，行为不变）：log.html 每句话带上「叫名字 · 句首」「转过来 1.2 秒」「影子：会开口」。</td></tr>
+      <tr><td>P1</td><td><b>围观用上关键词耳朵</b>：喊 Dynames 不会再被压成「嗯」。</td></tr>
+      <tr><td>P2</td><td><b>被叫反应</b>：任何模式下喊它，眼睛和头都有反应，不花钱。</td></tr>
+      <tr><td>P3</td><td><b>陪伴对话窗</b>：旁人聊天它不插嘴，叫它再接上（先测别人的声音）。</td></tr>
+      <tr><td>P4</td><td><b>围观先打分再付费</b>：分数不够就不让模型生成，省掉没播出的回答的钱；脱口秀被叫就停。</td></tr>
+      <tr><td>P5</td><td><b>第二级校验器</b>：只有测出误报才做（合成数据已备好）。</td></tr>
+    </table>
+    <p class="small">要主人定的一件事：长时间没说话之后，“叫名字”是代替 hello，还是两个都算。</p>
+  </article>
+
   <article class="card wide">
     <h2>节奏：多久一次</h2>
     <table class="cadence">
       <tr><th>多久</th><th>发生什么</th></tr>
       <tr><td>一直</td><td><span class="tag hear">听</span>麦克风声音传到 ear　<span class="tag see">看</span>M12 人脸事件</td></tr>
+      <tr><td>每 0.25 秒</td><td><span class="tag hear">听</span>关键词耳朵看一次最近 1.5 秒（安静时跳过）</td></tr>
       <tr><td>每句话</td><td><span class="tag hear">听</span>送模型的声音、本地识别、找关键词　<span class="tag say">说</span>回答闸门；说完更新【刚才的对话】</td></tr>
       <tr><td>约 2 秒</td><td><span class="tag see">看</span>视觉爆发一张（只在触发后 20 秒内）</td></tr>
       <tr><td>最多 3 秒一次</td><td><span class="tag see">看</span>眼前的人变了、来了新注视 → 重发说明</td></tr>
@@ -327,6 +500,7 @@
   <article class="card wide muted-card">
     <h2>依据和没把握的地方</h2>
     <ul>
+      <li>第二张图和 ⑦–⑨ 来自 2026-11-17 晚的两份评估（M12 0.2.0 能做什么、关键词怎么接进流程）和关键词耳朵的实测；相关度权重是 <a href="/crowd-plan.html">围观重构计划</a> 里的起步值。<b>线上围观现在还没有这个分数</b>：仍是先播出、播完检查（回答闸门）再加正则救回。</li>
       <li>按本机源码整理（2026-11-17）：<code>server/ear/realtime_link.py</code>、<code>ear_server.py</code>、<code>vision_burst.py</code>、<code>web_search.py</code>；<code>server/mind/realtime.py</code>、<code>runner.py</code>、<code>notes_runner.py</code>、<code>eye.py</code>、<code>fusion.py</code>；日志说明 <code>docs/hello-log.md</code>。没有核对服务器上正在跑的版本。</li>
       <li>背景刷新：代码里是 30 秒（<code>Config.context_s</code>），几处注释还写着 60 秒；本页按代码。</li>
       <li>摄像头“最快约 1 秒一张”出自固件笔记（0.4.98），这次没有在服务器代码里核对。</li>

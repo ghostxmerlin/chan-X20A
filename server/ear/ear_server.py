@@ -56,6 +56,7 @@ import vision_burst
 import web_search
 import sound_kinds
 import hearing_protocol as hp
+import kws_link
 
 SR = 16000
 TICK = 0.1
@@ -301,6 +302,7 @@ class Ear:
         self.chat = None               # mouth_link.ModeRelay (main): sentences go to mind while hello is in chat
         self.presence = None           # presence.Presence (main): a known voice is presence for the pause (mind/pause.py)
         self.realtime = None           # realtime_link.RealtimeHub (main): 围观 voice session, fed from on_audio
+        self.keywords = None           # kws_link.KeywordLink (main, SOUL_KWS_URL / kws.url): raw mic to the keyword ear
         self.on_tingwu_change = None   # main: called when a stream starts or stops (status document)
         self.audio_declared = False
         self._tw_box = None
@@ -558,6 +560,11 @@ class Ear:
             # her own voice (user 2026-11-11: "hello发声时不收音"; it used to get everything, then be flagged)
             self.tingwu.feed(bytes(len(data)) if self.self_flags.get("sounding") else data)
         x = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+        if self.keywords is not None and self.device_profile:
+            try:                      # 关键词耳朵: the raw mic as a stream, no sentence cutting; never waits
+                self.keywords.feed(x, self.ring.end, self.session, bool(self.self_flags.get("sounding")), self.post)
+            except Exception as error:     # noqa: BLE001 - never costs the audio path
+                print(f"kws: feed failed: {type(error).__name__}", flush=True)
         self.tick_sq += float(np.sum(x ** 2))      # level meter reports what the mic really heard
         self.tick_n += len(x)
         if self.tag_ring is not self.ring:
@@ -981,6 +988,7 @@ async def serve_hearing(ws, peer, number, ctx):
         ear.chat = mode_hub
         ear.realtime = ctx.rt_hub
         ear.presence = getattr(ctx, "presence", None)
+        ear.keywords = getattr(ctx, "kws", None)
         ctx.ears.add(ear)
         ticker = asyncio.create_task(ear.ticker())
         async for data in ws:
@@ -1165,10 +1173,16 @@ def main():
         burst = vision_burst.VisionBurst(rt_hub, vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]), db=database)
         rt_hub.burst = burst
 
+    kws = None                                     # 关键词耳朵 (2026-11-17, server/kws): SOUL_KWS_URL or kws.url
+    kws_url = kws_link.configured_url(os.environ, os.path.join(os.path.dirname(os.path.abspath(__file__)), "kws.url"))
+    if kws_url:
+        kws = kws_link.KeywordLink(kws_url, emit=ear_log.emit)
+    print(f"keyword ear: {kws.url if kws else 'off (no SOUL_KWS_URL, no kws.url)'}", flush=True)
+
     hearing_ctx = argparse.Namespace(models=models, ex=ex, rec_root=rec_root, database=database,
                                      tingwu_keys=tingwu_keys, tw_switch=tw_paid,
                                      write_tingwu_status=write_tingwu_status, mouth=mouth, mode_hub=mode_hub,
-                                     rt_hub=rt_hub, ears=ears, active=active, presence=presence)
+                                     rt_hub=rt_hub, ears=ears, active=active, presence=presence, kws=kws)
 
     async def handler(ws):
         path = ws.request.path if getattr(ws, "request", None) else ""
@@ -1244,6 +1258,7 @@ def main():
                 "paused": pause.reasons(),
                 "mouth": mouth.mode, "robot_mode": mode_hub.robot_mode,
                 "burst": burst.running() if burst is not None else None,
+                "kws": kws.status() if kws is not None else None,
                 "links": {"hearing": len(active), "vision": len(vision_active), "mouth": len(mouth_active),
                           "signal": len(signal_active)}}
 

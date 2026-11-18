@@ -218,7 +218,9 @@ export class Monitor extends EventEmitter {
     // replacement (including removed diagnostics) without refreshing sensor age.
     if (data.seq === this.telemetry?.seq) { this.telemetry = data; return; }
     const previous = this.telemetry; this.telemetry = data; this.telemetryAt = now;
-    this.m12Tracker.accept(data);
+    // m12d 0.2.0 events (collector-0.5.02): fresh ones (≤ 5 s old) also go into the page log; all are in the M12 dialog
+    for (const e of this.m12Tracker.accept(data, now)) if (e.age_ms <= 5000)
+      this.event('m12', `M12 ${e.label}${e.who ? ' ' + e.who : ''}${e.detail ? ' · ' + e.detail : ''}`, e.at);
     const thermal = data.temperature;
     if (thermal?.valid && Number.isFinite(thermal.celsius) && thermal.timestamp_us > (this.thermalHistory.at(-1)?.timestamp_us || 0)) {
       this.thermalHistory.push({ timestamp_us: thermal.timestamp_us, celsius: thermal.celsius });
@@ -270,7 +272,7 @@ export class Monitor extends EventEmitter {
     const fresh = { telemetry: !!this.telemetryAt && now - this.telemetryAt < 1500,
       camera: this.streams.camera && !!this.frame?.at && now - this.frame.at < 1500, audio: !!this.audio.at && now - this.audio.at < 1000 };
     return { online: this.online, active: this.running, error: this.error, viewers: this.viewers, streams: { ...this.streams },
-      capabilities: this.info?.capabilities || {}, firmware: this.info?.firmware || '', boot: this.info?.boot_id || '', address: this.client.push ? 'USB Serial/JTAG' : (this.client.binding?.address || ''),
+      capabilities: this.info?.capabilities || {}, firmware: this.info?.firmware || '', uiFont: this.info?.ui_font || null, boot: this.info?.boot_id || '', address: this.client.push ? 'USB Serial/JTAG' : (this.client.binding?.address || ''),
       receivedAt: this.telemetryAt, fresh, telemetry: this.telemetry,
       voiceLibrary: this.info?.voice_library || {clips:[]},
       eyesCatalog: this.info?.eyes || {styles:[],states:[]},

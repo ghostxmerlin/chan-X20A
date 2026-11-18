@@ -70,7 +70,7 @@ export class MindProxy {
   this.lastStart=this.now();
   this.prepareFn(this.socketPath);
   const child=this.spawnFn('ssh',['-N','-o','BatchMode=yes','-o','ExitOnForwardFailure=yes','-o','ServerAliveInterval=15',
-   '-o','ConnectTimeout=15','-o','StreamLocalBindUnlink=yes','-o','StreamLocalBindMask=0177',
+   '-o','ConnectTimeout=15','-o','Compression=yes','-o','StreamLocalBindUnlink=yes','-o','StreamLocalBindMask=0177',
    '-L',`${this.socketPath}:127.0.0.1:${this.remotePort}`,this.ssh],{stdio:'ignore'});
   child.on('exit',()=>{if(this.child===child)this.child=null;});
   child.on('error',()=>{if(this.child===child)this.child=null;});
@@ -81,7 +81,8 @@ export class MindProxy {
   const target=MindProxy.check(pathAndQuery);
   if(!target)return {status:400,body:'参数不允许'};
   if(!this.tunnel())return {status:503,body:'情景服务连接中'};
-  try{return await this.requestFn(this.target,target,{Authorization:`Bearer ${this.token}`});}
+  // slow links (hotspot / USB LAN) carry ~20 KB/s: a 100 KB log page can sit idle past 8 s behind another reply
+  try{return await this.requestFn(this.target,target,{Authorization:`Bearer ${this.token}`},{timeout:30000});}
   catch{return {status:503,body:'情景服务连接中'};}
  }
  async post(path,bodyText){

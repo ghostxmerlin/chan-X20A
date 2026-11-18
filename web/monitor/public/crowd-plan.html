@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>围观重构计划</title>
+  <link rel="stylesheet" href="/crowd-plan.css"><script type="module" src="/crowd-plan.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <span class="brand">围观重构计划</span>
+    <nav aria-label="其它页面"><a href="/">观察台</a><a href="/crowd-flow.html">围观流程图</a><a href="/log.html">日志</a></nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="hero-text">
+      <h1>先判断“是不是在跟我说”，再决定开不开口</h1>
+      <p>现在的围观是“听到就答，答完再删”：模型对每句话都生成回答，再用一串规则把不该说的压成「嗯」。重构后，它先算这句话和自己有多大关系，过了阈值才让模型回答；没过就只听、只记，不出声。</p>
+    </div>
+    <aside class="name-card" aria-label="设备的新名字">
+      <span class="name-glyph" aria-hidden="true">力</span>
+      <div>
+        <p class="name-label">设备的名字</p>
+        <p class="name">Dynames</p>
+        <p class="name-sub">《高达 00》的力天使高达。“hello” 留给 ASR 唤醒词。</p>
+      </div>
+    </aside>
+  </section>
+
+  <section class="baseline" aria-labelledby="baseline-h">
+    <h2 id="baseline-h">现在的样子（日志实测）</h2>
+    <p class="note">日志从 11-16 15:42 开始记，所以这里基本是 11-16 一个下午的围观，会话共开了约 1.9 小时。</p>
+    <div class="stats">
+      <div class="stat"><b>492</b><span>次回答判定</span></div>
+      <div class="stat bad"><b>72%</b><span>被压成「嗯」没播出（355 次）</span></div>
+      <div class="stat"><b>24%</b><span>真正说出口（119 次）</span></div>
+      <div class="stat bad"><b>¥2.00 / ¥2.70</b><span>花在没播出的回答上（74%）</span></div>
+      <div class="stat"><b>1.1 秒</b><span>说完到机器人出声，中位数（43 次）</span></div>
+      <div class="stat"><b>27 次</b><span>被压掉的「嗯」又靠规则救回来</span></div>
+    </div>
+  </section>
+
+  <section class="core" aria-labelledby="core-h">
+    <div class="sec-head">
+      <span class="pt">核心</span>
+      <h2 id="core-h">相关度闸门：和我有关才开口，没关系就只收集</h2>
+    </div>
+    <div class="compare">
+      <div class="lane now">
+        <h3>现在</h3>
+        <ol class="pipe">
+          <li>听到一句话</li>
+          <li class="hot">模型直接生成回答（花钱）</li>
+          <li>十几组正则事后检查：是「嗯」、没听清、重复、看不见…</li>
+          <li class="hot">七成回答被丢掉</li>
+        </ol>
+      </div>
+      <div class="lane next">
+        <h3>以后</h3>
+        <ol class="pipe">
+          <li>听到一句话（ear 自己的识别已经有文字）</li>
+          <li class="good">算“和 Dynames 有多大关系”，0 到 100 分</li>
+          <li class="good">过阈值：让模型回答</li>
+          <li>差一点（阈值下 20 分内）：不出声，只用表情回应</li>
+          <li>没关系：只收集，照样进纪要、情景和记忆</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="signals">
+      <h3>相关度从哪些信号来</h3>
+      <ul class="sig-list">
+        <li class="plus"><b>+60</b>叫了它的名字（Dynames 和几个中文叫法）</li>
+        <li class="plus"><b>+30</b>它刚说完 20 秒内有人接话</li>
+        <li class="plus"><b>+20</b>有人正对着它（M12 看到脸、离得近）</li>
+        <li class="plus"><b>+10</b>是问句</li>
+        <li class="plus"><b>+10</b>话里说到“你”“它”“机器人”</li>
+        <li class="plus"><b>+10</b>是主人或家人的声音</li>
+        <li class="minus"><b>−30</b>几个人在互相说（说话人轮流、没人看它）</li>
+        <li class="minus"><b>−30</b>像电视、远处的声音（陌生声音、远、画面里没人）</li>
+      </ul>
+      <p class="note">分值是起点，不是定论。上线前用你录下的会话回放，看哪些该答、哪些不该答，再调分值。以后也可以用 DualKey 的好坏评价慢慢校准。分数卡在阈值附近、拿不准的，第二阶段可以再问一次便宜的文字模型。</p>
+    </div>
+
+    <div class="demo" aria-labelledby="demo-h">
+      <div class="demo-head">
+        <h3 id="demo-h">拖一下阈值看看</h3>
+        <p class="note">下面几句是示意场景，不是实测数据。</p>
+      </div>
+      <div class="slider-row">
+        <label for="th">开口阈值</label>
+        <input type="range" id="th" min="10" max="95" step="5" value="50" aria-describedby="th-out">
+        <output id="th-out" for="th">50</output>
+        <span class="band-note" id="band-note">低于 30 只收集，30–49 只用表情，50 以上开口</span>
+      </div>
+      <div id="scenes" class="scenes"></div>
+      <p class="note">默认阈值 50（已定）。阈值能在网页上调，也可以用语音（“多说点”“少说点”）或 DualKey 调。</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="pts-h">
+    <h2 id="pts-h">其它要改的地方</h2>
+    <div class="points">
+      <article class="point">
+        <h3>名字改成 Dynames</h3>
+        <p class="prob">“hello” 既是 ASR 模块的唤醒词，又是围观判断“在叫我”的词。叫 ASR 的时候，围观也以为在跟它说话。</p>
+        <p class="fix">人设、打招呼、自我介绍改用 Dynames；“在叫我”的词表换成 Dynames 和它的中文叫法；hello 只留给 ASR。</p>
+        <p class="gain">两个入口不再互相抢。要先用录音测一下语音识别会把 “Dynames” 写成什么字，把这些写法都收进词表。</p>
+      </article>
+      <article class="point">
+        <h3>一个大文件拆成四块</h3>
+        <p class="prob">围观的主文件将近 2000 行，大约 110 个函数，会话、拼说明、判断、动作全搅在一起，每打一个补丁都更难改。</p>
+        <p class="fix">拆成四块：会话（连上、10 分钟换一轮、闲了关、暂停）；拼说明；什么时候开口（上面的相关度闸门，一张表）；动作（垫话、打招呼、视觉爆发、联网查、闭嘴）。</p>
+        <p class="gain">每块能单独测试，改一处不牵动别处。</p>
+      </article>
+      <article class="point">
+        <h3>说明只在一个地方拼</h3>
+        <p class="prob">背景由 mind 拼，人设、刚才的对话、你的眼睛由 ear 加，模型收到的东西要去两处看。</p>
+        <p class="fix">由一处负责按段拼好：人设、背景、刚才的对话、你的眼睛；每段有名字、有版本。</p>
+        <p class="gain">改说明有固定入口；日志页的“只看改了哪几行”会更清楚。</p>
+      </article>
+      <article class="point">
+        <h3>关键词放进一张表</h3>
+        <p class="prob">叫它、看看、看不见、查一下、闭嘴、没听清……十几组词写死在代码里。</p>
+        <p class="fix">放进一个配置文件，按用途分组，在网页上能看到。</p>
+        <p class="gain">改词不用改代码、不用重新部署代码；跟“最新的关键词表说了算”这条一致。</p>
+      </article>
+      <article class="point">
+        <h3>和暂停共用“有没有人”</h3>
+        <p class="prob">打招呼自己维护“主人走了多久、回来没有”，和刚上线的“没人就暂停”是两套标准。</p>
+        <p class="fix">打招呼、相关度里的“有人对着它”都改用同一份在场信号。</p>
+        <p class="gain">只有一个“有人在”的标准，不会一个说在、一个说不在。</p>
+      </article>
+      <article class="point">
+        <h3>顺手清理</h3>
+        <p class="prob">注释和代码对不上：背景刷新代码 30 秒、注释 60 秒；离开多久再打招呼，代码 60 秒、注释 5 分钟。常量散在文件各处。</p>
+        <p class="fix">常量集中一处，注释和文档跟代码对齐。</p>
+        <p class="gain">流程图、文档和行为一致。</p>
+      </article>
+    </div>
+  </section>
+
+  <section aria-labelledby="steps-h">
+    <h2 id="steps-h">怎么稳妥地改</h2>
+    <ol class="steps">
+      <li><b>先拿基线。</b>用日志统计现在每小时答几句、压掉几成、多快出声、花多少钱、答了多少电视（上面那组数会定期更新）。</li>
+      <li><b>新旧并行。</b>新版本和旧版本放在一起，用一个开关切换，随时能退回旧的。</li>
+      <li><b>录音回放。</b>用你录下的会话跑新版本，逐句列出新旧谁答了、谁没答，你来看对不对。</li>
+      <li><b>再上真机。</b>先只在你在场时打开新版本，看日志里的“开口 / 表情 / 只收集”比例和你的感受。</li>
+    </ol>
+  </section>
+
+  <section class="decide" aria-labelledby="decide-h">
+    <h2 id="decide-h">已经定了的，和还没定的</h2>
+    <ul class="decided">
+      <li><b>名字：</b>Dynames。“hello” 只留给 ASR 唤醒词。</li>
+      <li><b>默认阈值：</b>50。</li>
+      <li><b>差一点的时候：</b>用表情回应，不出声。</li>
+      <li><b>怎么叫它：</b>照《高达 00》里洛克昂那样，用日语说「デュナメス」。</li>
+      <li><b>显示的名字：</b>hello 就是 Dynames，网页和日志里显示的名字改成 Dynames；代码和数据库里的名字不动。</li>
+    </ul>
+    <ul class="open">
+      <li>语音识别会把 デュナメス 写成什么：日文假名、英文，还是中文近音字？要你对着它说几遍，从日志里收齐写法，再放进“在叫我”的词表。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

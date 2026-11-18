@@ -24,6 +24,7 @@ namespace hal_bridge { void board_set_display_backlight_enabled(bool enabled); }
 #endif
 
 LV_FONT_DECLARE(collector_mono_15);
+LV_FONT_DECLARE(collector_words_20);   // 0.5.03: the M12 words' glyphs only (m12_words.h)
 
 namespace collector {
 namespace {
@@ -1577,6 +1578,18 @@ void screen_set_cjk_font(const lv_font_t* small, const lv_font_t* large)
 void screen_show_toast(const char* text, uint32_t now_ms)
 {
     if (!mode_toast || !enabled || !text || !*text) return;
+    use_font(mode_toast, nullptr);
+    set_text(mode_toast, text);
+    lv_obj_remove_flag(mode_toast, LV_OBJ_FLAG_HIDDEN);
+    toast_until_ms = now_ms + kToastMs;
+    toast_shown = true;
+}
+// 0.5.03: a word for an M12 event (m12_words.h) in the toast row, drawn in collector_words_20.
+bool screen_toast_busy() { return toast_shown; }
+void screen_show_word(const char* text, uint32_t now_ms)
+{
+    if (!mode_toast || !enabled || !text || !*text) return;
+    use_font(mode_toast, &collector_words_20);
     set_text(mode_toast, text);
     lv_obj_remove_flag(mode_toast, LV_OBJ_FLAG_HIDDEN);
     toast_until_ms = now_ms + kToastMs;

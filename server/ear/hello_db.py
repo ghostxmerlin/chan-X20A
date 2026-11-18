@@ -7,8 +7,8 @@ Collections (one document per thing; `session` = the recording folder name, e.g.
             speaker, voice, self flags; unique (session, id)
   sounds    sound events (typing, clap ...): kind, label, pos, peak; unique (session, id)
   vision    M12 change events from the robot (face/person found, named, attrs, unknown, lost,
-            vision on/off, M12 online/offline); `at` = wall time of the event; unique
-            (session, t_us, event, face, person)
+            vision on/off, M12 online/offline; m12_ev = an m12d 0.2.0 event line, its type in `ev`);
+            `at` = wall time of the event; unique (session, t_us, event, face, person[, ev])
   tingwu    听悟 realtime sentences (kind "sentence", final only) and the diarized result after
             the session (kind "paragraph", speaker); unique (session, kind, n)
   vision_looks  视觉爆发 (2026-11-15): kind "look" = one snap photo recognised (text, latency, usage, cost_usd,
@@ -27,6 +27,9 @@ import time
 import ear_log
 
 DB_NAME = "hello"
+# vision m12_ev (collector-0.5.02, m12d 0.2.0 events): the event's own fields, stored as sent (vision_link.py)
+M12_EV_FIELDS = ("ev", "n", "side", "dur", "d", "lum", "on", "area", "amt", "cd", "pan", "hot", "faces", "persons",
+                 "faces_seen", "persons_seen")
 log = logging.getLogger("hello_db")
 
 
@@ -133,10 +136,12 @@ class HelloDB:
         """One robot vision event; its wall time is the arrival time minus how long it waited."""
         wait_ms = max(0, (msg.get("now_us", 0) - msg.get("t_us", 0)) // 1000) if isinstance(msg.get("now_us"), int) else 0
         doc = {k: msg.get(k) for k in ("event", "t_us", "f", "face", "person", "box", "prob", "sim", "gender", "age",
-                                        "age_group", "name", "reason") if msg.get(k) is not None}
+                                        "age_group", "name", "reason") + M12_EV_FIELDS if msg.get(k) is not None}
         doc.update({"session": session, "at": received_ms - wait_ms, "received": received_ms})
         key = {"session": session, "t_us": doc.get("t_us"), "event": doc.get("event"), "face": doc.get("face"),
                "person": doc.get("person")}
+        if "ev" in doc:                          # m12_ev: lines of one serial read share t_us; the type tells them apart
+            key["ev"] = doc["ev"]
         self._put("upsert", "vision", key, doc)
 
     def realtime_turn(self, doc):

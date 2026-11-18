@@ -253,3 +253,59 @@ class NameCarryTest(unittest.TestCase):
             link.on_text(json.dumps({"type": "vision", **m}))
         stored = [c[2] for c in db.calls if c[0] == "vision"]
         self.assertEqual([(e.get("event"), e.get("carried")) for e in stored][-2:], [("face_found", None), ("face_carried", True)])
+
+
+class M12EventTest(unittest.TestCase):
+    """collector-0.5.02 (m12d 0.2.0 events, owner 2026-11-17 先呈现事件出来): m12_ev is stored, logged, reacts to nothing."""
+    def link(self, **kw):
+        db = FakeDB()
+        link = vision_link.VisionLink(db, 3, "p", **kw)
+        link.on_text(json.dumps({"type": "hello", "source": "stackchan-x"}))
+        return db, link
+
+    def test_events_are_stored_and_logged_one_row_each(self):
+        from unittest.mock import patch
+        db, link = self.link()
+        lines = [{"ev": "nod", "seq": 5, "t_us": 9_000_000, "now_us": 9_100_000, "f": 8542, "face": 3, "n": 2},
+                 {"ev": "wake", "seq": 6, "t_us": 9_500_000, "f": 9000, "area": [100, 50, 200, 300], "amt": 0.12, "cd": 30,
+                  "faces": [{"box": [300, 100, 80, 100], "name": "me", "sim": 0.71}], "persons": [[250, 60, 200, 400]]},
+                 {"ev": "near", "seq": 7, "t_us": 9_600_000, "face": 3, "d": [1.2, 0.7]},
+                 {"ev": "zzz_new", "seq": 8, "t_us": 9_700_000}]
+        with patch.object(vision_link.ear_log, "emit") as emit, patch.object(vision_link.ear_log, "robot_state") as state:
+            for m in lines:
+                self.assertIsNone(link.on_text(json.dumps({"type": "vision", "event": "m12_ev", **m})))
+        stored = [c[2] for c in db.calls if c[0] == "vision"]
+        self.assertEqual([e["ev"] for e in stored], ["nod", "wake", "near", "zzz_new"])
+        self.assertEqual(link.events, 4)
+        state.assert_not_called()
+        self.assertEqual([c.args[0] for c in emit.call_args_list], ["seen.m12"] * 4)
+        sums = [c.kwargs["sum"] for c in emit.call_args_list]
+        self.assertEqual(sums[0], "点头 脸#3 2 下")
+        self.assertEqual(sums[1], "待机唤醒 脸 1 人形 1（me）")
+        self.assertEqual(sums[2], "靠近 脸#3 1.2→0.7 米")
+        self.assertEqual(sums[3], "M12 zzz_new")
+        first = emit.call_args_list[0].kwargs
+        self.assertEqual(first["by"], "m12"); self.assertEqual(first["ref"], {"session": link.session})
+        self.assertEqual(first["extra"], {"device": "stackchan-x", "ev": "nod", "f": 8542, "face": 3, "n": 2})
+        self.assertNotIn("now_us", emit.call_args_list[1].kwargs["extra"])
+        self.assertEqual(emit.call_args_list[1].kwargs["extra"]["faces"][0]["name"], "me")
+
+    def test_no_hook_reacts_to_them(self):
+        seen = []
+        _, link = self.link(on_event=seen.append)
+        link.on_text(json.dumps({"type": "vision", "event": "m12_ev", "ev": "look", "t_us": 1, "face": 1}))
+        self.assertEqual(len(seen), 1)                              # handed on like any vision event ...
+        self.assertIsNone(link.carry.feed(seen[0]))                 # ... the name carry-over ignores it
+
+    def test_sums_for_every_kind_of_field(self):
+        s = vision_link.m12_ev_sum
+        self.assertEqual(s({"ev": "light", "on": False, "lum": [120, 20]}), "关灯")
+        self.assertEqual(s({"ev": "light", "on": True}), "开灯")
+        self.assertEqual(s({"ev": "uncover", "dur": 3.4, "lum": [8, 139]}), "拿开遮挡 3.4 秒")
+        self.assertEqual(s({"ev": "tilt", "face": 3, "side": "l"}), "歪头 脸#3 向画面左")
+        self.assertEqual(s({"ev": "leave", "person": 18, "dur": 12.5}), "有人走了 人形#18 12.5 秒")
+        self.assertEqual(s({"ev": "wake", "pan": True, "hot": True, "cd": 60}), "待机唤醒 转动 过热未分析")
+        self.assertEqual(s({"ev": "wake", "faces": [{"box": [1, 1, 9, 9]}] * 3, "faces_seen": 5, "persons": []}),
+                         "待机唤醒 脸 5 人形 0")
+        self.assertEqual(s({}), "M12 事件")
+        self.assertEqual(s({"ev": "nod", "n": True, "face": "x"}), "点头")         # wrong types are left out

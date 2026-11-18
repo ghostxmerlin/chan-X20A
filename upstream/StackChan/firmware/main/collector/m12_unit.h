@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #include "m12_protocol.h"
+#include "m12_words.h"
 #include <ArduinoJson.hpp>
 #include <cstdint>
 
@@ -59,11 +60,14 @@ using M12LookDone = void (*)(uint32_t token);
 void m12_look(uint32_t token, M12LookDone done);   // lock-free: atomics only
 bool m12_look_active();                             // a look is asked or running (the uplink holds frames)
 // Vision change events (face/person found, named, attrs, unknown, lost; vision on/off; M12
-// online/offline), oldest first, each with a sequence number. The vision uplink peeks, sends,
-// then commits what was sent; meanwhile the newest 64 wait here (older ones dropped, counted).
-size_t m12_peek_vision_events(M12VisionEvent* out, uint32_t* seq, size_t max);
+// online/offline; m12_ev = an m12d 0.2.0 event line), oldest first, each with a sequence number.
+// The vision uplink peeks, sends, then commits what was sent; meanwhile the newest 64 wait here
+// (older ones dropped, counted). ev_out (optional, max entries): the event of each m12_ev entry.
+size_t m12_peek_vision_events(M12VisionEvent* out, uint32_t* seq, size_t max, M12Event* ev_out = nullptr);
 void m12_commit_vision_events(uint32_t through_seq);
 size_t m12_vision_pending();
+// 0.5.03: every m12d event, lock free for the screen loop (m12_words.h); nullptr until m12_init ran
+const m12words::Feed* m12_words_feed();
 
 void m12_json(ArduinoJson::JsonObject out);
 void m12_info_json(ArduinoJson::JsonObject out);
