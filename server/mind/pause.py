@@ -61,8 +61,11 @@ def _is_num(v):
 def config(s):
     """{away_ms, away_min, cap_cny, usd_cny} from settings (pause.*), defaults for anything missing."""
     p = {**DEFAULTS, **{k: v for k, v in ((s or {}).get('pause') or {}).items() if _is_num(v)}}
+    off = ((s or {}).get('pause') or {}).get('away_off_until')
     return {'away_min': p['away_min'], 'away_ms': int(p['away_min'] * 60_000), 'cap_cny': float(p['cap_cny_per_day']),
-            'usd_cny': float(p['usd_cny'])}
+            'usd_cny': float(p['usd_cny']),
+            # owner 2026-11-18 (a night of development): no away pause until this epoch ms; the budget cap stays
+            'away_off_until': int(off) if _is_num(off) else None}
 
 
 def day_of(ms):
@@ -148,7 +151,7 @@ def decide(prev, *, now, cfg, presence, owner_at, owner_what, spend, unknown_n, 
                        (owner_at, f'owner:{owner_what or "?"}'), (now if faces > 0 else None, 'face'))
     if last is None:
         last, by = started_at, 'start'
-    away = now - last >= cfg['away_ms']
+    away = now - last >= cfg['away_ms'] and not (cfg.get('away_off_until') and now < cfg['away_off_until'])
     override = prev.get('override_day') == day
     over = spend is not None and spend >= cfg['cap_cny']
     budget = over and not override

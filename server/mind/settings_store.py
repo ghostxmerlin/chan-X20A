@@ -104,6 +104,9 @@ def validate(s):
         v = pz.get(key)
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi):
             errs.append(f"pause.{key}: number {lo}–{hi}")
+    off = pz.get("away_off_until")
+    if off is not None and (isinstance(off, bool) or not isinstance(off, (int, float)) or off < 0):
+        errs.append("pause.away_off_until: epoch ms or null")
     if "pause" in s and not isinstance(s["pause"], dict):
         errs.append("pause: an object")
     for k, v in (s.get("thresholds") or {}).items():

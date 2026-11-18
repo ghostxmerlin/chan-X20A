@@ -311,3 +311,16 @@ class PauseApiTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+
+class AwayOffTest(unittest.TestCase):
+    """Owner 2026-11-18: no away pause for a night of development; the budget cap stays."""
+    def test_away_off_until(self):
+        cfg = pause.config({"pause": {"away_min": 10, "away_off_until": T0 + 3600_000}})
+        args = dict(now=T0 + 1800_000, presence={}, owner_at=None, owner_what=None, unknown_n=0, started_at=T0)
+        self.assertEqual(pause.decide({}, cfg=cfg, spend=1.0, **args)[0]["reasons"], [])
+        self.assertEqual(pause.decide({}, cfg=cfg, spend=25.0, **args)[0]["reasons"], ["budget"])
+        late = dict(args, now=T0 + 4000_000)
+        self.assertEqual(pause.decide({}, cfg=cfg, spend=1.0, **late)[0]["reasons"], ["away"])
+        self.assertIsNone(pause.config({"pause": {}})["away_off_until"])

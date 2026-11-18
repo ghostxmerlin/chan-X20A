@@ -1069,6 +1069,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--ask-port", type=int, default=52743, help="local request API for mind's tools (0 = off)")
     ap.add_argument("--models", required=True)
     ap.add_argument("--speakers", default=None, help="speakers.npz (default: next to this file)")
     ap.add_argument("--threads", type=int, default=2)
@@ -1206,6 +1207,12 @@ def main():
             kws.on_hit = lambda out: rt_hub.called("name")
     print(f"keyword ear: {kws.url if kws else 'off (no SOUL_KWS_URL, no kws.url)'}", flush=True)
 
+    import ask_api                                 # mind's tools ask the ear (L1 2026-11-18), 127.0.0.1 only
+    asks = ask_api.Asks(hub=rt_hub, burst=burst, presence=presence,
+                        searcher=rt_hub.searcher if rt_hub is not None and getattr(rt_hub, "searcher", None) else
+                        (web_search.dashscope_search(secrets["DASHSCOPE_API_KEY"]) if secrets.get("DASHSCOPE_API_KEY") else None),
+                        paused=pause.reasons)
+
     hearing_ctx = argparse.Namespace(models=models, ex=ex, rec_root=rec_root, database=database,
                                      tingwu_keys=tingwu_keys, tw_switch=tw_paid,
                                      write_tingwu_status=write_tingwu_status, mouth=mouth, mode_hub=mode_hub,
@@ -1299,12 +1306,21 @@ def main():
         async with serve(handler, a.host, a.port, max_size=65536):
             print(f"listening on {a.host}:{a.port}", flush=True)
             watcher = asyncio.create_task(watch_tingwu_switch())
+            ask_server = None
+            if a.ask_port:
+                try:
+                    ask_server = await ask_api.serve(asks, token_value, "127.0.0.1", a.ask_port)
+                    print(f"ask api: 127.0.0.1:{a.ask_port}", flush=True)
+                except OSError as e:
+                    print(f"ask api: off ({e})", flush=True)
             if rt_hub is not None:
                 rt_hub.start()
             try:
                 await stopper.wait()
             finally:
                 watcher.cancel()
+                if ask_server is not None:
+                    ask_server.close()
                 if burst is not None:
                     await burst.shutdown()
                 if live_eye is not None:

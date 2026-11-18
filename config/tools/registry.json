@@ -30,14 +30,14 @@
    "group": "sense",
    "level": "R",
    "runs_on": "ear",
-   "status": "wrap",
+   "status": "live",
    "description": "想知道眼前或身边现在有谁时用：脸、声音、画面合起来。",
    "parameters": {
     "type": "object",
     "properties": {}
    },
    "returns": "people[{who, seen_by: 脸|声音|画面, last}]、owner_state",
-   "source": "FaceView.recent + presence + 即时画面（server/ear）",
+   "source": "FaceView.recent + presence + 即时画面（server/ear）；耳朵 POST /ask（server/ear/ask_api.py）",
    "latency": "<50 ms",
    "cost": "无",
    "needs": [],
@@ -70,7 +70,7 @@
    "group": "sense",
    "level": "R",
    "runs_on": "ear",
-   "status": "wrap",
+   "status": "live",
    "description": "需要亲眼看清某样东西时用（“他手里拿的是什么”）；问题会交给识图。",
    "parameters": {
     "type": "object",
@@ -83,14 +83,14 @@
     }
    },
    "returns": "answer、scene、photo_at",
-   "source": "snap + 识图（vision_burst）",
+   "source": "snap + 识图（vision_burst）；耳朵 POST /ask（server/ear/ask_api.py）",
    "latency": "2–4 s",
    "cost": "约 0.0004 元/张",
    "needs": [
     "realtime 或 eye 开关",
     "机器人相机开"
    ],
-   "notes": "",
+   "notes": "Docking 里拍一张新照片（视觉爆发的一张）再识图，等不到 14 秒就超时；不在 Docking 时退回最近 90 秒的即时画面",
    "example": {
     "question": "他手里拿的是什么"
    }
@@ -723,7 +723,7 @@
    "group": "world",
    "level": "R",
    "runs_on": "ear",
-   "status": "have",
+   "status": "live",
    "description": "要查新闻、天气、比分、某件事的最新情况时用。",
    "parameters": {
     "type": "object",
@@ -738,7 +738,7 @@
     ]
    },
    "returns": "answer（1–2 句）或没查到",
-   "source": "server/ear/web_search.py（qwen3.8-flash 强制搜索）",
+   "source": "server/ear/web_search.py（qwen3.8-flash 强制搜索）；耳朵 POST /ask（server/ear/ask_api.py）",
    "latency": "1.7–2.4 s",
    "cost": "0.004 元/次 + token",
    "needs": [
@@ -867,7 +867,7 @@
    "group": "express",
    "level": "A",
    "runs_on": "ear",
-   "status": "wrap",
+   "status": "live",
    "description": "让 hello 用当前的声音说出一句话（技能的结果、主动提醒）。",
    "parameters": {
     "type": "object",
@@ -885,11 +885,11 @@
     ]
    },
    "returns": "spoken、ms",
-   "source": "Docking 插话（内部已有）/ 其他模式经 TTS",
+   "source": "Docking 插话（内部已有）/ 其他模式经 TTS；耳朵 POST /ask（server/ear/ask_api.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "频率上限：同一技能 10 秒内最多 2 句",
+   "notes": "频率上限：同一技能 10 秒内最多 2 句；现在只在 Docking 里说（用它自己的声音）；主人让它安静时不说",
    "example": {
     "text": "我在呢"
    }
@@ -900,14 +900,14 @@
    "group": "express",
    "level": "A",
    "runs_on": "ear",
-   "status": "have",
+   "status": "live",
    "description": "主人让停下时用。",
    "parameters": {
     "type": "object",
     "properties": {}
    },
    "returns": "stopped",
-   "source": "Docking _interrupt / POST /say/stop",
+   "source": "Docking _interrupt / POST /say/stop；耳朵 POST /ask（server/ear/ask_api.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1020,7 +1020,7 @@
    "group": "express",
    "level": "A",
    "runs_on": "ear",
-   "status": "wrap",
+   "status": "live",
    "description": "主人要详细点 / 简单点时用（保持 10 分钟）。",
    "parameters": {
     "type": "object",
@@ -1039,7 +1039,7 @@
     ]
    },
    "returns": "mode、until",
-   "source": "realtime_link._length_from",
+   "source": "realtime_link._length_from；耳朵 POST /ask（server/ear/ask_api.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1800,27 +1800,73 @@
    "group": "settings",
    "level": "A",
    "runs_on": "ear",
-   "status": "new",
-   "description": "主人让 hello 安静时用：不主动说话、不回答，直到再被叫（hello / Dynames / 唤醒词）或到时间。",
+   "status": "live",
+   "description": "让 hello 临时安静（直到被叫 hello / Dynames）或少插话（大家在聊天、在看电视）。主人说「你先别说话」「我们在聊天」时用；恢复用 off。",
    "parameters": {
     "type": "object",
     "properties": {
+     "level": {
+      "type": "string",
+      "enum": [
+       "quiet",
+       "low",
+       "off"
+      ],
+      "description": "quiet = 什么都不说直到被叫；low = 少插话，只答叫它或明确问它的；off = 恢复"
+     },
      "minutes": {
       "type": "integer",
       "minimum": 1,
       "maximum": 240,
-      "description": "可空 = 直到被叫"
+      "description": "可空：quiet 默认到被叫（最多 4 小时），low 默认 30 分钟"
      }
     }
    },
-   "returns": "quiet、until",
-   "source": "新：Docking 静默状态（被叫窗口解除）；现有「闭嘴」是关掉整个 Docking",
+   "returns": "level、minutes、ends",
+   "source": "realtime_link.set_quiet；耳朵 POST /ask（server/ear/ask_api.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
    "notes": "临时，不存设置；屏幕显示安静中",
    "example": {
+    "level": "low",
     "minutes": 30
+   }
+  },
+  {
+   "name": "set_role",
+   "title": "临时角色",
+   "group": "settings",
+   "level": "A",
+   "description": "给 hello 临时加一层角色（比如「当个大姐姐，陪陪老人」「像老师一样耐心」），不改变它是谁，到时间或主人说恢复就结束。role 为空 = 结束。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "role": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "角色和要做的事，一句话；空 = 结束"
+     },
+     "minutes": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 240
+     }
+    }
+   },
+   "returns": "role、minutes",
+   "runs_on": "ear",
+   "status": "live",
+   "source": "realtime_link.set_role；耳朵 POST /ask（server/ear/ask_api.py）；也能直接说「hello，当个…」",
+   "latency": "<1 秒",
+   "cost": "无",
+   "needs": [
+    "Docking"
+   ],
+   "notes": "只在 Docking 里生效；口头触发只认叫了 hello 之后的话",
+   "example": {
+    "role": "当个大姐姐，陪陪老人",
+    "minutes": 60
    }
   }
  ]

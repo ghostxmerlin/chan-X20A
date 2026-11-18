@@ -368,3 +368,15 @@ class SelfToolsTest(unittest.TestCase):
         self.assertIn("听悟（第二路转写）", d["senses_off"])
         only = self.t["capabilities"]({"group": "move"})
         self.assertEqual(only["can_do"], [])
+
+
+class EarToolsTest(unittest.TestCase):
+    def test_proxy_and_errors(self):
+        got = []
+        t = tool_impls.ear_tools(lambda n, a: (got.append((n, a)), {"ok": n})[1])
+        self.assertEqual(t["set_quiet"]({"level": "low"}), {"ok": "set_quiet"})
+        self.assertEqual(got, [("set_quiet", {"level": "low"})])
+        down = tool_impls.ear_asker("tok", url="http://127.0.0.1:9/ask", timeout=2)
+        with self.assertRaises(ToolError) as e:
+            down("who_is_here", {})
+        self.assertEqual(e.exception.code, "not_available")

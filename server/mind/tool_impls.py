@@ -469,3 +469,34 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
              "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
              "capabilities": capabilities}
     return impls
+
+
+# ---- L1: the ear's tools (server/ear/ask_api.py, 127.0.0.1 only) ----
+EAR_TOOLS = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role")
+EAR_ASK_URL = "http://127.0.0.1:52743/ask"
+
+
+def ear_asker(token, url=EAR_ASK_URL, timeout=32):
+    """ask(name, args) -> data; the ear's error -> ToolError."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    def ask(name, args):
+        req = urllib.request.Request(url, data=json.dumps({"name": name, "args": args}, ensure_ascii=False).encode(),
+                                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                                     method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                out = json.loads(r.read().decode())
+        except (urllib.error.URLError, OSError, ValueError):
+            raise ToolError("not_available", "耳朵没连上（ear 服务没在跑）") from None
+        if not out.get("ok"):
+            e = out.get("error") or {}
+            raise ToolError(e.get("code") or "failed", e.get("message") or "耳朵出错了")
+        return out.get("data")
+    return ask
+
+
+def ear_tools(ask):
+    return {name: (lambda args, _n=name: ask(_n, args)) for name in EAR_TOOLS}

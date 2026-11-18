@@ -342,6 +342,18 @@ def call_rest(text):
 # (2) keeps the owner's 详细点 / 简单点 for LENGTH_S in a 【这会儿的回答长短】 line, (5) asks for short answers while
 # many faces are in view, and (4) logs each turn's question kind, length mode and reply length (call.realtime.turn).
 LENGTH_S = 600.0
+# 安静 / 少插话 / 临时角色 (owner 2026-11-18). quiet: answer nothing unless called (set_quiet; a call ends it).
+# low: "我们在聊天 / 我在看电视": no greetings, answer only a call or a sentence clearly for hello; LOW_S or 可以说话了.
+# role: "hello，当个大姐姐，陪陪老人" (inside a call window, or the set_role tool): a temporary extra on the persona,
+# ROLE_S or 恢复 / 做回你自己.
+QUIET_MAX_S = 4 * 3600.0
+LOW_S = 1800.0
+ROLE_S = 2 * 3600.0
+LOW_RE = re.compile(r"我们(正)?在聊(天|事|呢)?|我们聊我们的|(我|我们)(正)?在看电视|看电视呢|在开会|你(先)?别插(话|嘴)|"
+                    r"不用理(我们|我)|不是跟你说")
+LOW_END_RE = re.compile(r"(你)?可以(说话|插话|聊)了|(你)?可以接话了|恢复(正常)?说话")
+ROLE_RE = re.compile(r"(当|做|演|扮演|变成|装成)(一?个|一下)?(?P<who>[^，,。！!？?]{1,10}?)(吧|好吗|好不好)?([，,。！!]|$)(?P<rest>.*)")
+ROLE_END_RE = re.compile(r"恢复(原样|原来|正常)?$|做回(你)?自己|不用(演|装)了|别(演|装)了|变回(来|原样)")
 CROWD_FACES = 3
 DETAIL_RE = re.compile(r"详细(一点|点|些|说|讲|地)|展开(说|讲)|多说(点|些|一些)|具体(点|说|讲)|说清楚点|讲清楚")
 BRIEF_RE = re.compile(r"简单(点|些|说|讲)|说重点|太长了|长话短说|简短|别说那么多|少说(点|几句)")
@@ -467,7 +479,7 @@ def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
     return out
 
 
-def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None):
+def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None, role=None, manner=None):
     """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
     where the voice model tended to miss them; owner 2026-11-14). looks: look_lines() of the vision burst (else mind's
     注视： line, if the context has one)."""
@@ -478,7 +490,8 @@ def instructions(context_text=None, seen=None, recent=None, looks=None, scene=No
             eye[key] = line[len(key):]
         else:
             rest.append(line)
-    out = PERSONA + (f"\n\n【这会儿的回答长短】{length}" if length else "") + \
+    out = PERSONA + (f"\n\n【临时角色】{role}" if role else "") + (f"\n\n【这会儿怎么接话】{manner}" if manner else "") + \
+        (f"\n\n【这会儿的回答长短】{length}" if length else "") + \
         ("\n\n【背景】\n" + "\n".join(rest) if rest else "")
     # Anti-repeat (owner 2026-11-15 "meet 经常卡在重复的一句话"): hello's last replies, also across a session rotation.
     pairs = [(h, r) for h, r in (recent or []) if r]
@@ -851,6 +864,10 @@ class RealtimeHub:
         self._scene = None                             # (at_ms, text): the newest instantly recognised camera photo
         self._pending_search = None                    # a search the ear's ASR heard, waiting for the model's verdict
         self._length = None                            # (mode, at): the owner's 详细点 / 简单点 (see LENGTH_S)
+        self._quiet_mode = None                        # until (clock): answer nothing unless called (set_quiet)
+        self._low = None                               # until (clock): 少插话 (see LOW_S)
+        self._role = None                              # (text, until): a temporary role on the persona (see ROLE_S)
+        self.look_waiters = []                         # [(mark, future)]: look_now tool waits for a fresh look
         self._called_until = 0.0                       # inside a call window (hello / Dynames): see CALLED_S
         self._called_at = None                         # the last call (merges sources that heard the same call)
         self._called_text = None                       # {text, at, trace}: a called sentence still waiting for an answer
@@ -999,6 +1016,11 @@ class RealtimeHub:
         self.stats["called_" + source] += 1
         stopped = self._interrupt(now) or interrupted
         self._quiet_until = 0.0
+        if self._quiet_mode is not None:               # a call wakes hello from 安静
+            self._quiet_mode = None
+            ear_log.emit("trigger.quiet", trace=trace or ear_log.new_trace(), by=source, sum="安静结束：被叫醒",
+                         extra={"mode": "off", "why": "called"})
+            self._write_status(now)
         self._send_until = max(self._send_until, now + CALLED_S)
         if not merged:
             self._stage("listen")
@@ -1384,7 +1406,7 @@ class RealtimeHub:
         self._seen_sent, self._seen_at = seen, self.clock()
         self._looks_dirty, self._looks_sent_at = False, self.clock()
         return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()),
-                            self._scene_line(), self._length_line())
+                            self._scene_line(), self._length_line(), self._role_line(), self._manner_line())
 
     # ---- reply length (see LENGTH_S) ----
     def _length_mode(self, now=None):
@@ -1418,6 +1440,137 @@ class RealtimeHub:
         if self._ws is not None and self._ready.is_set():
             self._send_instructions("length", trace)
 
+    def set_length(self, mode, trace=None, by="tool"):
+        now = self.clock()
+        self._length = None if mode == "normal" else (mode, now)
+        ear_log.emit("trigger.length", trace=trace or ear_log.new_trace(), by=by,
+                     sum=f"回答长短：{ {'detail': '详细', 'brief': '简短', 'normal': '恢复正常'}[mode] }（工具）",
+                     ref={"session": self.session_no}, extra={"mode": mode})
+        self._refresh_instructions("length", trace)
+        return None if mode == "normal" else now + LENGTH_S
+
+    # ---- 安静 / 少插话 / 临时角色 ----
+    def quiet_on(self, now=None):
+        now = self.clock() if now is None else now
+        return self._quiet_mode is not None and now < self._quiet_mode
+
+    def low_on(self, now=None):
+        now = self.clock() if now is None else now
+        return self._low is not None and now < self._low
+
+    def role_text(self, now=None):
+        now = self.clock() if now is None else now
+        return self._role[0] if self._role is not None and now < self._role[1] else None
+
+    def _refresh_instructions(self, why, trace=None):
+        if self._ws is not None and self._ready.is_set():
+            self._send_instructions(why, trace)
+
+    def set_quiet(self, level="quiet", minutes=None, trace=None, by="tool", heard=None):
+        """level quiet / low / off. -> until (clock) or None."""
+        now = self.clock()
+        if level == "off":
+            self._quiet_mode = self._low = None
+            until = None
+        elif level == "quiet":
+            self._quiet_mode = until = now + min(minutes * 60 if minutes else QUIET_MAX_S, QUIET_MAX_S)
+            self._interrupt(now)
+        else:
+            self._low = until = now + min(minutes * 60 if minutes else LOW_S, QUIET_MAX_S)
+        zh = {"quiet": "安静（直到被叫）", "low": "少插话", "off": "恢复正常接话"}[level]
+        ear_log.emit("trigger.quiet", trace=trace or ear_log.new_trace(), by=by,
+                     sum=f"{zh}" + (f"（{str(heard)[:30]}）" if heard else "") +
+                         (f" {int((until - now) // 60)} 分钟" if until else ""),
+                     ref={"session": self.session_no}, extra={"mode": level, "minutes": minutes,
+                                                              **({"heard": str(heard)[:200]} if heard else {})})
+        self._refresh_instructions("quiet", trace)
+        self._write_status(now)
+        return until
+
+    def set_role(self, text, minutes=None, trace=None, by="tool"):
+        now = self.clock()
+        if not text:
+            self._role = None
+            until = None
+        else:
+            self._role = (str(text)[:120], now + min(minutes * 60 if minutes else ROLE_S, ROLE_S * 2))
+            until = self._role[1]
+        ear_log.emit("trigger.role", trace=trace or ear_log.new_trace(), by=by,
+                     sum=f"临时角色：{str(text)[:40]}" if text else "临时角色结束",
+                     ref={"session": self.session_no}, extra={"role": str(text or "")[:120], "minutes": minutes})
+        self._refresh_instructions("role", trace)
+        self._write_status(now)
+        return until
+
+    def _low_from(self, text, now, trace):
+        t = norm_text(text)
+        if self.low_on(now) and LOW_END_RE.search(t):
+            self.set_quiet("off", trace=trace, by="heard", heard=text)
+        elif LOW_RE.search(t) and not (self.low_on(now) and now - (self._low - LOW_S) < 60):
+            self.set_quiet("low", trace=trace, by="heard", heard=text)
+
+    def _role_from(self, text, now, trace):
+        """Only a sentence said to hello (inside a call window, or starting with the call word)."""
+        rest = call_rest(text)
+        if not (self.in_called(now) or rest):
+            return
+        t = (rest or text).strip()
+        if self.role_text(now) and ROLE_END_RE.search(norm_text(t)):
+            self.set_role(None, trace=trace, by="heard")
+            return
+        m = ROLE_RE.search(t)
+        if m and m.start() <= 4:                        # "当个大姐姐…" at the start, not "他想当个医生"
+            self.set_role(t[m.start():], trace=trace, by="heard")
+
+    def _role_line(self):
+        r = self.role_text()
+        if not r:
+            return None
+        return (f"主人刚让你：{r}。在不改变你是谁、不违背你的底线的前提下，按这个角色说话（称呼、语气、关心的事都跟着变），"
+                f"直到主人说恢复。")
+
+    def _manner_line(self):
+        if self.quiet_on():
+            return "主人让你先安静：除非有人叫你的名字或 hello，否则什么都不说。"
+        if self.low_on():
+            return "他们在聊天或在看电视：别插话，不主动搭腔；只有叫你、或明确问你的时候才回答，回答也短。"
+        return None
+
+    # ---- tools (ask_api.py) ----
+    def say(self, text, trace=None):
+        """Speak one line now (Docking). -> "sent" / "not_ready" / "busy" / "quiet"."""
+        if not self._ready.is_set() or self._ws is None:
+            return "not_ready"
+        if self.busy() or self._seg is not None:
+            return "busy"
+        self._next_kind, self._next_trace = "say", trace or ear_log.new_trace()
+        self._next_prompt = f"（系统：请用你平常的语气把下面这句话说出来，意思不变，不要加别的话）{str(text)[:200]}"
+        ear_log.emit("trigger.say", trace=self._next_trace, by="tool", sum=f"让它说：{str(text)[:40]}",
+                     ref={"session": self.session_no}, extra={"text": str(text)[:200]})
+        self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
+                                                                      "content": [{"type": "input_text",
+                                                                                   "text": self._next_prompt}]}})
+        self._send_soon({"type": "response.create"})
+        return "sent"
+
+    def stop_speaking(self):
+        return self._interrupt(self.clock())
+
+    def faces_now(self):
+        owner = self.ctx.get("owner") or {}
+        names = self.ctx.get("names") or {}
+        out = []
+        for f in self.watch.recent(self.clock()):
+            n = f.get("name")
+            who = (owner.get("call") or "主人") if n and n in (owner.get("face_names") or []) else \
+                (names.get(n) if isinstance(names.get(n), str) else n) if n else "不认识的人"
+            out.append({"who": who, "known": bool(n), "gender": f.get("gender"), "age": f.get("age_group")})
+        return out
+
+    def scene_now(self):
+        """(at_ms, text) of the newest instantly recognised photo, or None."""
+        return self._scene
+
     # ---- 即时画面 (vision_burst.LiveEye) ----
     def add_scene(self, text, at_ms):
         """The newest uploaded camera photo, recognised at once: goes out with the instructions (debounced)."""
@@ -1443,6 +1596,10 @@ class RealtimeHub:
             return
         self._looks.append((at_ms, str(text)[:200]))
         self._looks_dirty = True
+        for mark, fut in list(self.look_waiters):      # look_now tool (ask_api.py)
+            if snapped is not None and snapped >= mark and not fut.done():
+                fut.set_result(str(text)[:200])
+        self.look_waiters = [(m, f) for m, f in self.look_waiters if not f.done()]
         w = self._look_wait
         if w is not None and not w["sent"] and w.get("look") is None and snapped is not None and snapped >= w["mark"]:
             now = self.clock()
@@ -1952,6 +2109,16 @@ class RealtimeHub:
             self.stats["muted_order"] += 1
             self._log_gate(rid, turn, v, done)
             return
+        if turn.get("kind") == "speech" and not self.in_called(now) and (
+                self.quiet_on(now) or (self.low_on(now) and not addressed(turn.get("heard") or ""))):
+            v = "quiet_mode" if self.quiet_on(now) else "low_mode"      # 安静 / 少插话 (owner 2026-11-18)
+            turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
+            self._dropped.add(rid)
+            self.stats[f"muted_{v}"] += 1
+            if self._pending_vision is not None or self._pending_search is not None:
+                self._release_vision(now, False, "安静中" if v == "quiet_mode" else "少插话中")
+            self._log_gate(rid, turn, v, done)
+            return
         if turn.get("kind") == "speech" and (self._pending_vision is not None or self._pending_search is not None):
             q = reply_verdict(turn.get("tx"), done)
             if q is None:
@@ -2094,6 +2261,8 @@ class RealtimeHub:
 
     def _heard_text(self, text, now, told=False, trace=None):
         self._length_from(str(text), now, trace)
+        self._low_from(str(text), now, trace)
+        self._role_from(str(text), now, trace)
         word = order_word(text)
         if word is not None and (call_rest(text) is not None or self.in_called(now)):
             # only right after a call: a bare "OK." in ordinary talk is not an order (the robot's own report is)
@@ -2356,6 +2525,8 @@ class RealtimeHub:
         call = owner.get("call")
         if g is None or not self._ready.is_set() or self.busy() or self.clock() < self._quiet_until:
             return
+        if self.quiet_on(now) or self.low_on(now):    # 安静 / 少插话: no greetings (step() drops an old one)
+            return
         if self._seg is not None:                      # the server hears someone speaking: it would refuse (2026-11-18)
             return
         if now - g["at"] > self.cfg.greet_max_age_s:
@@ -2470,7 +2641,8 @@ class RealtimeHub:
                 "running": [f"rt{self.session_no}"] if self.state != "closed" else [], "state": self.state,
                 "available": bool(self.key and self.voice), "on": self.switch.on,
                 "hour_used_s": int(self.hour_used(now)), "turns": self.stats["turns"],
-                "cost_cny": round(self.stats["cost_micro_cny"] / 1e6, 4), "at": self.wall_ms()})
+                "cost_cny": round(self.stats["cost_micro_cny"] / 1e6, 4), "at": self.wall_ms(),
+                "quiet": self.quiet_on(now), "low": self.low_on(now), "role": self.role_text(now)})
         except Exception:                              # noqa: BLE001
             pass
 

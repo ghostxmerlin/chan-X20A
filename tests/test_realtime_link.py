@@ -804,6 +804,74 @@ class LengthTest(HubBase):
         self.assertIn("眼前有 3 个人", self.hub._length_line())
 
 
+class QuietLowRoleTest(HubBase):
+    """Owner 2026-11-18: 安静（直到被叫）, 少插话 ("我们在聊天 / 我在看电视"), a temporary role ("当个大姐姐")."""
+    def last_instr(self, ws):
+        return [m["session"]["instructions"] for m in ws.sent if m["type"] == "session.update"][-1]
+
+    def turn(self, ws, rid, heard, reply):
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": heard})
+        ws.push({"type": "response.created", "response": {"id": rid}})
+        ws.push({"type": "response.audio_transcript.delta", "delta": reply})
+
+    async def test_quiet_mutes_until_called(self):
+        ws = await self.open_ready()
+        self.hub.set_quiet("quiet")
+        await settle(10)
+        self.assertIn("主人让你先安静", self.last_instr(ws))
+        self.turn(ws, "r1", "今天天气怎么样", "今天天气挺好的，出去走走吧")
+        await settle(10)
+        self.assertEqual(self.hub.stats["muted_quiet_mode"], 1)
+        self.hub.called("asr")
+        self.assertFalse(self.hub.quiet_on())
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed"}})
+        await settle(10)
+        self.assertEqual(self.hub.say("我在呢"), "sent")
+        await settle(10)
+        self.assertTrue(any(m["type"] == "conversation.item.create" and "我在呢" in json.dumps(m, ensure_ascii=False)
+                            for m in ws.sent))
+
+    async def test_low_mode_from_natural_words(self):
+        ws = await self.open_ready()
+        self.hub.local_heard("我们在聊天呢")
+        await settle(10)
+        self.assertTrue(self.hub.low_on())
+        self.assertIn("别插话", self.last_instr(ws))
+        self.t[0] += 5
+        self.turn(ws, "r2", "这个电视剧挺好看", "是呀，我也觉得剧情不错")
+        await settle(10)
+        self.assertEqual(self.hub.stats["muted_low_mode"], 1)
+        self.t[0] += 61
+        self.hub.local_heard("好了你可以说话了")
+        self.assertFalse(self.hub.low_on())
+
+    async def test_role_only_when_said_to_hello(self):
+        ws = await self.open_ready()
+        self.hub.local_heard("他想当个医生")                                 # not to hello: nothing
+        self.assertIsNone(self.hub.role_text())
+        self.hub.local_heard("hello，当个大姐姐，陪陪老人")
+        await settle(10)
+        self.assertEqual(self.hub.role_text(), "当个大姐姐，陪陪老人")
+        self.assertIn("【临时角色】主人刚让你：当个大姐姐，陪陪老人", self.last_instr(ws))
+        self.hub.local_heard("hello，做回你自己吧")
+        self.assertIsNone(self.hub.role_text())
+        self.hub.set_role("像个老师一样耐心", 30)
+        self.assertEqual(self.hub.role_text(), "像个老师一样耐心")
+        self.t[0] += 31 * 60
+        self.assertIsNone(self.hub.role_text())
+
+    async def test_look_waiters_take_a_fresh_look(self):
+        await self.open_ready()
+        fut = asyncio.get_running_loop().create_future()
+        self.hub.look_waiters.append((5.0, fut))
+        self.hub.add_look("旧照片", self.hub.wall_ms(), snapped=4.0)
+        self.assertFalse(fut.done())
+        self.hub.add_look("主人手里拿着一个杯子", self.hub.wall_ms(), snapped=6.0)
+        self.assertEqual(fut.result(), "主人手里拿着一个杯子")
+        self.assertEqual(self.hub.look_waiters, [])
+
+
 class SceneTest(HubBase):
     async def test_an_instant_photo_goes_into_the_eyes(self):
         ws = await self.open_ready()

@@ -259,7 +259,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         switches=switches, store=store, mode_store=ctx.get("mode_store"),
         ledger=(lambda day: log_query.ledger(db, day)) if log_query is not None else None,
         settings_fn=lambda: current_settings()[0], registry=registry,
-        flows=(lambda lo, hi, kinds, limit: log_query.flows(db, lo, hi, kinds=kinds, limit=limit)) if log_query is not None else None))
+        flows=(lambda lo, hi, kinds, limit: log_query.flows(db, lo, hi, kinds=kinds, limit=limit)) if log_query is not None else None)
+        | tool_impls.ear_tools(ctx.get("ear_ask") or tool_impls.ear_asker(token)))
 
     def note_owner(path, body, reply):
         """After a POST went through: tell the pause about an explicit owner input (never raises)."""
