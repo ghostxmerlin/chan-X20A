@@ -30,10 +30,15 @@ def mind(method, path, body=None, timeout=40):
 tools = rl.realtime_tools(mind("GET", "/tools")["tools"], rl.SKILL_TOOL_SKIP)
 ALL = {t["name"]: t for t in tools}
 cfg = rl.load_skills(os.path.join(EAR, "skills.json"))
-SK = {s["id"]: s for s in cfg["skills"] if any(n in ALL for n in s["tools"])}
+SK = {s["id"]: s for s in cfg["skills"] if "*" in s["tools"] or any(n in ALL for n in s["tools"])}
 OPEN = rl.open_skill_spec(list(SK.values()))
 ctx = mind("GET", "/realtime/context")
-INSTR = rl.instructions(ctx.get("text"))
+
+
+def instr_for(opened):
+    """As the hub: the open skills' full text in the instructions (not in the history)."""
+    block = "\n\n".join(SK[k].get("guide") or "" for k in opened if k in SK) or None
+    return rl.instructions(ctx.get("text"), skills=block)
 auto = intent.Auto(intent.Embedder()) if MODE == "auto" else None
 URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.1-realtime-flash"
 
@@ -41,7 +46,8 @@ URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.1-real
 def specs_for(opened):
     names = []
     for k in opened:
-        names += [n for n in SK[k]["tools"] if n in ALL and n not in names]
+        want = list(ALL) if "*" in SK[k]["tools"] else SK[k]["tools"]
+        names += [n for n in want if n in ALL and n not in names]
     return [OPEN] + [ALL[n] for n in names]
 
 
@@ -55,7 +61,7 @@ async def run(case):
     async with websockets.connect(URL, additional_headers={"Authorization": f"Bearer {env['DASHSCOPE_API_KEY']}"},
                                   max_size=None) as ws:
         await ws.send(json.dumps({"type": "session.update", "session": {
-            "modalities": ["text"], "instructions": INSTR, "turn_detection": None,
+            "modalities": ["text"], "instructions": instr_for(opened), "turn_detection": None,
             "tools": specs_for(opened), "tool_choice": "auto"}}))
         await ws.send(json.dumps({"type": "conversation.item.create", "item": {
             "type": "message", "role": "user", "content": [{"type": "input_text", "text": case["say"]}]}}))
@@ -83,13 +89,18 @@ async def run(case):
                     args = json.loads(fc.get("arguments") or "{}")
                 except ValueError:
                     args = {}
-                if name == "open_skill":
+                n_calls = len([c for c in calls if c[0] != "open_skill"])
+                if name != "open_skill" and n_calls >= rl.SKILL_DEPTH:      # as the hub: enough, answer now
+                    res = {"ok": False, "error": {"code": "refused", "message": rl.TOOL_ENOUGH}}
+                    calls.append((name, "refused: enough", False))
+                elif name == "open_skill":
                     sid = args.get("skill")
                     if sid in SK and sid not in opened:
                         opened.append(sid)
                     res = {"ok": sid in SK, "data": {"skill": SK.get(sid, {}).get("title"), "tools": SK.get(sid, {}).get("tools"),
-                                                     "guide": SK.get(sid, {}).get("guide"), "next": "现在直接调用上面的工具来回答"}}
-                    await ws.send(json.dumps({"type": "session.update", "session": {"tools": specs_for(opened)}}))
+                                                     "next": "做法已经放进说明的【此刻打开的技能】里，照着做，直接调用这些工具来回答"}}
+                    await ws.send(json.dumps({"type": "session.update", "session": {"tools": specs_for(opened),
+                                                                                  "instructions": instr_for(opened)}}))
                     calls.append(("open_skill", sid, True))
                 else:
                     env_ = mind("POST", "/tool/call", {"name": name, "args": args, "caller": "qwen", "trace": "skilleval"}, 60)
@@ -109,6 +120,8 @@ def judge(case, r):
     used = [c[0] for c in r["calls"] if c[0] != "open_skill"]
     if case.get("none"):
         bad = [s for s in r["opened"] if s not in r["preloaded"]] + used
+        if "[事件]" in r["text"] or "【" in r["text"]:
+            bad.append("念出了标记")
         return (not bad), ("" if not bad else f"闲聊却用了 {bad}")
     why = []
     if not set(case["skill"]) & set(r["opened"]):
@@ -118,8 +131,12 @@ def judge(case, r):
         why.append(f"没调对工具（调了 {used or '无'}）")
     elif not any(c[2] for c in hit):
         why.append(f"工具出错 {hit}")
-    if case.get("text") and not re.search(case["text"], r["text"]):
+    if not r["text"]:
+        why.append("没有回答")
+    elif case.get("text") and not re.search(case["text"], r["text"]):
         why.append("回答缺要点")
+    if "[事件]" in r["text"] or "【" in r["text"]:
+        why.append("念出了标记")
     return not why, "；".join(why)
 
 
@@ -130,16 +147,21 @@ async def main():
     t_start = int(time.time() * 1000)
     results = []
     for c in cases:
-        try:
-            r = await run(c)
-        except Exception as e:                          # noqa: BLE001
-            r = {"error": f"{type(e).__name__}: {str(e)[:80]}"}
+        r = None
+        for attempt in range(3):                        # a rate limit ("Allocated quota exceeded"): wait, try again
+            try:
+                r = await run(c)
+            except Exception as e:                      # noqa: BLE001
+                r = {"error": f"{type(e).__name__}: {str(e)[:80]}"}
+            if "quota" not in str(r.get("error", "")).lower():
+                break
+            await asyncio.sleep(20 * (attempt + 1))
         ok, why = judge(c, r)
         results.append((c, r, ok, why))
         print(("PASS " if ok else "FAIL ") + c["say"][:22].ljust(22), "| skills", r.get("opened"), "| calls",
               [f"{n}{'' if okc else '!'}" for n, _, okc in r.get("calls", [])], "|", why, "|", (r.get("text") or "")[:60],
               f"| {r.get('tokens')}t {r.get('s')}s", flush=True)
-        await asyncio.sleep(1.5)                        # the robot's own rate limit (2 per 10 s per verb)
+        await asyncio.sleep(3)                          # the robot's rate limit (2 per 10 s per verb) and the model's
     n_ok = sum(1 for *_, ok, _ in results if ok)
     print(f"\n{MODE}: {n_ok}/{len(results)} passed")
     cleanup(t_start)

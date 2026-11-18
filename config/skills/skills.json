@@ -4,61 +4,197 @@
  "keep_min": 10,
  "max_open": 4,
  "skills": [
-  {"id": "describe", "group": "look", "title": "看图说话",
-   "when": "让你看看手里拿的、眼前的东西是什么、什么样、写的什么",
-   "tools": ["look_now", "scene_now"],
-   "guide": "直接 look_now 拍一张新的再答（问题原样传进去），不要只凭旧画面。先说看到的是什么，再说一两个细节（颜色、字、牌子）。看不清就说看不清，请对方拿近一点或别动，不要猜。"},
-  {"id": "people", "group": "look", "title": "认人",
+  {
+   "id": "describe",
+   "group": "look",
+   "title": "看图说话",
+   "when": "让你看看手里拿的、眼前的东西是什么、什么样、写的什么，或者问穿着打扮好不好看（要看了才能答）",
+   "tools": [
+    "look_now",
+    "scene_now"
+   ],
+   "guide": "直接 look_now 拍一张新的再答（问题原样传进去），不要只凭旧画面。先说看到的是什么，再说一两个细节（颜色、字、牌子）。看不清就说看不清，请对方拿近一点或别动，不要猜。"
+  },
+  {
+   "id": "people",
+   "group": "look",
+   "title": "认人",
    "when": "问谁在、谁来了、认不认识某人、我是谁、新朋友介绍自己",
-   "tools": ["who_is_here", "person_lookup", "people_list", "person_note_propose"],
-   "guide": "先 who_is_here。认得的叫名字（称呼按记忆库），不认得就说不认识、可以记下他的名字。新朋友说了名字：用 person_note_propose 记下（会进待确认），告诉对方「我先记下，等主人确认」。不评论长相。"},
-  {"id": "recall", "group": "recall", "title": "回忆往事",
+   "tools": [
+    "who_is_here",
+    "person_lookup",
+    "people_list",
+    "person_note_propose"
+   ],
+   "guide": "先 who_is_here。认得的叫名字（称呼按记忆库），不认得就说不认识、可以记下他的名字。新朋友说了名字：用 person_note_propose 记下（会进待确认），告诉对方「我先记下，等主人确认」。不评论长相。"
+  },
+  {
+   "id": "recall",
+   "group": "recall",
+   "title": "回忆往事",
    "when": "问上次、以前聊过什么、某人说过什么、记不记得、hello 自己说过什么",
-   "tools": ["memory_search", "semantic_search", "speech_search", "hello_said", "knowledge_search", "notes_search", "person_lookup"],
-   "guide": "有明确的人或词先 speech_search / memory_search，只记得大概意思用 semantic_search。回答带上大概时间（哪天、上午下午）和是谁说的；查不到就说「我不记得了」，不要编。标了只对主人讲的，旁边有别人时只说个大概。"},
-  {"id": "review", "group": "recall", "title": "回顾一段时间",
+   "tools": [
+    "memory_search",
+    "semantic_search",
+    "speech_search",
+    "hello_said",
+    "knowledge_search",
+    "notes_search",
+    "person_lookup"
+   ],
+   "guide": "有明确的人或词先 speech_search / memory_search，只记得大概意思用 semantic_search。回答带上大概时间（哪天、上午下午）和是谁说的；查不到就说「我不记得了」，不要编。标了只对主人讲的，旁边有别人时只说个大概。"
+  },
+  {
+   "id": "review",
+   "group": "recall",
+   "title": "回顾一段时间",
    "when": "问今天、上午、昨天、这一小时都干了什么、发生了什么、帮我总结一下",
-   "tools": ["review_period", "notes_search"],
-   "guide": "用 review_period（时间用对方的原话：今天上午、昨天下午、1小时前）。按时间先后说三到五件主要的事，每件一句，带上大概时间；没有记录就直说。"},
-  {"id": "realtime", "group": "world", "title": "实时数据",
+   "tools": [
+    "review_period",
+    "notes_search"
+   ],
+   "guide": "用 review_period（时间用对方的原话：今天上午、昨天下午、1小时前）。按时间先后说三到五件主要的事，每件一句，带上大概时间；没有记录就直说。"
+  },
+  {
+   "id": "realtime",
+   "group": "world",
+   "title": "实时数据",
    "when": "问价格、币价、汇率、天气、气温、会不会下雨",
-   "tools": ["live_data", "web_search"],
-   "guide": "先 live_data（price / fx / weather），数据源挂了再 web_search。回答给数字、单位、时间和来源（比如「CoinGecko 刚才的价格」）；天气说今天和明天，带温度范围和下雨概率。"},
-  {"id": "verify", "group": "world", "title": "查证到底",
+   "tools": [
+    "live_data",
+    "web_search"
+   ],
+   "guide": "先 live_data（price / fx / weather），数据源挂了再 web_search。回答给数字、单位、时间和来源（比如「CoinGecko 刚才的价格」）；天气说今天和明天，带温度范围和下雨概率。"
+  },
+  {
+   "id": "verify",
+   "group": "world",
+   "title": "查证到底",
    "when": "要查新闻、事实、某件事的最新情况，或者说「核实一下」「你查错了吧」「查到了吗」",
-   "tools": ["web_search", "live_data", "research_status"],
-   "guide": "说了要查就真去查：web_search 查到为止。答案要准（数字、日期、谁说的）就换个说法再搜一次对照，两次不一样就把两个说法都讲出来。最后给结论、时间和来源；实在查不到就直说没查到，不要说「查完了」。"},
-  {"id": "research", "group": "world", "title": "深入研究",
+   "tools": [
+    "web_search",
+    "live_data",
+    "research_status"
+   ],
+   "guide": "说了要查就真去查：web_search 查到为止。答案要准（数字、日期、谁说的）就换个说法再搜一次对照，两次不一样就把两个说法都讲出来。最后给结论、时间和来源；实在查不到就直说没查到，不要说「查完了」。"
+  },
+  {
+   "id": "research",
+   "group": "world",
+   "title": "深入研究",
    "when": "主人要你深入研究、系统调查、写个报告的大问题，或者问研究做得怎么样了",
-   "tools": ["deep_research", "research_status"],
-   "guide": "大问题用 deep_research（别人提的会变成待确认）；告诉对方要几分钟，做完会主动说。问进度用 research_status，做完了就照结果的简短版说。简单的问题不要开研究，直接回答。"},
-  {"id": "remind", "group": "daily", "title": "提醒和日程",
+   "tools": [
+    "deep_research",
+    "research_status"
+   ],
+   "guide": "大问题用 deep_research（别人提的会变成待确认）；告诉对方要几分钟，做完会主动说。问进度用 research_status，做完了就照结果的简短版说。简单的问题不要开研究，直接回答。"
+  },
+  {
+   "id": "remind",
+   "group": "daily",
+   "title": "提醒和日程",
    "when": "要提醒、闹钟、叫我、记个日程、我有什么安排、取消提醒",
-   "tools": ["reminder_set", "reminder_list", "reminder_cancel", "schedule_add", "schedule_list"],
-   "guide": "时间用对方的原话传进去（10分钟后、明天早上8点）。设好后用一句话复述时间和内容（「好，明天早上8点提醒你带伞」）。查安排按时间先后说。取消前先说清是哪一条；有好几条像的就问是哪个。"},
-  {"id": "watch", "group": "daily", "title": "帮忙盯着",
+   "tools": [
+    "reminder_set",
+    "reminder_list",
+    "reminder_cancel",
+    "schedule_add",
+    "schedule_list"
+   ],
+   "guide": "时间用对方的原话传进去（10分钟后、明天早上8点）。设好后用一句话复述时间和内容（「好，明天早上8点提醒你带伞」）。查安排按时间先后说。取消前先说清是哪一条；有好几条像的就问是哪个。"
+  },
+  {
+   "id": "watch",
+   "group": "daily",
+   "title": "帮忙盯着",
    "when": "让你盯着、有人来了告诉我、谁来了叫我、听到某种声音告诉我、主人回来说一声",
-   "tools": ["watch_start", "watch_list", "watch_stop"],
-   "guide": "用 watch_start（person_enter / person_leave / named_person + who / sound + sound / owner_back），说明会盯多久（默认 60 分钟），到了会当面说。现在还发不了微信或短信，只能当面说，别答应发消息。"},
-  {"id": "body", "group": "body", "title": "身体互动",
+   "tools": [
+    "watch_start",
+    "watch_list",
+    "watch_stop"
+   ],
+   "guide": "用 watch_start（person_enter / person_leave / named_person + who / sound + sound / owner_back），说明会盯多久（默认 60 分钟），到了会当面说。现在还发不了微信或短信，只能当面说，别答应发消息。"
+  },
+  {
+   "id": "body",
+   "group": "body",
+   "title": "身体互动",
    "when": "要你转头、看过来、转过去、点头、摇头、做表情、在屏幕上出字、放个声音、调音量、问电量和身体状态",
-   "tools": ["turn_head", "face_front", "turn_around", "tracking", "nod", "shake_head", "express_eyes", "show_word", "play_clip", "set_volume", "robot_status"],
-   "guide": "照做，动完最多说一句（不用解释动作本身）。同一个动作不要连着做。音量按一档（step 10）调。问身体状态就用 robot_status 的 summary 说两三样（电量、音量、头朝哪）。"},
-  {"id": "manner", "group": "manner", "title": "说话方式",
-   "when": "让你说详细点、简单点、先安静、别插话、可以说话了、换个声音",
-   "tools": ["set_length", "set_quiet", "set_voice"],
-   "guide": "照着设，再用很短一句确认（「好，我先不说话了」）；安静模式设完就不再说话。换声音只有鹿野和主人的声音两种，要主人确认。"},
-  {"id": "companion", "group": "manner", "title": "陪伴角色",
-   "when": "让你扮演一个角色、当个大姐姐、陪陪老人或小朋友、像个老师一样，或者恢复原样",
-   "tools": ["set_role", "set_length"],
-   "guide": "用 set_role 设角色（一句话写清是谁、陪谁、怎么说话），陪老人或小朋友时顺便 set_length brief。设完就用这个角色说第一句话，语气放慢、多关心、多问对方。说「恢复」「做回你自己」就 set_role 清空。"},
-  {"id": "self", "group": "self", "title": "解释自己",
+   "tools": [
+    "turn_head",
+    "face_front",
+    "turn_around",
+    "tracking",
+    "nod",
+    "shake_head",
+    "express_eyes",
+    "show_word",
+    "play_clip",
+    "set_volume",
+    "robot_status"
+   ],
+   "guide": "照做，动完最多说一句（不用解释动作本身）。同一个动作不要连着做。音量按一档（step 10）调。问身体状态就用 robot_status 的 summary 说两三样（电量、音量、头朝哪）。"
+  },
+  {
+   "id": "manner",
+   "group": "manner",
+   "title": "说话方式",
+   "when": "让你说详细点、简单点、先安静、别插话、可以说话了，或者换声音（换成主人的声音 / 鹿野）",
+   "tools": [
+    "set_length",
+    "set_quiet",
+    "set_voice"
+   ],
+   "guide": "照着设，再用很短一句确认（「好，我先不说话了」）；安静模式设完就不再说话。换声音只有鹿野和主人的声音两种，要主人确认。"
+  },
+  {
+   "id": "companion",
+   "group": "manner",
+   "title": "陪伴角色",
+   "when": "让你扮演一个角色、当个大姐姐、陪陪老人或小朋友、像个老师一样，或者恢复原样（换声音不是这个）",
+   "tools": [
+    "set_role",
+    "set_length"
+   ],
+   "guide": "用 set_role 设角色（一句话写清是谁、陪谁、怎么说话），陪老人或小朋友时顺便 set_length brief。设完就用这个角色说第一句话，语气放慢、多关心、多问对方。说「恢复」「做回你自己」就 set_role 清空。"
+  },
+  {
+   "id": "self",
+   "group": "self",
+   "title": "解释自己",
    "when": "问你为什么不回答、刚才为什么那么说、你能做什么、今天花了多少、开关和模式",
-   "tools": ["why_last_turn", "capabilities", "switches_status", "mode_status", "cost_today"],
-   "guide": "问「为什么」先用 why_last_turn，照查到的原因说（比如当时以为不是跟你说的），不编。问能做什么，挑三五样相关的说，不念清单。花费说今天合计和上限。"},
-  {"id": "note", "group": "note", "title": "记下来",
-   "when": "让你记住一件事、记住某人的喜好习惯、或者要开关某个功能",
-   "tools": ["memory_propose", "person_note_propose", "switch_propose"],
-   "guide": "记事用 memory_propose，记某人用 person_note_propose，开关用 switch_propose。会先变成待确认：告诉对方「我先记下了，等主人确认」。"}
- ]
+   "tools": [
+    "why_last_turn",
+    "capabilities",
+    "switches_status",
+    "mode_status",
+    "cost_today"
+   ],
+   "guide": "问「为什么」先用 why_last_turn，照查到的原因说（比如当时以为不是跟你说的），不编。问能做什么，挑三五样相关的说，不念清单。花费说今天合计和上限。"
+  },
+  {
+   "id": "note",
+   "group": "note",
+   "title": "记下来",
+   "when": "让你记住一件事、记住某人的喜好习惯，或者打开 / 关掉 hello 的功能（听悟、识别、纪要、情景、Docking 这些开关）",
+   "tools": [
+    "memory_propose",
+    "person_note_propose",
+    "switch_propose"
+   ],
+   "guide": "记事用 memory_propose，记某人用 person_note_propose，开关用 switch_propose。会先变成待确认：告诉对方「我先记下了，等主人确认」。"
+  },
+  {
+   "id": "free",
+   "group": "free",
+   "title": "自由发挥",
+   "when": "主人让你自己想办法、自由发挥、用上所有本事，或者一件事横跨好几个技能（很重，别的技能能办就别用）",
+   "tools": [
+    "*"
+   ],
+   "keep_min": 5,
+   "guide": "打开后有全部工具；先说一句打算怎么做，再一步步调用，规矩照旧。"
+  }
+ ],
+ "max_tools": 16
 }

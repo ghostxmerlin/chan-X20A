@@ -185,6 +185,8 @@ PERSONA_RULES = (
     # owner 2026-11-18: the ASR unit answers its wake word with a spoken "I'm here" that the mic picks up
     "- 有人叫“hello”之后紧跟的英文“I'm here”，是你身上语音模块自己放的提示音，不是人说的：忽略它，只回应人说的话。\n"
     "- 只说要说出口的话：不加表情符号、括号和动作描写，不说“作为AI”。\n"
+    # 2026-11-18 skill test: a reply began with "[事件] 主人（hello）出现在你面前了，打个招呼" (the format below, echoed)
+    "- 背景、事件、工具结果里的标记（[事件]、【…】、字段名）只是给你看的，绝不念出来；也不要自己编事件。\n"
     "- 不给医疗、健康、用药方面的建议；背景里提到身体情况也不要劝人看医生。\n"
     "- 先分清是不是在跟你说话：电视、手机、广播里的声音，别人之间在聊天，零碎几个字、没头没尾、听不清的，都不是跟你说的，"
     "这时只回一个字「嗯」，别的什么都不说（这个「嗯」不会播出来）。不要问“你说啥”“没听清”“咋回事”。\n"
@@ -481,7 +483,7 @@ def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
 
 
 def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None, role=None, manner=None,
-                 persona=None):
+                 persona=None, skills=None):
     """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
     where the voice model tended to miss them; owner 2026-11-14). looks: look_lines() of the vision burst (else mind's
     注视： line, if the context has one)."""
@@ -519,6 +521,8 @@ def instructions(context_text=None, seen=None, recent=None, looks=None, scene=No
         eyes.append(f"摄像头照片识图（大约一分钟前）：{eye['画面：']}")
     if eyes:
         out += "\n\n【你的眼睛】\n" + "\n".join(eyes)
+    if skills:                                         # the open skills' full text (owner 2026-11-18): here, not in the
+        out += "\n\n【此刻打开的技能】（用到时照着做）\n" + skills   # history, so a closed skill leaves no trace
     return out
 
 
@@ -567,8 +571,10 @@ TOOL_OUTPUT_CHARS = 3000
 
 
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
+TOOL_ENOUGH = "这句话已经查了好几次了：不要再调用工具，现在就用已经拿到的结果回答（没查到就直说）。"
 SKILL_DEPTH = 5                                        # skills mode: open_skill + its tool calls for one sentence
 PRELOAD_KEEP_S = 120.0
+MAX_SKILL_TOOLS = 16                                   # tools of open skills at once
 TOOL_GATE_TEXT_S = 8.0
 BODY_TOOLS = frozenset(("turn_head", "face_front", "turn_around", "tracking", "nod", "shake_head", "express_eyes",
                         "show_word", "play_clip", "set_volume"))      # move / express (robot_status only reads)                                 # the ear's own ASR texts this recent count for the tool gate                                 # auto: a skill preloaded for a sentence, never used, goes after this
@@ -603,9 +609,13 @@ def load_skills(path=None):
 def open_skill_spec(skills):
     """The one tool of the first layer (owner 2026-11-18: the model finds a skill first, then its tools)."""
     ids = [s["id"] for s in skills]
-    menu = "；".join(f"{s['id']}={s['title']}（{s['when']}）" for s in skills)
+    # owner 2026-11-18 "没有机会给全部列表，会不会错失模型发挥创造力": each skill lists its tools' names too (cheap),
+    # so the model sees everything it can do; several skills may be opened for one task
+    menu = "；".join(f"{s['id']}={s['title']}（{s['when']}；工具：{'全部' if '*' in (s.get('tools') or []) else '、'.join(s.get('tools') or [])}）"
+                    for s in skills)
     return {"type": "function", "name": "open_skill",
-            "description": f"要用工具时先打开对应的技能，拿到它的工具和用法，再调用那些工具。闲聊不用打开。技能：{menu}",
+            "description": f"要用工具时先打开对应的技能，拿到它的工具和做法，再调用那些工具；一件事要用到好几个技能就都打开。"
+                           f"闲聊不用打开。技能：{menu}",
             "parameters": {"type": "object", "properties": {"skill": {"type": "string", "enum": ids}}, "required": ["skill"]}}
 
 
@@ -1516,7 +1526,7 @@ class RealtimeHub:
         self._looks_dirty, self._looks_sent_at = False, self.clock()
         return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()),
                             self._scene_line(), self._length_line(), self._role_line(), self._manner_line(),
-                            self.persona)
+                            self.persona, self._skills_block())
 
     # ---- reply length (see LENGTH_S) ----
     def _length_mode(self, now=None):
@@ -1687,7 +1697,8 @@ class RealtimeHub:
         if self._tools_mode in ("skills", "auto"):
             cfg = load_skills()
             self._all_specs = {t["name"]: t for t in (realtime_tools(body.get("tools"), SKILL_TOOL_SKIP) if ok else [])}
-            self._skills = {sk["id"]: sk for sk in cfg.get("skills", []) if any(n in self._all_specs for n in sk.get("tools", []))}
+            self._skills = {sk["id"]: sk for sk in cfg.get("skills", [])
+                            if "*" in sk.get("tools", []) or any(n in self._all_specs for n in sk.get("tools", []))}
             self._skill_cfg, self._open_skills = cfg, {}
             if self._skills:
                 log(f"realtime: session skills: {len(self._skills)} (of {len(specs)} tools)", flush=True)
@@ -1703,21 +1714,42 @@ class RealtimeHub:
         """Drop skills past their keep (a preloaded one never used: PRELOAD_KEEP_S) -> True when the set changed."""
         keep = float(self._skill_cfg.get("keep_min") or 10) * 60
         before = set(self._open_skills)
+        own = lambda k: float((self._skills.get(k) or {}).get("keep_min") or 0) * 60 or keep   # noqa: E731
         self._open_skills = {k: at for k, at in self._open_skills.items()
-                             if now - at < (PRELOAD_KEEP_S if k in self._preloaded else keep)}
+                             if now - at < (PRELOAD_KEEP_S if k in self._preloaded else own(k))}
         self._preloaded = {k: at for k, at in self._preloaded.items() if k in self._open_skills}
         cap = int(self._skill_cfg.get("max_open") or 3)
         for k in sorted(self._open_skills, key=self._open_skills.get)[:-cap]:
             del self._open_skills[k]
             self._preloaded.pop(k, None)
+        # at most MAX_SKILL_TOOLS tools at once (owner 2026-11-18 "skill 加载太多也很沉重"): the oldest skill goes first
+        free = any("*" in (self._skills.get(k) or {}).get("tools", []) for k in self._open_skills)
+        while not free and len(self._open_skills) > 1 and \
+                len(self._skill_tool_names(list(self._open_skills))) > int(self._skill_cfg.get("max_tools") or MAX_SKILL_TOOLS):
+            oldest = min(self._open_skills, key=self._open_skills.get)
+            del self._open_skills[oldest]
+            self._preloaded.pop(oldest, None)
         return set(self._open_skills) != before
 
-    def _push_skill_tools(self):
+    def _skill_tool_names(self, keys):
         names = []
-        for k in self._open_skills:
-            names += [n for n in self._skills[k].get("tools", []) if n in self._all_specs and n not in names]
+        for k in keys:
+            want = self._skills[k].get("tools", [])
+            if "*" in want:                            # 自由发挥: every tool (owner 2026-11-18: room for creativity)
+                want = list(self._all_specs)
+            names += [n for n in want if n in self._all_specs and n not in names]
+        return names
+
+    def _skills_block(self):
+        return "\n\n".join(self._skills[k].get("guide") or "" for k in self._open_skills if k in self._skills) or None
+
+    def _push_skill_tools(self):
+        """Tools of the open skills + their full text in the instructions, in one session.update."""
+        names = self._skill_tool_names(list(self._open_skills))
         self._tool_specs = [open_skill_spec(list(self._skills.values()))] + [self._all_specs[n] for n in names]
-        self._send_soon({"type": "session.update", "session": {"tools": self._tool_specs}})
+        instr = self._instructions()
+        self._send_soon({"type": "session.update", "session": {"tools": self._tool_specs, "instructions": instr}})
+        self._live_instr = instr
 
     def _used_skill(self, tool_name, now):
         """A preloaded skill whose tool the model called counts as opened (normal keep)."""
@@ -1761,9 +1793,13 @@ class RealtimeHub:
         self._prune_skills(now)
         self._push_skill_tools()
         self.stats["skills_opened"] += 1
+        ear_log.emit("trigger.skill", trace=ear_log.new_trace(), sum=f"打开技能：{sk['title']}",
+                     ref={"session": self.session_no}, extra={"skill": sid, "free": "*" in sk.get("tools", []),
+                                                              "open": list(self._open_skills)})
         mine = [n for n in sk.get("tools", []) if n in self._all_specs]
-        return {"ok": True, "data": {"skill": sk["title"], "tools": mine, "guide": sk.get("guide") or "",
-                                     "next": "现在直接调用上面的工具来回答"}, "error": None}
+        return {"ok": True, "data": {"skill": sk["title"], "tools": mine,
+                                     "next": "做法已经放进说明的【此刻打开的技能】里，照着做，直接调用这些工具来回答"},
+                "error": None}
 
     def _speaker_now(self, now):
         """The voiceprint of the newest sentence the ear heard in the last TOOL_GATE_TEXT_S, or (None, None)."""
@@ -1869,13 +1905,13 @@ class RealtimeHub:
         if fc["name"] == "open_skill" and self._tools_mode in ("skills", "auto") and self._skills and self.tools_on() and \
                 any(t["name"] == "open_skill" for t in self._tool_specs):
             env = self._open_skill((args or {}).get("skill") if isinstance(args, dict) else None, self.clock()) \
-                if depth <= limit else {"ok": False, "error": {"code": "refused", "message": "先回答吧"}}
+                if depth <= limit else {"ok": False, "error": {"code": "refused", "message": TOOL_ENOUGH}}
         elif fc["name"] not in {t["name"] for t in self._tool_specs}:     # only what this session was given
             env = {"ok": False, "error": {"code": "not_available", "message": f"没有给你 {fc['name'][:30]} 这个工具"}}
         elif args is None or not isinstance(args, dict):
             env = {"ok": False, "error": {"code": "bad_args", "message": "参数不是合法的 JSON"}}
         elif depth > limit:
-            env = {"ok": False, "error": {"code": "refused", "message": "这句话已经连着用了好几次工具，先回答吧"}}
+            env = {"ok": False, "error": {"code": "refused", "message": TOOL_ENOUGH}}
         else:
             loop = asyncio.get_running_loop()
             try:

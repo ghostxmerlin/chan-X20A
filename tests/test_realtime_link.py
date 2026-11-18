@@ -962,7 +962,10 @@ class SkillModeTest(HubBase):
         upd = [m for m in ws.sent if m["type"] == "session.update" and "tools" in m["session"]][-1]["session"]["tools"]
         self.assertEqual([t["name"] for t in upd], ["open_skill", "live_data", "web_search"])
         out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
-        self.assertIn("来源", json.loads(out[-1]["item"]["output"])["data"]["guide"])
+        self.assertNotIn("guide", json.loads(out[-1]["item"]["output"])["data"])       # not in the history
+        instr = [m for m in ws.sent if m["type"] == "session.update" and "tools" in m["session"]][-1]["session"]["instructions"]
+        self.assertIn("【此刻打开的技能】", instr)
+        self.assertIn("来源", instr)                                                   # the skill's text is there
         self.assertNotIn("/tool/call", [p for p, _ in calls])                       # opening is local
         ws.push({"type": "response.created", "response": {"id": "r2"}})
         ws.push({"type": "response.function_call_arguments.done", "response_id": "r2", "call_id": "c2",
@@ -2023,3 +2026,19 @@ class AutoModeTest(HubBase):
         self.hub._skill_cfg = {"keep_min": 10}
         self.t[0] = 1001.0 + self.rl.PRELOAD_KEEP_S + 1
         self.assertFalse(self.hub._prune_skills(self.t[0]))                   # normal keep (10 min) now
+
+
+class FreeSkillTest(HubBase):
+    """自由发挥 (owner 2026-11-18): one skill that hands every tool, past the 16-tool cap, kept 5 minutes."""
+    async def test_free_gives_every_tool_then_goes(self):
+        await self.open_ready()
+        self.hub._all_specs = {f"t{i}": {"type": "function", "name": f"t{i}"} for i in range(30)}
+        self.hub._skills = {"free": {"id": "free", "title": "自由发挥", "when": "x", "tools": ["*"], "keep_min": 5},
+                            "a": {"id": "a", "title": "A", "when": "y", "tools": ["t1", "t2"]}}
+        self.hub._skill_cfg = {"keep_min": 10, "max_open": 4, "max_tools": 16}
+        self.hub._open_skill("a", self.t[0])
+        self.hub._open_skill("free", self.t[0])
+        self.assertEqual(len(self.hub._tool_specs), 31)                    # open_skill + all 30
+        self.t[0] += 5 * 60 + 1
+        self.assertTrue(self.hub._prune_skills(self.t[0]))
+        self.assertEqual(set(self.hub._open_skills), {"a"})               # free goes after 5 min, a stays
