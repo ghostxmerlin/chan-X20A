@@ -48,7 +48,6 @@ Leaving chat (the on_change hook) cancels the current speech and the pending tur
 Billing gates nothing (owner); chat costs go to mind_runs (step chat) like every other model call.
 """
 import collections
-import json
 import re
 import threading
 import time
@@ -86,20 +85,6 @@ STATES = ('queued', 'thinking', 'answered', 'skipped', 'superseded')
 LISTEN_SHOW_MS = 20_000              # the page shows listening this long after an onset without a sentence
 SKIP_SHOW_MS = 1_500
 TOLD_OK = (None, 'hello_speaking', 'mouth_not_tts', 'no_model', 'no_tts')   # gate results whose text may set the place
-
-
-CHAT_TOOL_SKIP = frozenset(('say', 'stop_speaking', 'search_verify', 'set_voice', 'db_query'))   # as Docking's
-CHAT_TOOL_ROUNDS = 3
-CHAT_TOOL_EXTRA_S = 30.0
-CHAT_TOOL_OUTPUT = 3000
-
-
-def _tool_calls(resp):
-    try:
-        calls = resp['choices'][0]['message'].get('tool_calls') or []
-    except (KeyError, IndexError, TypeError, AttributeError):
-        return []
-    return [c for c in calls if isinstance(c, dict) and isinstance(c.get('function'), dict)]
 
 
 def _num(v):
@@ -299,7 +284,6 @@ class Chat:
         self.tts, self.env, self.mode_fn = tts, env, mode_fn
         self.mouth_fn = mouth_fn or (lambda: (db['switches'].find_one({'_id': 'mouth'}) or {}).get('mode', 'clips'))
         self.chat_fn = chat_fn or llm.chat
-        self.tools = None                    # tools.Tools (api.py sets it): 模型用工具
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.mono, self.log, self.threaded = mono, log, threaded
         self.finish_async = threaded         # each spoken line's soul-tts status is awaited on its own thread
@@ -603,56 +587,17 @@ class Chat:
                 self._cond.wait(QUIET_POLL_S)
         return None
 
-    def tools_on(self):
-        """模型用工具 (owner 2026-11-18 "直接打开模型调用吧…不止千问要调用"): the same switch as Docking's."""
-        if self.tools is None:
-            return False
-        try:
-            return (self.db['switches'].find_one({'_id': 'realtime_tools'}) or {}).get('on') is True
-        except Exception:                    # noqa: BLE001
-            return False
-
-    def _tool_list(self):
-        return [t for t in self.tools.export() if t['function']['name'] not in CHAT_TOOL_SKIP]
-
     def _ask(self, cfg, msgs):
-        """One model call (one retry after an early error) -> (reply text or '', run info). With 模型用工具 on, the
-        model may call tools first (at most CHAT_TOOL_ROUNDS rounds): each call runs through Tools.call (caller chat),
-        its result goes back as a tool message, then the model answers."""
-        body = {'model': cfg['model'], 'messages': list(msgs), 'max_tokens': MAX_TOKENS, 'temperature': 0.8,
+        """One plain-text model call (one retry after an early error) -> (reply text or '', run info)."""
+        body = {'model': cfg['model'], 'messages': msgs, 'max_tokens': MAX_TOKENS, 'temperature': 0.8,
                 'reasoning_effort': 'none'}       # coordinator 2026-11-14: always none (haiku burns tokens otherwise)
-        tools = self._tool_list() if self.tools_on() else []
-        if tools:
-            body['tools'], body['tool_choice'] = tools, 'auto'
         t0 = self.mono()
         tries, resp, err, ms = 0, None, None, 0
-        used = []
-        budget = LLM_TIMEOUT_S + (CHAT_TOOL_EXTRA_S if tools else 0)
         while True:
             tries += 1
-            left = budget - (self.mono() - t0)
+            left = LLM_TIMEOUT_S - (self.mono() - t0)
             with hello_log.scope('call.chat'):
                 resp, ms, err = self.chat_fn(self.env['base_url'], self.env['api_key'], body, timeout=max(1.0, left))
-            calls = _tool_calls(resp) if tools and not err else []
-            if calls and len(used) < CHAT_TOOL_ROUNDS and self.mono() - t0 < budget - 3:
-                body['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': calls})
-                for c in calls:
-                    fn = c.get('function') or {}
-                    try:
-                        args = json.loads(fn.get('arguments') or '{}')
-                    except ValueError:
-                        args = None
-                    env = self.tools.call(str(fn.get('name') or '')[:60], args if isinstance(args, dict) else {},
-                                          caller='chat') if isinstance(args, dict) else \
-                        {'ok': False, 'error': {'code': 'bad_args', 'message': '参数不是合法的 JSON'}}
-                    out = json.dumps({'ok': env.get('ok'), 'data': env.get('data'), 'error': env.get('error')},
-                                     ensure_ascii=False)[:CHAT_TOOL_OUTPUT]
-                    body['messages'].append({'role': 'tool', 'tool_call_id': c.get('id'), 'content': out})
-                    used.append(fn.get('name'))
-                if len(used) >= CHAT_TOOL_ROUNDS:
-                    body.pop('tools', None)
-                    body.pop('tool_choice', None)
-                continue
             if not err or tries >= 2 or self.mono() - t0 >= RETRY_BEFORE_S:
                 break
         raw = ''
@@ -674,7 +619,7 @@ class Chat:
             self.log(f'mind chat: run record failed: {type(e).__name__}', flush=True)
         return trim(raw, cfg['max_chars']), {'llm_ms': int((self.mono() - t0) * 1000), 'tries': tries,
                                             'usage': usage, 'cost_usd': cost, 'error': err, 'run_id': run_id,
-                                            'raw': raw[:400], 'tools_used': used}
+                                            'raw': raw[:400]}
 
     # ---- the chat speak path ----
     def speak_line(self, text, s, *, gen=None, epoch=None, tid=None, stream=None, end_at=None):
