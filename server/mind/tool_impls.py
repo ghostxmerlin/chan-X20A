@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import re
 
-from . import mode_table, recall, segments, selfvoice, settings as settings_mod, tool_time
+from . import mode_table, recall, segments, selfvoice, semantic, settings as settings_mod, tool_time
 from .library import Library
 from .store import LANE
 from .tools import Paid, ToolError
@@ -56,8 +56,9 @@ WHY_KINDS = ("heard.asr", "heard.called", "gate.realtime", "gate.rescue", "call.
 
 
 def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, settings_fn=None, flows=None,
-               registry=None, write_switch=None, scope_fn=None, research=None):
-    """flows(lo, hi, kinds, limit) = the run log query (hello_log_query.flows bound to the db); registry = the tools
+               registry=None, write_switch=None, scope_fn=None, research=None, embed=None):
+    """embed(texts, purpose) -> (vectors, info) = semantic.embedder (None: semantic_search is not available).
+    flows(lo, hi, kinds, limit) = the run log query (hello_log_query.flows bound to the db); registry = the tools
     registry (capabilities reads it)."""
     """name -> fn(args): switches = api's switches(); store.enabled() = the 情景 switch; ledger(db_day) = the run log's
     day ledger (hello_log_query.ledger bound to the db), None when the log query is not deployed."""
@@ -503,13 +504,36 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
     def face_learn_propose(args):
         raise ToolError("not_available", "学人脸要等服务器到机器人的命令线做好（下一步）")
 
+    _semantic = semantic.search_tool(db, embed, settings, names_of, now_ms)    # 按意思找 (semantic.py)
+
+    def semantic_gated(args):
+        """Memory hits go through the same gate as memory_search (security review 2026-11-18): only memories in
+        recall.load_pool (memory.apply off = none), and their text as recall.prompt_text (the treatment rules)."""
+        out = _semantic(args)
+        data = out.data if isinstance(out, Paid) else out
+        if any(h.get("kind") == "memory" for h in data.get("hits", [])):
+            s = settings()
+            pool = {m.get("id"): m for m in recall.load_pool(db, s, now_ms())}
+            kept = []
+            for h in data["hits"]:
+                if h.get("kind") == "memory":
+                    m = pool.get(h.get("id"))
+                    if m is None:
+                        continue
+                    r = memory_row(m, s["tz"])
+                    h.update(text=r["statement"], only_for_owner=r["only_for_owner"])
+                kept.append(h)
+            data["hits"] = kept
+        return out
+
     impls = {"switches_status": switches_status, "mode_status": mode_status, "cost_today": cost_today,
              "scene_now": scene_now, "notes_search": notes_search, "review_period": review_period,
              "memory_search": memory_search, "knowledge_search": knowledge_search, "person_lookup": person_lookup,
              "people_list": people_list, "speech_search": speech_search, "recent_speech": recent_speech,
              "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
              "capabilities": capabilities, "switch_propose": switch_propose, "memory_propose": memory_propose,
-             "person_note_propose": person_note_propose, "face_learn_propose": face_learn_propose}
+             "person_note_propose": person_note_propose, "face_learn_propose": face_learn_propose,
+             "semantic_search": semantic_gated}
     if research is not None:                     # 深入研究 (mind/research.py Runner): deep_research, research_status
         from . import research as research_mod
         impls.update(research_mod.tools(research))

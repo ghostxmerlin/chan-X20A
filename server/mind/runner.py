@@ -447,6 +447,14 @@ def main():
         threading.Thread(target=say_worker.run, daemon=True).start()
         if tts:
             threading.Thread(target=auto_worker.run, daemon=True).start()
+    # 按意思找 (semantic.py): the tool embeds its query with DashScope; the incremental vector sync every 10 min runs
+    # only with MIND_SEMANTIC_SYNC=1 in the unit's environment (default off; first backfill: python3 -m mind.semantic)
+    from . import semantic
+    embed = semantic.embedder(os.environ.get("DASHSCOPE_API_KEY") or hub.get("DASHSCOPE_API_KEY"))
+    if embed and semantic.sync_enabled():
+        semantic.ensure_indexes(db)
+        threading.Thread(target=semantic.periodic, args=(db, embed), kwargs={"paused_fn": pause_ctl.paused},
+                         daemon=True).start()
     threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port,
                                              {"env": env, "settings_store": settings_store,
                                                                          "recordings_root": a.recordings, "roles_dir": a.roles,
@@ -454,7 +462,7 @@ def main():
                                                                          "say_auto": say_auto_live, "mode_store": mode_store,
                                                                          "billing": billing, "round_gate": round_gate,
                                                                          "chat": chat, "pause": pause_ctl, "daily": daily,
-                                                                         "research": research}),
+                                                                         "research": research, "embed": embed}),
                      daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}, mode {mode_store.current()['mode']} "

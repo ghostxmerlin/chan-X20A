@@ -207,6 +207,10 @@ class FakeCollection:
             new.update(copy.deepcopy(update.get("$set", {})))
             self.docs.append(new)
 
+    def delete_many(self, flt):
+        self._check()
+        self.docs = [d for d in self.docs if not _match(d, flt)]
+
     def create_index(self, keys, unique=False, **k):
         self.__dict__.setdefault("indexes", []).append((list(keys), unique))
         return "ok"
