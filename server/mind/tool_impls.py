@@ -56,7 +56,7 @@ WHY_KINDS = ("heard.asr", "heard.called", "gate.realtime", "gate.rescue", "call.
 
 
 def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, settings_fn=None, flows=None,
-               registry=None):
+               registry=None, write_switch=None, scope_fn=None):
     """flows(lo, hi, kinds, limit) = the run log query (hello_log_query.flows bound to the db); registry = the tools
     registry (capabilities reads it)."""
     """name -> fn(args): switches = api's switches(); store.enabled() = the 情景 switch; ledger(db_day) = the run log's
@@ -462,13 +462,65 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
         return {"can_do": [{"group": g, "tools": ts} for g, ts in can.items()], "not_yet": later,
                 "senses_on": on, "senses_off": off, "paused": sw["pause"]["paused"]}
 
+    # ---- L3: C-level tools (they run as written only for the owner in person or after the owner's approval) ----
+    SWITCH_ZH = {"tingwu": "听悟", "eye": "识别", "notes": "纪要", "mind": "情景", "realtime": "Docking"}
+
+    def switch_propose(args):
+        if write_switch is None:
+            raise ToolError("not_available", "开关写入没有接上")
+        write_switch(args["name"], bool(args["on"]))
+        return {"switch": SWITCH_ZH.get(args["name"], args["name"]), "on": bool(args["on"])}
+
+    def scope():
+        return scope_fn() if scope_fn else "default"
+
+    def memory_propose(args):
+        subjects = []
+        for who in args.get("about") or []:
+            pid = resolve(who)
+            if pid and pid not in subjects:
+                subjects.append(pid)
+        st = args["statement"].strip()
+        try:
+            out = lib.put("memory_items", {"kind": "told", "title": st[:30], "statement": st, "subjects": subjects,
+                                           "when": {"type": "point", "start_ms": now_ms()}},
+                          item_id=None, expected_version=None, scope_id=scope(), now_ms=now_ms(),
+                          reason=("工具：" + (args.get("why") or "记一件事"))[:200])
+        except ValueError as e:
+            raise ToolError("bad_args", str(e)) from None
+        return {"saved": True, "memory_id": (out or {}).get("memory_id") if isinstance(out, dict) else None,
+                "statement": st}
+
+    def person_note_propose(args):
+        pid = resolve(args["who"])
+        try:
+            out = lib.put("people_notes", {"person_id": pid, "kind": args.get("kind") or "fact", "text": args["text"].strip()},
+                          item_id=None, expected_version=None, scope_id=scope(), now_ms=now_ms(), reason="工具：人物笔记")
+        except ValueError as e:
+            raise ToolError("bad_args", str(e)) from None
+        return {"saved": True, "who": args["who"], "note_id": (out or {}).get("note_id") if isinstance(out, dict) else None}
+
+    def face_learn_propose(args):
+        raise ToolError("not_available", "学人脸要等服务器到机器人的命令线做好（下一步）")
+
     impls = {"switches_status": switches_status, "mode_status": mode_status, "cost_today": cost_today,
              "scene_now": scene_now, "notes_search": notes_search, "review_period": review_period,
              "memory_search": memory_search, "knowledge_search": knowledge_search, "person_lookup": person_lookup,
              "people_list": people_list, "speech_search": speech_search, "recent_speech": recent_speech,
              "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
-             "capabilities": capabilities}
+             "capabilities": capabilities, "switch_propose": switch_propose, "memory_propose": memory_propose,
+             "person_note_propose": person_note_propose, "face_learn_propose": face_learn_propose}
     return impls
+
+
+DESCRIBE = {   # one line for the 待确认 list (Tools.describe)
+    "switch_propose": lambda a: f"把「{ {'tingwu': '听悟', 'eye': '识别', 'notes': '纪要', 'mind': '情景', 'realtime': 'Docking'}.get(a['name'], a['name']) }」"
+                                f"{'打开' if a['on'] else '关掉'}" + (f"：{a['why']}" if a.get("why") else ""),
+    "memory_propose": lambda a: f"记住：{a['statement']}" + (f"（关于 {'、'.join(a['about'])}）" if a.get("about") else ""),
+    "person_note_propose": lambda a: f"给{a['who']}记一笔：{a['text']}",
+    "face_learn_propose": lambda a: f"学一张脸，名字叫「{a['name']}」",
+    "deep_research": lambda a: f"深入研究：{a.get('topic') or a.get('question') or ''}",
+}
 
 
 # ---- L1: the ear's tools (server/ear/ask_api.py, 127.0.0.1 only) ----

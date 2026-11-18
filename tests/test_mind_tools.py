@@ -428,3 +428,61 @@ class LiveToolsTest(unittest.TestCase):
         self.assertEqual((out.data["agree"], out.data["answer"]), ("yes", "约 6.4 万美元"))
         self.assertEqual(calls, [tool_impls.VERIFY_MODEL, tool_impls.JUDGE_MODEL])
         self.assertGreater(out.cost["amount"], 0.014)
+
+
+class ProposalTest(unittest.TestCase):
+    def setUp(self):
+        from mind.proposals import Proposals
+        self.db = FakeDB()
+        self.t = [NOW]
+        self.p = Proposals(self.db, clock_ms=lambda: self.t[0], emit=lambda *a, **k: None)
+        self.ran = []
+        reg = {"tools": [{"name": "switch_propose", "title": "提议改开关", "level": "C",
+                          "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "on": {"type": "boolean"}},
+                                         "required": ["name", "on"]}}]}
+        self.tools = Tools(reg, {"switch_propose": lambda a: (self.ran.append(a), {"on": a["on"]})[1]},
+                           log=lambda *a, **k: None, proposals=self.p, describe=tool_impls.DESCRIBE)
+
+    def test_c_tool_is_a_proposal_unless_the_owner_asks(self):
+        env = self.tools.call("switch_propose", {"name": "eye", "on": True}, caller="qwen")
+        self.assertTrue(env["ok"])
+        self.assertEqual(env["data"]["state"], "pending")
+        self.assertEqual(self.ran, [])
+        again = self.tools.call("switch_propose", {"name": "eye", "on": True}, caller="qwen")
+        self.assertTrue(again["data"]["again"])
+        items = self.p.list()
+        self.assertEqual([i["summary"] for i in items], ["把「识别」打开"])
+        doc = self.p.decide(items[0]["_id"], True, lambda n, a: self.tools.call(n, a, owner=True))
+        self.assertEqual((doc["state"], self.ran), ("approved", [{"name": "eye", "on": True}]))
+        with self.assertRaises(ValueError):
+            self.p.decide(items[0]["_id"], True, lambda n, a: None)
+        env = self.tools.call("switch_propose", {"name": "notes", "on": False}, owner=True)
+        self.assertEqual(env["data"], {"on": False})                         # the owner in person: at once
+
+    def test_reject_and_expire(self):
+        self.tools.call("switch_propose", {"name": "eye", "on": False})
+        pid = self.p.list()[0]["_id"]
+        self.assertEqual(self.p.decide(pid, False, None)["state"], "rejected")
+        self.tools.call("switch_propose", {"name": "tingwu", "on": True})
+        self.t[0] += 25 * 3600_000
+        self.assertEqual(self.p.list(), [])
+        self.assertEqual(self.p.list("expired")[0]["args"]["name"], "tingwu")
+
+    def test_executors(self):
+        db = FakeDB()
+        db["people_cards"].insert_one({"person_id": "p_aaaaaaaaaaaa", "version": 1, "kind": "regular", "display": "小王",
+                                       "aliases": [], "links": {}, "status": "confirmed", "changed_at": 1})
+        writes = []
+        t = tool_impls.mind_tools(switches=lambda: {}, store=Store(db), clock_ms=lambda: NOW,
+                                  write_switch=lambda n, on: writes.append((n, on)))
+        self.assertEqual(t["switch_propose"]({"name": "eye", "on": True}), {"switch": "识别", "on": True})
+        self.assertEqual(writes, [("eye", True)])
+        with self.assertRaises(ToolError):
+            t["face_learn_propose"]({"name": "小王"})
+        m = t["memory_propose"]({"statement": "主人喜欢喝美式咖啡", "about": ["主人"]})
+        self.assertTrue(m["saved"])
+        row = db["memory_items"].find_one({"statement": "主人喜欢喝美式咖啡"})
+        self.assertEqual((row["kind"], row["subjects"], row["actor"]), ("told", ["owner"], "owner"))
+        n = t["person_note_propose"]({"who": "小王", "kind": "preference", "text": "喜欢喝茶"})
+        self.assertTrue(n["saved"])
+        self.assertEqual(db["people_notes"].find_one({"text": "喜欢喝茶"})["person_id"], "p_aaaaaaaaaaaa")

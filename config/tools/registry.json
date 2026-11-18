@@ -1562,7 +1562,7 @@
    "group": "settings",
    "level": "C",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "提议打开或关掉听悟、识别、纪要、情景、Docking；主人确认后才执行。",
    "parameters": {
     "type": "object",
@@ -1591,7 +1591,7 @@
     ]
    },
    "returns": "proposal_id",
-   "source": "新：确认列表（页面 / 口头）",
+   "source": "新：确认列表（页面 / 口头）；提议表 hello.proposals（server/mind/proposals.py），工具页「待确认」",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1608,7 +1608,7 @@
    "group": "settings",
    "level": "C",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "想记下一件事时提议，主人确认后写进记忆库。",
    "parameters": {
     "type": "object",
@@ -1634,7 +1634,7 @@
     ]
    },
    "returns": "proposal_id",
-   "source": "新：确认后走 Library.put",
+   "source": "新：确认后走 Library.put；提议表 hello.proposals（server/mind/proposals.py），工具页「待确认」",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1652,7 +1652,7 @@
    "group": "settings",
    "level": "C",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "想给某人记一条笔记（喜好、关系…）时提议。",
    "parameters": {
     "type": "object",
@@ -1682,7 +1682,7 @@
     ]
    },
    "returns": "proposal_id",
-   "source": "新：确认后写 people_notes",
+   "source": "新：确认后写 people_notes；提议表 hello.proposals（server/mind/proposals.py），工具页「待确认」",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],

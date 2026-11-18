@@ -21,3 +21,12 @@ test('tools page: 试一下 only for implemented read-only tools; argument skele
   assert.ok(!html.includes('data-tool="turn_head"'));            // A level: no button even if implemented
   assert.deepEqual(skeleton({ type: 'object', properties: { q: { type: 'string' }, n: { type: 'integer', minimum: 2 }, m: { type: 'string', enum: ['a', 'b'] } }, required: ['q', 'n', 'm'] }), { q: '', n: 2, m: 'a' });
 });
+
+test('proposal list escapes and shows both buttons', async () => {
+  const { proposalHtml } = await import('./public/tools-ui.js');
+  const html = proposalHtml([{ _id: 'q_1', summary: '把「识别」打开<script>', by: 'qwen', at: 0 }], 30 * 60000);
+  assert.ok(html.includes('&lt;script&gt;'));
+  assert.ok(html.includes('data-approve="1"') && html.includes('data-approve="0"'));
+  assert.ok(html.includes('30 分钟前'));
+  assert.ok(proposalHtml([]).includes('没有待确认'));
+});

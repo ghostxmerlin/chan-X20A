@@ -48,7 +48,37 @@ export function render(reg, status = '', available = new Set()) {
   return `<section class="notes">${Object.keys(reg.groups).map(g => groupHtml(reg, g, status, available)).join('')}</section>`;
 }
 
+export function proposalHtml(items, now = Date.now()) {
+  if (!items.length) return '<p>没有待确认的事。</p>';
+  const ago = at => { const m = Math.round((now - at) / 60000); return m < 1 ? '刚刚' : m < 60 ? `${m} 分钟前` : `${Math.round(m / 60)} 小时前`; };
+  return '<ul class="proposals">' + items.map(p => `<li><b>${esc(p.summary || p.title)}</b>
+    <span class="small">（${esc(p.by || '未知')} · ${ago(p.at)}）</span>
+    <button class="try" data-decide="${esc(p._id)}" data-approve="1">同意</button>
+    <button class="try" data-decide="${esc(p._id)}" data-approve="0">不同意</button></li>`).join('') + '</ul>';
+}
+
+async function loadProposals() {
+  const box = document.getElementById('proposal-list');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/mind/proposals?state=pending', { cache: 'no-store' });
+    if (!r.ok) { box.textContent = `读不到（${r.status}）`; return; }
+    box.innerHTML = proposalHtml((await r.json()).items || []);
+    box.querySelectorAll('button[data-decide]').forEach(b => b.addEventListener('click', async () => {
+      b.disabled = true;
+      const r2 = await fetch('/api/mind/proposal/decide', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: b.dataset.decide, approve: b.dataset.approve === '1' }) });
+      if (!r2.ok) alertLine(box, `没成功：${r2.status} ${await r2.text()}`);
+      loadProposals();
+    }));
+  } catch (e) { box.textContent = `读取失败：${e.message}`; }
+}
+
+function alertLine(box, text) { const p = document.createElement('p'); p.textContent = text; box.prepend(p); }
+
 async function main() {
+  loadProposals();
+  setInterval(loadProposals, 15000);
   const res = await fetch('/api/tools', { cache: 'no-store' });
   if (!res.ok) { document.getElementById('tools-summary').textContent = '读不到工具注册表'; return; }
   const reg = await res.json();

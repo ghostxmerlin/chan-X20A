@@ -257,14 +257,31 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
     registry = load_registry()
     ear_ask = ctx.get("ear_ask") or tool_impls.ear_asker(token)
     from . import llm as _llm
+    from .proposals import Proposals
+    proposals = ctx.get("proposals") or Proposals(db)
+
+    def write_switch(name, on):
+        """A C tool's switch change (switch_propose, owner in person or approved)."""
+        now_ = int(time.time() * 1000)
+        if name == "mind":
+            with runlog.switch("mind", runlog.value(store.enabled), on, "tool"):
+                store.set_state(enabled=on, switched_at=now_)
+            return
+        if name not in SWITCHES:
+            raise ValueError(name)
+        with runlog.switch(name, runlog.read_switch(db, name), on, "tool"):
+            db["switches"].update_one({"_id": name}, {"$set": {"on": on, "at": now_, "by": "tool"}}, upsert=True)
+
     tools = ctx.get("tools") or Tools(registry, tool_impls.mind_tools(
-        switches=switches, store=store, mode_store=ctx.get("mode_store"),
+        switches=switches, store=store, mode_store=ctx.get("mode_store"), write_switch=write_switch,
+        scope_fn=lambda: speech_settings.scope(current_settings()[0])["id"],
         ledger=(lambda day: log_query.ledger(db, day)) if log_query is not None else None,
         settings_fn=lambda: current_settings()[0], registry=registry,
         flows=(lambda lo, hi, kinds, limit: log_query.flows(db, lo, hi, kinds=kinds, limit=limit)) if log_query is not None else None)
         | tool_impls.ear_tools(ear_ask)
         | tool_impls.live_tools(ear_search=lambda q: ear_ask("web_search", {"query": q}), llm_env=ctx.get("env"),
-                                chat=_llm.chat, tz=current_settings()[0].get("tz") or "Asia/Shanghai"))
+                                chat=_llm.chat, tz=current_settings()[0].get("tz") or "Asia/Shanghai"),
+        proposals=proposals, describe=tool_impls.DESCRIBE)
 
     def note_owner(path, body, reply):
         """After a POST went through: tell the pause about an explicit owner input (never raises)."""
@@ -598,6 +615,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return switches()
         if path == "/tools":
             return {"tools": tools.export(include_unlisted=q.get("all", ["0"])[0] == "1"), "available": tools.available()}
+        if path == "/proposals":
+            state = (q.get("state") or ["pending"])[0]
+            if state not in ("pending", "all", "approved", "rejected", "expired", "failed"):
+                raise BadRequest("bad state")
+            return {"items": proposals.list(state)}
         if path == "/mode":
             ms = modes()
             return {"snapshot": ms.current(), "robot": ms.robot(), "log": ms.log(10)}
@@ -685,7 +707,19 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         if path == "/tool/call":                          # B1: one tool call -> the envelope (errors inside it)
             trace = body.get("trace")
             trace = trace if isinstance(trace, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", trace) else None
-            return tools.call(_str(body.get("name"), 60), body.get("args"), trace=trace, caller=_str(body.get("caller"), 32) or None)
+            return tools.call(_str(body.get("name"), 60), body.get("args"), trace=trace, caller=_str(body.get("caller"), 32) or None,
+                              owner=body.get("owner") is True)
+        if path == "/proposal/decide":                    # L3: the owner's 同意 / 不同意 on the 待确认 list
+            if not isinstance(body.get("id"), str) or not isinstance(body.get("approve"), bool):
+                raise BadRequest("id and approve (true/false) required")
+            try:
+                doc = proposals.decide(body["id"], body["approve"],
+                                       lambda name, args: tools.call(name, args, caller="owner:page", owner=True))
+            except KeyError as e:
+                raise NotFound(str(e.args[0])) from None
+            except ValueError as e:
+                raise Conflict(str(e)) from None
+            return {"proposal": doc}
         if path in DB_POST:
             return lib_post(path, body)
         if path == '/db/memory/review':
@@ -1052,7 +1086,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                                 '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
                                 '/db/memory/review', '/db/extract/switch', '/db/extract/run',
                                 '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard', '/chat/stage',
-                                '/tool/call'):
+                                '/tool/call', '/proposal/decide'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats", "/mode/seq"):
                     self._send(405, {"error": "read only"})
                 else:

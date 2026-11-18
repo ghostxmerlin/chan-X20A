@@ -87,12 +87,14 @@ def validate(parameters, args):
 class Tools:
     """registry: load_registry(); impls: name -> fn(args) -> data (or raise ToolError); cost of a paid tool: return
     {"data": ..., "cost": {"amount", "cur"}} wrapped by the implementation in a Paid(...)."""
-    def __init__(self, registry, impls, clock_ms=None, log=None):
+    def __init__(self, registry, impls, clock_ms=None, log=None, proposals=None, describe=None):
         self.registry = registry or {}
         self.by_name = {t["name"]: t for t in self.registry.get("tools", [])}
         self.impls = dict(impls)
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.emit = log or hello_log.emit
+        self.proposals = proposals                     # proposals.Proposals: C tools not asked by the owner in person
+        self.describe = describe or {}                 # name -> fn(args) -> one Chinese line for the 待确认 list
 
     def available(self):
         return sorted(n for n in self.impls if n in self.by_name)
@@ -108,7 +110,9 @@ class Tools:
                                                              "parameters": t["parameters"]}})
         return out
 
-    def call(self, name, args=None, trace=None, caller=None):
+    def call(self, name, args=None, trace=None, caller=None, owner=False):
+        """owner: the owner asked in person (recognised) - a C tool then runs at once (2026-11-18), else it is a
+        proposal."""
         t0 = time.monotonic()
         spec = self.by_name.get(name)
         data, cost, err = None, None, None
@@ -119,7 +123,11 @@ class Tools:
             if fn is None:
                 raise ToolError("not_available", f"「{spec['title']}」还没做好")
             clean = validate(spec.get("parameters"), args)
-            out = fn(clean)
+            if spec.get("level") == "C" and not owner and self.proposals is not None:
+                line = self.describe[name](clean) if name in self.describe else spec["title"]
+                out = self.proposals.create(name, spec["title"], clean, by=caller, trace=trace, summary=line)
+            else:
+                out = fn(clean)
             if isinstance(out, Paid):
                 data, cost = out.data, out.cost
             else:
