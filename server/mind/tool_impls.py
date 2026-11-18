@@ -504,6 +504,38 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
     def face_learn_propose(args):
         raise ToolError("not_available", "学人脸要等服务器到机器人的命令线做好（下一步）")
 
+    # ---- L5: a read-only query over whitelisted collections and fields (no memory / people: their own tools) ----
+    def db_query(args):
+        c = args["collection"]
+        spec = DB_QUERY.get(c)
+        if spec is None:
+            raise ToolError("bad_args", f"只能查：{'、'.join(f'{k}（{v[2]}）' for k, v in DB_QUERY.items())}")
+        tfield, allowed, _ = spec
+        want = args.get("fields") or list(allowed)
+        bad = [f for f in want if f not in allowed]
+        if bad:
+            raise ToolError("bad_args", f"{c} 能看的字段：{'、'.join(allowed)}")
+        s, now = settings(), now_ms()
+        lo, hi = tool_time.span(args.get("from"), args.get("to"), now, s["tz"])
+        limit = args.get("limit") or 10
+        proj = {"_id": 0, tfield: 1, **{f: 1 for f in want}}
+        rows = list(db[c].find({tfield: {"$gte": lo, "$lt": hi}}, proj).sort(tfield, -1).limit(limit))
+        out = []
+        for r in rows:
+            row = {"time": tool_time.label(r[tfield], s["tz"]) if isinstance(r.get(tfield), (int, float)) else None}
+            for f in want:
+                v = r.get(f)
+                if f == "speaker" and isinstance(v, dict):
+                    v = v.get("name") if v.get("band") == "known" else v.get("band")
+                if isinstance(v, str) and len(v) > 300:
+                    v = v[:300] + "…"
+                if isinstance(v, (dict, list)):
+                    v = str(v)[:300]
+                row[f] = v
+            out.append(row)
+        return {"collection": c, "range": [tool_time.label(lo, s["tz"]), tool_time.label(hi, s["tz"])],
+                "shown": len(out), "rows": out}
+
     _semantic = semantic.search_tool(db, embed, settings, names_of, now_ms)    # 按意思找 (semantic.py)
 
     def semantic_gated(args):
@@ -533,12 +565,29 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
              "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
              "capabilities": capabilities, "switch_propose": switch_propose, "memory_propose": memory_propose,
              "person_note_propose": person_note_propose, "face_learn_propose": face_learn_propose,
-             "semantic_search": semantic_gated}
+             "semantic_search": semantic_gated, "db_query": db_query}
     if research is not None:                     # 深入研究 (mind/research.py Runner): deep_research, research_status
         from . import research as research_mod
         impls.update(research_mod.tools(research))
     return impls
 
+
+DB_QUERY = {   # collection -> (time field, readable fields, what it is); memory / people go through their own tools
+    "conversations": ("start_ms", ("title", "notes", "end_ms"), "对话纪要"),
+    "speech": ("t", ("text", "speaker", "emotion", "lang", "dur", "session", "pos"), "听到的每句话"),
+    "sounds": ("t", ("label", "kind", "dur", "loud_db"), "听到的声音"),
+    "realtime_turns": ("at", ("kind", "state", "heard", "reply", "model", "cost_cny"), "Docking 的每一轮"),
+    "chat_turns": ("at", ("text", "reply", "mode", "state"), "对话模式的每一轮"),
+    "utterances": ("at", ("role", "text", "state", "voice"), "说出的台词"),
+    "vision_looks": ("at", ("kind", "text", "model", "latency_ms", "cost_usd"), "看过的照片"),
+    "vision": ("at", ("event", "ev", "name", "person"), "M12 视觉事件"),
+    "eye_minutes": ("at", ("minute", "result"), "每分钟画面"),
+    "sessions": ("start_ms", ("device", "kind", "session"), "录音会话"),
+    "reminders": ("due", ("kind", "text", "title", "state", "repeat"), "提醒和日程"),
+    "watches": ("at", ("what", "who", "sound", "state", "until"), "盯着的事"),
+    "proposals": ("at", ("tool", "summary", "state", "by"), "待确认"),
+    "research": ("at", ("topic", "state", "cost_cny"), "深入研究"),
+}
 
 DESCRIBE = {   # one line for the 待确认 list (Tools.describe)
     "switch_propose": lambda a: f"把「{ {'tingwu': '听悟', 'eye': '识别', 'notes': '纪要', 'mind': '情景', 'realtime': 'Docking'}.get(a['name'], a['name']) }」"

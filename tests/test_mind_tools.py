@@ -599,3 +599,18 @@ class DailyTest(unittest.TestCase):
         self.assertEqual(self.d.watch_list()["total"], 0)                       # expired
         with self.assertRaises(ToolError):
             self.d.watch_start("person_enter", how="notify")
+
+
+class DbQueryTest(unittest.TestCase):
+    def test_whitelist(self):
+        db = FakeDB()
+        db["sounds"].insert_one({"t": NOW - 60_000, "label": "敲门", "kind": "knock", "dur": 1.0, "loud_db": -20, "secret": "x"})
+        db["speech"].insert_one({"t": NOW - 30_000, "text": "你好", "speaker": {"band": "known", "name": "me"}})
+        t = tool_impls.mind_tools(switches=lambda: {}, store=Store(db), clock_ms=lambda: NOW)
+        d = t["db_query"]({"collection": "sounds", "from": "1小时前"})
+        self.assertEqual(d["rows"][0]["label"], "敲门")
+        self.assertNotIn("secret", d["rows"][0])
+        self.assertEqual(t["db_query"]({"collection": "speech", "fields": ["text", "speaker"]})["rows"][0]["speaker"], "me")
+        for bad in ({"collection": "memory_items"}, {"collection": "sounds", "fields": ["secret"]}):
+            with self.assertRaises(ToolError):
+                t["db_query"](bad)

@@ -76,8 +76,26 @@ async function loadProposals() {
 
 function alertLine(box, text) { const p = document.createElement('p'); p.textContent = text; box.prepend(p); }
 
+async function rtTools() {
+  const box = document.getElementById('rt-tools'), st = document.getElementById('rt-tools-state');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/mind/switches', { cache: 'no-store' });
+    const sw = r.ok ? await r.json() : {};
+    box.checked = !!(sw.realtime_tools && sw.realtime_tools.on);
+  } catch { st.textContent = '读不到开关'; }
+  box.addEventListener('change', async () => {
+    st.textContent = '保存中…';
+    const r = await fetch('/api/mind/switches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'realtime_tools', on: box.checked }) });
+    st.textContent = r.ok ? (box.checked ? '已打开（下次会话生效）' : '已关') : `没成功：${r.status}`;
+    if (!r.ok) box.checked = !box.checked;
+  });
+}
+
 async function main() {
   loadProposals();
+  rtTools();
   setInterval(loadProposals, 15000);
   const res = await fetch('/api/tools', { cache: 'no-store' });
   if (!res.ok) { document.getElementById('tools-summary').textContent = '读不到工具注册表'; return; }

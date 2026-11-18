@@ -493,14 +493,29 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "以上工具都不合适时，按集合、时间段和白名单字段做只读查询。",
    "parameters": {
     "type": "object",
     "properties": {
      "collection": {
       "type": "string",
-      "maxLength": 30
+      "enum": [
+       "conversations",
+       "speech",
+       "sounds",
+       "realtime_turns",
+       "chat_turns",
+       "utterances",
+       "vision_looks",
+       "vision",
+       "eye_minutes",
+       "sessions",
+       "reminders",
+       "watches",
+       "proposals",
+       "research"
+      ]
      },
      "from": {
       "type": "string",
@@ -530,7 +545,7 @@
     ]
    },
    "returns": "rows、total",
-   "source": "新：受限只读查询",
+   "source": "server/mind/tool_impls.py DB_QUERY 白名单（集合、时间字段、能看的字段）；只读；记忆和人物走各自的工具",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],

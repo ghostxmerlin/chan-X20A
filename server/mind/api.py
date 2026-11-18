@@ -230,6 +230,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 "today_calls": sum(r["calls"] for r in out if r["day"] == today)}
 
     SWITCHES = ("tingwu", "eye", "notes", "realtime")    # spec 2026-11-11 §3; realtime: 围观 voice session (2026-11-14)
+    TOGGLES = ("realtime_tools",)    # 千问用工具 (L6 2026-11-18): Docking's Qwen may call tools; default off
     MOUTH_MODES = ("off", "clips", "tts")    # 嘴: emotion clips (default) or soul-tts, never both (user 2026-11-11)
 
     def mouth_mode():
@@ -246,6 +247,9 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             out[name + "_status"] = {"running": st.get("running") or [], "available": st.get("available"), "at": st.get("at"),
                                      "stale": not isinstance(st.get("at"), int) or now - st["at"] > 90_000}
         out["mouth"] = {"mode": mouth_mode(), "at": (db["switches"].find_one({"_id": "mouth"}) or {}).get("at")}
+        for name in TOGGLES:                           # free flags (no status, not paid)
+            sw = db["switches"].find_one({"_id": name}) or {}
+            out[name] = {"on": sw.get("on") is True, "at": sw.get("at")}
         if ctx.get("mode_store"):
             last = db["mode_log"].find_one({"input": "billing", "device": None, "code": "ok"}, sort=[("at", -1)]) or {}
             out["billing"] = {"on": ctx["mode_store"].billing(), "at": last.get("at")}
@@ -915,6 +919,12 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             r = ms.apply("billing", body["on"], source="page", now_ms=now)      # = preset 9 / preset 0
             return {**switches(), "result": r["result"], "robot": r.get("robot", {}),
                     **({"failed": r["failed"]} if r.get("failed") else {})}
+        if path == "/switches" and body.get("name") in TOGGLES:
+            if not isinstance(body.get("on"), bool):
+                raise BadRequest("on (true/false) required")
+            with runlog.switch(body["name"], runlog.read_switch(db, body["name"]), body["on"], "page"):
+                db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page"}}, upsert=True)
+            return switches()
         if path == "/switches":
             if body.get("name") not in SWITCHES or not isinstance(body.get("on"), bool):
                 raise BadRequest(f"name ({'/'.join(SWITCHES)}) and on (true/false) required")

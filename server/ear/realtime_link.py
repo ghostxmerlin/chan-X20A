@@ -535,7 +535,7 @@ def seen_text(faces, names, owner_faces, owner_call):
     return f"眼前有 {len(faces)} 个人：" + "、".join(parts) + more + "。"
 
 
-def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False, turn="server_vad"):
+def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False, turn="server_vad", tools=None):
     # search (owner 2026-11-15 "可以支持搜索吗"): DashScope's built-in web search; the model searches only when it needs
     # to (strategy agent: measured 2026-11-15, "你好" no search 0.4 s, weather / news one search 3.5-4.5 s, ~1.9k more
     # text input tokens plus the search fee).
@@ -550,7 +550,28 @@ def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False, tu
         cfg["turn_detection"] = {"type": turn, "threshold": threshold}
     if search:
         cfg["enable_search"] = True
+    if tools:                                          # L6 2026-11-18: Qwen calls hello's tools (probe: supported)
+        cfg["tools"], cfg["tool_choice"] = tools, "auto"
     return cfg
+
+
+# L6 (owner 2026-11-18 "工具也给 qwen 吧"): behind the 千问用工具 switch (realtime_tools, default off). The tool list is
+# mind's GET /tools (live tools) minus these: hello speaks for itself; a 38 s cross-check is too slow for a reply.
+TOOL_SKIP = frozenset(("say", "stop_speaking", "search_verify", "set_voice"))
+TOOL_DEPTH = 3                                         # tool calls in a row for one sentence
+TOOL_TIMEOUT_S = 30.0
+TOOL_OUTPUT_CHARS = 3000
+
+
+def realtime_tools(mind_tools):
+    """mind's function list ({type: function, function: {name, description, parameters}}) -> the realtime format."""
+    out = []
+    for t in mind_tools or []:
+        f = t.get("function") or {}
+        if f.get("name") and f["name"] not in TOOL_SKIP:
+            out.append({"type": "function", "name": f["name"], "description": f.get("description") or "",
+                        "parameters": f.get("parameters") or {"type": "object", "properties": {}}})
+    return out
 
 
 SHORT_WORDS = ("hi", "你好", "嗯哼？", "嘿")     # owner 2026-11-14: a short hello is one of these, or two beeps
@@ -912,6 +933,10 @@ class RealtimeHub:
         self._search_question = None
         self.searcher = None                           # web_search.dashscope_search(key) (ear_server wires it)
         self.search_fillers = []                       # [(text, pcm)]: "我查查哈" (load_fillers, <voice>-search)
+        self.tools_switch = None                       # 千问用工具 (realtime_tools): .on; None = off
+        self._tool_specs = []                          # this session's tools (realtime format)
+        self._next_depth = 0
+        self._tool_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="rt-tool")
         self.fillers = list(fillers or [])             # [(text, pcm 24 kHz)]: "我看看哈" while waiting (load_fillers)
         self._filler_last = None
         self._search_filler_last = None
@@ -1327,8 +1352,10 @@ class RealtimeHub:
             self._ws = ws
             await self._take_context(ctx_fut)
             instr = self._instructions()
+            self._tool_specs = await self._load_tools() if self.tools_on() else []
             await ws.send(json.dumps({"type": "session.update", "session": session_config(
-                self.voice, instr, self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search, self.cfg.turn)}))
+                self.voice, instr, self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search, self.cfg.turn,
+                self._tool_specs)}))
             self._live_instr = instr
             ear_log.emit("call.realtime.session", ok=True, model=self.cfg.model, key=self.key, sum=f"Docking 会话打开 {why}",
                          body={"system": instr}, ref={"session": n},
@@ -1550,6 +1577,65 @@ class RealtimeHub:
         if self.low_on():
             return "他们在聊天或在看电视：别插话，不主动搭腔；只有叫你、或明确问你的时候才回答，回答也短。"
         return None
+
+    # ---- 千问用工具 (L6) ----
+    def tools_on(self):
+        return bool(self.tools_switch is not None and self.tools_switch.on)
+
+    async def _load_tools(self):
+        loop = asyncio.get_running_loop()
+        try:
+            status, body = await asyncio.wait_for(loop.run_in_executor(self._pool, self.call, "GET", "/tools", None,
+                                                                       self.cfg.context_timeout_s),
+                                                  self.cfg.context_timeout_s + 0.5)
+        except Exception:                              # noqa: BLE001 - no tools this session
+            return []
+        specs = realtime_tools((body or {}).get("tools")) if status == 200 and isinstance(body, dict) else []
+        log(f"realtime: session tools: {len(specs)}", flush=True)
+        return specs
+
+    async def _run_tool(self, turn):
+        fc = turn["fc"]
+        trace = turn.get("trace") or ear_log.new_trace()
+        depth = int(turn.get("tool_depth") or 0) + 1
+        try:
+            args = json.loads(fc["arguments"] or "{}")
+        except ValueError:
+            args = None
+        self.stats["tool_calls"] += 1
+        if depth == 1 and fc["name"] not in ("set_length", "set_quiet", "set_role", "who_is_here", "switches_status",
+                                             "mode_status", "capabilities"):
+            self._play_filler(self.search_fillers or self.fillers, "search_filler", trace)   # "我查查哈" meanwhile
+        t0 = self.clock()
+        if args is None or not isinstance(args, dict):
+            env = {"ok": False, "error": {"code": "bad_args", "message": "参数不是合法的 JSON"}}
+        elif depth > TOOL_DEPTH:
+            env = {"ok": False, "error": {"code": "refused", "message": "这句话已经连着用了好几次工具，先回答吧"}}
+        else:
+            loop = asyncio.get_running_loop()
+            try:
+                status, body = await asyncio.wait_for(loop.run_in_executor(
+                    self._tool_pool, self.call, "POST", "/tool/call",
+                    {"name": fc["name"], "args": args, "trace": trace, "caller": "qwen"}, TOOL_TIMEOUT_S),
+                    TOOL_TIMEOUT_S + 1)
+                env = body if status == 200 and isinstance(body, dict) else \
+                    {"ok": False, "error": {"code": "failed", "message": f"工具服务回了 {status}"}}
+            except Exception as e:                     # noqa: BLE001 - mind slow / down
+                env = {"ok": False, "error": {"code": "timeout", "message": f"工具没回应（{type(e).__name__}）"}}
+        ms = int((self.clock() - t0) * 1000)
+        out = {"ok": env.get("ok"), "data": env.get("data"), "error": env.get("error")}
+        text = json.dumps(out, ensure_ascii=False)
+        if len(text) > TOOL_OUTPUT_CHARS:
+            text = text[:TOOL_OUTPUT_CHARS] + "…（截断）"
+        ear_log.emit("call.realtime.tool", trace=trace, ok=bool(env.get("ok")), ms=ms,
+                     sum=f"千问用工具：{fc['name']}" + ("" if env.get("ok") else f"（{(env.get('error') or {}).get('message', '')[:30]}）"),
+                     ref={"session": self.session_no}, extra={"tool": fc["name"], "args": args, "depth": depth})
+        if self._ws is None or not self._ready.is_set():
+            return
+        self._next_kind, self._next_trace, self._next_prompt, self._next_depth = "tool_answer", trace, None, depth
+        self._send_soon({"type": "conversation.item.create", "item": {"type": "function_call_output",
+                                                                      "call_id": fc["call_id"], "output": text}})
+        self._send_soon({"type": "response.create"})
 
     # ---- tools (ask_api.py) ----
     def say(self, text, trace=None):
@@ -2036,7 +2122,8 @@ class RealtimeHub:
                  "prompt": self._next_prompt if self._next_kind != "speech" else None}
             if turn.get("kind") == "speech":
                 self._called_text = None
-            self._next_kind, self._turn = "speech", None
+            turn["tool_depth"] = self._next_depth if turn.get("kind") == "tool_answer" else 0
+            self._next_kind, self._turn, self._next_depth = "speech", None, 0
             self._next_trace = self._next_prompt = self._inject_id = None
             turn.update({"rid": rid, "session": n, "response_at": now, "first_delta": None, "sound_at": None,
                          "reply_chars": 0, "audio_ms": 0, "usage": None, "at": self.wall_ms(),
@@ -2092,11 +2179,26 @@ class RealtimeHub:
                         self._send_instructions("reply", turn.get("trace"))
             if self.on_transcript:
                 self.on_transcript("reply", text)
+        elif t == "response.function_call_arguments.done":
+            turn = self._turns.get(str(e.get("response_id") or self._resp))
+            if turn is not None and turn.get("fc") is None:
+                turn["fc"] = {"call_id": e.get("call_id"), "name": str(e.get("name") or "")[:60],
+                              "arguments": str(e.get("arguments") or "")[:4000]}
+                if turn.get("gate") is None:
+                    turn["gate"], turn["held"] = "tool", []
+                    if self._pending_vision is not None or self._pending_search is not None:
+                        self._release_vision(now, True)   # the model took the sentence (it called a tool for it)
         elif t == "response.done":
             resp = e.get("response") or {}
             rid = str(resp.get("id") or self._resp)
             turn = self._turns.get(rid)
             self._log_search(rid, turn, resp.get("usage"))
+            if turn is not None and turn.get("fc") and not turn["audio_ms"]:
+                turn["usage"], turn["status"] = resp.get("usage"), resp.get("status")
+                self._resp = None
+                self._finish_turn(rid, "tool_call")
+                self.spawn(self._run_tool(turn))
+                return
             if turn is not None:
                 turn["usage"], turn["status"] = resp.get("usage"), resp.get("status")
                 self._judge(rid, turn, True)            # no transcript came: decided on what there is
@@ -2298,7 +2400,7 @@ class RealtimeHub:
                 self._pending_vision = {"text": text, "at": now, "trace": trace}
         else:
             self._vision_from(text, now, trace, look, key)
-        if not look and not self._task_follow(text, now, trace) and is_search_ask(text):
+        if not look and not self.tools_on() and not self._task_follow(text, now, trace) and is_search_ask(text):
             if self.cfg.turn != "server_vad" and not self.in_called(now):
                 # 2026-11-18 18:12: "别扔了就行，那只能去网上搜搜看有没有" (to a colleague) started a search that hello then
                 # read out. Same gate as the burst: the search waits for the model's real reply to this sentence.

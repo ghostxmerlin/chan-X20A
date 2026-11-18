@@ -834,6 +834,49 @@ class LengthTest(HubBase):
         self.assertIn("眼前有 3 个人", self.hub._length_line())
 
 
+class ToolCallTest(HubBase):
+    """L6 2026-11-18: Qwen calls hello's tools in Docking (switch realtime_tools); probe: supported by the model."""
+    async def test_a_tool_call_round_trip(self):
+        calls = []
+
+        def call(method, path, body=None, timeout=5):
+            calls.append((method, path, body))
+            if path == "/tools":
+                return 200, {"tools": [{"type": "function", "function": {"name": "live_data", "description": "币价",
+                                                                         "parameters": {"type": "object", "properties": {}}}},
+                                       {"type": "function", "function": {"name": "say", "description": "x", "parameters": {}}}]}
+            if path == "/tool/call":
+                return 200, {"ok": True, "data": {"usd": 64143}, "error": None}
+            return 200, json.loads(json.dumps(CTX))
+        self.hub.call = call
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch = sw
+        ws = await self.open_ready()
+        upd = [m for m in ws.sent if m["type"] == "session.update"][0]["session"]
+        self.assertEqual([t["name"] for t in upd["tools"]], ["live_data"])            # say is hello's own
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": "比特币多少钱"})
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": "r1", "call_id": "c1",
+                 "name": "live_data", "arguments": '{"kind": "price", "symbol": "BTC"}'})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed"}})
+        await settle(30)
+        self.assertIn(("POST", "/tool/call", {"name": "live_data", "args": {"kind": "price", "symbol": "BTC"},
+                                              "trace": calls[-1][2]["trace"], "caller": "qwen"}), calls)
+        out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
+        self.assertEqual((out[0]["item"]["call_id"], json.loads(out[0]["item"]["output"])["data"]), ("c1", {"usd": 64143}))
+        self.assertEqual(ws.sent[-1]["type"], "response.create")
+        self.assertEqual(self.hub.stats["muted_quiet"], 0)                               # no rescue of an empty reply
+        ws.push({"type": "response.created", "response": {"id": "r2"}})
+        await settle(5)
+        self.assertEqual((self.hub._turns["r2"]["kind"], self.hub._turns["r2"]["gate"]), ("tool_answer", "play"))
+
+    async def test_tools_off_by_default(self):
+        ws = await self.open_ready()
+        self.assertNotIn("tools", [m for m in ws.sent if m["type"] == "session.update"][0]["session"])
+
+
 class QuietLowRoleTest(HubBase):
     """Owner 2026-11-18: 安静（直到被叫）, 少插话 ("我们在聊天 / 我在看电视"), a temporary role ("当个大姐姐")."""
     def last_instr(self, ws):

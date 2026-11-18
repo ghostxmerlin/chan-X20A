@@ -22,6 +22,11 @@
     <button data-status="new" aria-pressed="false">要新做</button>
   </div>
 </header>
+<section class="try-panel" aria-live="polite">
+  <h2>千问用工具</h2>
+  <p class="small">打开后，Docking 里的千问可以自己调用上面「已接入」的工具（查东西、看一眼、设提醒…），调用时先说「我查查」垫着；C 级的只会变成「待确认」。下一次 Docking 会话开始时生效。</p>
+  <label><input type="checkbox" id="rt-tools"> 让千问直接调用工具</label> <span id="rt-tools-state" class="small"></span>
+</section>
 <section id="proposals" class="try-panel" aria-live="polite">
   <h2>待确认</h2>
   <p class="small">hello 想做、要主人点头的事（别人提的、或千问自己想做的）。同意后立刻执行；24 小时没处理就作废。</p>

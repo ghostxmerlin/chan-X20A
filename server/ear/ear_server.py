@@ -1145,6 +1145,7 @@ def main():
             await asyncio.to_thread(tw_switch.update)
             await asyncio.to_thread(rt_switch.update)
             await asyncio.to_thread(eye_switch.update)
+            await asyncio.to_thread(tools_switch.update)
             await asyncio.to_thread(pause.update)
             if pause.reasons() != held:
                 held = pause.reasons()
@@ -1193,6 +1194,10 @@ def main():
 
     # 即时画面 (owner 2026-11-18 "改成上传即刻理解"): every uploaded camera photo recognised at once, under 识别 (eye)
     eye_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("eye")) if database else (lambda: None))
+    # 千问用工具 (L6 2026-11-18): Qwen calls hello's tools in Docking; read at each session open (default off)
+    tools_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("realtime_tools")) if database else (lambda: None))
+    if rt_hub is not None:
+        rt_hub.tools_switch = tools_switch
     live_eye = None
     if secrets.get("DASHSCOPE_API_KEY"):
         live_eye = vision_burst.LiveEye(vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]),
