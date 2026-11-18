@@ -848,7 +848,7 @@
    "group": "world",
    "level": "C",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "主人要求研究一个问题时用：后台跑几分钟，做完汇报。",
    "parameters": {
     "type": "object",
@@ -891,7 +891,7 @@
    "group": "world",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "被问研究做得怎么样、研究结果是什么时用；不给 id 就列最近几个研究。",
    "parameters": {
     "type": "object",
