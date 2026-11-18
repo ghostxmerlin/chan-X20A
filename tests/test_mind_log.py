@@ -399,7 +399,7 @@ class ModeAndPresetTest(LogCase):
         ctx.mode_store.apply("play", None, source="page", now_ms=20)
         ch = self.one("mode.change")
         self.assertEqual((ch["by"], ch["mode"], ch["extra"]["from"]["mode"], ch["extra"]["to"]["mode"]),
-                         ("page", "chat", "talk", "chat"))
+                         ("page", "chat", "crowd", "chat"))      # a fresh store starts in crowd (Docking, 2026-11-18)
 
     def test_report_change_and_billing_set(self):
         ms = ModeStore(FakeDB(), clock_ms=lambda: 0)

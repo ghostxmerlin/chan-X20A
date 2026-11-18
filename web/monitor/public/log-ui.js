@@ -61,7 +61,7 @@ export const CATS=[
  {key:'hear',glyph:'听',name:'听',hint:'识别、听悟、纪要'},
  {key:'see',glyph:'看',name:'看',hint:'画面、识图、M12 事件'},
  {key:'think',glyph:'想',name:'想',hint:'情景判断、分段'},
- {key:'speak',glyph:'说',name:'说',hint:'围观、聊天、语音'},
+ {key:'speak',glyph:'说',name:'说',hint:'Docking、聊天、语音'},
  {key:'mem',glyph:'记',name:'记',hint:'记忆'},
  {key:'ctl',glyph:'控',name:'控',hint:'开关、模式、预设'},
  {key:'link',glyph:'连',name:'连',hint:'机器人连接、在线'},
@@ -89,7 +89,7 @@ export const KIND_LABELS={
  'call.chat':'聊天回答','call.say':'想一句话','call.say.speak':'说一句','call.say.line':'写脱口秀台词','call.say.huyu':'写兜底的一句',
  'call.say.judge':'脱口秀挑台词','call.say.check':'开口前复核',
  'call.memory':'整理记忆','call.memory.extract':'提取记忆','call.memory.backfill':'补录记忆',
- 'call.realtime.session':'围观会话','call.realtime.context':'更新围观说明','call.realtime.turn':'围观回答','call.realtime.search':'联网搜索',
+ 'call.realtime.session':'Docking 会话','call.realtime.context':'更新 Docking 说明','call.realtime.turn':'Docking 回答','call.realtime.search':'联网搜索',
  'call.tts':'合成语音','gate.realtime':'回答放不放','gate.rescue':'救回一句「嗯」','filler.play':'播垫话','trigger.greet':'打招呼','trigger.hush':'被叫闭嘴',
  'switch.set':'切换开关','switch.pause':'暂停付费','switch.resume':'恢复付费','budget.warn':'花费预警','mode.input':'模式输入','mode.change':'换模式','preset.apply':'应用预设','billing.set':'计费开关',
  'link.open':'连上','link.close':'断开','link.upstream':'上游连接','robot.state':'机器人状态',
@@ -221,7 +221,7 @@ export const isPrompt=r=>!!r?.model&&!!r.body&&Object.keys(PROMPT_PARTS).some(n=
 const BODY_LABELS={params:'参数（schema、工具、采样）',system:'系统提示词',input:'输入全文',output:'输出全文'};
 
 // Provider usage (OpenAI-style prompt/completion or input/output tokens, or plain counters) in a few words.
-// 千问判定 (owner 2026-11-18): today's 围观 gate.realtime rows -> how often the realtime model refused. ambient =
+// 千问判定 (owner 2026-11-18): today's Docking gate.realtime rows -> how often the realtime model refused. ambient =
 // smart_turn_v2 judged a sentence not for hello (no reply); refused_busy = it refused one of hello's own replies
 // (greeting / rescue / answer) while someone spoke; accepted = it answered (then our gate played or muted it).
 export function qwenSummary(rows){
@@ -240,7 +240,7 @@ export function qwenHtml(s){
  const judged=s.accepted+s.ambient;
  const pct=judged?Math.round(s.ambient*100/judged)+'%':'—';
  const rows=s.recent.map(r=>`<tr><td>${hms(r.at)}</td><td>${escText(r.what)}</td><td>${escText(r.text||'')}</td></tr>`).join('');
- return `<div class="ledger-total"><b>今天 围观 · 千问判定</b> 判过 ${judged} 句，判「不是跟我说」${s.ambient} 句（${pct}）</div>`+
+ return `<div class="ledger-total"><b>今天 Docking · 千问判定</b> 判过 ${judged} 句，判「不是跟我说」${s.ambient} 句（${pct}）</div>`+
   `<table><tr><th>千问接下</th><td>${s.accepted}（我们放行 ${s.played}，拦下 ${s.muted}）</td></tr>`+
   `<tr><th>千问判不是跟我说</th><td>${s.ambient}（机器人：蓝色方块 + 不是跟我说的）</td></tr>`+
   `<tr><th>千问拒绝主动回复</th><td>${s.busy}（有人在说话；机器人：等你说完）</td></tr></table>`+

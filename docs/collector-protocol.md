@@ -10,8 +10,8 @@
   - 网络：SSID、IP、信号（dBm）、连没连上；`Wi-Fi >` 打开原来的扫描 / 数字键盘页（0.4.45），从那里返回回到快捷设置页。
   - 计费 `ALL ON` / `ALL OFF`（全开 / 全关）：0.4.95 起全开要确认：第一下按钮变琥珀色“再点确认”/`TAP AGAIN`，2 秒内再点才发 9，否则复原；全关仍一下就发（关掉总是安全的）。就是数字 9 / 0，和 ASR 数字词走同一条路：`mode_input {"source":"quick","input":"digit","value":9|0}` 经 `/mouth` 给 mind，屏幕先提示 `PRESET 9`，mind 的 `mode_result` 带来真正的提示；离线提示 `OFFLINE`。计费没有状态，页面不显示开关状态，只显示 `last: ALL ON  2m ago`（mind 最近一次回答的是哪个数字、多久以前，按机器人自己的时钟，它没有墙上时间；回答不是 `ok` 时带上 code）。模式会话记住最近 8 个发出去的数字的 seq，用来认出回答的是 9 还是 0（`ModeView.result_digit`、`result_at_us`）。
   - 听觉 `ON` / `OFF`：本地开关（和遥控器上推同一个，只在 RAM），主循环调用 `hearing::set_listening`；没有配置 ear 时提示 `HEARING: NO EAR SET`。
-- **模式选择页**：3×3 九格（TALK、CHAT、SET、AUTO、SUB ZH>EN、SUB EN>ZH、MEET、PAL、IDLE），用模式表的名字和颜色；当前模式全色加白框，其他变暗。点一格 = `select {mode, dir}`，由 hello 自己的规则（`mode_rules.h`）执行，来源 `select`，然后回首页、显示提示；点当前模式 = 离开（规则照旧：去 IDLE，设置回原处，字幕点另一个方向 = 换方向）。离线也能切（规则在 hello 上），连上后报给 mind。
-- **文字**：0.4.94 全部 ASCII（`collector_mono_15` 只有 0x20–0x7E）。**collector-0.4.95** 起，SD 中文字库（思源黑体，`docs/sd-media.md`）装好后这三页显示中文：快捷设置 / 音量 / 网络 <SSID> / 改网络 / 计费 全开 全关 / `上次：全开 2 分钟前` / 听觉 开 关 / `< 返回`；模式页标题“选择模式”，九格为模式表中文名（脱口秀、对话、设置、事件驱动、字幕 中→英、字幕 英→中、围观、陪伴、IDLE），当前模式高亮不变；摘要页标题行“状态摘要 模式 <名> <版本>”，底行操作提示也是中文。页标题用 24 px，其他 16 px。中文在 `ui_text_zh.h`，ASCII 替身仍是 `ui_pages.h` 的 `ui::text`（同名），每个标签经 `ui_font::choose()` 选择：没卡、缺片或字库没装时整屏照旧 ASCII，可正常使用。SSID、IP、dBm、音量数字、`-`/`+` 原样；角标和提示（toast）保持 ASCII。字库在开机后由 PSRAM 任务载入，`ui_font::generation()` 变化时主循环调 `screen_set_cjk_font(cjk_exact(16), cjk_exact(24))`，已打开的页面就地重建。
+- **模式选择页**：3×3 九格（TALK、CHAT、SET、AUTO、SUB ZH>EN、SUB EN>ZH、DOCK、PAL、IDLE），用模式表的名字和颜色；当前模式全色加白框，其他变暗。点一格 = `select {mode, dir}`，由 hello 自己的规则（`mode_rules.h`）执行，来源 `select`，然后回首页、显示提示；点当前模式 = 离开（规则照旧：去 IDLE，设置回原处，字幕点另一个方向 = 换方向）。离线也能切（规则在 hello 上），连上后报给 mind。
+- **文字**：0.4.94 全部 ASCII（`collector_mono_15` 只有 0x20–0x7E）。**collector-0.4.95** 起，SD 中文字库（思源黑体，`docs/sd-media.md`）装好后这三页显示中文：快捷设置 / 音量 / 网络 <SSID> / 改网络 / 计费 全开 全关 / `上次：全开 2 分钟前` / 听觉 开 关 / `< 返回`；模式页标题“选择模式”，九格为模式表中文名（脱口秀、对话、设置、事件驱动、字幕 中→英、字幕 英→中、Docking、陪伴、IDLE），当前模式高亮不变；摘要页标题行“状态摘要 模式 <名> <版本>”，底行操作提示也是中文。页标题用 24 px，其他 16 px。中文在 `ui_text_zh.h`，ASCII 替身仍是 `ui_pages.h` 的 `ui::text`（同名），每个标签经 `ui_font::choose()` 选择：没卡、缺片或字库没装时整屏照旧 ASCII，可正常使用。SSID、IP、dBm、音量数字、`-`/`+` 原样；角标和提示（toast）保持 ASCII。字库在开机后由 PSRAM 任务载入，`ui_font::generation()` 变化时主循环调 `screen_set_cjk_font(cjk_exact(16), cjk_exact(24))`，已打开的页面就地重建。
 - **内存**：两个页面的 LVGL 对象打开时建、关掉时删（各约 25 个小对象，内部 RAM）；静态内部 RAM 比 0.4.93 多 304 B（.data +48、.bss +256），IRAM 不变。只有屏幕任务画；`/mouth` 任务不碰 LVGL 和 NVS。
 - **顺带修正**：关屏期间缓存的状态以前没有复制 SSID（指向已经失效的临时字符串），现在复制。
 
@@ -30,9 +30,9 @@
 
 ## 0.4.92：hello 的模式（以 hello 为准，2026-11-14）
 
-主人 2026-11-14 定：模式由 hello 自己决定，服务器只记录、只按"效果"开关自己的功能。开机默认脱口秀（`talk`），模式只在内存里，不写 NVS。切换规则和 `server/mind/modes.py` 是同一套：固件 `collector/mode_rules.h` 逐条重放 `tests/data/mode_vectors.json`（由 `tests/gen_mode_vectors.py` 从 `modes.py`、`mode_table.py` 和下面的数字表生成，共 2100 条，新状态、结果码、提示和效果都要一样）。
+主人 2026-11-14 定：模式由 hello 自己决定，服务器只记录、只按"效果"开关自己的功能。开机默认 Docking（`crowd`，主人 2026-11-18；以前是脱口秀 `talk`），开机只带 `stop_speech`、不再 `talk_enter`，模式只在内存里，不写 NVS。切换规则和 `server/mind/modes.py` 是同一套：固件 `collector/mode_rules.h` 逐条重放 `tests/data/mode_vectors.json`（由 `tests/gen_mode_vectors.py` 从 `modes.py`、`mode_table.py` 和下面的数字表生成，共 2100 条，新状态、结果码、提示和效果都要一样）。
 
-**八个模式**（`mode_table.py`）：`talk` 脱口秀 TALK、`chat` 对话 CHAT、`settings` 设置 SET（临时层，记 `return_to`）、`event` 事件驱动 AUTO（外层）、`subtitle` 字幕 SUB ZH>EN / SUB EN>ZH、`crowd` 围观 MEET、`companion` 陪伴 PAL、`idle` IDLE。
+**八个模式**（`mode_table.py`）：`talk` 脱口秀 TALK、`chat` 对话 CHAT、`settings` 设置 SET（临时层，记 `return_to`）、`event` 事件驱动 AUTO（外层）、`subtitle` 字幕 SUB ZH>EN / SUB EN>ZH、`crowd` Docking DOCK（2026-11-18 起，原名围观 MEET；hello 的主模式、开机模式）、`companion` 陪伴 PAL、`idle` IDLE。
 
 **ASR 口令的新含义**（先说 "Hi M Five"、"hello" 或 "hi A S R" 唤醒）。旧的本机用途都去掉了：
 
@@ -55,7 +55,7 @@
 | --- | --- | --- |
 | 0 | 花费全关 | mind（hello 发 `mode_input` `digit` 0，屏幕显示 mind 回的提示） |
 | 9 | 花费全开 | mind（同上） |
-| 4 / 5 / 6 | 进 IDLE / 围观 / 陪伴 | hello 自己 |
+| 4 / 5 / 6 | 进 IDLE / Docking / 陪伴 | hello 自己 |
 | 7 / 8 | 进字幕 中→英 / 英→中 | hello 自己 |
 | 1 / 2 / 3 | 空（`no_action`） | — |
 
@@ -63,7 +63,7 @@
 
 **首页手势**（`collector/touch_gesture.h`，只在首页）：单击、双击按当前模式（脱口秀：单击 = 说一轮，hello 正在说话时 = 停；双击 = 开提前写；其他模式见 `mode_table.py` 的 `inputs`）。单击要等 300 ms 看有没有第二下。**左滑打开状态摘要页**（以前是轻点）。上滑、下滑、右滑这一版不接（0.4.94 起：下滑快捷设置、上滑模式选择，见上）。其他页面的触摸照旧。
 
-**屏幕**：右上角角标，所有页面可见：模式的 ASCII 名字加颜色底；`/mouth` 没连上时变灰并加 ` OFF`。每次输入的结果在底部显示 2 秒（例如 `CHAT`、`SAYING`、`NO ACTION`、`OFFLINE`）。眼睛：脱口秀一律笑面男（开着视觉也是）；对话 v05 金色猫眼；围观 v14 绿色机甲眼，热闹表情池（迎接、开心、好奇、搞怪、惊讶）；陪伴 v18 奶油白眼睛；字幕、设置、事件驱动、IDLE 这一版先是笑面男（专用页在 0.4.93）。
+**屏幕**：右上角角标，所有页面可见：模式的 ASCII 名字加颜色底；`/mouth` 没连上时变灰并加 ` OFF`。每次输入的结果在底部显示 2 秒（例如 `CHAT`、`SAYING`、`NO ACTION`、`OFFLINE`）。眼睛：脱口秀一律笑面男（开着视觉也是）；对话 v05 金色猫眼；Docking v14 绿色机甲眼，热闹表情池（迎接、开心、好奇、搞怪、惊讶）；陪伴 v18 奶油白眼睛；字幕、设置、事件驱动、IDLE 这一版先是笑面男（专用页在 0.4.93）。
 
 **设置**：5 分钟没有任何输入就回原来的模式（hello 自己计时，结果 `by: "timeout"`）。
 
@@ -80,7 +80,7 @@
 - 上行 `{"type":"mode_report","seq":N,"mode":"talk","dir":null,"host":null,"return_to":null,"by":"asr|touch|page|timeout|boot","input":"forward","effects":["stop_speech","talk_enter"]}`：每次切换、或者有效果的输入（说一轮、开关提前写、停说）发一条。`seq` 是 hello 本次开机的递增编号。`effects` 取 `stop_speech`、`talk_leave`、`talk_enter`、`say_round`、`prefetch_on`、`prefetch_off`，由 mind 执行（计费总闸照样拦）。
 - 每次连上 `/mouth`（收到 ear 的 hello）先发一条当前状态：开机后第一次是 `by:"boot"`、`input:"boot"`；以后 `input:null`、`by` 是最近一次切换的来源。它的 `effects` 是从 mind 上一次收到的状态到现在要做的切换效果，所以离线时切的模式也会让 mind 关掉 / 打开提前写和连续说。断线时没发出去的报告丢掉，由这一条代替。报告按顺序发，socket 收下才算发出；一下子积了 8 条没发出去，就合成一条（当前状态 + 从上次发出的状态起的切换效果 + 最新输入自己的效果）。
 - 上行 `{"type":"mode_input","seq":N,"age_ms":A,"source":"asr","input":"digit","value":0}`：只有数字 0 和 9。
-- **开机补发的 9 只恢复、不改开关（2026-11-17，服务器端）**：0.4.96 起 hello 每次开机自己打开听觉、相机、M12，再补发一个 `source:"quick"` 的 9 直到 mind 回 ok。mind 把“这次开机还没有任何数字回过 ok 时的 quick 9”认作开机补发：回 `ok`、提示 `POWER ON: SWITCHES KEPT`，服务器上的开关（听悟、识别、纪要、围观、情景、嘴）保持原样。之后的 quick 9（快捷页全开）、ASR 九、网页 9 照旧全开。mind 也接受 `source:"boot"` 的数字，永远算开机补发（以后固件想标明时用，见 `server/mind/billing.py` 的 `power_on`）。
+- **开机补发的 9 只恢复、不改开关（2026-11-17，服务器端）**：0.4.96 起 hello 每次开机自己打开听觉、相机、M12，再补发一个 `source:"quick"` 的 9 直到 mind 回 ok。mind 把“这次开机还没有任何数字回过 ok 时的 quick 9”认作开机补发：回 `ok`、提示 `POWER ON: SWITCHES KEPT`，服务器上的开关（听悟、识别、纪要、Docking、情景、嘴）保持原样。之后的 quick 9（快捷页全开）、ASR 九、网页 9 照旧全开。mind 也接受 `source:"boot"` 的数字，永远算开机补发（以后固件想标明时用，见 `server/mind/billing.py` 的 `power_on`）。
 - 下行 `{"type":"mode_result","seq":N,"code":"ok","toast":"..."}`：只回给 `mode_input`；`toast` 显示 2 秒（空的不显示）。旧版 ear 推的 `{"type":"mode"}` 快照 0.4.92 忽略。
 - 收到的文本消息先查长度（≤ 1600 B）再完整解析，解析失败的不看；JSON 池在 PSRAM；模式处理有自己的锁，不碰音频锁。
 

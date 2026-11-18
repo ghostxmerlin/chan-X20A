@@ -385,7 +385,8 @@ void init(const std::string& device_id, const std::string& boot_id)
     if (void* mem = heap_caps_calloc(1, sizeof(ModeSession), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) {
         std::lock_guard<std::mutex> lock(mode_mutex);
         modes_session = new (mem) ModeSession();      // never freed: lives as long as the link task
-        // power-on (0.4.96, owner 2026-11-15): 围观 (crowd), and 9 (全开) to mind behind the "boot" report of the
+        // power-on (0.4.96, owner 2026-11-15): crowd (shown as Docking since 0.5.08, owner 2026-11-18; the rules'
+        // boot input lands there too), and 9 (全开) to mind behind the "boot" report of the
         // first link; both wait for that link. The robot half of the 9 is the main loop's, at boot.
         modes_session->boot(esp_timer_get_time(), modes::rules::Mode::Crowd, 9);
         modes_session->set_look_hold(kLookHoldUs);   // 0.4.98: crowd's tap waits up to 0.8 s for the M12 look

@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>围观模式流程</title>
+  <title>Docking 模式流程</title>
   <link rel="stylesheet" href="/crowd-flow.css">
 </head>
 <body>
 <header class="top">
   <div class="top-row">
-    <h1>围观模式怎么工作 · 服务器流程（2026-11-18）</h1>
+    <h1>Docking 模式怎么工作 · 服务器流程（2026-11-18）</h1>
     <a href="/">← 观察台</a>
   </div>
-  <p class="lead"><b>围观模式</b>（代码名 <code>crowd</code>，屏幕显示 <b>MEET</b>）：听、看，再加上情景和纪要来聊天。人设是<b>鹿野</b>（设定文件 <code>config/persona/luye.md</code>），声音 ly01，语气平稳、清冷、干脆。第一张图是服务器上现在的流程；第二张图是<b>每一句话怎么决定说不说</b>。都是线上在跑的，计划中的放在最后一张卡片里。</p>
+  <p class="lead"><b>Docking 模式</b>（hello 的主模式、开机就在这里；原名围观，代码名 <code>crowd</code>，屏幕显示 <b>DOCK</b>）：听、看，再加上情景和纪要来聊天。人设是<b>鹿野</b>（设定文件 <code>config/persona/luye.md</code>），声音 ly01，语气平稳、清冷、干脆。第一张图是服务器上现在的流程；第二张图是<b>每一句话怎么决定说不说</b>。都是线上在跑的，计划中的放在最后一张卡片里。</p>
   <ul class="legend" aria-label="颜色">
     <li><i class="sw hear"></i>听</li>
     <li><i class="sw see"></i>看</li>
@@ -29,7 +29,7 @@
   <p class="swipe">左右滑动看整张图</p>
   <div class="scroller">
   <svg viewBox="0 0 1290 900" role="img" aria-labelledby="flow-title flow-desc">
-    <title id="flow-title">围观模式服务器流程图</title>
+    <title id="flow-title">Docking 模式服务器流程图</title>
     <desc id="flow-desc">麦克风声音经耳朵的收音闸门送给千问实时会话；耳朵自己的识别、关键词耳朵和 Unit ASR 决定被叫窗口和口令；M12 和机身相机提供眼前的人、招呼和视觉爆发；mind 每分钟提供情景和纪要，与人设一起拼成说明；千问的回答经过回答闸门从机器人喇叭说出，被拦下的按需补一句；每一步记进运行日志并在机器人屏幕上提示。</desc>
     <defs>
       <marker id="m-hear" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hear"/></marker>
@@ -234,7 +234,7 @@
     <!-- think -->
     <rect x="20" y="524" width="170" height="104" rx="10" class="box neutral"/>
     <text x="105" y="548" class="t" text-anchor="middle">开关 · 暂停 · 上限</text>
-    <text x="105" y="568" class="s" text-anchor="middle">围观开关（说「闭嘴」= 关）</text>
+    <text x="105" y="568" class="s" text-anchor="middle">Docking 开关（说「闭嘴」= 关）</text>
     <text x="105" y="586" class="s" text-anchor="middle">没人时暂停付费</text>
     <text x="105" y="604" class="s" text-anchor="middle">每天一个总上限 ¥20</text>
     <text x="105" y="620" class="s" text-anchor="middle">会话 10 分钟换一段</text>
@@ -329,7 +329,7 @@
     <!-- nodes -->
     <rect x="40" y="40" width="200" height="56" rx="12" class="box hear"/>
     <text x="140" y="66" class="t" text-anchor="middle">有人说了一句话</text>
-    <text x="140" y="84" class="s" text-anchor="middle">（围观模式）</text>
+    <text x="140" y="84" class="s" text-anchor="middle">（Docking 模式）</text>
 
     <rect x="320" y="34" width="260" height="68" rx="12" class="box hear strong"/>
     <text x="450" y="60" class="t" text-anchor="middle">前面被叫了吗？</text>

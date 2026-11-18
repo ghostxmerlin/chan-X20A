@@ -1,4 +1,4 @@
-// 围观重构计划 page: the relevance threshold demo. Illustrative scenes (not measured), scored with the starting weights
+// Docking 重构计划 page: the relevance threshold demo. Illustrative scenes (not measured), scored with the starting weights
 // shown on the page; at or above the threshold Dynames speaks, up to 20 below it only reacts (face / eyes), lower it
 // only collects (notes, scene, memory). The pure parts are exported for tests.
 export const WEIGHTS={name:60,follow:30,face:20,question:10,you:10,family:10,crosstalk:-30,far:-30};

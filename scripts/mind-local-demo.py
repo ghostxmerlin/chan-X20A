@@ -93,7 +93,8 @@ def _interrupt(*_):
 class FakeHello:
     """A stand-in for hello's mode side (0.4.92): the state lives here, the rules are mind/modes.py's transition, every
     change is reported to mind (ModeStore.report, as ear forwards hello's mode_report). It has just booted: the first
-    report is by boot (stop_speech + talk_enter, an entry into talk). "Speaking" is never true here (nothing plays).
+    report is by boot, in crowd (shown as Docking, owner 2026-11-18; only stop_speech, as hello's first link sends).
+    "Speaking" is never true here (nothing plays).
     The settings timer runs here too, as on hello. 4-8 as a digit enter that mode (coordinator ruling 2026-11-14:
     never toggle off; already there = already)."""
     DIGIT_SELECT = {4: {'mode': 'idle'}, 5: {'mode': 'crowd'}, 6: {'mode': 'companion'},
@@ -107,7 +108,7 @@ class FakeHello:
         self.seq = self.tseq = 0
         self.by, self.since = 'boot', clock_ms()
         self.last_input = self.since
-        self.report(None, ['stop_speech', 'talk_enter'], 'boot')
+        self.report(None, ['stop_speech'], 'boot')
 
     def report(self, inp, effects, by):
         self.seq += 1

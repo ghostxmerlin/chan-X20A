@@ -128,6 +128,10 @@ class UiFontTest(unittest.TestCase):
         for ch in '啊座，。！？：；“”…—·0aZ ':
             self.assertIn(ch, chars)
 
+    # Drawn with their own compiled-in font (collector_words_20, scripts/generate-words-font.sh), not the SD CJK
+    # font; tests/m12_words_test.cpp checks that every character is in that font (2026-11-18).
+    OWN_FONT = ('m12_words.h', 'collector_words_20.c')
+
     def test_every_ui_string_is_covered(self):
         """Any non-ASCII character in a firmware string literal must be in the font, or the screen shows nothing
         for it. Fix: add it to config/ui-font-extra.txt and regenerate (docs/sd-media.md)."""
@@ -135,6 +139,8 @@ class UiFontTest(unittest.TestCase):
         missing = {}
         for path in sorted(FW.rglob('*')):
             if path.suffix not in ('.h', '.hpp', '.cpp', '.cc', '.c'):
+                continue
+            if path.name in self.OWN_FONT:
                 continue
             for literal in string_literals(path.read_text(encoding='utf-8', errors='replace')):
                 for ch in literal:

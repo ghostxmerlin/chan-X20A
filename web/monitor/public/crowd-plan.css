@@ -1,4 +1,4 @@
-/* 围观重构计划 page: same tokens as the log page (log.css). Colour carries meaning only: orange = 说 (speaks),
+/* Docking 重构计划 page: same tokens as the log page (log.css). Colour carries meaning only: orange = 说 (speaks),
    violet = react only, slate = collect only, red = waste. */
 :root {
   --bg: #f4f5f7; --panel: #ffffff; --raised: #f8f9fb; --hover: #f1f3f6; --line: #e6e8ec; --line-strong: #d3d7de;

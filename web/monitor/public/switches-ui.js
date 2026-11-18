@@ -46,13 +46,13 @@ export function switchView(robot,fresh,mind,switches=null){
  const nRunning=!nKnown||ns.stale?null:ns.running===true;
  const notes={known:nKnown,on:nOn,can:nKnown&&(nOn||nAvail!==false),running:nRunning,
   detail:!nKnown?'纪要服务未连接':nAvail===false?'服务器未配置模型':!nOn?'不调用模型':nRunning===null?'状态未知':'有人说话时每分钟一次'};
- // 围观 realtime (owner 2026-11-15: its own switch; the session itself opens only in crowd with speech)
+ // Docking realtime (owner 2026-11-15: its own switch; the session itself opens only in crowd with speech)
  const rKnown=!!switches?.realtime&&!!switches?.realtime_status,rs=switches?.realtime_status||{};
  const rOn=rKnown&&switches.realtime.on===true,rAvail=rKnown&&typeof rs.available==='boolean'?rs.available:null;
  const rRunning=!rKnown||rs.stale?null:Array.isArray(rs.running)?rs.running.length>0:null;
  const meet={known:rKnown,on:rOn,can:rKnown&&(rOn||rAvail!==false),running:rRunning,
-  detail:!rKnown?'围观服务未连接':rAvail===false?'服务器没配语音模型':!rOn?'闭嘴：围观不说话':
-   rRunning===true?'正在对话（约 0.003 元/轮）':rRunning===null?'状态未知':'待命：围观模式有人说话就开口'};
+  detail:!rKnown?'Docking 服务未连接':rAvail===false?'服务器没配语音模型':!rOn?'闭嘴：Docking 不说话':
+   rRunning===true?'正在对话（约 0.003 元/轮）':rRunning===null?'状态未知':'待命：Docking 模式有人说话就开口'};
  let cost;
  if(!hearingKnown||!mindKnown)cost='花费状态未知';
  else{
@@ -63,7 +63,7 @@ export function switchView(robot,fresh,mind,switches=null){
   const eyeSelected=eyeOn&&camOn&&eyeAvailable!==false;
   if(eyeSelected&&eyeRunning===true)paying.push('视觉识别（每分钟最多一次）');
   if(nOn&&nRunning===true)paying.push('对话纪要（有人说话时每分钟一次）');
-  if(rOn&&rRunning===true)paying.push('围观对话');
+  if(rOn&&rRunning===true)paying.push('Docking 对话');
   const unknown=[tingwuUnknown&&'听悟状态未知',eyeSelected&&eyeRunning===null&&'识别状态未知',
    nOn&&nAvail!==false&&nRunning===null&&'纪要状态未知'].filter(Boolean).join('；');
   cost=paying.length?'正在花钱：'+paying.join(' + ')+(unknown?'；'+unknown:''):unknown||'现在不花钱';
@@ -152,7 +152,7 @@ export function toggleRequest(which,robot,mindOrFresh){
  return {kind:'control',body:{action:'m12',enabled:!v.vision.on,boot:robot?.boot}};
 }
 
-const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'围观'};
+const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'Docking'};
 const LEVELS=[['off','关'],['local','本地'],['tingwu','听悟']];
 const VLEVELS=[['off','关'],['upload','上传'],['recognize','识别']];
 const MLEVELS=[['off','关'],['clips','录音'],['tts','TTS']];
@@ -206,10 +206,10 @@ export class SwitchBar{
  }
  async setLevel(level){
   if(this.pending)return;
-  // 关 stops the robot's mic uplink, which 围观 hears with too (2026-11-15): the first 关 while 围观 is on only warns.
+  // 关 stops the robot's mic uplink, which Docking hears with too (2026-11-15): the first 关 while Docking is on only warns.
   const meetOn=switchView(this.robot,this.fresh,this.mind,this.switches).meet.on;
   if(level==='off'&&meetOn&&!(this.offWarnedAt&&Date.now()-this.offWarnedAt<10000)){
-   this.offWarnedAt=Date.now();this.msg='关掉听觉，围观也会听不到；只想关听悟请选「本地」。确定要关，10 秒内再点一次「关」';this.paint();return;
+   this.offWarnedAt=Date.now();this.msg='关掉听觉，Docking 也会听不到；只想关听悟请选「本地」。确定要关，10 秒内再点一次「关」';this.paint();return;
   }
   this.offWarnedAt=0;
   this.pending='hearing';this.msg='';this.paint();

@@ -70,7 +70,7 @@ test('rows: Chinese name, category badge, service, summary, time, cost; escaped'
  const call=ui.rowHtml({_id:'n',at:T,svc:'notes',kind:'call.notes',model:'m',body:{system:SHA}});
  assert.match(call,/<span class="badge" aria-hidden="true">纪<\/span>/);              // a model call: solid
  assert.match(ui.rowHtml({_id:'t',at:T,svc:'ear',kind:'call.tingwu',model:'tingwu'}),/<span class="badge soft" aria-hidden="true">悟<\/span>/);
- assert.match(html,/<b>围观回答<\/b>/);
+ assert.match(html,/<b>Docking 回答<\/b>/);
  assert.match(html,/<span class="tag model">qwen-rt<\/span>/);
  assert.match(html,/<span class="tag fail">失败<\/span>/);
  assert.match(html,/14:00:00/);
@@ -125,7 +125,7 @@ test('detail: header, stats, tabs; model calls get prompt sections, other bodies
   cost:{amount:0.0029,cur:'CNY'},trace:'t9',body:{input:SHA,output:'b'.repeat(64),params:'c'.repeat(64)},
   extra:{heard:[{trace:'t1',text:'今天<几号>',at:T-2000},{trace:null,text:'嗯',at:T-500}]}};
  const html=ui.detailHtml(r);
- assert.match(html,/<h2>围观回答<\/h2>/);
+ assert.match(html,/<h2>Docking 回答<\/h2>/);
  assert.match(html,/<span>call.realtime.turn<\/span><span>ear<\/span><span>2026-11-16 14:00:00<\/span>/);
  assert.match(html,/<dt>耗时<\/dt><dd>692 毫秒<\/dd>/);
  assert.match(html,/<div class="wide"><dt>Token<\/dt><dd>入 1444  出 82<\/dd>/);

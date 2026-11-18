@@ -156,7 +156,7 @@ def generate(otf, conv, preview):
     MANIFEST.write_text(json.dumps(manifest, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
     HEADER.write_text(header_text(manifest), encoding='utf-8')
     if preview:
-        sample = '模式 脱口秀 对话 设置 事件驱动 字幕 围观 陪伴 IDLE'
+        sample = '模式 脱口秀 对话 设置 事件驱动 字幕 Docking 陪伴 IDLE'
         rows = []
         for vid in blobs:
             rows += tools.render(tools.unpack(blobs[vid]), sample, 320) + [[(80, 80, 80)] * 320]

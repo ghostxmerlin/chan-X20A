@@ -88,7 +88,7 @@ int main(int argc, char** argv)
     lv_obj_set_size(sheet, 320, 240);
     lv_obj_set_style_bg_color(sheet, lv_color_hex(0x000000), 0);
     lv_obj_set_style_pad_all(sheet, 0, 0);
-    const char* lines[] = {"模式 脱口秀 对话 设置", "事件驱动 字幕 围观 陪伴", "音量 网络 计费 听觉，返回！", "IDLE TALK 0.4.95 （测试）"};
+    const char* lines[] = {"模式 脱口秀 对话 设置", "事件驱动 字幕 Docking 陪伴", "音量 网络 计费 听觉，返回！", "IDLE TALK 0.4.95 （测试）"};
     int y = 4;
     for (size_t i = 0; i < ui_font::kVariantCount; ++i)
         for (const char* text : lines) {

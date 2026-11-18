@@ -56,12 +56,16 @@ class LocalDemoTest(unittest.TestCase):
     def select(self, mode, **v):
         return self.hello_call('/v1/control', {'target': 'mode', 'input': 'select', 'value': {'mode': mode, **v}})
 
-    def test_starts_in_talk_as_hello_just_booted(self):
+    def test_starts_in_docking_as_hello_just_booted(self):
+        # owner 2026-11-18: hello boots into crowd (shown as Docking, badge DOCK), not an entry into talk
         st, r = self.call('/mode')
-        self.assertEqual((st, r['snapshot']['mode'], r['snapshot']['by'], r['robot']['connected']), (200, 'talk', 'boot', True))
-        self.assertEqual(self.workers(), (True, True))                # hello's boot is an entry into talk
+        self.assertEqual((st, r['snapshot']['mode'], r['snapshot']['by'], r['robot']['connected']), (200, 'crowd', 'boot', True))
+        self.assertEqual(r['snapshot']['look']['label'], 'DOCK')
+        self.assertEqual(self.workers(), (False, False))              # 提前写 / 连续说 stay off outside talk
 
     def test_switching_goes_through_hello_and_reaches_mind(self):
+        self.assertEqual(self.select('talk')[1]['result']['code'], 'ok')
+        self.assertEqual((self.call('/mode')[1]['snapshot']['mode'], self.workers()), ('talk', (True, True)))
         self.assertEqual(self.select('crowd')[1]['result']['code'], 'ok')
         self.assertEqual(self.call('/mode')[1]['snapshot']['mode'], 'crowd')
         self.assertEqual(self.workers(), (False, False))              # leaving talk
@@ -70,7 +74,7 @@ class LocalDemoTest(unittest.TestCase):
         self.select('talk')
         self.assertEqual((self.call('/mode')[1]['snapshot']['mode'], self.workers()), ('talk', (True, True)))
         t = self.hello_call('/v1/telemetry')[1]
-        self.assertEqual((t['mode']['mode'], t['mode']['seq'], t['boot_id']), ('talk', 4, self.ctx['hello'].boot))
+        self.assertEqual((t['mode']['mode'], t['mode']['seq'], t['boot_id']), ('talk', 5, self.ctx['hello'].boot))
 
     def test_digits_four_to_eight_are_hello_selects(self):
         self.hello_call('/v1/control', {'target': 'mode', 'input': 'digit', 'value': 8})
@@ -84,11 +88,13 @@ class LocalDemoTest(unittest.TestCase):
         self.assertEqual((st, r['code']), (409, 'on_hello'))
 
     def test_forward_in_talk_costs_nothing(self):
+        self.select('talk')                                           # hello boots in crowd (Docking)
         self.hello_call('/v1/control', {'target': 'mode', 'input': 'forward', 'value': None})
         row = self.ctx['mode_store'].db['mode_log'].docs[-1]
         self.assertEqual((row['input'], row['code']), ('forward', 'not_implemented'))  # no say_round_fn: no model, no tts
 
     def test_preset_zero_then_single_switches_still_work(self):
+        self.select('talk')                                           # hello boots in crowd (Docking)
         _, r = self.call('/preset', {'n': 0, 'source': 'page'})
         self.assertFalse(r['snapshot']['billing'])
         self.assertEqual(self.workers(), (False, False))
@@ -100,6 +106,7 @@ class LocalDemoTest(unittest.TestCase):
         self.assertEqual(self.workers(), (True, True))
 
     def test_settings_returns_after_the_short_timeout_on_hello(self):
+        self.select('talk')                                           # hello boots in crowd (Docking)
         self.select('settings')
         self.assertEqual(self.call('/mode')[1]['snapshot']['return_to'], 'talk')
         hello = self.ctx['hello']

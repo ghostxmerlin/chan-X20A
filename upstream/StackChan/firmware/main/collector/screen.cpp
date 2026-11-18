@@ -142,7 +142,8 @@ bool hearing_shown = false;
 // A value just pressed is shown until the main loop has applied it and the status caught up.
 constexpr uint32_t kRequestHoldMs = 1500;
 uint32_t volume_hold_until = 0, hearing_hold_until = 0, billing_line_ms = 0;
-uint8_t mode_now = 0, dir_now = 0;
+// The boot mode until the main loop draws the session (owner 2026-11-18: crowd = Docking, was talk).
+uint8_t mode_now = static_cast<uint8_t>(modes::rules::State{}.mode), dir_now = 0;
 int billing_last = -1;
 char billing_code[20] = "";
 uint32_t billing_at_ms = 0;
@@ -666,7 +667,7 @@ void top_row_draw(lv_event_t* event)
     draw_rect(layer, row, l.battery + top::kBatW, bty + (top::kBatH - 5) / 2, top::kBatNub, 5, c, 1);
     if (const int w = top::battery_fill(bat, top::kBatW - 4)) draw_rect(layer, row, l.battery + 2, bty + 2, w, top::kBatH - 4, c, 1);
 }
-// The row ends kRowGap before the badge (44 px = "TALK" until the first screen_update_mode).
+// The row ends kRowGap before the badge (44 px = a four-letter label such as "DOCK" until the first screen_update_mode).
 int top_width() { return 320 - kRowX - kRowGap - (top_state->badge_w >= 0 ? top_state->badge_w : 44); }
 // After any change to what the row shows (or its width, or the CJK font): the % text and the part of the name that
 // fits in its room, cut between characters (CJK font only with every glyph, else "known"); then one invalidation.
@@ -924,8 +925,9 @@ void screen_create(lv_obj_t* parent)
     home_gesture.reset();
     home_pending = ScreenHomeGesture::None;
     auto* top = lv_display_get_layer_top(screen_display);
-    mode_badge = label(top, 0, 0, "TALK", kInk);
-    lv_obj_set_style_bg_color(mode_badge, lv_color_hex(0xE040A0), 0);
+    // The boot mode's badge (DOCK, owner 2026-11-18; was TALK) until the main loop's first screen_update_mode.
+    mode_badge = label(top, 0, 0, modes::rules::def(modes::rules::State{}.mode).label, kInk);
+    lv_obj_set_style_bg_color(mode_badge, lv_color_hex(modes::rules::def(modes::rules::State{}.mode).color), 0);
     lv_obj_set_style_bg_opa(mode_badge, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(mode_badge, kBadgePadHor, 0);
     lv_obj_set_style_pad_ver(mode_badge, kBadgePadVer, 0);

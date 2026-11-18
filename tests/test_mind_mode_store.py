@@ -10,9 +10,49 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+from unittest import mock
+
 from mind_fixtures import FakeDB
+from mind import mode_store
 from mind.mode_store import STALE_MS, ModeStore, valid_state
 from mind.modes import result
+
+# owner 2026-11-18: mind's boot default (fresh or impossible hello.mode) is crowd, shown as Docking. The tests below
+# were written for a store that starts in talk and pin its behaviour from there, so this module starts its fresh
+# stores in talk; BootDefaultTest pins the real default (REAL_BOOT, read before the patch).
+REAL_BOOT = dict(mode_store.BOOT_STATE)
+TALK_START = {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}
+_TALK_START = mock.patch.object(mode_store, 'BOOT_STATE', TALK_START)
+
+
+def setUpModule():
+    _TALK_START.start()
+
+
+def tearDownModule():
+    _TALK_START.stop()
+
+
+class BootDefaultTest(unittest.TestCase):
+    def setUp(self):
+        self.real = mock.patch.object(mode_store, 'BOOT_STATE', REAL_BOOT)
+        self.real.start()
+        self.addCleanup(self.real.stop)
+
+    def test_a_fresh_store_starts_in_docking_with_nothing_paid(self):
+        self.assertEqual(REAL_BOOT, {'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None})
+        db = FakeDB()
+        snap = ModeStore(db, clock_ms=lambda: 5).current()
+        self.assertEqual((snap['mode'], snap['by'], snap['look']['label']), ('crowd', 'boot', 'DOCK'))
+        self.assertEqual(db['mode'].find_one({'_id': 'current'})['mode'], 'crowd')
+        self.assertEqual(db['mode_log'].docs, [])                    # nothing ran: no talk_enter, nothing paid
+
+    def test_an_impossible_stored_state_goes_back_to_docking(self):
+        db = FakeDB()
+        db['mode'].docs.append({'_id': 'current', 'mode': 'nope', 'dir': None, 'host': None, 'return_to': None, 'seq': 3})
+        snap = ModeStore(db, clock_ms=lambda: 5).current()
+        self.assertEqual((snap['mode'], snap['seq']), ('crowd', 4))
+        self.assertEqual((db['mode_log'].docs[-1]['code'], db['mode_log'].docs[-1]['to']), ('bad_state', 'crowd'))
 
 
 class ModeStoreTest(unittest.TestCase):
@@ -340,12 +380,16 @@ class RobotAndTimeoutTest(unittest.TestCase):
     def setUp(self):
         self.db = FakeDB(); self.ms = ModeStore(self.db, clock_ms=lambda: 0)
 
-    def test_boot_input_runs_talk_enter_even_in_talk(self):
+    def test_boot_input_lands_in_docking(self):
+        # owner 2026-11-18: boot = crowd (Docking), never talk_enter; from talk it is a leave (talk_leave), in crowd
+        # already only stop_speech and no seq bump
         seen = []
-        self.ms.on_change.append(lambda o, n, e, m, t: seen.append((e, m['source'])))
+        self.ms.on_change.append(lambda o, n, e, m, t: seen.append((e, m['source'], n['mode'])))
         s0 = self.ms.seq()
         self.ms.apply('boot', None, source='boot', now_ms=1)
-        self.assertEqual((seen, self.ms.seq()), ([(['stop_speech', 'talk_enter'], 'boot')], s0))
+        self.assertEqual((seen, self.ms.seq()), ([(['stop_speech', 'talk_leave'], 'boot', 'crowd')], s0 + 1))
+        self.ms.apply('boot', None, source='boot', now_ms=2)
+        self.assertEqual((seen[1:], self.ms.seq()), ([(['stop_speech'], 'boot', 'crowd')], s0 + 1))
 
     def test_talk_enter_with_billing_off_is_an_ordinary_entry(self):
         self.ms.apply('backward', None, source='page', now_ms=1)

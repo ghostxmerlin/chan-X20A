@@ -94,7 +94,19 @@ void vector(JsonArrayConst v, size_t i)
 // Things the vectors do not reach: unknown digits, look(), the id helpers.
 void extras()
 {
-    State talk;
+    // owner 2026-11-18: the default state is the boot mode, crowd (Docking, badge DOCK); boot from anywhere lands
+    // there with stop_speech only (talk_leave when it was talk), never talk_enter.
+    const State boot_default;
+    assert(boot_default.mode == Mode::Crowd && !std::strcmp(label(boot_default), "DOCK"));
+    State talk; talk.mode = Mode::Talk;
+    for (size_t m = 0; m < kModeCount; ++m) {
+        State st; st.mode = Mode(m);
+        if (st.mode == Mode::Subtitle) st.dir = Dir::ZhEn;
+        if (st.mode == Mode::Settings) st.return_to = Mode::Talk;
+        const Outcome o = transition(st, Input::Boot, Value{}, false);
+        assert(o.state == boot_default && o.code == Code::Ok && o.has(Effect::StopSpeech) && !o.has(Effect::TalkEnter));
+        assert(o.has(Effect::TalkLeave) == (st.mode == Mode::Talk) && o.n_effects == (st.mode == Mode::Talk ? 2 : 1));
+    }
     Value v;
     for (int d : {-1, 0, 9, 10}) {
         v.digit = d;

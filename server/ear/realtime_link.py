@@ -174,7 +174,8 @@ def build_persona(text):
 PERSONA_RULES = (
     "你现在在哪，看背景里的“现在的地点”；写着不知道就别假定在办公室或桌上。"
     "说话用普通话。"
-    "现在是围观模式：大家围着你看，跟你聊天，你就跟他们聊。\n"
+    # owner 2026-11-18: the mode is called Docking now (was 围观); same meaning
+    "现在是 docking 模式：大家围着你看，跟你聊天，你就跟他们聊。\n"
     "【要求】\n"
     # owner 2026-11-18 "现在的回复很多时候都很短…需要动态回复长度": the length follows the matter, not a fixed cap
     "- 回答长短看事情：闲聊、打招呼、附和，一两句口语短句，干脆利落；有人问事实、要你解释、查资料、核实、帮忙解决问题时，"
@@ -1031,7 +1032,7 @@ class RealtimeHub:
             ear_log.emit("gate.realtime", trace=trace or self._trace_now() or ear_log.new_trace(),
                          sum=f"直接口令：{word}（机器人自己执行，不回答）",
                          extra={"verdict": "order", "word": word, "source": source,
-                                "reason": "语音模块的口令词是给机器人的直接指令，围观不回答"})
+                                "reason": "语音模块的口令词是给机器人的直接指令，Docking 不回答"})
 
     def _interrupt(self, now):
         """Stop hello's own reply (generating or playing). -> True if something was stopped."""
@@ -1241,7 +1242,7 @@ class RealtimeHub:
         now = self.clock()
         log(f"realtime: session {self.session_no} closing ({why}) after {now - self.opened_at:.0f}s", flush=True)
         ear_log.emit("call.realtime.session", ok=why not in ("error", "refused", "connect_failed"), model=self.cfg.model,
-                     sum=f"围观会话关闭 {why}", ms=int((now - self.opened_at) * 1000), ref={"session": self.session_no},
+                     sum=f"Docking 会话关闭 {why}", ms=int((now - self.opened_at) * 1000), ref={"session": self.session_no},
                      extra={"state": "close", "why": why})
         self._spans.append((self.opened_at, now))
         self.state, self.opened_at = "closed", None
@@ -1291,7 +1292,7 @@ class RealtimeHub:
             await ws.send(json.dumps({"type": "session.update", "session": session_config(
                 self.voice, instr, self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search, self.cfg.turn)}))
             self._live_instr = instr
-            ear_log.emit("call.realtime.session", ok=True, model=self.cfg.model, key=self.key, sum=f"围观会话打开 {why}",
+            ear_log.emit("call.realtime.session", ok=True, model=self.cfg.model, key=self.key, sum=f"Docking 会话打开 {why}",
                          body={"system": instr}, ref={"session": n},
                          extra={"state": "open", "why": why, "search": bool(self.cfg.search),
                                 "silence_ms": self.cfg.silence_ms, "vad_threshold": self.cfg.vad_threshold,
@@ -2205,9 +2206,9 @@ class RealtimeHub:
             return
         self._hush_busy = True
         self.stats["hush"] += 1
-        log("realtime: hush heard, switching 围观 off", flush=True)
+        log("realtime: hush heard, switching Docking off", flush=True)
         try:
-            ear_log.emit("trigger.hush", trace=trace, by="asr", sum=f"闭嘴 → 围观 关：{str(text or '')[:40]}",
+            ear_log.emit("trigger.hush", trace=trace, by="asr", sum=f"闭嘴 → Docking 关：{str(text or '')[:40]}",
                          ref={"session": self.session_no},
                          extra={"word": "闭嘴" if HUSH_ANY.search(norm_text(text or "")) else "short",
                                 "action": "realtime_off"})

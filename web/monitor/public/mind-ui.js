@@ -166,7 +166,7 @@ export function settingsHtml(v,names){
  <fieldset><legend>工作时段</legend><label>工作日（1=周一）<input name="work_days" value="${escapeHtml(v.work_days)}"></label><label>从<input name="work_start" value="${escapeHtml(v.work_start)}"></label><label>到<input name="work_end" value="${escapeHtml(v.work_end)}"></label></fieldset>
  <fieldset><legend>交给模型的信息</legend>${chk('speech_text',v.speech_text,'话的内容')}${chk('tingwu',v.tingwu,'听悟')}${chk('sounds',v.sounds,'声音事件')}${chk('vision',v.vision,'视觉')}</fieldset>
  <fieldset><legend>模型</legend>${chk('fusion_enabled',v.fusion_enabled,'每分钟融合')}<label>模型<select name="model">${['gpt-6-luna','gpt-6.1-terra'].map(m=>`<option${m===v.model?' selected':''}>${m}</option>`).join('')}</select></label></fieldset>
- <fieldset><legend>花费上限和没人暂停</legend><label>每天花费上限（元，所有付费项合计：听悟、围观、识图、说话、模型；北京时间按天）<input name="cap_cny" value="${escapeHtml(v.cap_cny)}"></label><label>美元折算人民币<input name="usd_cny" value="${escapeHtml(v.usd_cny)}"></label><label>没人多少分钟后暂停付费项（没看到脸、没听到认识的声音、没按开关）<input name="away_min" value="${escapeHtml(v.away_min)}"></label></fieldset>
+ <fieldset><legend>花费上限和没人暂停</legend><label>每天花费上限（元，所有付费项合计：听悟、Docking、识图、说话、模型；北京时间按天）<input name="cap_cny" value="${escapeHtml(v.cap_cny)}"></label><label>美元折算人民币<input name="usd_cny" value="${escapeHtml(v.usd_cny)}"></label><label>没人多少分钟后暂停付费项（没看到脸、没听到认识的声音、没按开关）<input name="away_min" value="${escapeHtml(v.away_min)}"></label></fieldset>
  <label>性格与语气（现在只存不用）<textarea name="persona" rows="2">${escapeHtml(v.persona)}</textarea></label>
  <label>修改说明<input name="note" placeholder="比如：补上同事A"></label>`;
 }

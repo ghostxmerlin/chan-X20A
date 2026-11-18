@@ -3,8 +3,8 @@
 // text. Polls every 3 s while a burst runs, else every 15 s; photos are fetched once per look.
 const esc=t=>String(t??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const hms=ms=>{const d=new Date(ms);return [d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':');};
-const REASONS={elapsed:'2 分钟到了',heard_stop:'听到“别看了”',max_looks:'看满了',failures:'连续失败',left_crowd:'离开了围观',
- switch_off:'围观关了',mouth_dropped:'机器人断开',shutdown:'服务重启',cancelled:'中断'};
+const REASONS={elapsed:'2 分钟到了',heard_stop:'听到“别看了”',max_looks:'看满了',failures:'连续失败',left_crowd:'离开了 Docking',
+ switch_off:'Docking 关了',mouth_dropped:'机器人断开',shutdown:'服务重启',cancelled:'中断'};
 export const reasonText=r=>REASONS[String(r||'').split(':')[0]]||esc(r||'—');
 
 export function burstStatusHtml(d,now=Date.now()){
@@ -12,7 +12,7 @@ export function burstStatusHtml(d,now=Date.now()){
  const r=d.running;
  if(r)return `<p class="burst-on">● 正在看：已看 ${r.looks} 张，开始于 ${hms(r.since)}（${Math.max(0,Math.round((now-r.since)/1000))} 秒前）</p>`;
  const b=(d.bursts||[])[0];
- if(!b)return '<p class="alt">还没有视觉爆发。围观模式下说“注意看”就会开始。</p>';
+ if(!b)return '<p class="alt">还没有视觉爆发。Docking 模式下说“注意看”就会开始。</p>';
  const fails=Object.values(b.failures||{}).reduce((a,n)=>a+n,0);
  return `<p>上一次：${hms(b.at)}，${esc(b.duration_s)} 秒，看了 ${esc(b.looks)} 张`+
   `${b.latency_p50_ms!=null?`，识图中位 ${(b.latency_p50_ms/1000).toFixed(1)} 秒`:''}`+

@@ -9,7 +9,7 @@ namespace collector::ui_text {
 // mode_table.MODES[...]['name'], in modes::rules::kModeIds order (tests/test_ui_font.py compares them; IDLE has
 // no Chinese name there).
 inline constexpr const char* kModeNames[modes::rules::kModeCount] = {
-    "脱口秀", "对话", "设置", "事件驱动", "字幕", "围观", "陪伴", "IDLE"};
+    "脱口秀", "对话", "设置", "事件驱动", "字幕", "Docking", "陪伴", "IDLE"};   // crowd = Docking (owner 2026-11-18, was 围观)
 inline constexpr const char* kModeWord = "模式";
 
 inline const char* mode_name(modes::rules::Mode m)

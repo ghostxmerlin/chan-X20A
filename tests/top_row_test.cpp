@@ -183,7 +183,7 @@ int main()
                 assert(l.name_w == std::max(0, plain.name_w - kGroupGap - l.burst_w));
                 if (l.name_w > 0) assert(l.name + l.name_w + kGroupGap == l.burst);
                 assert(l.wifi == plain.wifi && l.pct == plain.pct && l.battery == plain.battery && l.name == plain.name);
-                // A four-letter badge (MEET / TALK), blocks, 100 %, not charging, two-digit count: room for a
+                // A four-letter badge (DOCK / TALK), blocks, 100 %, not charging, two-digit count: room for a
                 // 3-character Chinese name (16 px each).
                 if (badge == 44 && !bolt && count_w == 18) assert(l.name_w >= 48);
                 // burst_fit: no name or a name that fits = the full group; a longer one = the eye alone.

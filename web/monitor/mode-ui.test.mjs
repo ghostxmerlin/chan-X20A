@@ -36,7 +36,7 @@ test('the bar shows hello\'s own mode, with the mind billing, and can switch',()
 });
 test('no mode in hello\'s telemetry (0.4.91): shows mind\'s record, says 等 0.4.92, switching off',()=>{
  const r=ui.robotMode({...tele('talk'),telemetry:{boot_id:'b1',seq:1}});
- const v=ui.modeView(state({mode:'crowd',look:{label:'MEET',color:'30D060'}}),r);
+ const v=ui.modeView(state({mode:'crowd',look:{label:'DOCK',color:'30D060'}}),r);
  assert.deepEqual([v.known,v.source,v.canSwitch,v.mode],[true,'mind',false,'crowd']);
  const h=ui.modeBarHtml(v,[]);
  assert.match(h,/hello 固件还不支持模式（等 0.4.92）/);
@@ -113,7 +113,7 @@ test('log rows: newest ten, readable, everything escaped',()=>{
  rows.push({at:99,source:'<b>',input:'billing',value:false,from:'talk',to:'talk',code:'"><x'});
  const h=ui.modeBarHtml(hv('talk'),rows);
  assert.equal((h.match(/<li/g)||[]).length,10);
- assert.match(h,/触摸 · 脱口秀 → 围观/);assert.doesNotMatch(h,/<b>|"><x/);
+ assert.match(h,/触摸 · 脱口秀 → Docking/);assert.doesNotMatch(h,/<b>|"><x/);
  assert.match(ui.logLine({at:1,source:'page',input:'billing',value:false,from:'talk',to:'talk',code:'ok'}),/计费 全关/);
  assert.match(ui.logLine({at:1,source:'asr',input:'digit',value:9,from:'talk',to:'talk',code:'ok'}),/预设 9/);
  assert.match(ui.logLine({at:1,source:'timeout',input:'timeout',from:'settings',to:'talk',code:'ok'}),/超时/);
@@ -256,7 +256,7 @@ test('select posts to hello through /api/control and says so; nothing goes to mi
  assert.match(m.msg,/已发给 hello：字幕 中→英/);
  await m.helloPreset(5);
  assert.deepEqual(sent[1],['/api/control',{action:'mode',boot:'b1',input:'digit',value:5}]);   // hello's own digit rule
- assert.match(m.msg,/预设 5：已发给 hello（进 围观/);
+ assert.match(m.msg,/预设 5：已发给 hello（进 Docking/);
 });
 test('select while hello cannot switch sends nothing and says why',async()=>{
  const sent=[];const post=async(path,body)=>{sent.push(path);return {};};
@@ -276,7 +276,7 @@ test('the line under the bar: kept right after the page\'s own click, cleared wh
   {post:async()=>({accepted:true}),now:()=>t});
  await m.poll();
  await m.select('crowd');                                  // its own poll already sees crowd
- assert.match(m.msg,/已发给 hello：围观/);
+ assert.match(m.msg,/已发给 hello：Docking/);
  t=10000;await m.poll();assert.match(m.msg,/已发给 hello/); // same mode, nothing new
  await m.poll();assert.equal(m.msg,'');                     // hello's own word went to IDLE later: the old line goes
 });

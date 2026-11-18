@@ -191,7 +191,7 @@ def _realtime_toggle(b, source, now_ms, out):
     on = not b.ctx.switch_on(REALTIME)
     failed = b._run_all('realtime toggle', [(REALTIME, lambda: b.ctx.set_switch(REALTIME, on))])
     out['failed'] += failed
-    return None, ('MEET ON' if on else 'MEET QUIET') if not failed else None
+    return None, ('DOCK ON' if on else 'DOCK QUIET') if not failed else None    # Docking (owner 2026-11-18, was MEET)
 
 
 def power_on_result(source):

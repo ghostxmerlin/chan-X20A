@@ -67,7 +67,8 @@ inline constexpr ModeDef kModes[kModeCount] = {
      kNone, code_(Code::NoAction), code_(Code::NoAction), kNone, kNone},
     {"SUB", 0x7C6CF0, Eye::PageSubtitle, Pool::Default, TouchAct::None, TouchAct::None,
      kNone, code_(Code::NoAction), code_(Code::NoAction), kNone, kNone},
-    {"MEET", 0x30D060, Eye::V14, Pool::Lively, TouchAct::Server, TouchAct::Server,
+    // crowd, shown as Docking (owner 2026-11-18: renamed from 围观 / MEET, hello's main mode; the id stays crowd)
+    {"DOCK", 0x30D060, Eye::V14, Pool::Lively, TouchAct::Server, TouchAct::Server,
      kNone, kLook, code_(Code::NotImplemented), kNone, kNone},
     {"PAL", 0xF2E6C8, Eye::V18, Pool::Default, TouchAct::Server, TouchAct::None,
      kNone, code_(Code::NotImplemented), code_(Code::NoAction), kNone, kNone},
@@ -77,8 +78,9 @@ inline constexpr ModeDef kModes[kModeCount] = {
 inline constexpr const char* kSubtitleLabels[] = {"SUB", "SUB ZH>EN", "SUB EN>ZH"};   // by Dir
 
 // {mode, dir, host, return_to}. hosted = host "event" (a guest mode run by event-driven; never set in step 1).
+// The default is the boot mode: crowd, shown as Docking (owner 2026-11-18; was talk).
 struct State {
-    Mode mode = Mode::Talk;
+    Mode mode = Mode::Crowd;
     Dir dir = Dir::None;
     bool hosted = false;
     Mode return_to = Mode::None;
@@ -242,9 +244,10 @@ inline Outcome transition(const State& st, Input in, const Value& v, bool speaki
     using namespace detail;
     const ModeDef& m = def(st.mode);
     // 1. the same in every mode
+    // boot (owner 2026-11-18): crowd (Docking, the main mode), always stop_speech; no talk_enter (was talk).
     if (in == Input::Boot) {
-        const Effect fx[] = {Effect::StopSpeech, Effect::TalkEnter};
-        return done(st, plain(Mode::Talk), fx, 2);
+        const Effect fx[] = {Effect::StopSpeech};
+        return done(st, plain(Mode::Crowd), fx, 1);
     }
     if (in == Input::Long) {
         const Effect fx[] = {Effect::StopSpeech};

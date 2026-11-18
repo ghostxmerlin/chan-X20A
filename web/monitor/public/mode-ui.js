@@ -12,17 +12,17 @@ import { runLevel, runVision } from '/switches-ui.js';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const hhmmss=ms=>Number.isFinite(ms)?new Date(ms).toLocaleTimeString('zh-CN',{hour12:false}):'—';
 
-const NAMES={talk:'脱口秀',chat:'对话',settings:'设置',event:'事件驱动',subtitle:'字幕',crowd:'围观',companion:'陪伴',idle:'IDLE'};
+const NAMES={talk:'脱口秀',chat:'对话',settings:'设置',event:'事件驱动',subtitle:'字幕',crowd:'Docking',companion:'陪伴',idle:'IDLE'};
 const DIRS={zh_en:'中→英',en_zh:'英→中'};
 // Corner label and colour per mode: the same as server/mind/mode_table.py MODES[*].look (mode-ui.test.mjs checks it).
 export const LOOK={talk:['TALK','E040A0'],chat:['CHAT','F0B000'],settings:['SET','D8D8CC'],event:['AUTO','20B8C8'],
- subtitle:['SUB','7C6CF0'],crowd:['MEET','30D060'],companion:['PAL','F2E6C8'],idle:['IDLE','505050']};
+ subtitle:['SUB','7C6CF0'],crowd:['DOCK','30D060'],companion:['PAL','F2E6C8'],idle:['IDLE','505050']};
 const SUB_LABELS={zh_en:'SUB ZH>EN',en_zh:'SUB EN>ZH'};
 // The nine buttons, in the robot's swipe-up page order (spec §5.4): subtitle twice, one per direction.
 export const MODE_BUTTONS=[['talk'],['chat'],['settings'],['event'],['subtitle','zh_en'],['subtitle','en_zh'],['crowd'],['companion'],['idle']];
 const SOURCES={asr:'口令',touch:'触摸',select:'上滑页',quick:'快捷设置',dualkey:'DualKey',page:'网页',boot:'开机',timeout:'超时'};
 // Owner's table (2026-11-14, step 1b): 0 / 9 on mind, 4-8 = hello selects that mode itself, 1-3 empty.
-export const PRESETS={0:'花费全关',1:'空',2:'空',3:'空',4:'IDLE',5:'围观',6:'陪伴',7:'字幕 中→英',8:'字幕 英→中',9:'花费全开'};
+export const PRESETS={0:'花费全关',1:'空',2:'空',3:'空',4:'IDLE',5:'Docking',6:'陪伴',7:'字幕 中→英',8:'字幕 英→中',9:'花费全开'};
 export const HELLO_PRESETS={4:['idle'],5:['crowd'],6:['companion'],7:['subtitle','zh_en'],8:['subtitle','en_zh']};
 const MIND_PRESETS=new Set([0,9]);
 const CODES={ok:'',already:'已经是这个模式了',not_in_mode:'不在这个模式里',only_talk:'只在脱口秀里有用',

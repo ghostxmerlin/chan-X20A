@@ -136,10 +136,10 @@ test('notes switch toggles and counts in the cost line', ()=>{
 });
 const MEET=(on,running,{available=true}={})=>({tingwu:{on:false},tingwu_status:{running:[],available:true,stale:false,at:fresh},
  realtime:{on},realtime_status:{running:running?['rt3']:[],available,stale:false,at:fresh}});
-test('围观 switch (2026-11-15): its own toggle, quiet when off, counted while a session runs', ()=>{
+test('Docking switch (2026-11-15): its own toggle, quiet when off, counted while a session runs', ()=>{
  const r=robot({listen:true,hstate:'listening'});
  const v=sw.switchView(r,true,{enabled:false},MEET(true,true));
- assert.equal(v.meet.on,true);assert.match(v.meet.detail,/正在对话/);assert.match(v.cost,/围观对话/);
+ assert.equal(v.meet.on,true);assert.match(v.meet.detail,/正在对话/);assert.match(v.cost,/Docking 对话/);
  assert.deepEqual(sw.toggleRequest('meet',r,MEET(true,false)),{kind:'switch',body:{name:'realtime',on:false}});
  assert.deepEqual(sw.toggleRequest('meet',r,MEET(false,false)),{kind:'switch',body:{name:'realtime',on:true}});
  assert.match(sw.switchView(r,true,{enabled:false},MEET(false,false)).meet.detail,/闭嘴/);

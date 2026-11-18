@@ -107,10 +107,10 @@ int main(int argc, char** argv)
     row = lv_obj_get_child(home, -1);
     constexpr uint32_t kMeet = 0x30D060;
     base();
-    screen_update_mode("MEET", kMeet, true);
+    screen_update_mode("DOCK", kMeet, true);
     screen_set_cjk_font(&fonts[0].font, &fonts[1].font);
 
-    // Crowd (MEET): the three stage blocks as tall as the badge, in the mode's colour.
+    // Crowd (DOCK, was MEET): the three stage blocks as tall as the badge, in the mode's colour.
     dots(true, 0, false, kMeet);
     vision(top::VisionPower::On, true, true, "张三");
     shot("crowd-listen");
@@ -186,7 +186,7 @@ int main(int argc, char** argv)
         assert(std::strlen(screen_top_name()) > n);
         status.charging = true;
     }
-    screen_update_mode("MEET", kMeet, false);
+    screen_update_mode("DOCK", kMeet, false);
     dots(true, 2, false, kMeet);
     vision(top::VisionPower::On, true, true, "Alexandria-Smith");
     shot("worst-meet-off-long-ascii");
@@ -201,14 +201,14 @@ int main(int argc, char** argv)
     status.battery_percent = 64;
     shot("talk-typical");
 
-    // 0.5.00 vision burst (MEET, where "注意看" starts it): eye + count + time bar; the name stays whole.
+    // 0.5.00 vision burst (DOCK, where "注意看" starts it): eye + count + time bar; the name stays whole.
     {
         constexpr uint32_t kBurst = 0xFF5AD8;
         const auto pink_in_row = [] {
             for (int y = 0; y < top::kRowH; ++y) for (int x = 0; x < 320; ++x) if (is(px(x, y), kBurst)) return true;
             return false;
         };
-        screen_update_mode("MEET", kMeet, true);
+        screen_update_mode("DOCK", kMeet, true);
         dots(true, 0, false, kMeet);
         base();
         vision(top::VisionPower::On, true, true, "张三");

@@ -58,7 +58,9 @@ SOFT_PAID = ('talk_enter',)
 FIELDS = ('mode', 'dir', 'host', 'return_to')
 REPORT_DEVICE = 'robot.report'   # dedup / log key of hello's reports: its own seq, not the mode_input seq
 STALE_DROPS = ('stop_speech', 'say_round', 'prefetch_on', 'talk_enter')   # a late report keeps only the "turn off"s
-BOOT_STATE = {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}
+# The boot default (a fresh hello.mode or an impossible stored state): crowd, shown as Docking, hello's main mode
+# (owner 2026-11-18; was talk). hello itself boots there too (mode_rules.h boot input).
+BOOT_STATE = {'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None}
 DOC_ID = 'current'
 _RECENT = 1024                   # device-input results kept in memory (older ones are looked up in mode_log)
 _WAIT_S = 10                     # a duplicate waits this long for the first copy before answering busy
@@ -174,13 +176,13 @@ class ModeStore:
             self._rebuild()
             return
         # An impossible stored state: back to the boot default (seq still grows) and say so.
-        _log(f'bad stored mode state {st!r} seq={seq!r}: back to talk')
+        _log(f'bad stored mode state {st!r} seq={seq!r}: back to crowd (Docking)')
         prev = seq if _is_int(seq) and seq >= 1 else 0
         self._reset(now, seq=prev + 1, billing=True)
         self._changed(st, self._state, 'boot', 'load', now)
         self._append({'at': now, 'source': 'boot', 'device': None, 'boot': None, 'dev_seq': None, 'sid': None,
                       'input': 'load', 'value': st, 'from': st['mode'] if isinstance(st['mode'], str) else None,
-                      'to': 'talk', 'code': 'bad_state', 'result': None, 'seq': self._seq, 'effects': []})
+                      'to': BOOT_STATE['mode'], 'code': 'bad_state', 'result': None, 'seq': self._seq, 'effects': []})
 
     def _reset(self, now, *, seq, billing):
         self._state, self._seq, self._billing = dict(BOOT_STATE), seq, billing

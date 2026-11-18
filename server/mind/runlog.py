@@ -32,7 +32,7 @@ except ImportError:                              # repository layout: server/com
 
 SPOOL_DIR = "~/soul-spike/log-spool"
 CODE_VERSION_FILE = "~/soul-mind/CODE_VERSION"      # written by the deploy (plan Task 8)
-NAMES = {"tingwu": "听悟", "eye": "识别", "notes": "纪要", "realtime": "围观", "mind": "情景", "mouth": "嘴",
+NAMES = {"tingwu": "听悟", "eye": "识别", "notes": "纪要", "realtime": "Docking", "mind": "情景", "mouth": "嘴",
          "memory_extract": "记忆整理", "say_prefetch": "提前写", "say_auto": "连续说"}
 
 

@@ -111,9 +111,9 @@ void strokes()
 void picker()
 {
     // Nine tiles in mode-table order; the subtitle twice, with its direction.
-    const char* labels[] = {"TALK", "CHAT", "SET", "AUTO", "SUB ZH>EN", "SUB EN>ZH", "MEET", "PAL", "IDLE"};
+    const char* labels[] = {"TALK", "CHAT", "SET", "AUTO", "SUB ZH>EN", "SUB EN>ZH", "DOCK", "PAL", "IDLE"};
     // 0.4.95: their Chinese names (mode_table.py names; IDLE has none there).
-    const char* names[] = {"脱口秀", "对话", "设置", "事件驱动", "字幕 中→英", "字幕 英→中", "围观", "陪伴", "IDLE"};
+    const char* names[] = {"脱口秀", "对话", "设置", "事件驱动", "字幕 中→英", "字幕 英→中", "Docking", "陪伴", "IDLE"};
     for (size_t i = 0; i < kTiles; ++i) {
         assert(!std::strcmp(tile_label(i), labels[i]));
         assert(!std::strcmp(tile_name_zh(i), names[i]));
@@ -127,12 +127,14 @@ void picker()
     // Highlight: the current mode; subtitle only on its own direction.
     State s; s.mode = Mode::Subtitle; s.dir = Dir::EnZh;
     for (size_t i = 0; i < kTiles; ++i) assert(tile_current(i, s) == (i == 5));
-    s = State{};
+    s = State{};                                             // the boot mode: crowd = Docking (owner 2026-11-18)
+    assert(tile_current(6, s) && !tile_current(0, s));
+    s = collector::modes::rules::detail::plain(Mode::Talk);
     assert(tile_current(0, s) && !tile_current(1, s));
 
     // Taps go through the robot's own rules as select. From talk, each tile enters its mode.
     for (size_t i = 0; i < kTiles; ++i) {
-        const State talk{};
+        const State talk = collector::modes::rules::detail::plain(Mode::Talk);
         const auto o = transition(talk, Input::Select, tile_value(i), false);
         if (i == 0) { assert(o.state.mode == Mode::Idle); continue; }    // the current mode: leave it
         assert(o.state.mode == kTileModes[i].mode && o.code == collector::modes::rules::Code::Ok);

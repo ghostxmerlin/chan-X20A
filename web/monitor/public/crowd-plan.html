@@ -2,14 +2,14 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>围观重构计划</title>
+  <title>Docking 重构计划</title>
   <link rel="stylesheet" href="/crowd-plan.css"><script type="module" src="/crowd-plan.js"></script>
 </head>
 <body>
 <header class="top">
   <div class="top-in">
-    <span class="brand">围观重构计划</span>
-    <nav aria-label="其它页面"><a href="/">观察台</a><a href="/crowd-flow.html">围观流程图</a><a href="/log.html">日志</a></nav>
+    <span class="brand">Docking 重构计划</span>
+    <nav aria-label="其它页面"><a href="/">观察台</a><a href="/crowd-flow.html">Docking 流程图</a><a href="/log.html">日志</a></nav>
   </div>
 </header>
 
@@ -17,7 +17,7 @@
   <section class="hero">
     <div class="hero-text">
       <h1>先判断“是不是在跟我说”，再决定开不开口</h1>
-      <p>现在的围观是“听到就答，答完再删”：模型对每句话都生成回答，再用一串规则把不该说的压成「嗯」。重构后，它先算这句话和自己有多大关系，过了阈值才让模型回答；没过就只听、只记，不出声。</p>
+      <p>现在的 Docking 是“听到就答，答完再删”：模型对每句话都生成回答，再用一串规则把不该说的压成「嗯」。重构后，它先算这句话和自己有多大关系，过了阈值才让模型回答；没过就只听、只记，不出声。</p>
     </div>
     <aside class="name-card" aria-label="设备的新名字">
       <span class="name-glyph" aria-hidden="true">力</span>
@@ -31,7 +31,7 @@
 
   <section class="baseline" aria-labelledby="baseline-h">
     <h2 id="baseline-h">现在的样子（日志实测）</h2>
-    <p class="note">日志从 11-16 15:42 开始记，所以这里基本是 11-16 一个下午的围观，会话共开了约 1.9 小时。</p>
+    <p class="note">日志从 11-16 15:42 开始记，所以这里基本是 11-16 一个下午的 Docking，会话共开了约 1.9 小时。</p>
     <div class="stats">
       <div class="stat"><b>492</b><span>次回答判定</span></div>
       <div class="stat bad"><b>72%</b><span>被压成「嗯」没播出（355 次）</span></div>
@@ -105,13 +105,13 @@
     <div class="points">
       <article class="point">
         <h3>名字改成 Dynames</h3>
-        <p class="prob">“hello” 既是 ASR 模块的唤醒词，又是围观判断“在叫我”的词。叫 ASR 的时候，围观也以为在跟它说话。</p>
+        <p class="prob">“hello” 既是 ASR 模块的唤醒词，又是 Docking 判断“在叫我”的词。叫 ASR 的时候，Docking 也以为在跟它说话。</p>
         <p class="fix">人设、打招呼、自我介绍改用 Dynames；“在叫我”的词表换成 Dynames 和它的中文叫法；hello 只留给 ASR。</p>
         <p class="gain">两个入口不再互相抢。要先用录音测一下语音识别会把 “Dynames” 写成什么字，把这些写法都收进词表。</p>
       </article>
       <article class="point">
         <h3>一个大文件拆成四块</h3>
-        <p class="prob">围观的主文件将近 2000 行，大约 110 个函数，会话、拼说明、判断、动作全搅在一起，每打一个补丁都更难改。</p>
+        <p class="prob">Docking 的主文件将近 2000 行，大约 110 个函数，会话、拼说明、判断、动作全搅在一起，每打一个补丁都更难改。</p>
         <p class="fix">拆成四块：会话（连上、10 分钟换一轮、闲了关、暂停）；拼说明；什么时候开口（上面的相关度闸门，一张表）；动作（垫话、打招呼、视觉爆发、联网查、闭嘴）。</p>
         <p class="gain">每块能单独测试，改一处不牵动别处。</p>
       </article>

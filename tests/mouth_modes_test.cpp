@@ -26,7 +26,9 @@ struct Robot {
     ModeSession s;
     JsonDocument doc;
     uint32_t bad = 0;
-    explicit Robot(bool booted = true) { if (booted) s.boot(0); }
+    // Booted in talk: these tests were written for the old talk boot and drive talk's inputs from there. The real
+    // boot mode (crowd = Docking, owner 2026-11-18) is pinned in default_boot_is_docking().
+    explicit Robot(bool booted = true, Mode start = Mode::Talk) { if (booted) s.boot(0, start); }
     Text feed(const std::string& text)
     {
         const Text k = read_text(text.data(), text.size(), doc);
@@ -120,7 +122,7 @@ void boot_and_first_link()
     assert(o.drain() == report(3, "chat", "boot", "\"boot\"", "\"stop_speech\""));
 }
 
-// 0.4.96 power-on (owner 2026-11-15): hello starts in crowd (MEET) and owes mind a 9: it goes behind the boot report
+// 0.4.96 power-on (owner 2026-11-15): hello starts in crowd (DOCK) and owes mind a 9: it goes behind the boot report
 // of every link until mind answers ok for it (review 2026-11-15: the ear posts an input once, never again); no answer
 // in 10 s or a non-ok answer sends it again with a new seq; any newer 0 / 9 replaces it (offline: sent on the link).
 std::string digit_line(uint32_t seq, uint32_t age, int value, const char* source = "quick")
@@ -143,7 +145,7 @@ void power_on_crowd_and_nine()
     Robot r(false);
     r.s.boot(0, Mode::Crowd, 9);
     ModeView v = r.view();
-    assert(v.state.mode == Mode::Crowd && !std::strcmp(v.look.label, "MEET") && !std::strcmp(v.by, "boot"));
+    assert(v.state.mode == Mode::Crowd && !std::strcmp(v.look.label, "DOCK") && !std::strcmp(v.by, "boot"));
     assert(r.s.pending_digit() == 9 && r.drain().empty());
     // First link lost before the send loop ran: still owed.
     r.s.link_up(10 * kS);
@@ -184,9 +186,24 @@ void power_on_crowd_and_nine()
     assert(z.drain(6 * kS) == digit_line(2, 0, 9, "asr"));
     assert(answer(z, 1, "busy", 7 * kS) && z.drain(30 * kS).empty());
 
-    // The default boot (tests, old callers) is unchanged: talk, nothing owed.
-    Robot t;
-    assert(t.view().state.mode == Mode::Talk && t.s.pending_digit() == -1);
+    // The default boot (no preset): crowd (Docking, owner 2026-11-18), nothing owed.
+    Robot t(false);
+    t.s.boot(0);
+    assert(t.view().state.mode == Mode::Crowd && t.s.pending_digit() == -1);
+}
+
+// owner 2026-11-18: hello boots into crowd, shown as Docking (badge DOCK), its main mode; the first link's boot
+// report is crowd with stop_speech only (never talk_enter: nothing paid starts at boot).
+void default_boot_is_docking()
+{
+    Robot r(false);
+    r.s.boot(0);
+    ModeView v = r.view();
+    assert(v.state.mode == Mode::Crowd && v.seq == 1 && !std::strcmp(v.by, "boot") && !v.online);
+    assert(!std::strcmp(v.look.label, "DOCK") && v.look.eye == collector::modes::Eye::V14 && v.look.color == 0x30D060);
+    r.feed(kHello);
+    assert(r.drain() == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\""));
+    assert(r.drain().empty());
 }
 
 void inputs_become_reports()
@@ -500,9 +517,9 @@ void digit_one()
     assert(a.to_mind && a.input_seq == 1 && !a.changed && !a.reported && !std::strcmp(r.view().toast, "PRESET 1"));
     assert(r.drain(1 * kS) == digit_line(1, 0, 1, "asr"));
     JsonDocument d;
-    deserializeJson(d, R"({"type":"mode_result","seq":1,"code":"ok","toast":"PRESET 1: MEET QUIET"})");
+    deserializeJson(d, R"({"type":"mode_result","seq":1,"code":"ok","toast":"PRESET 1: DOCK QUIET"})");
     assert(r.s.on_result(d.as<JsonObjectConst>(), 2 * kS));
-    assert(r.view().result_digit == 1 && !std::strcmp(r.view().toast, "PRESET 1: MEET QUIET"));
+    assert(r.view().result_digit == 1 && !std::strcmp(r.view().toast, "PRESET 1: DOCK QUIET"));
     // talk: a double tap is the table's prefetch_on, not a digit
     Applied t = r.in(Input::DoubleTap, "touch");
     assert(!t.to_mind && t.reported && t.out.has(collector::modes::rules::Effect::PrefetchOn));
@@ -592,6 +609,7 @@ int main()
     text_frames();
     boot_and_first_link();
     power_on_crowd_and_nine();
+    default_boot_is_docking();
     inputs_become_reports();
     links();
     digits();

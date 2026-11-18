@@ -17,8 +17,9 @@ from .mode_table import MODES, DIRECTIONS, SUBTITLE_DIRS
 INPUTS = ('forward', 'backward', 'play', 'pause', 'open', 'close', 'start', 'stop', 'next', 'previous',
           'digit', 'tap', 'double_tap', 'long', 'direction', 'select', 'billing', 'boot', 'timeout')
 SOURCES = ('asr', 'touch', 'select', 'quick', 'dualkey', 'page', 'boot', 'timeout')
-# talk_enter (owner 14): every entry into talk, boot included = 提前写 on + 连续说 on + 家人声音 off (billing gates
-# nothing since the owner's 2026-11-14 evening ruling; 'billing_off' stays in CODES only as a known word, never produced).
+# talk_enter (owner 14): every entry into talk = 提前写 on + 连续说 on + 家人声音 off; boot no longer is one (it lands
+# in crowd, owner 2026-11-18). Billing gates nothing since the owner's 2026-11-14 evening ruling ('billing_off'
+# stays in CODES only as a known word, never produced).
 # talk_leave: both off, stock dropped.
 EFFECTS = ('stop_speech', 'talk_leave', 'talk_enter', 'say_round', 'prefetch_on', 'prefetch_off')
 
@@ -150,9 +151,10 @@ def transition(state, input, value=None, *, source, speaking=False):
 
     # 1. the same in every mode
     if input == 'boot':
-        # robot reboot (new boot id): talk, even when already there, and that counts as an entry into talk:
-        # 提前写 / 连续说 on, 家人声音 off (owner 14, spec §3.6, §3.8; replaces "reboot turns them off")
-        return _done(st, {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech', 'talk_enter'])
+        # robot reboot (new boot id): crowd (shown as Docking, hello's main mode; owner 2026-11-18, was talk with
+        # talk_enter). Always stop_speech, even when already there; leaving talk adds talk_leave as any change does.
+        # Nothing paid starts: crowd has no entry effect (its realtime session follows the mirrored mode + switch).
+        return _done(st, {'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech'])
     if input == 'long':
         # DualKey long press: stop the current thing, back to talk; a manual pick, so event-driven stops too
         return _done(st, {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech'])

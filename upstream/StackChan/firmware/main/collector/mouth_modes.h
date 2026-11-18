@@ -115,13 +115,14 @@ public:
     ModeSession(const ModeSession&) = delete;
     ModeSession& operator=(const ModeSession&) = delete;
 
-    // Once, at power-on: the boot input on the default state (talk). Its report goes out with the first link.
-    // collector-0.4.96 (owner 2026-11-15, field data collection): `start` is the mode hello powers up in (crowd on
-    // the robot; the rules' boot input stays talk, as mind's modes.py), and `preset` (0 / 9, -1 = none) is the
-    // first pending digit (see pending_): sent to mind behind the boot report of the first link (source quick, as
-    // the quick page's 全开) and resent until mind answers ok, so a power-on is 全开 on the server too and 围观
-    // works without a computer.
-    void boot(int64_t now_us, modes::rules::Mode start = modes::rules::Mode::Talk, int preset = -1)
+    // Once, at power-on: the boot input on the default state. Its report goes out with the first link.
+    // collector-0.5.08 (owner 2026-11-18): the rules' boot input itself lands in crowd (shown as Docking, the main
+    // mode), as mind's modes.py does, so `start` defaults to crowd too and no longer overrides anything.
+    // collector-0.4.96 (owner 2026-11-15, field data collection): `start` is the mode hello powers up in, and
+    // `preset` (0 / 9, -1 = none) is the first pending digit (see pending_): sent to mind behind the boot report of
+    // the first link (source quick, as the quick page's 全开) and resent until mind answers ok, so a power-on is 全开
+    // on the server too and Docking works without a computer.
+    void boot(int64_t now_us, modes::rules::Mode start = modes::rules::Mode::Crowd, int preset = -1)
     {
         const Outcome o = modes::rules::transition(state_, Input::Boot, Value{}, false);
         state_ = o.state; since_us_ = last_input_us_ = now_us;

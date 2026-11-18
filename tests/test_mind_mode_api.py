@@ -17,10 +17,25 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from unittest import mock
+
 from mind_fixtures import FakeDB
-from mind import api, runner, say_auto, say_prefetch, speak
+from mind import api, mode_store, runner, say_auto, say_prefetch, speak
 from mind.settings_store import SettingsStore
 from mind.store import Store
+
+# owner 2026-11-18: a fresh mind starts in crowd (Docking) now. These tests drive the talk pipeline from a fresh
+# mind, as written for the old talk default, so this module starts its stores in talk (tests/test_mind_mode_store.py
+# BootDefaultTest pins the real default).
+_TALK_START = mock.patch.object(mode_store, 'BOOT_STATE', {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None})
+
+
+def setUpModule():
+    _TALK_START.start()
+
+
+def tearDownModule():
+    _TALK_START.stop()
 
 ROOT = Path(__file__).resolve().parents[1]
 

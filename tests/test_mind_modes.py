@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-from mind import modes, mode_table
+from mind import modes, mode_table, mode_store
 
 
 class TransitionTest(unittest.TestCase):
@@ -46,8 +46,22 @@ class TransitionTest(unittest.TestCase):
     def test_entering_talk_emits_talk_enter(self):
         self.assertEqual(self.go('idle', 'forward')[2], ['stop_speech', 'talk_enter'])
         self.assertEqual(self.go('settings', 'close', return_to='talk')[2], ['stop_speech', 'talk_enter'])
-        self.assertEqual(self.go('talk', 'boot')[2], ['stop_speech', 'talk_enter'])     # robot reboot while already in talk
         self.assertEqual(self.go('crowd', 'long')[2], ['stop_speech', 'talk_enter'])
+
+    def test_boot_lands_in_docking(self):
+        # owner 2026-11-18: a robot reboot lands in crowd (shown as Docking, badge DOCK), never an entry into talk;
+        # stop_speech always (also when already there), talk_leave when it was in talk, nothing paid.
+        for mid in mode_table.MODES:
+            for host in (None, 'event'):
+                if host and mid in ('event', 'settings', 'idle'):
+                    continue
+                s, r, e = self.go(mid, 'boot', host=host, return_to='talk' if mid == 'settings' else None,
+                                  dir='zh_en' if mid == 'subtitle' else None)
+                self.assertEqual(s, {'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None}, (mid, host))
+                self.assertEqual(r['code'], 'ok')
+                self.assertEqual(e, ['stop_speech', 'talk_leave'] if mid == 'talk' else ['stop_speech'], (mid, host))
+        self.assertEqual(self.go('talk', 'boot')[1]['toast'], 'DOCK')
+        self.assertEqual(mode_store.BOOT_STATE, {'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None})
 
     def test_forward_inside_talk_is_not_an_entry(self):
         self.assertEqual(self.go('talk', 'forward')[2], ['say_round'])
@@ -83,10 +97,10 @@ class TransitionTest(unittest.TestCase):
         for m in ('subtitle', 'event', 'settings'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'no_action')
         self.assertEqual(self.go('idle', 'tap')[1]['code'], 'no_action')            # DualKey click: no badge flip
-        self.assertEqual(self.go('talk', 'boot')[2], ['stop_speech', 'talk_enter'])  # robot reboot while already in talk
+        self.assertEqual(self.go('crowd', 'boot')[2], ['stop_speech'])    # robot reboot while already in crowd (Docking)
         s, r, e = self.go('crowd', 'long')
         self.assertEqual((s['mode'], e[0]), ('talk', 'stop_speech'))
-        self.assertEqual(self.go('idle', 'boot')[0]['mode'], 'talk')
+        self.assertEqual(self.go('idle', 'boot')[0]['mode'], 'crowd')
 
     def test_leaving_settings_any_way_clears_return_to(self):
         for inp, val in (('play', None), ('direction', 'left'), ('long', None), ('boot', None), ('select', {'mode': 'idle'})):
@@ -216,9 +230,9 @@ class EdgeCaseTest(unittest.TestCase):
 
     def test_boot_from_elsewhere(self):
         s, r, e = self.go('settings', 'boot', return_to='chat', source='boot')
-        self.assertEqual((s, e), ({'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech', 'talk_enter']))
+        self.assertEqual((s, e), ({'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech']))
         s, r, e = self.go('crowd', 'boot', host='event', source='boot')
-        self.assertEqual((s['host'], e), (None, ['stop_speech', 'talk_enter']))
+        self.assertEqual((s['host'], e), (None, ['stop_speech']))
 
     # --- event-driven host ----------------------------------------------------------------
     def test_hosted_guest_leave_returns_to_event_waiting(self):
@@ -247,7 +261,7 @@ class EdgeCaseTest(unittest.TestCase):
         snap = modes.snapshot({'mode': 'crowd', 'dir': None, 'host': 'event', 'return_to': None},
                               seq=3, since=1, by='asr', billing=True)
         self.assertEqual((snap['host'], snap['look']['eye'], snap['look']['pool'], snap['look']['label'], snap['touch']['tap']),
-                         ('event', 'v14', 'lively', 'MEET', 'server'))
+                         ('event', 'v14', 'lively', 'DOCK', 'server'))
 
     # --- taps (gap a, b) --------------------------------------------------------------------
     def test_event_waiting_tap_is_none_but_idle_tap_is_badge(self):
@@ -311,8 +325,8 @@ class EdgeCaseTest(unittest.TestCase):
                         if s['mode'] != mid:
                             self.assertEqual(e[0], 'stop_speech', (mid, inp))
                             self.assertEqual('talk_leave' in e, mid == 'talk', (mid, inp))
-                        # owner 14: every entry into talk (and boot, even when already there) = talk_enter
-                        self.assertEqual('talk_enter' in e, s['mode'] == 'talk' and (mid != 'talk' or inp == 'boot'),
+                        # owner 14: every entry into talk = talk_enter (boot lands in crowd since 2026-11-18)
+                        self.assertEqual('talk_enter' in e, s['mode'] == 'talk' and mid != 'talk',
                                          (mid, host, inp, val, speaking))
                         self.assertFalse('talk_enter' in e and 'talk_leave' in e, (mid, inp))
                         if s['mode'] != 'settings':

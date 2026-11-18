@@ -1081,7 +1081,7 @@ def main():
                     help="robot sources only: denoise what VAD+ASR hear, only ASR segments, or nothing")
     ap.add_argument("--token-file", default=os.environ.get("SOUL_TOKEN_FILE", ""))
     ap.add_argument("--realtime", choices=["on", "off"], default="on",
-                    help="围观 realtime voice session (qwen-audio-3.1-realtime-flash); runs only while the hello.switches "
+                    help="Docking (was 围观) realtime voice session (qwen-audio-3.1-realtime-flash); runs only while the hello.switches "
                          "realtime switch is on (default off) and hello is in crowd")
     ap.add_argument("--realtime-voices", default=os.environ.get("SOUL_RT_VOICES", os.path.expanduser("~/soul-tts/soul_tts/voices.json")),
                     help="soul-tts voices.json that holds the cloned voice (private; the id is never logged)")
@@ -1178,13 +1178,13 @@ def main():
             rt_hub = realtime_link.RealtimeHub(key=secrets["DASHSCOPE_API_KEY"], voice=rt_voice, modes=mode_hub,
                                                call=mouth_link.mind_client(token_value), switch=rt_paid, db=database,
                                                cfg=cfg, fillers=fillers)
-            print(f"realtime (围观): {len(fillers)} look fillers", flush=True)
+            print(f"realtime (Docking): {len(fillers)} look fillers", flush=True)
             # 联网搜索 (owner 2026-11-16): search words make the ear search itself (web_search.py), "我查查哈" meanwhile
             rt_hub.searcher = web_search.dashscope_search(secrets["DASHSCOPE_API_KEY"])
             rt_hub.search_fillers = realtime_link.load_fillers(
                 os.path.expanduser(f"~/soul-spike/fillers/{a.realtime_voice}-search"))
-            print(f"realtime (围观): web search on search words, {len(rt_hub.search_fillers)} search fillers", flush=True)
-    print(f"realtime (围观): {'ready, follows the switch' if rt_hub else 'off (no key, no voice or --realtime off)'}", flush=True)
+            print(f"realtime (Docking): web search on search words, {len(rt_hub.search_fillers)} search fillers", flush=True)
+    print(f"realtime (Docking): {'ready, follows the switch' if rt_hub else 'off (no key, no voice or --realtime off)'}", flush=True)
     burst = None                                   # 视觉爆发 (2026-11-15): "注意看" in crowd, only with the realtime hub
     if rt_hub is not None:
         burst = vision_burst.VisionBurst(rt_hub, vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]), db=database)

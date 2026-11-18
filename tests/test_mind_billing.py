@@ -115,9 +115,9 @@ class BillingTest(unittest.TestCase):
         self.ctx.realtime = True
         tingwu = self.ctx.tingwu
         r = apply_preset(1, self.b, source='asr', now_ms=1)
-        self.assertEqual((r['result'], self.ctx.realtime), ({'code': 'ok', 'toast': 'PRESET 1: MEET QUIET'}, False))
+        self.assertEqual((r['result'], self.ctx.realtime), ({'code': 'ok', 'toast': 'PRESET 1: DOCK QUIET'}, False))
         r = apply_preset(1, self.b, source='quick', now_ms=2)
-        self.assertEqual((r['result']['toast'], self.ctx.realtime, self.ctx.tingwu), ('PRESET 1: MEET ON', True, tingwu))   # nothing else changes
+        self.assertEqual((r['result']['toast'], self.ctx.realtime, self.ctx.tingwu), ('PRESET 1: DOCK ON', True, tingwu))   # nothing else changes
 
     def test_one_to_eight_are_undefined_on_mind(self):
         # owner 2026-11-14 (step 1b): 4-8 are mode selects hello does itself, 1-3 are empty
