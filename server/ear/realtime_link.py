@@ -351,6 +351,7 @@ LOW_S = 1800.0
 ROLE_S = 2 * 3600.0
 LOW_RE = re.compile(r"我们(正)?在聊(天|事|呢)?|我们聊我们的|(我|我们)(正)?在看电视|看电视呢|在开会|你(先)?别插(话|嘴)|"
                     r"不用理(我们|我)|不是跟你说")
+QUIET_RE = re.compile(r"安静(一)?会(儿)?|先安静|你先别(说话|出声|说了)|先别(说话|出声)|安静一下|别出声了")
 LOW_END_RE = re.compile(r"(你)?可以(说话|插话|聊)了|(你)?可以接话了|恢复(正常)?说话")
 ROLE_RE = re.compile(r"(当|做|演|扮演|变成|装成)(一?个|一下)?(?P<who>[^，,。！!？?]{1,10}?)(吧|好吗|好不好)?([，,。！!]|$)(?P<rest>.*)")
 ROLE_END_RE = re.compile(r"恢复(原样|原来|正常)?$|做回(你)?自己|不用(演|装)了|别(演|装)了|变回(来|原样)")
@@ -2436,7 +2437,11 @@ class RealtimeHub:
             self._try_rescue(now)
         if told:
             self._told(text)
-        if is_hush(text):
+        if QUIET_RE.search(norm_text(text)) and not HUSH_ANY.search(norm_text(text)):
+            # owner 2026-11-18 "设定静默（临时-直到唤醒）": 安静一会儿 = quiet until called (闭嘴 still = Docking off)
+            if not self.quiet_on(now):
+                self.set_quiet("quiet", trace=trace, by="heard", heard=text)
+        elif is_hush(text):
             self._hush(text, trace)
 
     def _vision_from(self, text, now, trace, look, key):

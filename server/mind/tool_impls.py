@@ -596,6 +596,7 @@ DESCRIBE = {   # one line for the 待确认 list (Tools.describe)
     "person_note_propose": lambda a: f"给{a['who']}记一笔：{a['text']}",
     "face_learn_propose": lambda a: f"学一张脸，名字叫「{a['name']}」",
     "deep_research": lambda a: f"深入研究：{a.get('topic') or a.get('question') or ''}",
+    "set_voice": lambda a: f"把声音换成「{a.get('voice') or ''}」" + (f"，语气{a['style']}" if a.get("style") else ""),
 }
 
 

@@ -930,6 +930,14 @@ class QuietLowRoleTest(HubBase):
         self.assertTrue(any(m["type"] == "conversation.item.create" and "我在呢" in json.dumps(m, ensure_ascii=False)
                             for m in ws.sent))
 
+    async def test_quiet_from_natural_words_hush_still_off(self):
+        await self.open_ready()
+        self.hub.local_heard("你先安静一会儿")
+        self.assertTrue(self.hub.quiet_on())
+        self.assertEqual(self.hub.stats["hush"], 0)                       # not Docking off
+        self.hub.called("asr")
+        self.assertFalse(self.hub.quiet_on())
+
     async def test_low_mode_from_natural_words(self):
         ws = await self.open_ready()
         self.hub.local_heard("我们在聊天呢")
