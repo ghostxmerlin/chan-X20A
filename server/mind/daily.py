@@ -131,6 +131,15 @@ class Daily:
                       extra={"id": r["_id"], "action": "cancel"})
         return {"cancelled": 1, "what": rows[0].get("text") or rows[0].get("title")}
 
+    def announce(self, text, by=None):
+        """Say this as soon as someone is there (a finished deep research, ...): a reminder due now."""
+        now = self.clock_ms()
+        rid = _id("r")
+        self.db["reminders"].insert_one({"_id": rid, "kind": "reminder", "text": text.strip(), "due": now,
+                                         "repeat": "none", "state": "pending", "by": by, "at": now, "tries": 0,
+                                         "announce": True})
+        return rid
+
     # ---- watches ----
     def watch_start(self, what, who=None, sound=None, minutes=None, how="say", by=None):
         if what not in WATCH_KINDS:
@@ -214,6 +223,8 @@ class Daily:
             mins = max(0, round((r["start"] - now) / 60_000))
             when = "现在" if mins <= 1 else f"还有 {mins} 分钟" if mins < 120 else f"在 {self.label(r['start'])}"
             return f"日程提醒：{r['title']}，{when}" + (f"，在{r['place']}" if r.get("place") else "") + "。"
+        if r.get("announce"):
+            return r["text"]
         return ("刚才没人在，现在补上提醒：" if late else "提醒一下：") + r["text"]
 
     def _next(self, r):

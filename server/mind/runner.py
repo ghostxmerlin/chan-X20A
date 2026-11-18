@@ -426,6 +426,23 @@ def main():
             return False
     daily = daily_mod.Daily(db, say=_daily_say, settings_fn=lambda: settings_store.current()[0])
     threading.Thread(target=daily.run, daemon=True).start()
+    # 深入研究 (2026-11-18, mind/research.py): background jobs on aihubmix sol; done -> hello says the short answer
+    from . import research as research_mod
+
+    def _research_report(job):
+        ans = job.get("answer") or {}
+        spoken = ans.get("spoken") if isinstance(ans, dict) else None
+        if job.get("state") == "done" and spoken:
+            daily.announce(f"主人，你让我研究的「{str(job.get('topic'))[:20]}」查好了：{spoken}", by="research")
+        else:
+            daily.announce(f"主人，「{str(job.get('topic'))[:20]}」没研究出来，原因记在工具页里了。", by="research")
+
+    def _day_left():
+        v = pause_ctl.view() or {}
+        cap, spent = v.get("cap_cny"), v.get("spent_cny")
+        return (cap - spent) if isinstance(cap, (int, float)) and isinstance(spent, (int, float)) else None
+    research = research_mod.Runner(db, env, settings_fn=lambda: settings_store.current()[0], report=_research_report,
+                                   day_left_fn=_day_left).start() if env else None
     if env:
         threading.Thread(target=say_worker.run, daemon=True).start()
         if tts:
@@ -436,7 +453,8 @@ def main():
                                                                          "tts": tts, "say_worker": say_worker,
                                                                          "say_auto": say_auto_live, "mode_store": mode_store,
                                                                          "billing": billing, "round_gate": round_gate,
-                                                                         "chat": chat, "pause": pause_ctl, "daily": daily}),
+                                                                         "chat": chat, "pause": pause_ctl, "daily": daily,
+                                                                         "research": research}),
                      daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}, mode {mode_store.current()['mode']} "

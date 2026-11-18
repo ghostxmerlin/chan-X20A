@@ -56,7 +56,7 @@ WHY_KINDS = ("heard.asr", "heard.called", "gate.realtime", "gate.rescue", "call.
 
 
 def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, settings_fn=None, flows=None,
-               registry=None, write_switch=None, scope_fn=None):
+               registry=None, write_switch=None, scope_fn=None, research=None):
     """flows(lo, hi, kinds, limit) = the run log query (hello_log_query.flows bound to the db); registry = the tools
     registry (capabilities reads it)."""
     """name -> fn(args): switches = api's switches(); store.enabled() = the 情景 switch; ledger(db_day) = the run log's
@@ -510,6 +510,9 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
              "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
              "capabilities": capabilities, "switch_propose": switch_propose, "memory_propose": memory_propose,
              "person_note_propose": person_note_propose, "face_learn_propose": face_learn_propose}
+    if research is not None:                     # 深入研究 (mind/research.py Runner): deep_research, research_status
+        from . import research as research_mod
+        impls.update(research_mod.tools(research))
     return impls
 
 

@@ -33,6 +33,9 @@ DEFAULTS = {
     "pause": {"away_min": 10, "cap_cny_per_day": 20.0, "usd_cny": 7.2},
     "speech": speech_settings.defaults(),
     "memory": {"learning": True, "apply": True},
+    # 深入研究 (2026-11-18, mind/research.py): aihubmix model (Responses API + web_search), the per-task cap (counted in
+    # the daily cap too), how many jobs run at once (1–2).
+    "research": {"model": "gpt-6.2-sol", "cap_cny_per_task": 2.0, "max_jobs": 1},
 }
 # Keys older settings versions still carry; dropped on every read and save, never an "unknown setting" error.
 LEGACY_KEYS = ("budget_usd_per_day",)       # replaced by pause.cap_cny_per_day (2026-11-17)

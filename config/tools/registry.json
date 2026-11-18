@@ -827,7 +827,7 @@
    "title": "深入研究",
    "group": "world",
    "level": "C",
-   "runs_on": "external",
+   "runs_on": "mind",
    "status": "new",
    "description": "主人要求研究一个问题时用：后台跑几分钟，做完汇报。",
    "parameters": {
@@ -835,10 +835,12 @@
     "properties": {
      "question": {
       "type": "string",
+      "description": "要研究的问题，一句话",
       "maxLength": 200
      },
      "depth": {
       "type": "string",
+      "description": "quick 快查（2 个小问题 1 轮）/ normal 一般（3 个，最多 2 轮，默认）/ deep 深入（4 个，最多 3 轮）",
       "enum": [
        "quick",
        "normal",
@@ -850,16 +852,44 @@
      "question"
     ]
    },
-   "returns": "job_id（结果稍后汇报）",
-   "source": "新：后台任务 + 强模型多轮搜索",
-   "latency": "分钟级",
-   "cost": "较高，按任务封顶",
-   "needs": [],
-   "notes": "花钱多：主人亲口要求即执行，否则生成提议；按任务封顶",
+   "returns": "job_id、say（开始研究）、state、ahead（前面还有几个）、cap_cny；做完后主动汇报（说一句总结 + 屏幕上出字），详情用 research_status",
+   "source": "server/mind/research.py（Runner：后台线程，Mongo hello.research）；aihubmix gpt-6.2-sol 经 Responses API（POST /v1/responses）+ web_search 工具；计划 → 几轮搜索阅读 → 中文总结（口头 ≤3 句 + 书面报告）+ 来源",
+   "latency": "分钟级（每次搜索 10–60 s）",
+   "cost": "gpt-6.2-sol 输入 $2 / 缓存 $0.1 / 输出 $10 每百万 token + 每次搜索 $0.01（aihubmix 公开价，2026-11-18）；每个任务最多 ¥2（research.cap_cny_per_task），计入每日上限",
+   "needs": [
+    "aihubmix 密钥"
+   ],
+   "notes": "花钱多：主人亲口要求即执行，否则生成提议。按任务封顶：钱快用完时停止搜索、用剩下的钱写总结；到顶或到每日上限就停，汇报已查到的（不整理）。同时最多 1–2 个（research.max_jobs），排队最多 5 个。mind 重启时正在跑的算失败并汇报。",
    "example": {
     "question": "桌面机器人怎么判断是不是在跟它说话",
     "depth": "quick"
    }
+  },
+  {
+   "name": "research_status",
+   "title": "研究进度",
+   "group": "world",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "new",
+   "description": "被问研究做得怎么样、研究结果是什么时用；不给 id 就列最近几个研究。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "研究的 job_id，可空=最近 5 个",
+      "maxLength": 40
+     }
+    }
+   },
+   "returns": "不给 id：jobs[{id, topic, state_zh, at, cost_cny, spoken}]、running、queued；给 id：state_zh、spoken、report（前 1500 字）、sources、cost_cny、stopped",
+   "source": "server/mind/research.py（Mongo hello.research）；POST /tool/call（server/mind/tool_impls.py）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [],
+   "notes": "",
+   "example": {}
   },
   {
    "name": "say",

@@ -276,6 +276,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
     tools = ctx.get("tools") or Tools(registry, tool_impls.mind_tools(
         switches=switches, store=store, mode_store=ctx.get("mode_store"), write_switch=write_switch,
         scope_fn=lambda: speech_settings.scope(current_settings()[0])["id"],
+        research=ctx.get("research"),
         ledger=(lambda day: log_query.ledger(db, day)) if log_query is not None else None,
         settings_fn=lambda: current_settings()[0], registry=registry,
         flows=(lambda lo, hi, kinds, limit: log_query.flows(db, lo, hi, kinds=kinds, limit=limit)) if log_query is not None else None)
