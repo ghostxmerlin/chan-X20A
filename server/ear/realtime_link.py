@@ -115,7 +115,7 @@ HEARD_KEEP = 8                                      # candidates come from the l
 # old (against now). An onset the server VAD never turned into a segment (noise) must not stretch a later segment's
 # window back or collect later sentences' consequences; a cold open slower than this loses its opening sentence.
 COLD_MAX_S = 5.0
-GATE_REASONS = {"play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
+GATE_REASONS = {"tool_gated": "闲聊里想用工具，挡回去了（没执行、没放垫话）", "play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
                 "unclear": "a didn't-hear question", "repeat": "word for word a recent reply",
                 "blind": "看不清 without a fresh look", "wait_look": "a look question: the answer comes from the next photo",
                 "wait_search": "a search question (查一下 / 新闻 …): the answer comes from the ear's own web search",
@@ -568,7 +568,8 @@ TOOL_OUTPUT_CHARS = 3000
 
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
 SKILL_DEPTH = 5                                        # skills mode: open_skill + its tool calls for one sentence
-PRELOAD_KEEP_S = 120.0                                 # auto: a skill preloaded for a sentence, never used, goes after this
+PRELOAD_KEEP_S = 120.0
+TOOL_GATE_TEXT_S = 8.0                                 # the ear's own ASR texts this recent count for the tool gate                                 # auto: a skill preloaded for a sentence, never used, goes after this
 
 
 SKILLS_REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config", "skills", "skills.json")
@@ -978,6 +979,7 @@ class RealtimeHub:
         self._skill_cfg = {}
         self._open_skills = {}                         # skills mode: id -> opened at (clock)
         self._filler_traces = collections.deque(maxlen=16)
+        self._tool_ok_traces = collections.deque(maxlen=16)   # sentences whose tool calls passed the tool gate
         self.intent = None                             # intent.Auto (自动档): decides before the model answers
         self._preloaded = {}                           # auto: skill id -> preloaded at (clock), not used yet
         self._next_depth = 0
@@ -1744,6 +1746,29 @@ class RealtimeHub:
         return {"ok": True, "data": {"skill": sk["title"], "tools": mine, "guide": sk.get("guide") or "",
                                      "next": "现在直接调用上面的工具来回答"}, "error": None}
 
+    def _tool_allowed(self, turn, trace):
+        """The tool gate: True for a call window, a chain already allowed (same trace), or a sentence the classifier
+        (or a certain word) says needs tools. The sentence: the turn's transcript, else the ear's own ASR of the last
+        few seconds."""
+        now = self.clock()
+        if trace in self._tool_ok_traces:
+            return True
+        ok = self.in_called(now) or turn.get("kind") == "tool_answer" and turn.get("tool_depth", 0) > 0 and \
+            trace in self._tool_ok_traces
+        texts = [turn.get("heard")] + [t for at, t in list(self._local_texts) if now - at <= TOOL_GATE_TEXT_S]
+        texts = [str(t) for t in texts if t]
+        if not ok:
+            import intent as intent_mod                # rules only: no model needed
+            ok = any(intent_mod.rule(t) for t in texts)
+        if not ok and self.intent is not None and getattr(self.intent, "ready", False):
+            try:
+                ok = any(self.intent.decide(t).get("need", 0) >= self.intent.threshold for t in texts)
+            except Exception:                          # noqa: BLE001
+                ok = False
+        if ok:
+            self._tool_ok_traces.append(trace)
+        return ok
+
     def _filler_in_chain(self, trace):
         """One "我查查" per sentence: a tool chain (open_skill, then the tool) shares the sentence's trace."""
         if trace in self._filler_traces:
@@ -1760,9 +1785,25 @@ class RealtimeHub:
         except ValueError:
             args = None
         self.stats["tool_calls"] += 1
+        # 工具门 (owner 2026-11-18 "我不想让闲聊触发了工具调用，这个太伤"): smart_turn let the sentence through, but
+        # a tool (and its 我查查) only for a sentence that earns it: a call window, the classifier / a certain word, or
+        # a chain already let through. Otherwise the call goes back quietly and the model answers as in chat (its
+        # reply then passes the 嗯 gate like any speech turn).
+        given = fc["name"] == "open_skill" or fc["name"] in {t["name"] for t in self._tool_specs}
+        if given and fc["name"] != "open_skill" and not self._tool_allowed(turn, trace):
+            self.stats["tool_gated"] += 1
+            self._log_gate(turn.get("rid"), turn, "tool_gated", True, tool=fc["name"])
+            if self._ws is not None and self._ready.is_set():
+                self._next_kind, self._next_trace, self._next_prompt, self._next_depth = "tool_refused", trace, None, depth
+                self._send_soon({"type": "conversation.item.create", "item": {
+                    "type": "function_call_output", "call_id": fc["call_id"],
+                    "output": json.dumps({"ok": False, "error": {"code": "refused", "message":
+                        "这句不需要用工具：像平常聊天一样回答（不是跟你说的就只回「嗯」）。"}}, ensure_ascii=False)}})
+                self._send_soon({"type": "response.create"})
+            return
         quick = ("open_skill", "set_length", "set_quiet", "set_role", "who_is_here", "switches_status", "mode_status",
                  "capabilities")
-        if fc["name"] not in quick and not turn.get("filler_played") and not self._filler_in_chain(trace):
+        if given and fc["name"] not in quick and not self._filler_in_chain(trace):
             self._play_filler(self.search_fillers or self.fillers, "search_filler", trace)   # "我查查哈" meanwhile
         t0 = self.clock()
         limit = SKILL_DEPTH if self._tools_mode == "skills" else TOOL_DEPTH
@@ -2308,7 +2349,8 @@ class RealtimeHub:
             self._next_trace = self._next_prompt = self._inject_id = None
             turn.update({"rid": rid, "session": n, "response_at": now, "first_delta": None, "sound_at": None,
                          "reply_chars": 0, "audio_ms": 0, "usage": None, "at": self.wall_ms(),
-                         "gate": None if turn.get("kind") in ("speech", "rescue", "look_answer", "search_answer") else "play",
+                         "gate": None if turn.get("kind") in ("speech", "rescue", "look_answer", "search_answer",
+                                                              "tool_refused") else "play",
                          "held": [], "tx": "", "system": self._live_instr})
             if turn.get("kind") == "rescue":
                 turn["heard"] = self._rescue_heard

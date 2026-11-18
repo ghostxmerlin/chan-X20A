@@ -64,11 +64,19 @@ def fit(X, y, l2=1e-3, iters=800, lr=0.5):
     return w, b
 
 
-def check(X, y, th, shuffles=4):
+def check(X, y, th, shuffles=4, dock=None):
+    """Half / half: with dock (Docking sentences), the test half is Docking sentences only and every other sentence
+    trains (the classifier is used on Docking)."""
     tp = fn = fp = tn = 0
     for seed in range(shuffles):
-        idx = list(range(len(y))); random.Random(seed).shuffle(idx)
-        tr, te = idx[: len(idx) // 2], idx[len(idx) // 2:]
+        if dock is None:
+            idx = list(range(len(y))); random.Random(seed).shuffle(idx)
+            tr, te = idx[: len(idx) // 2], idx[len(idx) // 2:]
+        else:
+            d = [i for i in range(len(y)) if dock[i]]; random.Random(seed).shuffle(d)
+            te = d[: len(d) // 2]
+            tes = set(te)
+            tr = [i for i in range(len(y)) if i not in tes]
         w, b = fit(X[tr], y[tr])
         p = 1 / (1 + np.exp(-(X[te] @ w + b)))
         for pi, yi in zip(p, y[te]):
@@ -84,6 +92,9 @@ def main():
     ap.add_argument("--days", type=float, default=14)
     ap.add_argument("--threshold", type=float, default=0.5)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--all-history", action="store_true",
+                    help="also every sentence the ear ever heard (speech, not hello's own voice) and chat mode's")
+    ap.add_argument("--workers", type=int, default=6)
     a = ap.parse_args()
     hub = env_file(os.path.join(EAR, "hello.env"))
     from pymongo import MongoClient
@@ -93,36 +104,75 @@ def main():
     os.makedirs(intent.ART_DIR, exist_ok=True)
     lab_path = os.path.join(intent.ART_DIR, "labels.json")
     labels = json.load(open(lab_path)) if os.path.exists(lab_path) else {}
+    # owner 2026-11-18 "分类器的结果要靠你来校正": labels reviewed by Claude (labels_reviewed.json, {text: class}) win over
+    # the drafts; a reviewed sentence is never sent to the paid labeller again
+    rev_path = os.path.join(intent.ART_DIR, "labels_reviewed.json")
+    reviewed = json.load(open(rev_path)) if os.path.exists(rev_path) else {}
     since = int(time.time() * 1000) - int(a.days * 86400_000)
-    texts, seen = [], set()
-    for d in db["realtime_turns"].find({"kind": "speech", "at": {"$gte": since}, "heard": {"$nin": [None, ""]}}, {"heard": 1}):
-        t = str(d["heard"]).strip()
-        if 2 <= len(t) <= 80 and t not in seen:
-            seen.add(t); texts.append(t)
-    todo = [t for t in texts if t not in labels]
+    texts, seen, docking = [], set(), set()
+
+    def add(t, dock=False):
+        t = str(t or "").strip()
+        if 2 <= len(t) <= 80:
+            if dock:
+                docking.add(t)
+            if t not in seen:
+                seen.add(t); texts.append(t)
+    flt = {} if a.all_history else {"at": {"$gte": since}}
+    for d in db["realtime_turns"].find({"kind": "speech", "heard": {"$nin": [None, ""]}, **flt}, {"heard": 1}):
+        add(d["heard"], dock=True)
+    if a.all_history:
+        for d in db["chat_turns"].find({"text": {"$nin": [None, ""]}}, {"text": 1}):
+            add(d["text"])
+        for d in db["speech"].find({"text": {"$nin": [None, ""]}}, {"text": 1, "self": 1}):
+            if not (d.get("self") or {}).get("sounding"):
+                add(d["text"])
+    todo = [t for t in texts if t not in labels and t not in reviewed]
     cost = 0.0
-    for i in range(0, len(todo), 25):
+    from concurrent.futures import ThreadPoolExecutor
+    batches = [todo[i:i + 25] for i in range(0, len(todo), 25)]
+
+    def one(b):
         try:
-            got, c = label(todo[i:i + 25], hub)
-            cost += c
-            if got:
-                labels.update(zip(todo[i:i + 25], got))
+            return b, *label(b, hub)
         except Exception as e:                          # noqa: BLE001 - one batch lost, labelled next night
-            print("label batch failed", type(e).__name__, flush=True)
-    if not a.dry_run:
-        json.dump(labels, open(lab_path + ".tmp", "w"), ensure_ascii=False)
-        os.replace(lab_path + ".tmp", lab_path)
-    data = [(t, l) for t, l in labels.items() if l in KIND]
+            return b, None, 0.0
+    done = 0
+    with ThreadPoolExecutor(max_workers=max(1, a.workers)) as pool:
+        for b, got, c in pool.map(one, batches):
+            cost += c
+            done += 1
+            if got:
+                labels.update(zip(b, got))
+            if done % 40 == 0:
+                print(f"labelled {done}/{len(batches)} batches, ${cost:.3f}", flush=True)
+                json.dump(labels, open(lab_path + ".tmp", "w"), ensure_ascii=False)   # labels are kept even
+                os.replace(lab_path + ".tmp", lab_path)                               # in a dry run (paid for)
+    json.dump(labels, open(lab_path + ".tmp", "w"), ensure_ascii=False)
+    os.replace(lab_path + ".tmp", lab_path)
+    merged = {**labels, **reviewed}
+    data = [(t, l) for t, l in merged.items() if l in KIND]
+    if reviewed:                                        # the test half: reviewed Docking sentences only
+        docking = {t for t in docking if t in reviewed}
     emb = intent.Embedder()
     X = features(emb, [t for t, _ in data])
     y = np.array([0.0 if l == "none" else 1.0 for _, l in data])
-    caught, flagged = check(X, y, a.threshold)
+    dock = np.array([t in docking for t, _ in data])
+    caught, flagged = check(X, y, a.threshold, dock=dock)
+    if a.all_history:
+        d_only = check(X[dock], y[dock], a.threshold)
+        print(f"Docking test half: all history {caught:.0%} caught / {flagged:.0%} flagged; Docking only "
+              f"{d_only[0]:.0%} / {d_only[1]:.0%}", flush=True)
+        for th in (0.4, 0.45, 0.5, 0.55, 0.6):
+            c, f = check(X, y, th, dock=dock)
+            print(f"  threshold {th}: caught {c:.0%}, flagged {f:.0%}", flush=True)
     w, b = fit(X, y)
     version = time.strftime("%Y-%m-%d %H:%M")
     old = os.path.join(intent.ART_DIR, "head.json")
     prev = json.load(open(old)) if os.path.exists(old) else {}
     worse = prev.get("caught") is not None and caught < prev["caught"] - 0.15
-    report = {"version": version, "sentences": len(data), "new_labels": len(todo), "positives": int(y.sum()),
+    report = {"version": version, "sentences": len(data), "reviewed": len(reviewed), "new_labels": len(todo),
+              "positives": int(y.sum()),
               "caught": round(caught, 3), "flagged": round(flagged, 3), "label_cost_usd": round(cost, 4),
               "written": not (a.dry_run or worse)}
     if report["written"]:

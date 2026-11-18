@@ -47,7 +47,8 @@ VERDICT_ZH = {
     "muted_wait_look": "先等照片看清了再答", "muted_wait_search": "先等联网搜索的结果再答", "muted_order": "那句是给机器人的口令，不回答",
     "ambient": "千问判断不是跟它说，没有回答", "refused_busy": "它想主动说时有人在说话，被千问拒了",
     "search_gated": "没去搜：没等到千问真的回答", "burst_gated": "没开视觉爆发：没等到千问真的回答",
-    "called_answer": "被叫了，照样回答", "order": "是给机器人的直接口令，不回答"}
+    "called_answer": "被叫了，照样回答", "order": "是给机器人的直接口令，不回答",
+    "muted_tool_gated": "闲聊里想用工具，被挡回去了（没执行、没放垫话）"}
 KIND_ZH_TURN = {"greet": "看到主人，主动打招呼", "greet_short": "看到主人，主动打招呼", "tap": "有人点了它，打招呼",
                 "rescue": "补救：重新正经回答", "look_answer": "看了照片后回答", "search_answer": "联网查到后回答",
                 "called": "被叫了，照样回答"}

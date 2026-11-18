@@ -834,6 +834,62 @@ class LengthTest(HubBase):
         self.assertIn("眼前有 3 个人", self.hub._length_line())
 
 
+class ToolGateTest(HubBase):
+    """Owner 2026-11-18 "我不想让闲聊触发了工具调用": smart_turn let it through, the tool gate decides."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.calls = []
+
+        def call(method, path, body=None, timeout=5):
+            self.calls.append(path)
+            if path == "/tools":
+                return 200, {"tools": [{"type": "function", "function": {"name": "live_data", "description": "x",
+                                                                         "parameters": {"type": "object", "properties": {}}}}]}
+            if path == "/tool/call":
+                return 200, {"ok": True, "data": {"usd": 1}, "error": None}
+            return 200, json.loads(json.dumps(CTX))
+        self.hub.call = call
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch = sw
+        self.hub.search_fillers = [("我查查哈", b"\x00\x00" * 2400)]
+
+    def fc(self, ws, rid, heard):
+        self.hub.local_heard(heard)                                                     # the ear's own ASR
+        ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": heard})
+        ws.push({"type": "response.created", "response": {"id": rid}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": rid, "call_id": "c" + rid,
+                 "name": "live_data", "arguments": "{}"})
+        ws.push({"type": "response.done", "response": {"id": rid}})
+
+    async def test_chit_chat_tool_call_goes_back_quietly(self):
+        ws = await self.open_ready()
+        self.fc(ws, "r1", "你今天开心吗")
+        await settle(30)
+        self.assertNotIn("/tool/call", self.calls)
+        self.assertEqual(self.hub.stats["search_fillers"], 0)                          # no 我查查
+        out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
+        self.assertEqual(json.loads(out[-1]["item"]["output"])["error"]["code"], "refused")
+        ws.push({"type": "response.created", "response": {"id": "r2"}})
+        await settle(5)
+        self.assertEqual((self.hub._turns["r2"]["kind"], self.hub._turns["r2"]["gate"]), ("tool_refused", None))
+        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯"})
+        await settle(5)
+        self.assertEqual(self.hub._turns["r2"]["gate"], "quiet")                       # its 「嗯」 is not played
+
+    async def test_a_called_or_certain_sentence_passes(self):
+        ws = await self.open_ready()
+        self.fc(ws, "r1", "明天北京天气怎么样")                                          # a certain word
+        await settle(30)
+        self.assertIn("/tool/call", self.calls)
+        self.calls.clear()
+        self.t[0] += 30
+        self.hub.called("asr")
+        self.fc(ws, "r3", "那个呢")                                                      # inside a call window
+        await settle(30)
+        self.assertIn("/tool/call", self.calls)
+
+
 class SkillModeTest(HubBase):
     """Owner 2026-11-18: the model finds a skill first, then its tools (5668 vs ~300 input tokens a turn, measured)."""
     async def test_open_skill_then_its_tool(self):
@@ -854,6 +910,7 @@ class SkillModeTest(HubBase):
         self.hub.tools_mode_fn = lambda: "skills"
         self.hub.search_fillers = [("我查查哈", b"\x00\x00" * 2400)]
         ws = await self.open_ready()
+        self.hub.local_heard("比特币现在多少钱")                                          # a sentence that earns tools
         first = [m for m in ws.sent if m["type"] == "session.update"][0]["session"]["tools"]
         self.assertEqual([t["name"] for t in first], ["open_skill"])
         self.assertIn("world=查外面", first[0]["description"])
