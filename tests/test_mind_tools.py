@@ -237,3 +237,39 @@ class ReviewToolsTest(unittest.TestCase):
         self.db["vision_looks"].insert_one({"kind": "scene", "at": NOW - 10_000, "text": "主人在敲键盘"})
         d = self.t["scene_now"]({})
         self.assertEqual(d["camera_now"], {"seconds_ago": 10, "text": "主人在敲键盘"})
+
+
+from mind.library import Library
+
+
+class PeopleMemoryToolsTest(unittest.TestCase):
+    def setUp(self):
+        self.db = FakeDB()
+        self.lib = Library(self.db)
+        put = lambda c, f: self.lib.put(c, f, item_id=None, expected_version=None, scope_id="office", now_ms=NOW - 3600_000)
+        self.wang = put("people_cards", {"kind": "regular", "display": "小王", "aliases": ["王工"]})
+        put("people_notes", {"person_id": self.wang["person_id"], "kind": "preference", "text": "喜欢喝美式"})
+        put("knowledge_items", {"kind": "place", "name": "园区咖啡店", "statement": "楼下的咖啡店，美式最好喝",
+                                "subjects": ["owner"]})
+        put("memory_items", {"kind": "event", "title": "一起买咖啡", "statement": "主人和小王下午去买了美式咖啡",
+                             "subjects": ["owner", self.wang["person_id"]],
+                             "when": {"type": "point", "start_ms": NOW - 7200_000}})
+        self.t = tool_impls.mind_tools(switches=lambda: {}, store=Store(self.db), clock_ms=lambda: NOW)
+
+    def test_people(self):
+        names = [p["display"] for p in self.t["people_list"]({})["people"]]
+        self.assertIn("小王", names)
+        d = self.t["person_lookup"]({"who": "王工"})                       # an alias
+        self.assertEqual((d["display"], d["kind"]), ("小王", "常见的人"))
+        self.assertEqual(d["notes"], [{"kind": "preference", "text": "喜欢喝美式"}])
+        with self.assertRaises(ToolError):
+            self.t["person_lookup"]({"who": "张三"})
+
+    def test_knowledge_and_memory(self):
+        k = self.t["knowledge_search"]({"query": "咖啡"})
+        self.assertEqual(k["items"][0]["name"], "园区咖啡店")
+        m = self.t["memory_search"]({"query": "美式咖啡"})
+        self.assertTrue(any("美式咖啡" in x["statement"] for x in m["memories"]), m)
+        only_wang = self.t["memory_search"]({"query": "咖啡", "person": "小王"})
+        self.assertEqual(only_wang["person"], "小王")
+        self.assertTrue(all("小王" in x["people"] for x in only_wang["memories"]))

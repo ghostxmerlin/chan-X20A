@@ -6,7 +6,8 @@ what a model needs, in short keys with Chinese titles, and never a key, token or
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import mode_table, segments, settings as settings_mod, tool_time
+from . import mode_table, recall, segments, settings as settings_mod, tool_time
+from .library import Library
 from .store import LANE
 from .tools import ToolError
 
@@ -181,5 +182,91 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
                 "people_seen": _people(s, [n for n in faces if n]),
                 "counts": {"sentences_heard": said, "hello_replies": replies}}
 
+    # ---- B3: 认识的人、记忆、知识 ----
+    lib = Library(db)
+    KIND_ZH = {"owner": "主人", "family": "家人", "regular": "常见的人", "visitor": "访客", "unknown": "不认识"}
+
+    def cards():
+        return [c for c in lib.people() if c.get("status") != "retired"]
+
+    def names_of(ids):
+        table = {"unknown": "不认识的人", **{c["person_id"]: c.get("display") or c["person_id"] for c in cards()}}
+        return [table.get(i, i) for i in ids or []]
+
+    def resolve(who):
+        """A name as people say it -> person_id: 主人 / owner, a card's display or alias (exact, then contained)."""
+        w = str(who or "").strip()
+        if not w:
+            return None
+        cs = cards()
+        if w in ("主人", "owner", "我"):
+            return "owner"
+        low = w.lower()
+        for c in cs:
+            if low == str(c.get("display") or "").lower() or low in [str(a).lower() for a in c.get("aliases") or []]:
+                return c["person_id"]
+        for c in cs:
+            if low in str(c.get("display") or "").lower() or str(c.get("display") or "").lower() in low:
+                return c["person_id"]
+        raise ToolError("bad_args", f"不认识「{w[:20]}」，可以先查认识哪些人")
+
+    def memory_row(m, tz):
+        sens = m.get("sensitivity") or []
+        return {"statement": recall.prompt_text(m), "title": m.get("title") or "", "kind": m.get("kind"),
+                "source": {"habit": "习惯", "library": "记忆库"}.get(m.get("source"), m.get("source")),
+                "when": tool_time.label(m["at"], tz) if isinstance(m.get("at"), int) else None,
+                "people": names_of(m.get("person_ids")),
+                "only_for_owner": "private" in sens or "child" in sens}
+
+    def memory_search(args):
+        s, now = settings(), now_ms()
+        pid = resolve(args.get("person")) if args.get("person") else None
+        limit = args.get("limit") or 5
+        pool = recall.load_pool(db, s, now)
+        if pid:
+            pool = [m for m in pool if pid in (m.get("person_ids") or [])]
+        q = args["query"]
+        hits = recall.related(pool, q, limit=limit, person_id=pid)
+        seen = {m.get("id") for m in hits}
+        for m in pool:                                 # words the bigram match missed: plain substring
+            if len(hits) >= limit:
+                break
+            if m.get("id") not in seen and q in (m.get("text") or "") + (m.get("title") or ""):
+                hits.append(m)
+                seen.add(m.get("id"))
+        return {"query": q, "person": names_of([pid])[0] if pid else None, "pool": len(pool),
+                "memories": [memory_row(m, s["tz"]) for m in hits]}
+
+    def knowledge_search(args):
+        page = lib.knowledge(kind=args.get("kind"), q=args["query"], limit=8)
+        return {"total": page.get("total"),
+                "items": [{"name": k.get("name"), "kind": k.get("kind"), "statement": k.get("statement"),
+                           "aliases": k.get("aliases") or [], "about": names_of(k.get("subjects"))} for k in page.get("items", [])]}
+
+    def person_lookup(args):
+        s = settings()
+        pid = resolve(args["who"])
+        try:
+            p = lib.person(pid)
+        except KeyError:
+            raise ToolError("not_available", "记忆库里还没有这个人的卡片") from None
+        card = p["card"]
+        notes = [n for n in p["notes"] if n.get("status") == "active"]
+        mems = sorted(p["memories"], key=lambda m: -(m.get("start_ms") or 0))[:3]
+        tr = card.get("treatment") or {}
+        return {"display": card.get("display"), "kind": KIND_ZH.get(card.get("kind"), card.get("kind")),
+                "aliases": card.get("aliases") or [], "notes": [{"kind": n.get("kind"), "text": n.get("text")} for n in notes[:6]],
+                "recent_memories": [{"statement": m.get("statement"), "when": tool_time.label(m["start_ms"], s["tz"])
+                                     if isinstance(m.get("start_ms"), int) else None} for m in mems],
+                "treatment": {"tease": tr.get("tease"), "quote": tr.get("quote")},
+                "knows_by": {"voice": ((card.get("links") or {}).get("voice_names") or []),
+                             "face": ((card.get("links") or {}).get("face_names") or [])}}
+
+    def people_list(args):
+        return {"people": [{"display": c.get("display"), "kind": KIND_ZH.get(c.get("kind"), c.get("kind")),
+                            "notes": c.get("notes", 0)} for c in cards()]}
+
     return {"switches_status": switches_status, "mode_status": mode_status, "cost_today": cost_today,
-            "scene_now": scene_now, "notes_search": notes_search, "review_period": review_period}
+            "scene_now": scene_now, "notes_search": notes_search, "review_period": review_period,
+            "memory_search": memory_search, "knowledge_search": knowledge_search, "person_lookup": person_lookup,
+            "people_list": people_list}

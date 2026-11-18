@@ -319,7 +319,7 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "想起和某事、某人有关的记忆。",
    "parameters": {
     "type": "object",
@@ -343,7 +343,7 @@
     ]
    },
    "returns": "memories[{statement, when, kind, source}]",
-   "source": "recall + Library.memories（两字词重合）",
+   "source": "recall + Library.memories（两字词重合）；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -358,7 +358,7 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "查地点、工作、约定、术语、关于 hello 自己的知识。",
    "parameters": {
     "type": "object",
@@ -385,7 +385,7 @@
     ]
    },
    "returns": "items[{name, statement}]",
-   "source": "GET /db/knowledge",
+   "source": "GET /db/knowledge；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -400,7 +400,7 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "想了解某个人（称呼、关系、笔记、最近的记忆）。",
    "parameters": {
     "type": "object",
@@ -415,7 +415,7 @@
     ]
    },
    "returns": "display、kind、notes、recent_memories",
-   "source": "GET /db/person",
+   "source": "GET /db/person；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -430,14 +430,14 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "被问“你认识谁”时用。",
    "parameters": {
     "type": "object",
     "properties": {}
    },
    "returns": "people[{display, kind}]",
-   "source": "GET /db/people",
+   "source": "GET /db/people；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
