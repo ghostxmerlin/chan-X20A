@@ -49,14 +49,14 @@
    "group": "sense",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "想知道现在在干什么、在聊什么、什么环境时用。",
    "parameters": {
     "type": "object",
     "properties": {}
    },
    "returns": "time、doing、summary、topics、sound、people",
-   "source": "GET /now + 最新画面",
+   "source": "GET /now + 最新画面；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -172,7 +172,7 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "wrap",
+   "status": "live",
    "description": "被问“上午 / 昨天 / 这一小时发生了什么、聊了什么”时用；超过 24 小时自动分天。",
    "parameters": {
     "type": "object",
@@ -200,7 +200,7 @@
     ]
    },
    "returns": "segments、notes、highlights、range",
-   "source": "memory_extract.gather / Records.window + /segments /notes",
+   "source": "memory_extract.gather / Records.window + /segments /notes；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -212,7 +212,7 @@
    "group": "recall",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "找某次谈话的纪要（按时间或关键词）。",
    "parameters": {
     "type": "object",
@@ -239,7 +239,7 @@
     }
    },
    "returns": "conversations[{start, end, title, notes}]",
-   "source": "GET /notes（关键词要补）",
+   "source": "GET /notes（关键词要补）；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],

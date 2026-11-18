@@ -154,3 +154,86 @@ class ApiTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from mind import tool_time
+
+SH = ZoneInfo("Asia/Shanghai")
+NOW = int(datetime(2026, 11, 18, 19, 30, tzinfo=SH).timestamp() * 1000)     # a Wednesday
+
+
+def at(*a):
+    return int(datetime(*a, tzinfo=SH).timestamp() * 1000)
+
+
+class TimeWordsTest(unittest.TestCase):
+    def p(self, t):
+        return tool_time.parse(t, NOW)
+
+    def test_points_and_spans(self):
+        self.assertEqual(self.p("1小时前"), (NOW - 3600_000,) * 2)
+        self.assertEqual(self.p("半小时前"), (NOW - 1800_000,) * 2)
+        self.assertEqual(self.p("三天前")[0], NOW - 3 * 86400_000)
+        self.assertEqual(self.p("今天"), (at(2026, 11, 18), at(2026, 11, 19)))
+        self.assertEqual(self.p("昨天下午"), (at(2026, 11, 17, 12), at(2026, 11, 17, 18)))
+        self.assertEqual(self.p("今天上午"), (at(2026, 11, 18, 6), at(2026, 11, 18, 12)))
+        self.assertEqual(self.p("下午3点半"), (at(2026, 11, 18, 15, 30),) * 2)
+        self.assertEqual(self.p("昨天晚上8点"), (at(2026, 11, 17, 20),) * 2)
+        self.assertEqual(self.p("9:00"), (at(2026, 11, 18, 9),) * 2)
+        self.assertEqual(self.p("2026-11-17 09:15"), (at(2026, 11, 17, 9, 15),) * 2)
+        self.assertEqual(self.p("11-16"), (at(2026, 11, 16), at(2026, 11, 17)))
+        self.assertEqual(self.p("上周三"), (at(2026, 11, 11), at(2026, 11, 12)))
+        self.assertEqual(self.p("周五")[0], at(2026, 11, 13))          # a bare later weekday = last week's
+        self.assertEqual(self.p("这周"), (at(2026, 11, 16), NOW))
+        with self.assertRaises(ToolError):
+            self.p("很久以前")
+
+    def test_span(self):
+        self.assertEqual(tool_time.span(None, None, NOW), (NOW - 86400_000, NOW))
+        self.assertEqual(tool_time.span("1小时前", None, NOW), (NOW - 3600_000, NOW))
+        self.assertEqual(tool_time.span("昨天", None, NOW), (at(2026, 11, 17), at(2026, 11, 18)))
+        self.assertEqual(tool_time.span("今天", None, NOW), (at(2026, 11, 18), NOW))            # capped at now
+        self.assertEqual(tool_time.span("前天", "昨天", NOW), (at(2026, 11, 16), at(2026, 11, 18)))
+        with self.assertRaises(ToolError):
+            tool_time.span("2026-09-01", "今天", NOW)                                 # more than 31 days
+
+
+class ReviewToolsTest(unittest.TestCase):
+    def setUp(self):
+        self.db = FakeDB()
+        self.store = Store(self.db)
+        self.t = tool_impls.mind_tools(switches=lambda: {}, store=self.store, clock_ms=lambda: NOW)
+
+    def test_notes_search_by_time_and_word(self):
+        c = self.db["conversations"]
+        c.insert_one({"cid": "c1", "start_ms": at(2026, 11, 18, 10), "end_ms": at(2026, 11, 18, 10, 20), "title": "比特币价格",
+                      "notes": "核实 BTC"})
+        c.insert_one({"cid": "c2", "start_ms": at(2026, 11, 18, 15), "end_ms": None, "last_ms": at(2026, 11, 18, 15, 5),
+                      "title": "午饭", "notes": "吃什么"})
+        c.insert_one({"cid": "c3", "start_ms": at(2026, 11, 16, 9), "end_ms": at(2026, 11, 16, 9, 9), "title": "旧的", "notes": ""})
+        d = self.t["notes_search"]({})
+        self.assertEqual([x["title"] for x in d["conversations"]], ["午饭", "比特币价格"])        # last 24 h, newest first
+        d = self.t["notes_search"]({"query": "btc", "from": "今天"})
+        self.assertEqual((d["total"], d["conversations"][0]["start"]), (1, "11-18 10:00"))
+        self.assertEqual(self.t["notes_search"]({"from": "上周三"})["total"], 0)
+
+    def test_review_period(self):
+        self.db["conversations"].insert_one({"cid": "c1", "start_ms": at(2026, 11, 17, 14), "end_ms": at(2026, 11, 17, 14, 30),
+                                             "title": "改固件", "notes": "刷 0.5.06"})
+        self.db["vision"].insert_one({"at": at(2026, 11, 17, 14, 1), "event": "face_named", "name": "me"})
+        self.db["speech"].insert_one({"t": at(2026, 11, 17, 14, 2), "text": "hello"})
+        d = self.t["review_period"]({"from": "昨天", "detail": "full"})
+        self.assertEqual(d["range"], ["11-17 00:00", "11-18 00:00"])
+        self.assertEqual([(x["title"], x["notes"]) for x in d["conversations"]], [("改固件", "刷 0.5.06")])
+        self.assertEqual(d["people_seen"], ["主人"])
+        brief = self.t["review_period"]({"from": "前天", "to": "今天"})
+        self.assertNotIn("notes", brief["conversations"][0])
+
+    def test_scene_now_without_data(self):
+        with self.assertRaises(ToolError):
+            self.t["scene_now"]({})
+        self.db["vision_looks"].insert_one({"kind": "scene", "at": NOW - 10_000, "text": "主人在敲键盘"})
+        d = self.t["scene_now"]({})
+        self.assertEqual(d["camera_now"], {"seconds_ago": 10, "text": "主人在敲键盘"})

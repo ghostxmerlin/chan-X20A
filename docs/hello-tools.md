@@ -53,4 +53,4 @@
 
 - mind：`GET /tools` → 给模型的函数列表（只含 `live` 且已实现的；`?all=1` 含所有已实现的）和 `available`；`POST /tool/call {name, args, trace?, caller?}` → 第 3 节的返回（错误也在返回里，HTTP 仍是 200）。实现在 `server/mind/tools.py`（框架：查参数、计时、记日志）和 `server/mind/tool_impls.py`（各工具）。注册表随 mind 部署到 `~/soul-mind/tools/registry.json`。
 - 观察台「工具」页：已实现的只读工具旁有「试一下」，填参数后经观察台转给 mind 调用，结果原样显示。
-- 已接入（`live`）：`switches_status`、`mode_status`、`cost_today`（2026-11-18）。
+- 已接入（`live`）：`switches_status`、`mode_status`、`cost_today`（B1）；`scene_now`、`notes_search`、`review_period`（B2，时间词由 `server/mind/tool_time.py` 统一解析，一次最多 31 天）。
