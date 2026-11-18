@@ -548,24 +548,25 @@
    "level": "R",
    "runs_on": "mind",
    "status": "new",
-   "description": "按意思（不是字面）在记忆、纪要、片段、知识里找相关内容。",
+   "description": "按意思（不是字面）在记忆、纪要、片段、知识里找相关内容；关键词查不到、或只记得大概意思时用。",
    "parameters": {
     "type": "object",
     "properties": {
      "query": {
       "type": "string",
+      "description": "要找的意思，一句话",
       "maxLength": 60
      },
      "kinds": {
       "type": "array",
+      "description": "只在这几类里找（不写 = 全部）：memory 记忆、notes 纪要、segment 片段、knowledge 知识",
       "items": {
        "type": "string",
        "enum": [
         "memory",
         "notes",
         "segment",
-        "knowledge",
-        "person_note"
+        "knowledge"
        ]
       }
      },
@@ -579,14 +580,18 @@
      "query"
     ]
    },
-   "returns": "hits[{kind, id, text, when, score}]",
-   "source": "新：向量模型 + 可重建的向量表（RAG）",
-   "latency": "<100 ms",
-   "cost": "向量化按量计费",
+   "returns": "query, kinds, scanned, hits[{kind, kind_title, id, title, text, when, score, open{tool, args}}]（记忆另有 people、only_for_owner；知识另有 aliases、about；片段另有 until）",
+   "source": "server/mind/semantic.py：DashScope text-embedding-v4（512 维）向量存 Mongo vectors，Python 余弦；POST /tool/call（server/mind/tool_impls.py）",
+   "latency": "~0.3–1 s（一次向量化请求 + 扫几千条向量）",
+   "cost": "每次一次向量化（约 ¥0.00001）；回填/同步按 0.5 元/百万 Token",
    "needs": [],
-   "notes": "",
+   "notes": "向量表要先回填：python3 -m mind.semantic backfill --budget 5；之后每 10 分钟增量同步（MIND_SEMANTIC_SYNC=1 才开）。不嵌入单句说话（用 speech_search）。命中后用 open 里的工具和参数看原文。only_for_owner 的记忆只对主人说。",
    "example": {
     "query": "上次说的那个板子问题",
+    "kinds": [
+     "notes",
+     "segment"
+    ],
     "limit": 5
    }
   },

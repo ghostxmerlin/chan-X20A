@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import re
 
-from . import mode_table, recall, segments, selfvoice, settings as settings_mod, tool_time
+from . import mode_table, recall, segments, selfvoice, semantic, settings as settings_mod, tool_time
 from .library import Library
 from .store import LANE
 from .tools import ToolError
@@ -56,8 +56,9 @@ WHY_KINDS = ("heard.asr", "heard.called", "gate.realtime", "gate.rescue", "call.
 
 
 def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, settings_fn=None, flows=None,
-               registry=None):
-    """flows(lo, hi, kinds, limit) = the run log query (hello_log_query.flows bound to the db); registry = the tools
+               registry=None, embed=None):
+    """embed(texts, purpose) -> (vectors, info) = semantic.embedder (None: semantic_search is not available).
+    flows(lo, hi, kinds, limit) = the run log query (hello_log_query.flows bound to the db); registry = the tools
     registry (capabilities reads it)."""
     """name -> fn(args): switches = api's switches(); store.enabled() = the 情景 switch; ledger(db_day) = the run log's
     day ledger (hello_log_query.ledger bound to the db), None when the log query is not deployed."""
@@ -467,7 +468,8 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
              "memory_search": memory_search, "knowledge_search": knowledge_search, "person_lookup": person_lookup,
              "people_list": people_list, "speech_search": speech_search, "recent_speech": recent_speech,
              "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
-             "capabilities": capabilities}
+             "capabilities": capabilities,
+             "semantic_search": semantic.search_tool(db, embed, settings, names_of, now_ms)}    # 按意思找 (semantic.py)
     return impls
 
 
