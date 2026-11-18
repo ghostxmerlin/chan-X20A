@@ -83,8 +83,8 @@ export function category(kind){
  return 'sys';
 }
 export const KIND_LABELS={
- 'heard.asr':'听到一句话','heard.keyword':'听到关键词','call.tingwu':'听悟转写','call.notes':'写听觉纪要',
- 'call.eye':'看这一分钟的画面','call.look':'识别一张照片','trigger.burst':'视觉爆发','seen.m12':'M12 看到',
+ 'heard.asr':'听到一句话','heard.keyword':'听到关键词','heard.called':'被叫了','call.tingwu':'听悟转写','call.notes':'写听觉纪要',
+ 'call.eye':'看这一分钟的画面','call.look':'识别一张照片','trigger.burst':'视觉爆发','trigger.task':'查询任务','trigger.length':'回答长短','seen.m12':'M12 看到',
  'call.fusion':'判断当前情景','call.segment':'划分情景段','call.attention':'判断注意力','call.llm':'模型调用',
  'call.chat':'聊天回答','call.say':'想一句话','call.say.speak':'说一句','call.say.line':'写脱口秀台词','call.say.huyu':'写兜底的一句',
  'call.say.judge':'脱口秀挑台词','call.say.check':'开口前复核',
@@ -110,8 +110,8 @@ export function kindTitle(r){
 }
 // One character per kind, so kinds of the same colour still look different.
 export const KIND_GLYPHS={
- 'heard.asr':'听','heard.keyword':'键','call.tingwu':'悟','call.notes':'纪',
- 'call.eye':'看','call.look':'图','trigger.burst':'爆','seen.m12':'见',
+ 'heard.asr':'听','heard.keyword':'键','heard.called':'叫','call.tingwu':'悟','call.notes':'纪',
+ 'call.eye':'看','call.look':'图','trigger.burst':'爆','trigger.task':'查','trigger.length':'长','seen.m12':'见',
  'call.fusion':'景','call.segment':'段','call.attention':'注','call.llm':'模',
  'call.chat':'聊','call.say':'拟','call.say.speak':'句','call.say.line':'台','call.say.huyu':'兜','call.say.judge':'评','call.say.check':'核',
  'call.realtime.session':'会','call.realtime.context':'令','call.realtime.turn':'答','call.realtime.search':'搜',
@@ -221,6 +221,31 @@ export const isPrompt=r=>!!r?.model&&!!r.body&&Object.keys(PROMPT_PARTS).some(n=
 const BODY_LABELS={params:'参数（schema、工具、采样）',system:'系统提示词',input:'输入全文',output:'输出全文'};
 
 // Provider usage (OpenAI-style prompt/completion or input/output tokens, or plain counters) in a few words.
+// 千问判定 (owner 2026-11-18): today's 围观 gate.realtime rows -> how often the realtime model refused. ambient =
+// smart_turn_v2 judged a sentence not for hello (no reply); refused_busy = it refused one of hello's own replies
+// (greeting / rescue / answer) while someone spoke; accepted = it answered (then our gate played or muted it).
+export function qwenSummary(rows){
+ const s={accepted:0,played:0,muted:0,ambient:0,busy:0,recent:[]};
+ for(const r of rows||[]){
+  const x=r.extra||{},v=x.verdict||'';
+  if(v==='ambient'){s.ambient++;s.recent.push({at:r.at,what:'不是跟我说',text:x.heard||''});}
+  else if(v==='refused_busy'){s.busy++;s.recent.push({at:r.at,what:'拒绝主动回复',text:x.kind||''});}
+  else if(x.smart_turn==='accepted'){s.accepted++;if(v==='play')s.played++;else if(v.startsWith('muted_'))s.muted++;}
+ }
+ s.recent.sort((a,b)=>b.at-a.at);s.recent=s.recent.slice(0,10);
+ return s;
+}
+export const qwenShort=s=>`不是跟我说 ${s.ambient} · 拒回 ${s.busy}`;
+export function qwenHtml(s){
+ const judged=s.accepted+s.ambient;
+ const pct=judged?Math.round(s.ambient*100/judged)+'%':'—';
+ const rows=s.recent.map(r=>`<tr><td>${hms(r.at)}</td><td>${escText(r.what)}</td><td>${escText(r.text||'')}</td></tr>`).join('');
+ return `<div class="ledger-total"><b>今天 围观 · 千问判定</b> 判过 ${judged} 句，判「不是跟我说」${s.ambient} 句（${pct}）</div>`+
+  `<table><tr><th>千问接下</th><td>${s.accepted}（我们放行 ${s.played}，拦下 ${s.muted}）</td></tr>`+
+  `<tr><th>千问判不是跟我说</th><td>${s.ambient}（机器人：蓝色方块 + 不是跟我说的）</td></tr>`+
+  `<tr><th>千问拒绝主动回复</th><td>${s.busy}（有人在说话；机器人：等你说完）</td></tr></table>`+
+  (rows?`<table class="qwen-recent"><tr><th>时间</th><th>拒绝</th><th>听到的 / 哪种回复</th></tr>${rows}</table>`:'<p class="muted">今天还没有拒绝。</p>');
+}
 export function tokensText(u){
  if(!u||typeof u!=='object')return '';
  const inp=u.prompt_tokens??u.input_tokens,out=u.completion_tokens??u.output_tokens;
@@ -479,7 +504,13 @@ export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind
  }
  // A category picked and few of it among what was read: read earlier pages by itself, at most AUTO_PAGES of them.
  function fillCategory(){if(cat&&more&&shown().length<AUTO_MIN&&autoPages<AUTO_PAGES){autoPages++;page(true);}}
- async function refresh(){await page(false);gaps();last();ledger();}
+ async function qwen(){
+  const t=now(),from=parseBj(`${today(t)}T00:00`);
+  try{const d=await fetchJson('/log?'+buildQuery({from,to:t,kind:'gate.realtime',limit:1000}));
+   const s=qwenSummary(Array.isArray(d)?d:d.rows);$('log-qwen-n').textContent=qwenShort(s);$('log-qwen-box').innerHTML=qwenHtml(s);}
+  catch(e){$('log-qwen-n').textContent='读不到';$('log-qwen-box').innerHTML=`<p class="error">读不到千问判定：${escText(e.message)}</p>`;}
+ }
+ async function refresh(){await page(false);gaps();last();ledger();qwen();}
  async function chain(trace,at){
   const box=$('log-chain');box.hidden=false;$('log-list').hidden=true;$('log-more').hidden=true;
   box.innerHTML='<p class="empty">读取链路…</p>';
@@ -567,6 +598,7 @@ export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind
  $('log-more').addEventListener('click',()=>page(true));
  $('log-gaps-btn').addEventListener('click',()=>toggleDrawer($('log-gaps-btn'),'log-gaps'));
  $('log-cost-btn').addEventListener('click',()=>toggleDrawer($('log-cost-btn'),'log-ledger'));
+ $('log-qwen-btn').addEventListener('click',()=>toggleDrawer($('log-qwen-btn'),'log-qwen'));
  $('log-day').value=today(now());$('log-day').addEventListener('change',ledger);
  $('log-to').value=bjInput(now());$('log-from').value=bjInput(now()-3600000);
  $('log-detail').innerHTML=EMPTY_DETAIL;

@@ -461,6 +461,7 @@ class GateTest(HubBase):
         self.assertIsNone(self.hub._turn)
         self.assertEqual(self.hub.stats["ambient"], 1)
         self.assertEqual(self.link.sent, [])
+        self.assertEqual(self.modes.stages[-1:], ["aside"])                  # the robot's blocks flash blue
 
 
 class RescueTest(HubBase):
@@ -524,6 +525,7 @@ class RescueTest(HubBase):
         self.assertEqual(self.hints(ws), [])
 
     async def test_a_burst_word_heard_by_both_counts_once(self):
+        self.hub.cfg.turn = "server_vad"     # the two sources' dedupe; the smart_turn gate itself: VisionGateTest
         got = []
 
         class Burst:
@@ -538,6 +540,333 @@ class RescueTest(HubBase):
         self.t[0] += 5
         self.hub.local_heard("别看了")
         self.assertEqual(got, ["你注意看看。", "别看了"])
+
+
+class CalledTest(HubBase):
+    """Owner 2026-11-18: "hello" (the ASR unit's wake word) is a strong signal; what follows is taken seriously; hello may
+    interrupt hello's own speech. Also Dynames (keyword ear) and a sentence starting with hello / Dynames."""
+    def hints(self, ws):
+        return [m["item"]["content"][0]["text"] for m in ws.sent if m["type"] == "conversation.item.create"]
+
+    async def playing(self, ws, rid):
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "response.created", "response": {"id": rid}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(120)).decode()})
+        ws.push({"type": "response.audio_transcript.delta", "delta": "今天北京晴，最高六度"})
+        await settle(20)
+
+    def test_call_words(self):
+        r = self.rl.call_rest
+        self.assertEqual([r("hello,今天天气怎么样？"), r("Hello."), r("哈喽 你在吗"), r("Dynames 过来"), r("我说 hello")],
+                         ["今天天气怎么样？", "", "你在吗", "过来", None])
+        self.assertEqual(r("Hello. I'm here. 查一下比特币"), "查一下比特币")       # the ASR unit's own reply is dropped
+
+    async def test_the_asr_hello_stops_the_reply_and_opens_a_window(self):
+        ws = await self.open_ready()
+        await self.playing(ws, "r1")
+        self.assertTrue(self.hub.output_busy())
+        self.hub.on_wake(self.link, {"type": "asr_wake", "word": "hello", "interrupted": True})
+        await settle(10)
+        self.assertIn("response.cancel", ws.kinds())
+        self.assertIn("tts.stop", [m["type"] for m in self.link.texts()])
+        self.assertTrue(self.hub.in_called())
+        self.assertEqual(self.modes.stages[-1], "listen")
+        self.assertEqual(self.hub.stats["called_asr"], 1)
+        self.assertEqual(self.hub.stats["interrupted"], 1)
+
+    async def test_in_a_call_smart_turn_cannot_silence_the_sentence(self):
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "今天天气怎么样"})
+        await settle(20)
+        self.assertEqual(self.hints(ws), [self.rl.rescue_text("今天天气怎么样")])
+        self.assertEqual(ws.kinds()[-1], "response.create")
+        self.assertNotIn("aside", self.modes.stages)                  # no 不是跟我说的 when it answers anyway
+
+    async def test_the_next_sentence_joins_the_calls_chain(self):
+        # 2026-11-18: the owner could not see the hello that led to a search in that search's chain
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        call_trace = self.hub._called_trace
+        self.assertIsNotNone(call_trace)
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        await settle(10)
+        self.assertEqual(self.hub._seg["trace"], call_trace)
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        await settle(10)
+        self.assertNotEqual(self.hub._seg["trace"], call_trace)           # only the first sentence
+
+    def test_order_words(self):
+        o = self.rl.order_word
+        self.assertEqual([o("Turn left."), o("Hello. I'm here. Next."), o("Five"), o("左转"), o("turn left please")],
+                         ["turn left", "next", "five", None, None])
+
+    async def test_a_direct_order_is_not_answered(self):
+        # owner 2026-11-18: hello + a Unit ASR command word is an order for the robot, not a question for 围观
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        self.hub.on_order(self.link, {"type": "asr_order", "word": "turn left", "n": 1})
+        self.assertFalse(self.hub.in_called())
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(120)).decode()})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "好的，我向左转啦！"})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
+        await settle(20)
+        self.assertEqual(self.link.sent, [])
+        self.assertEqual(self.recs.turns[-1]["state"], "muted_order")
+        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "turn left"})
+        await settle(10)
+        self.assertEqual(self.hints(ws), [])                           # no called answer either
+
+    async def test_a_bare_ok_in_talk_is_not_an_order(self):
+        ws = await self.open_ready()
+        self.hub.local_heard("OK.")
+        self.assertIsNone(self.hub._order_at)
+        self.hub.local_heard("hello, OK.")
+        self.assertIsNotNone(self.hub._order_at)
+
+    async def test_outside_a_call_ambient_stays_silent(self):
+        ws = await self.open_ready()
+        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "今天天气怎么样"})
+        await settle(20)
+        self.assertEqual(self.hints(ws), [])
+
+    async def test_a_called_sentence_said_while_hello_spoke_is_answered_from_the_ears_text(self):
+        ws = await self.open_ready()
+        await self.playing(ws, "r1")
+        self.hub.local_heard("hello，你在北京找那个药看看")          # the model never got this audio
+        await settle(10)
+        self.assertIn("response.cancel", ws.kinds())                    # the text call interrupts too
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "cancelled", "usage": {}}})
+        await settle(10)
+        self.t[0] += self.rl.CALLED_ANSWER_WAIT_S + 0.5
+        self.hub.step()
+        await settle(10)
+        self.assertEqual(self.hints(ws)[-1], self.rl.rescue_text("你在北京找那个药看看"))
+
+    async def test_a_response_for_the_sentence_clears_the_pending_answer(self):
+        ws = await self.open_ready()
+        self.hub.local_heard("hello，几点了")
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        await settle(10)
+        self.assertIsNone(self.hub._called_text)
+
+
+class SearchTaskTest(HubBase):
+    """Owner 2026-11-18: BTC price wrong; "核实" was promised twice and never done. A search stays a task until answered,
+    given up by the owner, or honestly unresolved; refused answers are sent again."""
+    def searcher(self, answers):
+        self.asked = []
+        it = iter(answers)
+
+        def search(q):
+            self.asked.append(q)
+            return next(it, None)
+        return search
+
+    def hints(self, ws):
+        return [m["item"]["content"][0]["text"] for m in ws.sent if m["type"] == "conversation.item.create"]
+
+    async def answer(self, ws, rid, text):
+        ws.push({"type": "response.created", "response": {"id": rid}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(120)).decode()})
+        ws.push({"type": "response.audio_transcript.done", "transcript": text})
+        ws.push({"type": "response.done", "response": {"id": rid, "status": "completed", "usage": {}}})
+        await settle(20)
+        for m in self.link.texts():
+            if m.get("type") == "tts.start":
+                self.hub.on_report(self.link, {"type": "tts.done", "stream": m["stream"], "played_ms": 120})
+        await settle()
+
+    def test_words(self):
+        rl = self.rl
+        self.assertTrue(rl.PROMISE_RE.search("查的是实时行情，刚才那笔数据确实不准，我重新核实一下。"))
+        self.assertTrue(rl.PROMISE_RE.search("核实完了，确实是我之前查错了，现在重新查一下。") is None)   # no 我: not hers
+        self.assertIsNone(rl.PROMISE_RE.search("我查到的是六万五"))
+        self.assertTrue(rl.VERIFY_RE.search("我问你从哪查的BTC的价格，你好像查错了。"))
+        self.assertTrue(rl.VERIFY_RE.search("哎，你核实的结果呢？"))
+        self.assertTrue(rl.GIVEUP_RE.search("算了不用查了"))
+
+    async def test_a_follow_up_searches_again_until_unresolved(self):
+        self.hub.searcher = self.searcher(["比特币约6.5万美元（11月17日）", "比特币约9.2万美元", None, None])
+        ws = await self.open_ready()
+        self.hub.local_heard("查一下比特币的价格。")
+        await settle(20)
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(len(self.asked), 1)
+        await self.answer(ws, "r1", "查到了，比特币现在大概六万五。")
+        self.t[0] += 10
+        self.hub.local_heard("我问你从哪查的BTC的价格，你好像查错了。")      # follow-up: search again, asking for time / source
+        await settle(20)
+        self.assertEqual(len(self.asked), 2)
+        self.assertIn("最新的实时数据", self.asked[1])
+        self.hub.step()
+        await settle(20)
+        await self.answer(ws, "r2", "重新查了，九万二。")
+        self.t[0] += 10
+        self.hub.local_heard("你核实的结果呢？")
+        await settle(20)
+        self.hub.step()
+        await settle(20)
+        await self.answer(ws, "r3", "还是没查到。")
+        self.t[0] += 10
+        self.hub.local_heard("再查一下吧，核实一下")                      # the 4th: hello says honestly it cannot confirm
+        await settle(20)
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(len(self.asked), 3)
+        self.assertTrue(self.hints(ws)[-1].startswith("（你已经联网查了好几次「查一下比特币的价格。」"))
+        self.assertIn("6.5万", self.hints(ws)[-1])
+        self.assertEqual(self.hub._qtask["closed"], "unresolved")
+
+    async def test_her_own_promise_is_kept(self):
+        self.hub.searcher = self.searcher(["比特币约9.2万美元，来源某网站"])
+        ws = await self.open_ready()
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": "比特币多少钱了"})
+        await self.answer(ws, "r1", "我重新核实一下比特币的价格。")
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(len(self.asked), 1)                           # her promise ran a real search
+        self.assertIn("比特币多少钱了", self.asked[0])
+
+    async def test_the_owner_can_give_up(self):
+        self.hub.searcher = self.searcher(["x"])
+        ws = await self.open_ready()
+        self.hub.local_heard("查一下比特币的价格。")
+        await settle(20)
+        self.t[0] += 5
+        self.hub.local_heard("算了不用查了")
+        self.assertEqual(self.hub._qtask["closed"], "owner")
+        self.t[0] += 5
+        self.hub.local_heard("你核实的结果呢？")                            # no task any more: no search
+        await settle(20)
+        self.assertEqual(len(self.asked), 1)
+
+    async def test_a_refused_answer_is_sent_again_when_quiet(self):
+        self.hub.searcher = self.searcher(["比特币约9.2万美元"])
+        ws = await self.open_ready()
+        self.hub.local_heard("查一下比特币的价格。")
+        await settle(20)
+        self.hub.step()
+        await settle(20)
+        n = len(self.hints(ws))
+        self.assertEqual(self.hub._next_kind, "search_answer")
+        ws.push({"type": "error", "error": {"code": "invalid_value", "message": "Cannot create response while user is speaking."}})
+        await settle(20)
+        self.assertIsNotNone(self.hub._redo)
+        self.t[0] += 1
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(len(self.hints(ws)), n + 1)                    # the same answer again
+        self.assertEqual(self.hints(ws)[-1], self.hints(ws)[n - 1])
+        self.assertEqual(self.hub._next_kind, "search_answer")
+
+
+class LengthTest(HubBase):
+    """Owner 2026-11-18: reply length by mechanism, not only by the persona's rule."""
+    def last_instr(self, ws):
+        return [m["session"]["instructions"] for m in ws.sent if m["type"] == "session.update"][-1]
+
+    def test_kinds_and_hints(self):
+        k = self.rl.ask_kind
+        self.assertEqual([k("为什么天是蓝的？"), k("几点了？"), k("今天好累啊")], ["explain", "question", "chat"])
+        self.assertIn("三到五句", self.rl.rescue_text("这个原理是什么"))
+        self.assertIn("一两句", self.rl.rescue_text("哈哈好的"))
+
+    async def test_detail_and_brief_modes_are_kept_and_pushed(self):
+        ws = await self.open_ready()
+        self.assertNotIn("【这会儿的回答长短】", self.last_instr(ws))
+        self.hub.local_heard("你详细点说说这个")
+        await settle(10)
+        self.assertIn("主人刚让你说详细点", self.last_instr(ws))
+        self.t[0] += 60
+        self.hub.local_heard("太长了，说重点")
+        await settle(10)
+        self.assertIn("主人刚嫌你说得长", self.last_instr(ws))
+        self.t[0] += self.rl.LENGTH_S + 1
+        self.assertEqual(self.hub._length_mode(), "normal")
+
+    async def test_many_faces_ask_for_short_answers(self):
+        ws = await self.open_ready()
+        for i in range(3):
+            self.hub.on_vision({"event": "face_found", "face": 10 + i})
+        self.assertIn("眼前有 3 个人", self.hub._length_line())
+
+
+class SceneTest(HubBase):
+    async def test_an_instant_photo_goes_into_the_eyes(self):
+        ws = await self.open_ready()
+        self.hub.add_scene("主人举着一个红色的小盒子。", self.hub.wall_ms())
+        self.t[0] += 5
+        self.hub.step()
+        await settle(10)
+        instr = [m["session"]["instructions"] for m in ws.sent if m["type"] == "session.update"][-1]
+        self.assertIn("摄像头刚拍到的（", instr)
+        self.assertIn("主人举着一个红色的小盒子。", instr)
+        self.assertNotIn("大约一分钟前", instr)
+
+
+class VisionGateTest(HubBase):
+    """Owner 2026-11-18: "决定视觉爆发的前提是过了qwen的拒识闸门，别一有人说话就爆发" (smart_turn_v2)."""
+    class Burst:
+        def __init__(self):
+            self.heards, self.asks = [], []
+
+        def heard(self, text):
+            self.heards.append(text)
+
+        def ask(self, trigger="ask"):
+            self.asks.append(trigger)
+            return 1.0
+
+    async def test_a_burst_word_waits_for_the_models_verdict(self):
+        self.hub.burst = burst = self.Burst()
+        ws = await self.open_ready()
+        self.hub.local_heard("你注意看看那边")                             # the ear's ASR: no burst yet
+        self.assertEqual(burst.heards, [])
+        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "你注意看看那边"})
+        await settle(10)
+        self.assertEqual(burst.heards, [])                              # rejected: none
+        self.assertEqual(self.hub.stats["burst_gated"], 1)
+        self.t[0] += 5
+        self.hub.local_heard("你看看我手里的东西")                         # a look question: waits too
+        self.assertEqual(burst.asks, [])
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": "你看看我手里的东西"})
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        await settle(10)
+        self.assertEqual(burst.asks, [])                                # a transcript / a response alone: not yet
+        ws.push({"type": "response.audio_transcript.delta", "delta": "哇，这是一个红色的小盒子吧"})
+        await settle(10)
+        self.assertEqual(burst.asks, ["ask"])                           # a real reply: the model took it
+        self.assertEqual(burst.heards, ["你看看我手里的东西"])                # ... and its burst word counts
+        self.t[0] += 5
+        self.hub.local_heard("仔细看一下")
+        self.t[0] += self.rl.VISION_GATE_S + 1
+        self.hub.step()                                                # no verdict in time: dropped
+        self.assertEqual(burst.heards, ["你看看我手里的东西"])
+        self.assertEqual(self.hub.stats["burst_gated"], 2)
+        # a transcript alone (the model ignores the sentence) or a 「嗯」 reply: no burst (2026-11-18 15:09 / 15:14)
+        self.t[0] += 5
+        ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": "还得看一下表啊去"})
+        await settle(10)
+        self.t[0] += 1
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "response.created", "response": {"id": "r2"}})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯"})
+        ws.push({"type": "response.done", "response": {"id": "r2", "status": "completed", "usage": {}}})
+        await settle(20)
+        self.assertEqual(burst.heards, ["你看看我手里的东西"])
+        self.assertEqual(self.hub.stats["burst_gated"], 3)
+        self.hub.local_heard("别看了")                                     # stopping never waits
+        self.assertEqual(burst.heards, ["你看看我手里的东西", "别看了"])
 
 
 class SearchAnswerTest(HubBase):
@@ -662,6 +991,11 @@ class LookAnswerTest(HubBase):
     def hints(self, ws):
         return [m["item"]["content"][0]["text"] for m in ws.sent if m["type"] == "conversation.item.create"]
 
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        # the look logic itself, with the ear's ASR acting at once (server_vad); the smart_turn gate: VisionGateTest
+        self.hub.cfg.turn = "server_vad"
+
     async def instant(self, ws, rid, reply, heard=None):
         ws.push({"type": "input_audio_buffer.speech_stopped"})
         if heard is not None:
@@ -707,6 +1041,24 @@ class LookAnswerTest(HubBase):
         await settle()
         self.assertEqual((self.recs.turns[-1]["kind"], self.recs.turns[-1]["state"]), ("look_answer", "done"))
         self.assertEqual(self.hub._recent_pairs()[-1], ("你看看我手里拿的是什么东西", "是个黑色的遥控器！"))
+
+    async def test_an_unclear_photo_waits_for_the_next_one_and_the_photo_gets_the_question(self):
+        # 2026-11-18: the first photo after "你看看我手里拿的是什么" came before the thing was held up
+        self.hub.burst = self.Burst()
+        ws = await self.open_ready()
+        self.hub.local_heard("你看看我手里拿的是什么")
+        self.assertEqual(self.hub.look_question(), "你看看我手里拿的是什么")
+        self.hub.add_look("看不清，手挡住了镜头。主人坐在椅子上。", self.hub.wall_ms(), snapped=100.5)
+        await settle()
+        self.assertEqual(self.hints(ws), [])                               # passed over
+        self.hub.add_look("红色的运动相机，侧面有白色字。主人举着它。", self.hub.wall_ms(), snapped=101.0)
+        await settle()
+        self.assertEqual(self.hints(ws), [self.rl.look_answer_text("红色的运动相机，侧面有白色字。主人举着它。", "你看看我手里拿的是什么")])
+        self.assertIsNone(self.hub.look_question())
+        import vision_burst
+        text = vision_burst.look_messages(b"x", None, "你看看我手里拿的是什么")[1]["content"][0]["text"]
+        self.assertTrue(text.startswith("有人刚刚问 hello：「你看看我手里拿的是什么」"))
+        self.assertIn("不要叫它 hello", vision_burst.LOOK_SYSTEM)
 
     async def test_a_filler_plays_at_once_and_the_answer_follows_it(self):
         # owner 2026-11-15: "我看看哈" while waiting
@@ -912,14 +1264,38 @@ class FaceViewTest(unittest.TestCase):
 
 
 class GreetTest(HubBase):
-    async def test_owner_appearing_is_greeted_once(self):
-        self.hub.cfg.max_session_s = self.hub.cfg.idle_s = self.hub.cfg.hour_cap_s = 10 ** 6   # one session throughout
-        picks = iter([2, 4])                              # first short hello: the word 嗯哼？; second: two beeps
+    async def test_a_refused_greeting_is_taken_back_and_waits_for_quiet(self):
+        # 2026-11-18 13:08:40: response.create refused ("user is speaking"); the [事件] item stayed and the next answer
+        # greeted. Now: no greeting while the server hears speech; a refusal deletes the item and resets the turn kind.
+        self.hub.cfg.max_session_s = self.hub.cfg.idle_s = self.hub.cfg.hour_cap_s = 10 ** 6
+        ws = await self.open_ready()
+        creates = lambda: [m for m in ws.sent if m["type"] == "conversation.item.create"]
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        await settle(10)
+        self.hub.on_vision({"event": "face_named", "face": 1, "name": "boss_face"})
+        self.speak(1, speaking=False)
+        self.t[0] += 0.1
+        self.hub.step()
+        await settle()
+        self.assertEqual(creates(), [])                                   # the server hears speech: wait
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        await settle(10)
+        self.t[0] += 0.1
+        self.hub.step()
+        await settle()
+        self.assertEqual(len(creates()), 1)
+        self.assertEqual(self.hub._next_kind, "greet")
+        ws.push({"type": "conversation.item.created", "item": {"id": "item_g1", "role": "user"}})
+        ws.push({"type": "error", "error": {"code": "invalid_value", "message": "Cannot create response while user is speaking."}})
+        await settle(20)
+        self.assertIn({"type": "conversation.item.delete", "item_id": "item_g1"}, ws.sent)
+        self.assertEqual(self.hub._next_kind, "speech")
+        self.assertEqual(self.hub.stats["refused_busy"], 1)
+        self.assertEqual(self.modes.stages[-1:], ["busy"])
 
-        class Rng(__import__("random").Random):
-            def randrange(self, n):
-                return next(picks)
-        self.hub.rng = Rng(1)
+    async def test_owner_appearing_is_greeted_once(self):
+        # owner 2026-11-18: a face greeting at most once per 20 min, only after the face was gone 10 min; no short hellos
+        self.hub.cfg.max_session_s = self.hub.cfg.idle_s = self.hub.cfg.hour_cap_s = 10 ** 6   # one session throughout
         ws = await self.open_ready()
         items = lambda: [m["item"]["content"][0]["text"] for m in ws.sent if m["type"] == "conversation.item.create"]
 
@@ -941,35 +1317,27 @@ class GreetTest(HubBase):
             self.hub.on_vision({"event": "face_lost", "face": face})
             self.t[0] += s
 
-        await appear(1)                                   # first sight: one long, named greeting
-        self.assertEqual(items(), ["[事件] 主人（阿大）出现在你面前了，长招呼。"])
+        await appear(1)                                   # first sight: one named greeting, nothing else in it
+        self.assertEqual(items(), ["[事件] 主人（阿大）出现在你面前了，打个招呼。"])
         self.assertEqual(ws.kinds()[-1], "response.create")
-        await reply("阿大回来啦，今天也在忙电路呀")
+        await reply("阿大，来了。")
         leave(1, 30)
         await appear(2)                                   # gone only 30 s: not a new recognition
         self.assertEqual(len(items()), 1)
-        leave(2, 120)
-        await appear(3)                                   # inside 10 min: a short hello, one word, no name
-        self.assertEqual(items()[-1], "[事件] 主人又出现了，短招呼：只说「嗯哼？」。")
-        await reply("嗯哼？")
-        leave(3, 61)
-        before = len(self.link.texts())
-        await appear(4)                                   # another short hello (>= 60 s apart): two beeps, no model
-        await settle(20)
-        self.assertEqual(len(items()), 2)
-        starts = [m for m in self.link.texts()[before:] if m.get("type") == "tts.start"]
-        self.assertEqual(len(starts), 1)
-        self.assertTrue(any("beep" in line for line in self.logs))
-        sid = starts[0]["stream"]
-        self.hub.on_report(self.link, {"type": "tts.playing", "stream": sid})
-        self.hub.on_report(self.link, {"type": "tts.done", "stream": sid, "played_ms": 330})
-        await settle()
-        leave(4, 600)
-        await appear(5)                                   # 10 min after the long one: a new long one, told what it said
-        self.assertEqual(items()[-1], "[事件] 主人（阿大）出现在你面前了，长招呼。之前说过：「阿大回来啦，今天也在忙电路呀」。"
+        leave(2, 300)
+        await appear(3)                                   # gone 5 min: still not (10 min away needed)
+        self.assertEqual(len(items()), 1)
+        leave(3, 700)
+        await appear(4)                                   # gone 11 min, but only ~17 min since the greeting: too soon
+        self.assertEqual(len(items()), 1)
+        self.assertGreaterEqual(self.hub.stats["greet_too_soon"], 1)
+        leave(4, 650)
+        await appear(5)                                   # gone 11 min and 28 min since the greeting: a new one
+        self.assertEqual(items()[-1], "[事件] 主人（阿大）出现在你面前了，打个招呼。之前说过：「阿大，来了。」。"
                                       "这次换个完全不同的说法。")
-        self.assertEqual(len(items()), 3)
-        self.assertFalse(any("阿大" in line or "电路" in line for line in self.logs))
+        self.assertEqual(len(items()), 2)
+        self.assertFalse(any("阿大" in line for line in self.logs))
+        self.assertIn("不提背景里的情景", self.rl.PERSONA)
 
     async def test_others_and_unknown_are_not_greeted_and_not_outside_crowd(self):
         ws = await self.open_ready()

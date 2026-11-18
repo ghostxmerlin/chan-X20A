@@ -1881,9 +1881,23 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                     if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
                     if (cd) { cd->in_chat = mouth::dots_mode(view.state.mode); cd->color = view.look.color; cd->state = view.chat; }
                 }
+                {   // 0.5.06: the ASR unit heard "hello": 在呢 under the eyes at once (the server decides the rest)
+                    static uint32_t wakes_seen = mouth::asr_wakes();
+                    if (const uint32_t w = mouth::asr_wakes(); w != wakes_seen) {
+                        wakes_seen = w;
+                        screen_show_word("在呢", static_cast<uint32_t>(now / 1000));
+                    }
+                }
                 if (cd) {
+                    // 0.5.05: the realtime model's refusals as words under the eyes (once per aside / busy stage)
+                    static int64_t aside_seen = 0, busy_seen = 0;
+                    if (cd->in_chat && cd->state.aside_at_us && cd->state.aside_at_us != aside_seen)
+                        screen_show_word(m12words::kQwenAside, static_cast<uint32_t>(now / 1000));
+                    else if (cd->in_chat && cd->state.busy_at_us && cd->state.busy_at_us != busy_seen)
+                        screen_show_word(m12words::kQwenBusy, static_cast<uint32_t>(now / 1000));
+                    aside_seen = cd->state.aside_at_us; busy_seen = cd->state.busy_at_us;
                     const auto dots = cd->view.tick(cd->in_chat, cd->state, cd->in_chat && mouth::speaking(), now);
-                    screen_update_chat_dots(dots.visible, dots.lit, dots.grey, cd->color);
+                    screen_update_chat_dots(dots.visible, dots.lit, dots.grey, cd->color, dots.aside);
                 }
                 // 0.5.00 视觉爆发 indicator (burst_indicator.h): the ear's latest burst word, polled lock free; the
                 // tracker (PSRAM, made once) runs the countdown and the safety timeout, the top row draws it.

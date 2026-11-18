@@ -65,8 +65,8 @@ def dashscope_search(key, base_url=BASE_URL, model=MODEL, timeout=TIMEOUT_S, tod
         if text is not None and re.sub(r"[\W_]+", "", text) in ("没查到", "查不到"):
             text = None
         ear_log.emit("call.search", ok=err is None, err=err, ms=ms, model=model, key=key, usage=usage or None,
-                     cost=ear_log.search_cost(1), sum=(text or "没查到")[:60],
-                     extra={"token_cost_usd": cost_usd(usage), "found": text is not None},
+                     cost=ear_log.search_cost(1), sum=f"查「{str(question)[:30]}」→ {(text or '没查到')[:50]}",
+                     extra={"token_cost_usd": cost_usd(usage), "found": text is not None, "query": str(question)[:200]},
                      body={"system": messages[0]["content"], "input": messages[1:], "output": text, "params": params})
         return text
 

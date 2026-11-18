@@ -272,7 +272,7 @@ public:
         return true;
     }
 
-    // {"type":"chat_stage",...} (0.4.93): kept only in chat; anything but listen / think / skip is ignored.
+    // {"type":"chat_stage",...} (0.4.93): kept only in chat; anything but listen / think / skip / aside (0.5.04) is ignored.
     bool on_chat_stage(ArduinoJson::JsonObjectConst o, size_t bytes, int64_t now_us)
     {
         chat::Stage st;
@@ -429,7 +429,7 @@ private:
     }
     void clear_chat()
     {
-        if (chat_.stage == chat::Stage::Idle && !chat_.skip_until_us && !chat_.speak_from_us) return;
+        if (chat_.stage == chat::Stage::Idle && !chat_.skip_until_us && !chat_.aside_until_us && !chat_.speak_from_us) return;
         chat_.clear(); ++version_;
     }
     void pop_report()

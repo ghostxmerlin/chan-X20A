@@ -448,6 +448,7 @@ class HubLooksTest(unittest.IsolatedAsyncioTestCase):
             def heard(self, text):
                 got.append(text)
         self.hub.burst = Burst()
+        self.hub.cfg.turn = "server_vad"   # straight through; with smart_turn_v2 it waits for a real reply (test_realtime_link)
         self.hub._event({"type": "conversation.item.input_audio_transcription.completed", "transcript": "注意看"}, 1)
         self.assertEqual(got, ["注意看"])
 
@@ -461,3 +462,55 @@ class HubLooksTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveEyeTest(unittest.IsolatedAsyncioTestCase):
+    """即时画面 (owner 2026-11-18 "改成上传即刻理解"): each uploaded photo at once, one in flight, the newest waits."""
+    class Hub:
+        def __init__(self):
+            self.scenes = []
+
+        def seen_for_look(self):
+            return "眼前有 1 个人：主人（阿大）。"
+
+        def add_scene(self, text, at_ms):
+            self.scenes.append(text)
+
+    class On:
+        on = True
+
+    async def test_each_photo_is_recognised_at_once_newest_wins(self):
+        seen = []
+
+        def recognise(jpeg, seen_line=None):
+            seen.append((jpeg, seen_line))
+            time.sleep(0.05)
+            return f"画面{jpeg.decode()}", {"prompt_tokens": 10}, 50, None
+        hub, rows = self.Hub(), []
+
+        class DB:
+            def vision_look(self, doc):
+                rows.append(doc)
+        eye = vb.LiveEye(recognise, self.On(), hub=hub, db=DB(), gap_s=0.2)
+        eye.on_frame({"seq": 1}, b"1", "p1", "s")
+        await asyncio.sleep(0.01)
+        eye.on_frame({"seq": 2}, b"2", "p2", "s")                     # while 1 is in flight: waits
+        eye.on_frame({"seq": 3}, b"3", "p3", "s")                     # newer: 2 is skipped
+        eye.on_frame({"seq": 9, "snap": 4}, b"x", "px", "s")           # a burst snap: not ours
+        await asyncio.sleep(0.6)
+        self.assertEqual([j for j, _ in seen], [b"1", b"3"])
+        self.assertEqual(seen[0][1], "眼前有 1 个人：主人（阿大）。")
+        self.assertEqual(hub.scenes, ["画面1", "画面3"])
+        self.assertEqual([r["kind"] for r in rows], ["scene", "scene"])
+        self.assertEqual(eye.stats["skipped"], 1)
+        await eye.shutdown()
+
+    async def test_switch_off_nothing(self):
+        class Off:
+            on = False
+        calls = []
+        eye = vb.LiveEye(lambda *a: calls.append(a), Off())
+        eye.on_frame({"seq": 1}, b"1", "p", "s")
+        await asyncio.sleep(0.05)
+        self.assertEqual(calls, [])
+        await eye.shutdown()

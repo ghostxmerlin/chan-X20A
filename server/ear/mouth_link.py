@@ -407,7 +407,10 @@ class ModeRelay:
         if timeout is None:
             timeout = self.post_timeout_s
         loop = asyncio.get_running_loop()
-        fut = loop.run_in_executor(self._pool, self.call, method, path, body, timeout + 1)
+        try:
+            fut = loop.run_in_executor(self._pool, self.call, method, path, body, timeout + 1)
+        except RuntimeError:                         # the pool is shut down (the ear is stopping): no call, no error row
+            return None, {}
         try:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
@@ -583,6 +586,13 @@ class MouthLink:
                         self.burst.on_snap_result(self, m)
                     except Exception:                   # noqa: BLE001 - a burst bug never ends /mouth
                         _trace(f"mouth m{self.conn} snap_result")
+                continue
+            if m is not None and m.get("type") in ("asr_wake", "asr_order"):   # 0.5.06 / 0.5.07: the Unit ASR
+                if self.realtime is not None:
+                    try:
+                        (self.realtime.on_wake if m["type"] == "asr_wake" else self.realtime.on_order)(self, m)
+                    except Exception:                   # noqa: BLE001 - never ends /mouth
+                        _trace(f"mouth m{self.conn} asr_wake")
                 continue
             if m is not None and m.get("type") == "place_select":
                 if self._modes_on and self.modes.place_on():  # for mind, never for soul-tts; never awaited here

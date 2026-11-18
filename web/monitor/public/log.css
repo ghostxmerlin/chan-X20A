@@ -273,3 +273,9 @@ button.strip-item:hover { border-color: var(--line-strong); }
   .tag.model { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+
+/* 千问判定 drawer (2026-11-18) */
+#log-qwen table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+#log-qwen th { text-align: left; font-weight: 500; color: var(--text-3); white-space: nowrap; }
+#log-qwen th, #log-qwen td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); }
+#log-qwen .qwen-recent td:last-child { overflow-wrap: anywhere; }

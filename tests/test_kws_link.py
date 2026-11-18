@@ -104,6 +104,8 @@ class KeywordStreamTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_reports_become_events_and_run_log_rows(self):
         self.answer = {"reports": [report(), report(0.37, False, True, start=30000, end=54000)]}
+        hits = []
+        self.link.on_hit = hits.append                    # 2026-11-18: a hit is a call (only hits, not nears)
         self.packets(C)
         await self.settle()
         self.assertEqual([(e["type"], e["hit"], e["near"]) for e in self.posted],
@@ -112,6 +114,7 @@ class KeywordStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([k for k, _ in self.emitted], ["heard.keyword", "heard.keyword"])
         self.assertIn("差一点", self.emitted[1][1]["sum"])
         self.assertEqual(self.link.hits, 1)
+        self.assertEqual([h["pos"] for h in hits], [[1000, 25000]])
 
     async def test_spotter_down_costs_nothing(self):
         self.answer = ConnectionRefusedError()

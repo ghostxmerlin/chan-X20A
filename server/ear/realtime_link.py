@@ -118,7 +118,8 @@ COLD_MAX_S = 5.0
 GATE_REASONS = {"play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
                 "unclear": "a didn't-hear question", "repeat": "word for word a recent reply",
                 "blind": "看不清 without a fresh look", "wait_look": "a look question: the answer comes from the next photo",
-                "wait_search": "a search question (查一下 / 新闻 …): the answer comes from the ear's own web search"}
+                "wait_search": "a search question (查一下 / 新闻 …): the answer comes from the ear's own web search",
+                "order": "a Unit ASR command word: a direct order the robot carries out itself (owner 2026-11-18)"}
 STEP_S = 0.2
 log = print                                         # tests silence it
 _LOG_FAILED = set()                                 # run-log helpers that have failed once (said once on the console)
@@ -175,7 +176,13 @@ PERSONA_RULES = (
     "说话用普通话。"
     "现在是围观模式：大家围着你看，跟你聊天，你就跟他们聊。\n"
     "【要求】\n"
-    "- 每次用一两句口语短句回答，越短越好，干脆利落。\n"
+    # owner 2026-11-18 "现在的回复很多时候都很短…需要动态回复长度": the length follows the matter, not a fixed cap
+    "- 回答长短看事情：闲聊、打招呼、附和，一两句口语短句，干脆利落；有人问事实、要你解释、查资料、核实、帮忙解决问题时，"
+    "把事情说清楚为止（关键数字、时间、来源、结论都要有，一般三到五句），不要为了短省掉要点；主人让你详细说就详细说。"
+    "都用说话的口气，不念列表。\n"
+    "- 说了要去查、要核实，就是真的会去查：没查到结果之前不要说“查完了”“核实完了”。\n"
+    # owner 2026-11-18: the ASR unit answers its wake word with a spoken "I'm here" that the mic picks up
+    "- 有人叫“hello”之后紧跟的英文“I'm here”，是你身上语音模块自己放的提示音，不是人说的：忽略它，只回应人说的话。\n"
     "- 只说要说出口的话：不加表情符号、括号和动作描写，不说“作为AI”。\n"
     "- 不给医疗、健康、用药方面的建议；背景里提到身体情况也不要劝人看医生。\n"
     "- 先分清是不是在跟你说话：电视、手机、广播里的声音，别人之间在聊天，零碎几个字、没头没尾、听不清的，都不是跟你说的，"
@@ -186,12 +193,13 @@ PERSONA_RULES = (
     "- 背景只在跟话题有关时才用，不要硬扯，不要每句都提同一件事。\n"
     "- 背景里有“【可以问地点】”这一行时，可以找个自然的时候问一句现在在哪儿，只问一次；没有这一行就不要问地点。"
     "有人告诉你在哪了，就按他说的来。\n"
-    "- 收到“[事件] 主人（名字）出现在你面前了，长招呼”时：用这个名字喊主人、打招呼（照你的性格来，不用夸张），"
-    "再顺口说一句你看到的情景或想到的事，两三句。每次都换新说法，不要跟事件里列的“之前说过”的一样。\n"
+    # owner 2026-11-18: a greeting carries no news (a 1.5 min old scene in a greeting means nothing)
+    "- 收到“[事件] 主人（名字）出现在你面前了，打个招呼”时：只用这个名字跟主人打个招呼，一句话、几个字就够（照你的性格来，不用夸张）；"
+    "不提背景里的情景、纪要、刚才听到或看到的任何事，也不提问。每次都换新说法，不要跟事件里列的“之前说过”的一样。\n"
     "- 收到“[事件] 主人又出现了，短招呼：只说「…」”时：刚才已经见过，只原样说「」里那个词，一个字都不多说，不喊名字。\n"
     "- 收到“[事件] 有人点了你一下，让你跟面前的人打招呼”时：按事件里说的称呼主动打招呼，友好一点；"
     "认识的人叫名字，不认识的就用事件给的称呼（美女、帅哥、小朋友、爷爷、奶奶）。只夸，不评论长相的缺点，不开人身玩笑。"
-    "事件说没看到人脸，就自然地说一句没看到人（每次换个说法），再友好地问声好。\n"
+    "事件说没看到人脸，就自然地说一句没看到人（每次换个说法），再友好地问声好。打招呼只打招呼，不提背景里的情景和刚才的事。\n"
     "- 你有眼睛：头上的摄像头和人脸识别，看到的都写在最后的【你的眼睛】里：人脸识别是实时认出的人，"
     "摄像头照片识图是一分钟整理一次的画面（人在做什么、环境、变化）；"
     "“注视”是有人让你“注意看”之后你一张一张仔细看到的照片（新的在前，最准）。有人问你能不能看见、看到了谁、看到了什么，"
@@ -218,6 +226,8 @@ TOLD_HINT = re.compile(r"在|到|这里|这儿")         # only these sentences 
 # mostly "俺可没听见恁说啥，别拿俺寻开心"). The persona has hello answer only 「嗯」 when nobody is talking to it; a speech
 # reply's audio is held until its transcript (which arrives 0.3-0.6 s before the audio, measured 2026-11-15) shows it is
 # not 「嗯」, not a "didn't hear you" question and not a word-for-word repeat of a recent reply; those never play.
+SCENE_FRESH_S = 120                                 # an instant camera description is used while younger than this
+VISION_GATE_S = 6.0                                 # a pending burst / look waits this long for the model's verdict
 GATE_CHARS = 8                                      # decide once this many characters of the reply are in
 QUIET_CHARS = set("嗯唔")
 REPEAT_MIN_CHARS = 6                                # "你好呀" again is a greeting; only longer lines count as repeats
@@ -282,8 +292,75 @@ def addressed(text):
     return bool(t) and bool(ADDRESS.search(t))
 
 
+# Being called (owner 2026-11-18: "hello" heard by the ASR unit is a strong, independent "talking to me"; what follows
+# must be taken seriously; hello may interrupt hello's own speech). Sources: the robot's ASR wake word (asr_wake on
+# /mouth), the keyword ear's Dynames hit, a sentence that starts with hello / Dynames. A call opens CALLED_S: hello's
+# reply stops, the ear's audio goes up for the whole window, and a sentence in it is answered even when smart_turn
+# calls it not for hello (ambient) or the model only says 「嗯」; a called sentence the model never got (said while
+# hello spoke) is answered from the ear's own ASR after CALLED_ANSWER_WAIT_S.
+CALLED_S = 10.0
+CALLED_ANSWER_WAIT_S = 2.5
+CALL_RE = re.compile(r"^\W*(hello|hallo|哈喽|哈罗|嗨喽|dynames|dynamis|デュナメス)\W*", re.I)
+CALLED_SOURCES = {"asr": "语音模块听到 hello", "name": "关键词耳朵听到 Dynames", "text": "句子开头叫了 hello / Dynames"}
+
+
+# Direct orders (owner 2026-11-18): a Unit ASR command word said after the wake word is an order the robot carries out
+# itself (turn left, next, a digit ...); 围观 must not answer that sentence. The robot reports it (asr_order, 0.5.07);
+# a sentence that is just one of these words (the ear's ASR) counts too. Inside ORDER_S the reply is muted (order).
+ORDER_S = 4.0
+ORDER_WORDS = frozenset((
+    "up", "down", "left", "turn left", "right", "turn right", "forward", "front", "backward", "back", "open", "close",
+    "start", "stop", "turn on", "turn off", "play", "pause", "turn on the lights", "turn off the lights", "previous",
+    "next", "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ok", "increase volume",
+    "decrease volume", "maximum volume", "medium volume", "minimum volume", "check firmware version"))
+
+
+def order_word(text):
+    """A sentence that is just a Unit ASR command word (after any call word / I'm here) -> that word, else None."""
+    rest = call_rest(text)
+    t = re.sub(r"[^a-z ]+", " ", str(text if rest is None else rest).lower()).split()
+    w = " ".join(t)
+    return w if w in ORDER_WORDS else None
+
+
+IM_HERE_RE = re.compile(r"^\W*i\W?a?m\W*here\W*", re.I)      # the ASR unit's own reply to its wake word
+
+
+def call_rest(text):
+    """A sentence that starts with a call word -> what follows it ("" if nothing), else None. The ASR unit's "I'm here"
+    right after the call word is not the speaker's."""
+    m = CALL_RE.match(str(text or ""))
+    if not m:
+        return None
+    rest = str(text)[m.end():]
+    return IM_HERE_RE.sub("", rest).strip()
+
+
+# Reply length (owner 2026-11-18 "需要动态回复长度的机制"): the persona rule says the length follows the matter; on top
+# of it the ear (1) tells the model, in every text it hands in, what kind of question this is and how long to answer,
+# (2) keeps the owner's 详细点 / 简单点 for LENGTH_S in a 【这会儿的回答长短】 line, (5) asks for short answers while
+# many faces are in view, and (4) logs each turn's question kind, length mode and reply length (call.realtime.turn).
+LENGTH_S = 600.0
+CROWD_FACES = 3
+DETAIL_RE = re.compile(r"详细(一点|点|些|说|讲|地)|展开(说|讲)|多说(点|些|一些)|具体(点|说|讲)|说清楚点|讲清楚")
+BRIEF_RE = re.compile(r"简单(点|些|说|讲)|说重点|太长了|长话短说|简短|别说那么多|少说(点|几句)")
+EXPLAIN_RE = re.compile(r"为什么|为啥|怎么回事|怎么(做|弄|办|用|样才)|什么原因|解释|介绍|讲讲|说说看|区别|原理|什么意思|如何")
+LENGTH_HINTS = {"explain": "这是要你解释的问题：把道理说清楚，三到五句。",
+                "question": "这是一个问题：先直接回答，必要时补一句理由，一到三句。",
+                "chat": "这是闲聊：一两句就好。"}
+
+
+def ask_kind(text):
+    """explain / question / chat: how much a sentence asks for."""
+    t = str(text or "")
+    if EXPLAIN_RE.search(t):
+        return "explain"
+    return "question" if is_question(t) else "chat"
+
+
 def rescue_text(heard):
-    return f"（刚才这句是在跟你说话：「{str(heard)[:80]}」。直接回答它，不要只说「嗯」。）"
+    return (f"（刚才这句是在跟你说话：「{str(heard)[:80]}」。直接回答它，不要只说「嗯」。"
+            f"{LENGTH_HINTS[ask_kind(heard)]}）")
 
 
 # Look answers (owner 2026-11-15 evening: "你看看我手里拿的是什么" was answered at once with 看不清 / 全白 / 全黑 or a guess,
@@ -296,6 +373,7 @@ LOOK_ASK = re.compile(r"你看看|看看这|看看我|你看这|看一下|看一
 BLIND = re.compile(r"看不清|看不见|看不到|没看清|没看见|看不太清|看不出|黑乎乎|黑漆漆|一片黑|全黑|黑黑的|白茫茫|一片白|全白|"
                    r"白白的|太模糊|模模糊糊|太暗")
 LOOK_WAIT_S = 8.0                                   # wait this long for a fresh look, then stay quiet
+LOOK_UNCLEAR_SKIP = 2                               # 「看不清…」 looks passed over for a later photo (2026-11-18)
 FRESH_LOOK_S = 5.0                                  # a look this young is data: a blind reply may play then
 BLIND_HOLD_CHARS = 16                               # a reply that mentions 看 is judged after this many characters
 
@@ -336,6 +414,18 @@ def look_answer_text(look, question):
 # search (forced) and hand the result in, as with look questions. "我查查哈" plays meanwhile; nothing within SEARCH_WAIT_S
 # (or nothing found): hello says she couldn't find it.
 SEARCH_WAIT_S = 10.0
+# Search tasks (owner 2026-11-18: BTC price wrong, "核实" was promised twice and never done; "一旦进入搜索信息或解决问题，
+# 要确保问题得到解决、或确认主人放弃、或实在无法解决"). A search question opens a task on its topic for TASK_S. In it,
+# a follow-up (核实 / 查错了 / 结果呢 ...) or hello's own promise in a played reply (我重新核实一下 ...) runs the ear's
+# search again, asking for the latest figure with its time and source; after TASK_MAX_TRIES searches hello says
+# honestly it cannot confirm, with what was found. 算了 / 不用查了 closes it. Each step is one trigger.task row.
+TASK_S = 600.0
+TASK_MAX_TRIES = 3
+VERIFY_RE = re.compile(r"核实|核对|确认一下|查错|不对吧|不太对|不准|再查|重新查|从哪里?(查|来)|什么来源|哪个网站|结果呢|"
+                       r"查完了吗|查到了吗|查好了吗|查得怎么样")
+PROMISE_RE = re.compile(r"我(再|重新|这就|马上|现在|去|来|先)?(帮你|给你)?(去|再)?(查|核实|核对|确认|搜|找)(?!到|了|过|的)")
+GIVEUP_RE = re.compile(r"算了|不用查|不用了|别查了|不查了|没事了")
+REDO_S = 20.0                                       # an answer the model refused (someone spoke) is sent again this long
 
 
 def is_search_ask(text):
@@ -346,9 +436,16 @@ def is_search_ask(text):
 def search_answer_text(result, question):
     if result:
         return (f"（你刚刚联网查了一下，查到的是：{str(result)[:300]}）有人刚才问你：「{str(question)[:80]}」。"
-                "就照查到的回答，一两句口语，用你自己的语气；查到的里面没有的不要编。")
+                "就照查到的回答，把结果说清楚：关键数字、是什么时间的、从哪查的，两三句口语，用你自己的语气；"
+                "查到的里面没有的不要编，查到的数据看着可疑就直说。")
     return (f"（你刚刚想联网查「{str(question)[:80]}」，但是没查到。）用一句口语直说没查到，"
             "可以让对方换个说法再问；不要编。")
+
+
+def task_give_up_text(topic, results):
+    found = "；".join(str(r)[:120] for r in results if r) or "什么都没查到"
+    return (f"（你已经联网查了好几次「{str(topic)[:60]}」，还是没法确认准确的结果。查到过的：{found}）"
+            "如实告诉主人现在没法确认，说出查到的几个结果和各自的时间、来源，问他要不要换个问法再查，还是先放一放。三四句口语。")
 
 
 def is_hush(text):
@@ -369,7 +466,7 @@ def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
     return out
 
 
-def instructions(context_text=None, seen=None, recent=None, looks=None):
+def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None):
     """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
     where the voice model tended to miss them; owner 2026-11-14). looks: look_lines() of the vision burst (else mind's
     注视： line, if the context has one)."""
@@ -380,7 +477,8 @@ def instructions(context_text=None, seen=None, recent=None, looks=None):
             eye[key] = line[len(key):]
         else:
             rest.append(line)
-    out = PERSONA + ("\n\n【背景】\n" + "\n".join(rest) if rest else "")
+    out = PERSONA + (f"\n\n【这会儿的回答长短】{length}" if length else "") + \
+        ("\n\n【背景】\n" + "\n".join(rest) if rest else "")
     # Anti-repeat (owner 2026-11-15 "meet 经常卡在重复的一句话"): hello's last replies, also across a session rotation.
     pairs = [(h, r) for h, r in (recent or []) if r]
     times = collections.Counter(norm_text(r) for _, r in pairs)
@@ -399,7 +497,9 @@ def instructions(context_text=None, seen=None, recent=None, looks=None):
         eyes.extend(looks)
     elif eye.get("注视："):
         eyes.append(f"注视（最近 3 分钟，新的在前）：{eye['注视：']}")
-    if eye.get("画面："):
+    if scene:                                          # 即时画面 (2026-11-18): the newest uploaded photo, seconds old
+        eyes.append(f"摄像头刚拍到的（{scene}）")
+    elif eye.get("画面："):
         eyes.append(f"摄像头照片识图（大约一分钟前）：{eye['画面：']}")
     if eyes:
         out += "\n\n【你的眼睛】\n" + "\n".join(eyes)
@@ -470,7 +570,7 @@ def greet_text(call, kind="long", said=(), word=None):
     inside that window gets a short hello. said: hello's last long greetings (memory only), so it does not repeat."""
     if kind == "short":
         return f"[事件] 主人又出现了，短招呼：只说「{word or SHORT_WORDS[0]}」。"
-    text = f"[事件] 主人（{call}）出现在你面前了，长招呼。"
+    text = f"[事件] 主人（{call}）出现在你面前了，打个招呼。"
     if said:
         text += "之前说过：" + "；".join(f"「{t}」" for t in said) + "。这次换个完全不同的说法。"
     return text
@@ -688,9 +788,12 @@ class Config:
     max_lead_ms = 8000
     stall_s = 10
     done_grace_s = 10
-    away_s = 60                  # owner unseen this long, then seen again = a new recognition
-    long_greet_s = 600           # at most one long named greeting per 10 min (owner); inside it: a short hello
-    short_greet_min_s = 60       # short hellos at most this often
+    # owner 2026-11-18: a spoken greeting for the owner's face at most once per 20 min, and only when the face had
+    # been gone 10 min (was 60 s away, one long per 10 min, short hellos in between; short hellos are gone).
+    away_s = 600                 # owner unseen this long, then seen again = a new recognition
+    greet_gap_s = 1200           # any owner greeting (face or a tap on the owner) at most once per 20 min
+    long_greet_s = 1200
+    short_greet_min_s = 1200
     greet_said_keep = 3          # last long greetings kept in memory so the next one differs
     recent_keep = 8              # anti-repeat: hello's last replies (with what it heard) in the instructions
     recent_s = 900               # ... while younger than this (also carried into the next session)
@@ -742,6 +845,17 @@ class RealtimeHub:
         self._turns = {}                               # response id -> turn
         self._speech_end = None
         self._next_kind = "speech"
+        self._inject_id = None                         # the server id of the item that goes with _next_kind
+        self._pending_vision = None                    # a burst / look the ear's ASR heard, waiting for the model's verdict
+        self._scene = None                             # (at_ms, text): the newest instantly recognised camera photo
+        self._length = None                            # (mode, at): the owner's 详细点 / 简单点 (see LENGTH_S)
+        self._called_until = 0.0                       # inside a call window (hello / Dynames): see CALLED_S
+        self._called_at = None                         # the last call (merges sources that heard the same call)
+        self._called_text = None                       # {text, at, trace}: a called sentence still waiting for an answer
+        self._called_trace = None                      # the call's run-log trace: the next sentence in the window joins it
+        self._order_at = None                          # the last direct order (Unit ASR command word): see ORDER_S
+        self._qtask = None                             # the open search task {topic, at, tries, results, answered, ...}
+        self._redo = None                              # a refused answer to send again {kind, prompt, question, at, tries}
         self.ctx = {}                                  # last /realtime/context answer
         self._ctx_at = None
         self._seen_sent, self._seen_at = None, None    # last 【此刻看到】 line sent, and when
@@ -834,13 +948,14 @@ class RealtimeHub:
             if h is not None and h.get("local_end") is None and now - h["speech_end"] < 3:
                 h["local_end"] = now
         self._was_speaking = speaking and not sounding
-        if sounding or self.output_busy() or now < self._quiet_until:
+        called = now < self._called_until
+        if sounding or (self.output_busy() and not called) or now < self._quiet_until:
             self._preroll.clear()
             self._preroll_bytes, self._send_until = 0, 0.0
             return
         if speaking:                                   # the tail must outlast the server VAD's silence
             self._send_until = now + max(self.cfg.tail_s, self.cfg.silence_ms / 1000 + 0.6)
-        if self.cfg.gate == "all" or now < self._send_until:
+        if self.cfg.gate == "all" or now < self._send_until or called:
             if self.state == "closed":
                 return
             while self._preroll:
@@ -867,6 +982,85 @@ class RealtimeHub:
             if self.state == "connecting":             # run log: the first segment starts at this onset (R17)
                 self._cold = {"start": now, "trace": ear_log.new_trace()}
 
+    # ---- being called (see CALLED_S) ----
+    def on_wake(self, link, m):
+        """MouthLink: the robot's {"type":"asr_wake","word":"hello",...} (collector-0.5.06; it already stopped its speech)."""
+        self.called("asr", interrupted=bool((m or {}).get("interrupted")))
+
+    def called(self, source, text=None, trace=None, interrupted=False):
+        """hello was called (asr / name / text). Opens the window, stops hello's reply, lets the audio up."""
+        if not self.armed():
+            return
+        now = self.clock()
+        merged = self._called_at is not None and now - self._called_at < 2.0
+        self._called_at, self._called_until = now, now + CALLED_S
+        self.stats["called_" + source] += 1
+        stopped = self._interrupt(now) or interrupted
+        self._quiet_until = 0.0
+        self._send_until = max(self._send_until, now + CALLED_S)
+        if not merged:
+            self._stage("listen")
+            trace = trace or ear_log.new_trace()
+            if source != "text":                       # asr / name: what is said next goes on this call's chain
+                self._called_trace = trace
+            ear_log.emit("heard.called", trace=trace, by=source,
+                         sum=f"被叫了：{CALLED_SOURCES.get(source, source)}" + ("，打断了它的话" if stopped else ""),
+                         ref={"session": self.session_no}, extra={"source": source, "interrupted": stopped,
+                                                                  **({"text": str(text)[:200]} if text else {})})
+        if self.state == "closed" and self.want():
+            self._open(now, "called")
+
+    def on_order(self, link, m):
+        """MouthLink: the robot's {"type":"asr_order","word":...} (collector-0.5.07): a direct order it carries out."""
+        self.ordered(str((m or {}).get("word") or "")[:40], "asr")
+
+    def ordered(self, word, source, trace=None):
+        """A direct order: not for the voice backend. The call window closes, nothing is answered for that sentence."""
+        if not self.armed():
+            return
+        now = self.clock()
+        merged = self._order_at is not None and now - self._order_at < 2.0
+        self._order_at = now
+        self._called_until, self._called_text, self._called_trace = 0.0, None, None
+        self._pending_vision, self._rescue = None, None
+        self.stats["order_" + source] += 1
+        if self._resp is not None and (self._turns.get(self._resp) or {}).get("kind") == "speech":
+            self._interrupt(now)                       # a reply to the order is already on its way: stop it
+        if not merged:
+            self._stage("skip")
+            ear_log.emit("gate.realtime", trace=trace or self._trace_now() or ear_log.new_trace(),
+                         sum=f"直接口令：{word}（机器人自己执行，不回答）",
+                         extra={"verdict": "order", "word": word, "source": source,
+                                "reason": "语音模块的口令词是给机器人的直接指令，围观不回答"})
+
+    def _interrupt(self, now):
+        """Stop hello's own reply (generating or playing). -> True if something was stopped."""
+        stopped = False
+        if self._resp is not None:
+            self._dropped.add(self._resp)
+            self._send_soon({"type": "response.cancel"})
+            stopped = True
+        st = self._stream
+        if st is not None and not st["reported"]:
+            self._give_up(st, "interrupted")
+            stopped = True
+        if stopped:
+            self.stats["interrupted"] += 1
+        return stopped
+
+    def in_called(self, now=None):
+        return (self.clock() if now is None else now) < self._called_until
+
+    def _answer_called(self, text, now, trace, why):
+        """A sentence in a call window the model did not answer: ask it again through the rescue path."""
+        if not text:
+            return
+        self._called_text = None
+        self._rescue = {"at": now, "texts": [str(text)[:300]], "sent": False, "trace": trace, "called": why}
+        ear_log.emit("gate.realtime", trace=trace or ear_log.new_trace(), sum=f"被叫了，照样回答（{why}）{str(text)[:30]}",
+                     extra={"verdict": "called_answer", "reason": why, "heard": str(text)[:300]})
+        self._try_rescue(now)
+
     def on_vision(self, msg):
         """Every robot M12 event (VisionLink). Owner appears after away_s unseen in crowd -> a greeting."""
         if not isinstance(msg, dict):
@@ -882,12 +1076,10 @@ class RealtimeHub:
             self._queue_greet(now)
 
     def _queue_greet(self, now):
-        if self._last_long is None or now - self._last_long >= self.cfg.long_greet_s:
-            size = "long"
-        elif self._last_greet is None or now - self._last_greet >= self.cfg.short_greet_min_s:
-            size = "short"
-        else:
+        if self._last_greet is not None and now - self._last_greet < self.cfg.greet_gap_s:
+            self.stats["greet_too_soon"] += 1
             return
+        size = "long"
         if self._greet is None:
             self._greet = {"at": now, "kind": "owner", "pick": None, "size": size}
             self.stats["greet_queued"] += 1
@@ -967,6 +1159,32 @@ class RealtimeHub:
 
     def step(self):
         now = self.clock()
+        r = self._redo
+        if r is not None:
+            if now - r["at"] > REDO_S or r["tries"] > 4:
+                self._redo = None
+                self.stats["redo_dropped"] += 1
+            elif self._ws is not None and self._ready.is_set() and self._resp is None and not self.output_busy() \
+                    and self._seg is None and self._next_kind == "speech":
+                self._redo = None
+                self.stats["redo_sent"] += 1
+                if r["kind"] == "search_answer":
+                    self._search_question = r["question"]
+                elif r["kind"] == "look_answer":
+                    self._look_question = r["question"]
+                else:
+                    self._rescue_heard = r["question"]
+                self._next_kind, self._next_trace, self._next_prompt = r["kind"], r["trace"], r["prompt"]
+                self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
+                                                                              "content": [{"type": "input_text",
+                                                                                           "text": r["prompt"]}]}})
+                self._send_soon({"type": "response.create"})
+        c = self._called_text
+        if c is not None and now - c["at"] > CALLED_ANSWER_WAIT_S and self._resp is None and not self.output_busy():
+            self._answer_called(c["text"], now, c["trace"], "千问没有回答")
+        p = self._pending_vision
+        if p is not None and now - p["at"] > VISION_GATE_S:
+            self._release_vision(now, None)            # no verdict came (no session, model silent): no burst
         if not self.in_crowd():
             self._need_speech, self._greet, self._appear = False, None, None
         if not self.want():
@@ -1163,7 +1381,57 @@ class RealtimeHub:
         seen = self._seen()
         self._seen_sent, self._seen_at = seen, self.clock()
         self._looks_dirty, self._looks_sent_at = False, self.clock()
-        return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()))
+        return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()),
+                            self._scene_line(), self._length_line())
+
+    # ---- reply length (see LENGTH_S) ----
+    def _length_mode(self, now=None):
+        now = self.clock() if now is None else now
+        m = self._length
+        return m[0] if m is not None and now - m[1] <= LENGTH_S else "normal"
+
+    def _length_line(self):
+        mode = self._length_mode()
+        if mode == "detail":
+            return "主人刚让你说详细点：接下来问事情时多说几句，把来龙去脉讲清楚（闲聊仍然简短），直到他说简单点。"
+        if mode == "brief":
+            return "主人刚嫌你说得长：接下来每次一两句，只说重点，直到他让你详细说。"
+        try:
+            faces = len(self.watch.recent(self.clock()))
+        except Exception:                              # noqa: BLE001
+            faces = 0
+        if faces >= CROWD_FACES:
+            return f"眼前有 {faces} 个人，场面热闹：回答尽量短，一两句。"
+        return None
+
+    def _length_from(self, text, now, trace):
+        """The owner's 详细点 / 简单点: kept LENGTH_S, pushed to the model at once."""
+        mode = "detail" if DETAIL_RE.search(text) else "brief" if BRIEF_RE.search(text) else None
+        if mode is None or (self._length is not None and self._length[0] == mode and now - self._length[1] < 3):
+            return
+        self._length = (mode, now)
+        ear_log.emit("trigger.length", trace=trace or ear_log.new_trace(),
+                     sum=f"回答长短：{'详细' if mode == 'detail' else '简短'}（{text[:30]}）",
+                     ref={"session": self.session_no}, extra={"mode": mode, "heard": text[:200]})
+        if self._ws is not None and self._ready.is_set():
+            self._send_instructions("length", trace)
+
+    # ---- 即时画面 (vision_burst.LiveEye) ----
+    def add_scene(self, text, at_ms):
+        """The newest uploaded camera photo, recognised at once: goes out with the instructions (debounced)."""
+        if not text:
+            return
+        self._scene = (at_ms, str(text)[:200])
+        self._looks_dirty = True
+        self._push_looks(self.clock())
+
+    def _scene_line(self):
+        if self._scene is None:
+            return None
+        age = max(0, (self.wall_ms() - self._scene[0]) / 1000)
+        if age > SCENE_FRESH_S:
+            return None
+        return f"{int(age)} 秒前：{self._scene[1]}"
 
     # ---- vision burst (vision_burst.py) ----
     def add_look(self, text, at_ms, snapped=None):
@@ -1175,9 +1443,21 @@ class RealtimeHub:
         self._looks_dirty = True
         w = self._look_wait
         if w is not None and not w["sent"] and w.get("look") is None and snapped is not None and snapped >= w["mark"]:
-            w["look"] = str(text)[:200]
-            self._try_look_answer(self.clock())
+            now = self.clock()
+            # 2026-11-18: the first photo after the question often comes before the thing is held up; an unclear look
+            # waits for the next one while there is time (at most LOOK_UNCLEAR_SKIP, never past the last 2 s)
+            if str(text).startswith("看不清") and w.get("skipped", 0) < LOOK_UNCLEAR_SKIP and now < w["deadline"] - 2:
+                w["skipped"] = w.get("skipped", 0) + 1
+                self.stats["look_unclear_skipped"] += 1
+            else:
+                w["look"] = str(text)[:200]
+                self._try_look_answer(now)
         self._push_looks(self.clock())
+
+    def look_question(self):
+        """The look question waiting for a photo (vision_burst asks the photo this question), or None."""
+        w = self._look_wait
+        return w["question"] if w is not None and not w["sent"] and w.get("look") is None else None
 
     # ---- look questions (see LOOK_ASK) ----
     def _start_look_wait(self, question, now, trace=None):
@@ -1243,34 +1523,108 @@ class RealtimeHub:
         self._out_put(("end", rid, b""))
 
     # ---- search questions (see web_search.py) ----
-    def _start_search_wait(self, question, now, trace=None):
+    def _start_search_wait(self, question, now, trace=None, query=None, task=None):
         w = self._search_wait
         if w is not None and not w["sent"] and now <= w["deadline"]:
-            return                                     # already searching (both ASRs heard it): one search
+            return False                               # already searching (both ASRs heard it): one search
         if self.searcher is None or not self.active():
-            return
+            return False
         w = {"at": now, "question": str(question)[:80], "deadline": now + SEARCH_WAIT_S, "sent": False,
-             "done": False, "result": None, "filler": not self.search_fillers, "trace": trace}
+             "done": False, "result": None, "filler": not self.search_fillers, "trace": trace,
+             "query": str(query or question)[:160], "task": task}
         self._search_wait = w
         self.stats["search_asks"] += 1
         log("realtime: search question: searching", flush=True)
         self._stage("think")
         self.spawn(self._run_search(w))
         self._try_search_filler(now)
+        return True
 
     async def _run_search(self, w):
         loop = asyncio.get_running_loop()
         try:
             with ear_log.scope(trace=w.get("trace")):  # call.search carries the question's trace
                 ctx = contextvars.copy_context()
-                result = await loop.run_in_executor(None, functools.partial(ctx.run, self.searcher, w["question"]))
+                result = await loop.run_in_executor(None, functools.partial(ctx.run, self.searcher, w["query"]))
         except Exception:                              # noqa: BLE001 - a failed search: hello says so
             log(f"realtime: search failed\n{traceback.format_exc().rstrip()}", flush=True)
             result = None
         w["result"] = result if isinstance(result, str) and result.strip() else None
         w["done"] = True
+        if w.get("task") is not None:
+            w["task"]["results"].append(w["result"])
         self.stats["search_found" if w["result"] else "search_none"] += 1
         self._try_search_answer(self.clock())
+
+    # ---- search tasks (see TASK_S) ----
+    def _task_live(self, now):
+        t = self._qtask
+        return t if t is not None and not t.get("closed") and now - t["at"] <= TASK_S else None
+
+    def _task_open(self, topic, now, trace):
+        t = self._task_live(now)
+        if t is not None and now - t.get("last", -1e9) < 3:
+            return                                     # the other ASR heard the same question
+        self._qtask = {"topic": str(topic)[:80], "at": now, "tries": 1, "results": [], "answered": False,
+                       "trace": trace, "last": now}
+        self._task_log("开始", self._qtask, trace)
+
+    def _task_follow(self, text, now, trace):
+        """A follow-up on the open task (核实 / 查错了 / 结果呢, or 算了). -> True when it was one."""
+        t = self._task_live(now)
+        if t is None:
+            return False
+        if GIVEUP_RE.search(text):
+            t["closed"] = "owner"
+            self._task_log("主人说不用查了", t, trace)
+            return True
+        if not VERIFY_RE.search(text):
+            return False
+        if now - t.get("last", -1e9) < 3:
+            return True                                # both ASRs: once
+        self._task_search(now, trace, f"主人追问：{text[:30]}")
+        return True
+
+    def _task_promise(self, reply, turn, now):
+        """hello said it would look something up: make it true (the open task, or what was just asked)."""
+        w = self._search_wait
+        if w is not None and not w["sent"]:
+            return                                     # a search is already on its way
+        t = self._task_live(now)
+        if t is None:
+            topic = turn.get("heard") or next((x for at, x in reversed(self._local_texts) if now - at <= 15), None)
+            if not topic:
+                return
+            self._task_open(topic, now, turn.get("trace"))
+            t = self._qtask
+            t["tries"] = 0
+        elif now - t.get("last", -1e9) < 3:
+            return                                     # the owner's follow-up already started this search
+        self._task_search(now, turn.get("trace"), f"它说了要去查：{reply[:30]}")
+
+    def _task_search(self, now, trace, why):
+        t = self._qtask
+        t["last"] = now
+        t["tries"] += 1
+        if t["tries"] > TASK_MAX_TRIES:
+            t["closed"] = "unresolved"
+            self._task_log("查不准，如实告诉主人", t, trace)
+            w = {"at": now, "question": t["topic"], "deadline": now, "sent": False, "done": True, "result": None,
+                 "filler": True, "trace": trace, "query": t["topic"], "task": t,
+                 "prompt": task_give_up_text(t["topic"], t["results"])}
+            self._search_wait = w
+            self._try_search_answer(now)
+            return
+        query = f"{t['topic']}（要最新的实时数据，写明数据的时间和来源网站）"
+        if self._start_search_wait(t["topic"], now, trace, query=query, task=t):
+            self._task_log(f"再查第 {t['tries']} 次（{why}）", t, trace)
+
+    @_run_log
+    def _task_log(self, what, t, trace):
+        ear_log.emit("trigger.task", trace=trace or ear_log.new_trace(), sum=f"查询任务：{what} · {t['topic'][:30]}",
+                     ref={"session": self.session_no},
+                     extra={"topic": t["topic"], "tries": t["tries"], "closed": t.get("closed"),
+                            "answered": t.get("answered"), "results": [str(r)[:80] for r in t["results"]]})
 
     def _try_search_filler(self, now):
         """One "我查查哈" per search question, at once when hello is quiet; not when the result is already in."""
@@ -1302,7 +1656,9 @@ class RealtimeHub:
         self.stats["search_answers"] += 1
         log(f"realtime: session {self.session_no} answering the search question "
             f"({'found' if w['result'] else 'not found'})", flush=True)
-        prompt = search_answer_text(w["result"], w["question"])
+        prompt = w.get("prompt") or search_answer_text(w["result"], w["question"])
+        if w.get("task") is not None:
+            w["task"]["answered"] = True
         self._next_trace, self._next_prompt = w.get("trace"), prompt
         self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
                                                                       "content": [{"type": "input_text",
@@ -1417,13 +1773,37 @@ class RealtimeHub:
             if not self._ready.is_set():
                 self._ready.set()
                 self.state = "open"
-                if self.watch.present((self.ctx.get("owner") or {}).get("face_names") or [], now):
-                    self._queue_greet(now)
+                # (no greeting just because the owner is in view when a session opens: owner 2026-11-18, only an
+                # appearance after away_s greets; one queued by that appearance is delivered by step())
+        elif t == "conversation.item.created":
+            item = e.get("item") or {}
+            if self._next_kind != "speech" and item.get("role") == "user" and item.get("id"):
+                self._inject_id = item["id"]           # our [事件] / question item, deleted again if refused
         elif t == "error":
             err = e.get("error") or {}
             msg = str(err.get("message") or "")[:160].replace(self.voice or "\0", "<voice>")
             log(f"realtime: session {n} error {str(err.get('code') or err.get('type') or '')[:40]}: {msg}", flush=True)
             self.stats["errors"] += 1
+            if "user is speaking" in msg and self._next_kind != "speech":
+                # 2026-11-18 13:08:40: a greeting's response.create was refused while the owner talked; its [事件] item
+                # stayed in the conversation and the next answer (89 s later) greeted instead of answering. Drop it.
+                kind, trace, prompt = self._next_kind, self._next_trace, self._next_prompt
+                if kind in ("search_answer", "look_answer", "rescue") and prompt:
+                    # an answer someone waits for is sent again when the room is quiet (2026-11-18: three BTC / gold
+                    # search answers were refused and lost); a greeting is just dropped
+                    r = self._redo if self._redo is not None and self._redo["prompt"] == prompt else None
+                    self._redo = {"kind": kind, "prompt": prompt, "trace": trace, "at": (r or {}).get("at", now),
+                                  "tries": (r or {}).get("tries", 0) + 1,
+                                  "question": {"search_answer": self._search_question, "look_answer": self._look_question,
+                                               "rescue": self._rescue_heard}.get(kind)}
+                if self._inject_id:
+                    self._send_soon({"type": "conversation.item.delete", "item_id": self._inject_id})
+                self._next_kind, self._next_trace, self._next_prompt, self._inject_id = "speech", None, None, None
+                self.stats["refused_busy"] += 1
+                ear_log.emit("gate.realtime", trace=trace or ear_log.new_trace(), sum=f"没发出 {kind}：对方正在说话",
+                             extra={"verdict": "refused_busy", "kind": kind,
+                                    "reason": "千问在有人说话时拒绝了主动回复（招呼 / 补救 / 回答），已撤回"})
+                self._stage("busy")                    # 0.5.05: the robot shows 等你说完 (older firmware ignores it)
             if not self._ready.is_set():               # refused at setup (bad voice, key): stop and retry later
                 self._retry_at = now + self.cfg.retry_s
                 self.close("refused")
@@ -1431,7 +1811,7 @@ class RealtimeHub:
             self._last_speech = now
             if self._seg is None:                      # the turn's own trace starts with its segment (R17)
                 cold = self._take_cold(now)
-                self._seg = cold or {"start": now, "trace": ear_log.new_trace()}
+                self._seg = cold or {"start": now, "trace": self._take_called_trace(now) or ear_log.new_trace()}
         elif t == "input_audio_buffer.speech_stopped":
             self._speech_end = now
             recent = self._local_end if self._local_end is not None and now - self._local_end < 3 else None
@@ -1458,12 +1838,21 @@ class RealtimeHub:
             if self._turn is turn:
                 self._turn = None
             self.stats["ambient"] += 1
+            called = self.in_called(now) or self._called_text is not None
             if self.on_transcript:
                 self.on_transcript("ambient", text)
             ear_log.emit("gate.realtime", trace=(turn or {}).get("trace") or ear_log.new_trace(),
-                         sum=f"ambient {text[:40]}".strip(), extra={"verdict": "ambient", "heard": text[:300],
-                                                                    "turn": self.cfg.turn})
-            self._stage("skip")
+                         sum=f"千问判：不是跟我说 {text[:40]}".strip(),
+                         extra={"verdict": "ambient", "reason": "smart_turn_v2 判断不是跟 hello 说的，没有回答",
+                                "smart_turn": "rejected", "heard": text[:300], "turn": self.cfg.turn,
+                                **({"called": True} if called else {})})
+            if called:                                 # being called wins over smart_turn: answer it anyway
+                self._release_vision(now, True)
+                self._answer_called((self._called_text or {}).get("text") or text, now,
+                                    (turn or {}).get("trace"), "千问判不是跟我说")
+            else:
+                self._release_vision(now, False)
+                self._stage("aside")                   # 0.5.04: the stage blocks flash blue (older firmware ignores it)
         elif t == "response.created":
             rid = str((e.get("response") or {}).get("id") or f"r{now}")
             self._resp = rid
@@ -1471,8 +1860,10 @@ class RealtimeHub:
                 {"kind": self._next_kind, "speech_end": None, "heard_chars": None,
                  "trace": self._next_trace if self._next_kind != "speech" else None,
                  "prompt": self._next_prompt if self._next_kind != "speech" else None}
+            if turn.get("kind") == "speech":
+                self._called_text = None
             self._next_kind, self._turn = "speech", None
-            self._next_trace = self._next_prompt = None
+            self._next_trace = self._next_prompt = self._inject_id = None
             turn.update({"rid": rid, "session": n, "response_at": now, "first_delta": None, "sound_at": None,
                          "reply_chars": 0, "audio_ms": 0, "usage": None, "at": self.wall_ms(),
                          "gate": None if turn.get("kind") in ("speech", "rescue", "look_answer", "search_answer") else "play",
@@ -1519,6 +1910,8 @@ class RealtimeHub:
                 self._judge(self._resp, turn, True)
                 if turn.get("kind") == "greet" and text:
                     self._said.append(text[:80])
+                if text and turn.get("gate") == "play" and turn.get("kind") in ("speech", "rescue") and PROMISE_RE.search(text):
+                    self._task_promise(text, turn, self.clock())
                 if text and turn.get("gate") == "play":
                     self._recent.append((self.clock(), turn, text[:80]))   # heard is read later (it may come after)
                     if self._ws is not None and self._ready.is_set():     # the next reply already knows it
@@ -1550,9 +1943,22 @@ class RealtimeHub:
         if turn.get("gate") is not None:
             return
         now = self.clock()
+        if turn.get("kind") == "speech" and self._order_at is not None and now - self._order_at <= ORDER_S:
+            v = "order"                                # the sentence was a direct order to the robot (see ORDER_S)
+            turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
+            self._dropped.add(rid)
+            self.stats["muted_order"] += 1
+            self._log_gate(rid, turn, v, done)
+            return
+        if turn.get("kind") == "speech" and self._pending_vision is not None:
+            q = reply_verdict(turn.get("tx"), done)
+            if q is None:
+                return                                 # too little of the reply yet to tell 「嗯」 from an answer
+            self._release_vision(now, q != "quiet", "千问只回了「嗯」")   # a real reply: taken; 「嗯」: not for hello
         if turn.get("kind") == "speech":
-            asked = next((t for t in [turn.get("heard")] + [t for at, t in self._local_texts if now - at <= 3]
-                          if t and is_look_ask(t)), None)
+            asked = None if self.cfg.turn != "server_vad" else \
+                next((t for t in [turn.get("heard")] + [t for at, t in self._local_texts if now - at <= 3]
+                      if t and is_look_ask(t)), None)  # smart_turn: only through the pending gate above
             if asked is not None:
                 self._start_look_wait(asked, now, turn.get("trace"))
             w = self._look_wait
@@ -1569,7 +1975,8 @@ class RealtimeHub:
             if asked is not None:
                 self._start_search_wait(asked, now, turn.get("trace"))
             w = self._search_wait
-            if w is not None and not w["sent"] and now - w["at"] <= 4:
+            redo = self._redo is not None and self._redo["kind"] == "search_answer"
+            if (w is not None and not w["sent"] and (now - w["at"] <= 4 or not w["done"])) or redo:
                 v = "wait_search"                      # the answer comes from the ear's own search
                 turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
                 self._dropped.add(rid)
@@ -1609,6 +2016,12 @@ class RealtimeHub:
             return []
         return [dict(h) for t, h in self._heard_log if start - HEARD_EPS_S <= t <= now]
 
+    def _take_called_trace(self, now):
+        """The call's trace for the first sentence after it (2026-11-18: the owner could not see the hello that led to
+        a search in its chain)."""
+        t, self._called_trace = self._called_trace, None
+        return t if t is not None and self.in_called(now) else None
+
     def _trace_now(self, own=None):
         """The trace a local sentence's consequences (look wait, burst, hush) go on: the turn it falls into (the open
         segment, the session being opened for it, or the last turn while its record is not written yet), else the
@@ -1622,7 +2035,7 @@ class RealtimeHub:
         cold = self._cold_live(self.clock())
         if cold is not None:
             return cold["trace"]
-        return own
+        return self._take_called_trace(self.clock()) or own
 
     def _cold_live(self, now):
         """The onset that opened the session, while it is at most COLD_MAX_S old (R18); an older one is dropped."""
@@ -1644,7 +2057,10 @@ class RealtimeHub:
         ear_log.emit("gate.realtime", trace=turn["trace"], sum=f"{verdict} {(turn.get('tx') or '')[:40]}".strip(),
                      ref={"rid": rid, "session": turn.get("session")},
                      extra={"verdict": verdict, "reason": GATE_REASONS.get(v, v), "kind": turn.get("kind"),
-                            "done": done, "heard": self._heard_in(turn, self.clock()), **extra})
+                            "done": done, "heard": self._heard_in(turn, self.clock()),
+                            # owner 2026-11-18: smart_turn_v2's verdict beside ours (a reply = it took the turn)
+                            **({"smart_turn": "accepted"} if turn.get("kind") == "speech" and self.cfg.turn != "server_vad" else {}),
+                            **extra})
 
     @_run_log
     def _log_search(self, rid, turn, usage):
@@ -1674,27 +2090,63 @@ class RealtimeHub:
         self._heard_text(str(text)[:300], now, trace=self._trace_now(trace))
 
     def _heard_text(self, text, now, told=False, trace=None):
-        if is_look_ask(text):
-            self._start_look_wait(text, now, trace)
-        elif is_search_ask(text):
-            self._start_search_wait(text, now, trace)
+        self._length_from(str(text), now, trace)
+        word = order_word(text)
+        if word is not None and (call_rest(text) is not None or self.in_called(now)):
+            # only right after a call: a bare "OK." in ordinary talk is not an order (the robot's own report is)
+            self.ordered(word, "text", trace)
+            return
+        rest = call_rest(text)
+        if rest is not None:
+            self.called("text", text=text, trace=trace)
+            if rest and not told:                      # the ear's ASR: make sure this sentence gets an answer
+                self._called_text = {"text": rest, "at": now, "trace": trace}
+        look, key = is_look_ask(text), self._burst_key(text)
+        if (look or key == "burst_start") and self.cfg.turn != "server_vad" and not self.in_called(now):
+            # owner 2026-11-18 "决定视觉爆发的前提是过了qwen的拒识闸门": no burst / look wait until the realtime model
+            # answered the sentence with a real reply (_judge: not 「嗯」); ambient, 「嗯」 or nothing in 6 s = none.
+            # Both sources wait: the model transcribes sentences it then ignores (15:09 / 15:14 2026-11-18: talk with
+            # a colleague, "你看这把…", "还得看一下表", each started a burst from the transcript alone). A call skips it.
+            if self._pending_vision is None or now - self._pending_vision["at"] > 1.0 or not told:
+                self._pending_vision = {"text": text, "at": now, "trace": trace}
+        else:
+            self._vision_from(text, now, trace, look, key)
+        if not look and not self._task_follow(text, now, trace) and is_search_ask(text):
+            self._task_open(text, now, trace)
+            self._start_search_wait(text, now, trace, task=self._qtask)
         r = self._rescue
         if r is not None and not r["sent"] and now - r["at"] <= RESCUE_S:
             r["texts"].append(text)
             self._try_rescue(now)
-        if self.burst is not None:
-            key = self._burst_key(text)
-            if key and not (self._cmd_last.get(key, -1e9) > now - 4):    # both sources heard it: once
-                self._cmd_last[key] = now
-                try:
-                    with ear_log.scope(trace=trace):    # the burst (and its looks) carry this sentence's trace
-                        self.burst.heard(text)
-                except Exception:                      # noqa: BLE001 - a burst never costs the session
-                    log(f"realtime: burst trigger failed\n{traceback.format_exc().rstrip()}", flush=True)
         if told:
             self._told(text)
         if is_hush(text):
             self._hush(text, trace)
+
+    def _vision_from(self, text, now, trace, look, key):
+        """A look question starts the look wait; a burst word starts / stops the burst (once for both sources)."""
+        if look:
+            self._start_look_wait(text, now, trace)
+        if self.burst is not None and key and not (self._cmd_last.get(key, -1e9) > now - 4):
+            self._cmd_last[key] = now
+            try:
+                with ear_log.scope(trace=trace):        # the burst (and its looks) carry this sentence's trace
+                    self.burst.heard(text)
+            except Exception:                          # noqa: BLE001 - a burst never costs the session
+                log(f"realtime: burst trigger failed\n{traceback.format_exc().rstrip()}", flush=True)
+
+    def _release_vision(self, now, accepted, why=None):
+        """The realtime model's verdict on the sentence a pending burst / look waits for."""
+        p, self._pending_vision = self._pending_vision, None
+        if p is None:
+            return
+        if accepted and now - p["at"] <= VISION_GATE_S:
+            self._vision_from(p["text"], now, p["trace"], is_look_ask(p["text"]), self._burst_key(p["text"]))
+            return
+        why = why or ("千问判不是跟我说" if accepted is False else "没等到千问判定")
+        self.stats["burst_gated"] += 1
+        ear_log.emit("gate.realtime", trace=p["trace"] or ear_log.new_trace(), sum=f"视觉爆发没开：{why} {p['text'][:30]}",
+                     extra={"verdict": "burst_gated", "reason": why, "heard": p["text"][:300]})
 
     @staticmethod
     def _burst_key(text):
@@ -1710,11 +2162,13 @@ class RealtimeHub:
         r = self._rescue
         if r is None or r["sent"]:
             return
-        if now - r["at"] > RESCUE_S or (self._last_speech is not None and self._last_speech > r["at"]):
+        if now - r["at"] > RESCUE_S or (not r.get("called") and self._last_speech is not None and self._last_speech > r["at"]):
             self._rescue = None                        # too late, or someone is already talking again
             return
         follow = bool(self._recent) and now - self._recent[-1][0] <= FOLLOW_S      # hello just spoke
-        heard = next((t for t in r["texts"] if addressed(t) or (follow and is_question(t))), None)
+        called = r.get("called") or self.in_called(now) or r["at"] < self._called_until
+        heard = next((t for t in r["texts"] if addressed(t) or (follow and is_question(t)) or
+                      (called and len(norm_text(t)) >= 2)), None)
         if heard is not None and is_look_ask(heard):
             self._start_look_wait(heard, now, r.get("trace"))
         if heard is not None and self._look_wait is not None:
@@ -1883,6 +2337,8 @@ class RealtimeHub:
         call = owner.get("call")
         if g is None or not self._ready.is_set() or self.busy() or self.clock() < self._quiet_until:
             return
+        if self._seg is not None:                      # the server hears someone speaking: it would refuse (2026-11-18)
+            return
         if now - g["at"] > self.cfg.greet_max_age_s:
             return                                     # step() drops it
         if g["kind"] == "owner":
@@ -1981,7 +2437,10 @@ class RealtimeHub:
                      ref={"tid": doc["tid"], "session": turn.get("session"), "rid": turn.get("rid")},
                      extra={"kind": turn.get("kind"), "state": state, "heard": heard, "timings": doc["timings"],
                             "audio_ms": turn.get("audio_ms"), "heard_chars": turn.get("heard_chars"),
-                            "reply_chars": turn.get("reply_chars"), "tokens": doc["usage"]})
+                            "reply_chars": turn.get("reply_chars"), "tokens": doc["usage"],
+                            # reply length data (see LENGTH_S): what was asked, the length mode, how long the answer was
+                            "ask_kind": ask_kind(turn.get("heard") or next((h["text"] for h in heard), "")),
+                            "length_mode": self._length_mode()})
 
     def _write_status(self, now):
         self._status_at = now

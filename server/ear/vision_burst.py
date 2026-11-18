@@ -56,7 +56,7 @@ LOOK_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 LOOK_EXTRA = {"enable_thinking": False}
 PRICE_USD_PER_M = (0.1126, 0.380025)           # (input, output) USD per million tokens, as mind/llm.PRICES
 PRICE_BASIS = "vision_burst.PRICE_USD_PER_M = mind llm.PRICES qwen3.8-flash 2026-11-15"
-LOOK_PROMPT = "look-v1"
+LOOK_PROMPT = "look-v2"                         # 2026-11-18: the pending question goes in; hello is the camera
 
 # 2026-11-15 evening: the owner's own first try was "你看看我手里拿的是什么东西" (no burst); 你看看 / 看看这 / 你看这 / 看一下
 # start one too (a burst costs ~0.001 USD a minute).
@@ -75,7 +75,9 @@ UINT32 = 1 << 32
 log = print                                     # tests silence it
 
 LOOK_SYSTEM = ("你是宠物机器人 hello 的眼睛。hello 个头很小，主人常带着它走，可能在任何地方；机身摄像头 320×240，"
-               "画面只是 hello 正看着的方向。主人让 hello“注意看”，你一张一张看它刚拍下的照片。")
+               "画面只是 hello 正看着的方向。主人让 hello“注意看”，你一张一张看它刚拍下的照片。"
+               # 2026-11-18: looks called the red device in the owner's hand "hello"
+               "照片是 hello 自己的摄像头拍的，hello 自己不会出现在照片里：画面里的机器、设备、玩具都不要叫它 hello。")
 LOOK_USER = ("下面是 hello 刚刚拍下的一张照片。用中文写一两句短句（不超过 60 字），说画面里现在有谁、在哪、在做什么，周围什么样。"
              "人脸识别认出的名字可信；没认出的人说“一个人”“一个小朋友”等，不要猜名字（宁可叫不出名字，也不要叫错），"
              "不写年龄性别。只写看到的，看不清就直说。不要用“我看到”开头，不提建议。")
@@ -89,8 +91,16 @@ def cost_usd(usage):
     return round((n("prompt_tokens") * pin + n("completion_tokens") * pout) / 1e6, 12)
 
 
-def look_messages(jpeg, seen=None):
-    text = LOOK_USER + (f"\n人脸识别此刻：{seen}" if seen else "")
+# 2026-11-18 (owner: "为什么识别不出来我拿的什么"): with a look question pending, the photo is asked that question first;
+# the scene sentence was about people and missed the thing in the hand. Unclear = the reply starts with 看不清.
+LOOK_QUESTION = ("有人刚刚问 hello：「{q}」。先用一句话直接回答这个问题（问的是手里或面前的东西，就说它是什么，"
+                 "加上颜色、形状、上面能看到的字或标志）；看不清问的东西，就以「看不清」三个字开头说明原因（太近、太暗、挡住、"
+                 "不在画面里）。然后再用一句短句说画面。")
+
+
+def look_messages(jpeg, seen=None, question=None):
+    text = (LOOK_QUESTION.format(q=str(question)[:80]) + "\n" if question else "") + LOOK_USER + \
+        (f"\n人脸识别此刻：{seen}" if seen else "")
     return [{"role": "system", "content": LOOK_SYSTEM},
             {"role": "user", "content": [{"type": "text", "text": text},
                                          {"type": "image_url", "image_url": {
@@ -101,8 +111,8 @@ def dashscope_look(key, base_url=LOOK_BASE_URL, model=LOOK_MODEL, timeout=LOOK_T
     """recognise(jpeg, seen) -> (text or None, usage dict, latency ms, error or None). Blocking (run it on a pool);
     never raises; the key is only in the header (the run log keeps its first 7 characters). Every call is one call.look
     in the run log (trace and ref {path, lid} from the caller's scope; the photo is replaced by its size there)."""
-    def recognise(jpeg, seen=None):
-        messages = look_messages(jpeg, seen)
+    def recognise(jpeg, seen=None, question=None):
+        messages = look_messages(jpeg, seen, question)
         out = _recognise(messages)
         text, usage, ms, err = out
         ear_log.emit("call.look", ok=err is None, err=err, ms=ms, model=model, key=key, usage=usage or None,
@@ -374,7 +384,9 @@ class VisionBurst:
         with ear_log.scope("call.look", trace=b.get("trace"), ref={"path": f["path"], "lid": lid, "burst_id": b["id"]}):
             ctx = contextvars.copy_context()             # the pool thread logs call.look with this trace and ref
         try:
-            fut = loop.run_in_executor(self._pool, ctx.run, self.recognise, f["jpeg"], seen)
+            question = self.hub.look_question() if hasattr(self.hub, "look_question") else None
+            args = (f["jpeg"], seen, question) if question else (f["jpeg"], seen)
+            fut = loop.run_in_executor(self._pool, ctx.run, self.recognise, *args)
             text, usage, latency_ms, err = await asyncio.wait_for(fut, self.cfg.look_timeout_s + 1)
         except asyncio.TimeoutError:
             text, usage, latency_ms, err = None, {}, int((self.cfg.look_timeout_s + 1) * 1000), "timeout"
@@ -487,4 +499,103 @@ class VisionBurst:
             self._stop_why = self._stop_why or "shutdown"
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+# ---- 即时画面 (owner 2026-11-18 "改成上传即刻理解") ----
+# The per-minute eye (mind/eye.py) described a minute's frames once the minute was over: up to ~80 s old in 围观. Now
+# every body-camera frame the robot uploads (it uploads only when the picture changed; 2026-11-18 measured a median of
+# 31 a minute) is recognised at once: one in flight, at least LIVE_GAP_S apart, the newest frame waiting wins (older
+# ones are skipped, never queued). Same model / prompt as a burst look. Follows the 识别 (eye) switch through the pause.
+# Each result goes to the hub (【你的眼睛】 画面, pushed with the instructions) and to hello.vision_looks (kind scene).
+LIVE_GAP_S = 3.0
+
+
+class LiveEye:
+    def __init__(self, recognise, switch, hub=None, db=None, clock=time.monotonic, wall_ms=None, gap_s=LIVE_GAP_S):
+        self.recognise, self.switch, self.hub, self.db = recognise, switch, hub, db
+        self.clock = clock
+        self.wall_ms = wall_ms or (lambda: int(time.time() * 1000))
+        self.gap_s = gap_s
+        self._pending = None                     # the newest frame not recognised yet
+        self._busy = False
+        self._last = -1e9                        # when the last recognition started
+        self._timer = None
+        self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-eye")
+        self.stats = collections.Counter()
+
+    def on_frame(self, head, jpeg, path, session):
+        """VisionLink: one stored body-camera frame (non-blocking, on the event loop). A burst's snap is not ours."""
+        if isinstance(head, dict) and _is_id(head.get("snap")):
+            return
+        if not self.switch.on:
+            return
+        if self._pending is not None:
+            self.stats["skipped"] += 1           # a newer picture came before the older one was looked at
+        self._pending = {"jpeg": bytes(jpeg), "path": path, "session": session,
+                         "seq": head.get("seq") if isinstance(head, dict) else None, "at": self.wall_ms()}
+        self._kick()
+
+    def _kick(self):
+        if self._busy or self._pending is None:
+            return
+        wait = self._last + self.gap_s - self.clock()
+        if wait > 0:
+            if self._timer is None:
+                self._timer = asyncio.get_running_loop().call_later(wait, self._fire)
+            return
+        f, self._pending = self._pending, None
+        self._busy, self._last = True, self.clock()
+        asyncio.get_running_loop().create_task(self._look(f), context=contextvars.Context())
+
+    def _fire(self):
+        self._timer = None
+        self._kick()
+
+    async def _look(self, f):
+        loop = asyncio.get_running_loop()
+        try:
+            seen = None
+            try:
+                seen = self.hub.seen_for_look() if self.hub is not None and hasattr(self.hub, "seen_for_look") else None
+            except Exception:                    # noqa: BLE001 - the look goes without the M12 line
+                seen = None
+            lid = f"live-{f['session']}-{f['seq']}"
+            with ear_log.scope("call.look", trace=ear_log.new_trace(), ref={"path": f["path"], "lid": lid, "live": True}):
+                ctx = contextvars.copy_context()
+            try:
+                fut = loop.run_in_executor(self._pool, ctx.run, self.recognise, f["jpeg"], seen)
+                text, usage, latency_ms, err = await asyncio.wait_for(fut, LOOK_TIMEOUT_S + 1)
+            except Exception as e:               # noqa: BLE001 - one failed look
+                text, usage, latency_ms, err = None, {}, None, type(e).__name__
+            usage = usage if isinstance(usage, dict) else {}
+            at = self.wall_ms()
+            self.stats["looks"] += 1
+            self.stats["failed" if err or not text else "seen"] += 1
+            if self.db is not None:
+                try:
+                    self.db.vision_look({"kind": "scene", "lid": lid, "at": at, "session": f["session"], "seq": f["seq"],
+                                         "path": f["path"], "bytes": len(f["jpeg"]), "uploaded_at": f["at"],
+                                         "text": text, "error": err, "latency_ms": latency_ms,
+                                         "usage": {k: v for k, v in usage.items()
+                                                   if isinstance(v, (int, float)) and not isinstance(v, bool)},
+                                         "cost_usd": cost_usd(usage) if usage else None, "model": LOOK_MODEL,
+                                         "prompt": LOOK_PROMPT})
+                except Exception:                # noqa: BLE001
+                    pass
+            if text and not err and self.hub is not None and hasattr(self.hub, "add_scene"):
+                try:
+                    self.hub.add_scene(text, f["at"])
+                except Exception:                # noqa: BLE001
+                    log(f"live eye: add_scene failed\n{traceback.format_exc().rstrip()}", flush=True)
+        finally:
+            self._busy = False
+            self._kick()
+
+    def status(self):
+        return {"on": self.switch.on, "busy": self._busy, **dict(self.stats)}
+
+    async def shutdown(self):
+        if self._timer is not None:
+            self._timer.cancel()
         self._pool.shutdown(wait=False, cancel_futures=True)

@@ -74,6 +74,37 @@ int main()
         s.on_stage(Stage::Listen, 11 * kS);
         assert(v.tick(true, s, false, 11 * kS) == kListen);
     }
+    // Aside (0.5.04, smart_turn: not for hello): all blue for 1.5 s, then idle; speaking wins over it; a new stage ends it.
+    {
+        Stage st;
+        assert(stage_from("aside", st) && st == Stage::Aside && !std::strcmp(stage_id(st), "aside"));
+        StageState s; DotsView v;
+        s.on_stage(Stage::Think, 0);
+        s.on_stage(Stage::Aside, 1 * kS);
+        Dots d = v.tick(true, s, false, 1 * kS);
+        assert(d.visible && d.aside && !d.grey && d.lit == -1);
+        assert(v.tick(true, s, false, 1 * kS + kAsideUs - 1).aside);
+        assert(v.tick(true, s, false, 1 * kS + kAsideUs) == kIdle);
+        s.on_stage(Stage::Aside, 10 * kS);
+        assert(v.tick(true, s, true, 10 * kS) == kSpeak);
+        s.on_stage(Stage::Listen, 10 * kS + 100000);
+        assert(v.tick(true, s, false, 10 * kS + 200000) == kListen);
+        s.on_stage(Stage::Aside, 20 * kS);
+        assert(s.aside_at_us == 20 * kS);
+        s.clear();
+        assert(v.tick(true, s, false, 20 * kS + 1000) == kIdle && !s.aside_at_us);
+    }
+    // Busy (0.5.05): the model refused hello's own reply; only a word on screen, the dots keep their stage.
+    {
+        Stage st;
+        assert(stage_from("busy", st) && st == Stage::Busy && !std::strcmp(stage_id(st), "busy"));
+        StageState s; DotsView v;
+        s.on_stage(Stage::Listen, 1 * kS);
+        const uint32_t seq = s.seq;
+        s.on_stage(Stage::Busy, 2 * kS);
+        assert(s.busy_at_us == 2 * kS && s.seq != seq && s.stage == Stage::Listen && s.at_us == 1 * kS);
+        assert(v.tick(true, s, false, 2 * kS) == kListen);
+    }
     // Outside chat: nothing drawn, and the view forgets (the session also clears on leaving chat).
     {
         StageState s; DotsView v;

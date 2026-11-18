@@ -33,8 +33,10 @@
         <div class="strip-item svcs" id="log-svcs"><span class="muted">读取服务状态…</span></div>
         <button class="strip-item" id="log-gaps-btn" aria-expanded="false"><span class="muted">断档</span> <b id="log-gaps-n">…</b></button>
         <button class="strip-item" id="log-cost-btn" aria-expanded="false"><span class="muted">今天花费</span> <b id="log-cost-total">…</b></button>
+        <button class="strip-item" id="log-qwen-btn" aria-expanded="false" title="围观：千问 smart_turn_v2 判「不是跟我说」的句数 · 千问拒绝主动回复的次数"><span class="muted">千问拒绝</span> <b id="log-qwen-n">…</b></button>
       </section>
       <div id="log-gaps" class="drawer" hidden><p class="muted">读取中…</p></div>
+      <div id="log-qwen" class="drawer" hidden><div id="log-qwen-box"><p class="muted">读取中…</p></div></div>
       <div id="log-ledger" class="drawer" hidden><label class="field inline"><span>北京时间的一天</span><input type="date" id="log-day"></label><div id="log-ledger-box"></div></div>
       <section id="log-chain" class="chain" hidden></section>
       <div id="log-list" class="events"></div>

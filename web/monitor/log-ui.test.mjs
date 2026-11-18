@@ -289,3 +289,16 @@ test('seen.m12 (m12d 0.2.0 events): category 看, own character, title says what
  assert.equal(ui.kindTitle({kind:'seen.m12',extra:{ev:'zzz'}}),'M12 看到：zzz');
  assert.equal(ui.kindTitle({kind:'seen.m12'}),'M12 看到');
 });
+test('千问判定: rejections counted, newest first, shown in the drawer',async()=>{
+ const ui=await import('./public/log-ui.js');
+ const r=(at,extra)=>({at,kind:'gate.realtime',extra});
+ const s=ui.qwenSummary([r(1,{verdict:'play',smart_turn:'accepted'}),r(2,{verdict:'muted_quiet',smart_turn:'accepted'}),
+  r(3,{verdict:'ambient',smart_turn:'rejected',heard:'他们在聊午饭'}),r(4,{verdict:'refused_busy',kind:'greet'}),r(5,{verdict:'play'})]);
+ assert.deepEqual([s.accepted,s.played,s.muted,s.ambient,s.busy],[2,1,1,1,1]);
+ assert.deepEqual(s.recent.map(x=>x.what),['拒绝主动回复','不是跟我说']);
+ assert.equal(ui.qwenShort(s),'不是跟我说 1 · 拒回 1');
+ const html=ui.qwenHtml(s);
+ assert.match(html,/判过 3 句，判「不是跟我说」1 句（33%）/);
+ assert.match(html,/他们在聊午饭/);
+ assert.doesNotMatch(ui.qwenHtml(ui.qwenSummary([])),/<td>\d\d:/);
+});

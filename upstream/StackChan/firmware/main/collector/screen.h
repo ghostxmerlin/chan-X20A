@@ -118,7 +118,7 @@ void screen_show_word(const char* text, uint32_t now_ms);
 // 0.4.98: drawn as three narrow blocks as tall as the mode badge (same semantics and timing) by the home top row, one
 // drawn object (no objects created or deleted). The rest of the row (M12 vision, the recognised name, Wi-Fi, battery)
 // follows screen_update(); the row is invalidated only when what it shows changes.
-void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color);
+void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color, bool aside = false);
 // The part of the recognised name the top row draws ("" none; "known" when it cannot be drawn). For host previews.
 const char* screen_top_name();
 // 0.5.00 视觉爆发 indicator (burst_indicator.h): the home top row's burst group between the name and the Wi-Fi bars,

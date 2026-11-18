@@ -143,6 +143,9 @@ void asr_task(void*)
             // Consume each newly parsed frame once, independent of webpage/LVGL polling.
             // Local uses left: volume (playback), turn on/off (interaction). hearing::asr_command
             // and voice next are no-ops since step 1 (their words are mode inputs).
+            // 0.5.06: any of the unit's three wake words ("hello", "Hi M Five", "hi A S R") -> server, stops speech
+            if (!frame.has_value && (frame.id == 0x32 || frame.id == 0xFF || frame.id == 0x31)) mouth::asr_wake(asr_word(frame.id));
+            else if (asr_word(frame.id) && frame.id != 0xFE) mouth::asr_order(asr_word(frame.id));   // 0.5.07: a direct order
             playback_asr_command(frame.id,frame.has_value);
             hearing::asr_command(frame.id,frame.has_value);
             interaction::asr_command(frame.id,frame.has_value);

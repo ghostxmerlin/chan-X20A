@@ -33,6 +33,7 @@ import math
 import os
 import re
 import threading
+import traceback
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
@@ -1023,7 +1024,22 @@ async def serve_hearing(ws, peer, number, ctx):
                 print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
 
 
-async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=None, presence=None):
+def _frame_hooks(burst, live_eye):
+    """A stored camera frame: the burst's snap photo, or a photo for the instant eye (each ignores the other's)."""
+    hooks = [h.on_frame for h in (burst, live_eye) if h is not None]
+    if not hooks:
+        return None
+
+    def on_frame(head, jpeg, path, session):
+        for h in hooks:
+            try:
+                h(head, jpeg, path, session)
+            except Exception:                      # noqa: BLE001 - one consumer's bug never drops the frame for the other
+                traceback.print_exc()
+    return on_frame
+
+
+async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=None, presence=None, live_eye=None):
     """One /vision connection (vision_link.py), with its run-log link.open / link.close. -> the VisionLink.
     Every M12 event goes to presence first (a face lifts an away pause here at once), then to 围观."""
     print(f"+ {peer} vision v{number}", flush=True)
@@ -1038,7 +1054,7 @@ async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=
     try:
         link = await vision_link.serve_link(ws, database, number, f"{peer[0]}:{peer[1]}", rec_root,
                                             on_event=on_event if rt_hub or presence is not None else None,
-                                            on_frame=burst.on_frame if burst else None)
+                                            on_frame=_frame_hooks(burst, live_eye))
     finally:
         if presence is not None:
             presence.vision_closed(number)
@@ -1127,6 +1143,7 @@ def main():
         while True:
             await asyncio.to_thread(tw_switch.update)
             await asyncio.to_thread(rt_switch.update)
+            await asyncio.to_thread(eye_switch.update)
             await asyncio.to_thread(pause.update)
             if pause.reasons() != held:
                 held = pause.reasons()
@@ -1173,10 +1190,20 @@ def main():
         burst = vision_burst.VisionBurst(rt_hub, vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]), db=database)
         rt_hub.burst = burst
 
+    # 即时画面 (owner 2026-11-18 "改成上传即刻理解"): every uploaded camera photo recognised at once, under 识别 (eye)
+    eye_switch = tingwu_switch.SwitchReader((lambda: database.read_switch("eye")) if database else (lambda: None))
+    live_eye = None
+    if secrets.get("DASHSCOPE_API_KEY"):
+        live_eye = vision_burst.LiveEye(vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]),
+                                        presence_mod.Gated(eye_switch, pause), hub=rt_hub, db=database)
+    print(f"live eye: {'follows the 识别 switch' if live_eye else 'off (no key)'}", flush=True)
+
     kws = None                                     # 关键词耳朵 (2026-11-17, server/kws): SOUL_KWS_URL or kws.url
     kws_url = kws_link.configured_url(os.environ, os.path.join(os.path.dirname(os.path.abspath(__file__)), "kws.url"))
     if kws_url:
         kws = kws_link.KeywordLink(kws_url, emit=ear_log.emit)
+        if rt_hub is not None:             # 2026-11-18: the name heard = hello was called (围观)
+            kws.on_hit = lambda out: rt_hub.called("name")
     print(f"keyword ear: {kws.url if kws else 'off (no SOUL_KWS_URL, no kws.url)'}", flush=True)
 
     hearing_ctx = argparse.Namespace(models=models, ex=ex, rec_root=rec_root, database=database,
@@ -1239,7 +1266,8 @@ def main():
             vision_active.add(ws)
             vision_no[0] += 1
             try:
-                await serve_vision(ws, ws.remote_address, vision_no[0], database, rec_root, rt_hub, burst, presence)
+                await serve_vision(ws, ws.remote_address, vision_no[0], database, rec_root, rt_hub, burst, presence,
+                                   live_eye)
             finally:
                 vision_active.discard(ws)
             return
@@ -1258,6 +1286,7 @@ def main():
                 "paused": pause.reasons(),
                 "mouth": mouth.mode, "robot_mode": mode_hub.robot_mode,
                 "burst": burst.running() if burst is not None else None,
+                "live_eye": live_eye.status() if live_eye is not None else None,
                 "kws": kws.status() if kws is not None else None,
                 "links": {"hearing": len(active), "vision": len(vision_active), "mouth": len(mouth_active),
                           "signal": len(signal_active)}}
@@ -1278,6 +1307,8 @@ def main():
                 watcher.cancel()
                 if burst is not None:
                     await burst.shutdown()
+                if live_eye is not None:
+                    await live_eye.shutdown()
                 if rt_hub is not None:
                     await rt_hub.shutdown()
                 mode_hub.close()

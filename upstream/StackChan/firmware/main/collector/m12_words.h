@@ -119,8 +119,13 @@ inline const char* const* words(const Ev& e, uint8_t& count)
     count = 0;
     return nullptr;
 }
+// 0.5.05 (owner 2026-11-18 "给qwen拒绝加一个明确的机器上的ui"): the realtime model's two refusals in 围观, shown in the
+// same row: smart_turn_v2 judged a sentence not for hello (chat_stage aside, with the blue blocks), and a reply of
+// hello's own was refused because someone was speaking (chat_stage busy).
+constexpr const char* kQwenAside = "不是跟我说的";
+constexpr const char* kQwenBusy = "等你说完";
 // Every character any word uses: the glyph set of collector_words_20 (scripts/generate-words-font.sh).
-constexpr const char* kGlyphs = "你好嗨在呢嗯好呀吧不要吗？怎么啦看见黑的找到哇来欢迎拜太近别走亮了";
+constexpr const char* kGlyphs = "你好嗨在呢嗯好呀吧不要吗？怎么啦看见黑的找到哇来欢迎拜太近别走亮了是跟我说等完";
 
 class Picker {
 public:

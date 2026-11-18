@@ -84,8 +84,12 @@ def open_db(uri):
     db.sounds.create_index([("session", ASCENDING), ("id", ASCENDING)], unique=True)
     db.tingwu.create_index([("session", ASCENDING), ("kind", ASCENDING), ("n", ASCENDING)], unique=True)
     db.tingwu.create_index([("at", ASCENDING)])
+    # 2026-11-18: m12_ev lines of one serial read share t_us and differ only in ev (the upsert key has it), so the
+    # unique index has ev too; the old one without it dropped those writes (DuplicateKeyError). New first, then old.
     db.vision.create_index([("session", ASCENDING), ("t_us", ASCENDING), ("event", ASCENDING), ("face", ASCENDING),
-                            ("person", ASCENDING)], unique=True)
+                            ("person", ASCENDING), ("ev", ASCENDING)], unique=True)
+    if "session_1_t_us_1_event_1_face_1_person_1" in db.vision.index_information():
+        db.vision.drop_index("session_1_t_us_1_event_1_face_1_person_1")
     db.vision.create_index([("at", ASCENDING)])
     db.frames.create_index([("session", ASCENDING), ("seq", ASCENDING)], unique=True)
     db.frames.create_index([("at", ASCENDING)])

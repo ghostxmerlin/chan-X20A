@@ -52,6 +52,7 @@ class KeywordLink:
         self.call = call
         self.log = log
         self.emit = emit                   # ear_log.emit (run log), or None
+        self.on_hit = None                 # callable(report) on a hit, on the event loop (ear_server: 围观 called)
         self.clock = clock
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="kws")
         self.streams = {}                  # session -> {"buf": [arrays], "start": pos, "n": samples, "busy": bool}
@@ -120,6 +121,11 @@ class KeywordLink:
             post(out)
         except Exception as error:         # noqa: BLE001
             self.log(f"kws: post failed: {type(error).__name__}", flush=True)
+        if out["hit"] and self.on_hit is not None:      # 2026-11-18: a name hit is a call (围观: RealtimeHub.called)
+            try:
+                self.on_hit(out)
+            except Exception as error:     # noqa: BLE001
+                self.log(f"kws: on_hit failed: {type(error).__name__}", flush=True)
         if self.emit is not None:
             self.emit("heard.keyword", by="kws",
                       sum=f"{out['label']}{'' if out['hit'] else '（差一点）'} {out['score']}",

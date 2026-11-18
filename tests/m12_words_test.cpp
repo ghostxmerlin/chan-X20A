@@ -74,5 +74,7 @@ int main()
                         if (glyphs.find(ch) == std::string::npos) { std::printf("missing glyph %s\n", ch.c_str()); assert(false); }
                     });
             }
+    for (const char* w : {kQwenAside, kQwenBusy})                     // 0.5.05: the realtime model's refusals
+        each_char(w, [](const std::string& ch) { assert(glyphs.find(ch) != std::string::npos); });
     std::puts("m12_words_test: ok");
 }

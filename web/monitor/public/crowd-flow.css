@@ -132,3 +132,10 @@ th { color: var(--muted); font-weight: 600; }
   h1 { font-size: 19px; }
   .cadence td:first-child { width: auto; white-space: normal; }
 }
+
+/* 2026-11-18 redraw: the 想 lane and the 日志 card */
+.band.think { fill: color-mix(in srgb, var(--think) 5%, transparent); }
+.band.note { fill: color-mix(in srgb, var(--note) 5%, transparent); }
+.band-l.think { fill: var(--think-ink); } .band-l.note { fill: var(--note-ink); }
+.card.note { border-left-color: var(--note); }
+.card.note h2 { color: var(--note-ink); }

@@ -329,6 +329,7 @@ class BurstLogTest(unittest.IsolatedAsyncioTestCase):
 class RealtimeLogTest(HubBase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
+        self.hub.cfg.turn = "server_vad"     # logging of the look / filler paths; the smart_turn vision gate: VisionGateTest
         self.flows = capture()
 
     async def asyncTearDown(self):
