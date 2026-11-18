@@ -328,6 +328,36 @@ class InputTest(HubBase):
         await settle()
         self.assertGreater(len(ws.appended()), 0)
 
+    async def test_the_robots_silent_tail_after_our_reply_is_heard(self):
+        ws = await self.open_ready()
+        await self.play_one(ws)
+        pkt = b"\x01\x00" * 960
+        self.hub.feed(pkt, False, True)                           # inside guard_s: still nothing
+        await settle()
+        self.assertEqual(ws.appended(), b"")
+        self.t[0] += 0.7                                          # past the guard, the robot still flags sounding
+        for _ in range(3):
+            self.hub.feed(pkt, False, True)                       # (the ear's VAD only gets zeros there)
+        await settle()
+        self.assertEqual(len(ws.appended()), 3 * len(pkt))
+        self.t[0] += 0.5                                          # the flag clears: the tail keeps the server VAD fed
+        self.hub.feed(pkt, False, False)
+        await settle()
+        self.assertEqual(len(ws.appended()), 4 * len(pkt))
+        self.t[0] += 3.0                                          # long after our reply: sounding is a real sound
+        self.hub.feed(pkt, True, True)
+        await settle()
+        self.assertEqual(len(ws.appended()), 4 * len(pkt))
+
+    async def test_no_tail_while_something_else_plays(self):
+        ws = await self.open_ready()
+        await self.play_one(ws)
+        self.t[0] += 0.7
+        self.link.tts_active = {1}                                # soul-tts took the speaker
+        self.hub.feed(b"\x01\x00" * 960, False, True)
+        await settle()
+        self.assertEqual(ws.appended(), b"")
+
 class OutputTest(HubBase):
     async def test_framing_matches_soul_tts(self):
         import opuslib_next

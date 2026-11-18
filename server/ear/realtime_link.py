@@ -784,6 +784,11 @@ class Config:
     vad_threshold = 0.6
     turn = "smart_turn_v2"       # owner 2026-11-18: try DashScope's addressee judgement ("server_vad" = before)
     guard_s = 0.6
+    # owner 2026-11-18 "回答后，再采样很慢": the robot keeps its self flag `sounding` ~2.7 s after it reported our
+    # stream done (collector playback.cpp: the speaker holds 1.5 s of silence for a next sentence, mouth_stream.h
+    # kHoldUs, then self_tail_until +1.2 s), long after the guard. In that silent tail of OUR finished reply the hub
+    # streams the mic anyway (the ear's VAD only gets zeros there), so a reply right after hello is heard.
+    robot_tail_s = 3.0
     gate = "vad"                 # "vad": only around the ear's own speech (no silence billed); "all": everything
     preroll_s = 0.8
     tail_s = 1.2
@@ -886,6 +891,7 @@ class RealtimeHub:
         self._said = collections.deque(maxlen=self.cfg.greet_said_keep)   # its texts: memory only, never logged
         self._recent = collections.deque(maxlen=self.cfg.recent_keep)      # (at, heard, reply): memory only
         self._quiet_until = 0.0                        # no input / greeting right after hello finished speaking
+        self._done_at = None                           # when the robot last reported one of our streams finished
         self._appear = None                            # (name, at): appeared before mind's owner names were known
         self._bg = set()
         self._status_at = -1e9
@@ -968,11 +974,14 @@ class RealtimeHub:
                 h["local_end"] = now
         self._was_speaking = speaking and not sounding
         called = now < self._called_until
-        if sounding or (self.output_busy() and not called) or now < self._quiet_until:
+        tail = sounding and self._robot_tail(now)      # only the robot's silent hold + tail after our reply
+        if (sounding and not tail) or (self.output_busy() and not called) or now < self._quiet_until:
             self._preroll.clear()
             self._preroll_bytes, self._send_until = 0, 0.0
             return
-        if speaking:                                   # the tail must outlast the server VAD's silence
+        if tail:
+            self.stats["robot_tail_in"] += 1
+        if speaking or tail:                           # the tail must outlast the server VAD's silence
             self._send_until = now + max(self.cfg.tail_s, self.cfg.silence_ms / 1000 + 0.6)
         if self.cfg.gate == "all" or now < self._send_until or called:
             if self.state == "closed":
@@ -986,6 +995,11 @@ class RealtimeHub:
         self._preroll_bytes += len(pcm)
         while self._preroll_bytes > self.cfg.preroll_s * SR_IN * 2 and self._preroll:
             self._preroll_bytes -= len(self._preroll.popleft())
+
+    def _robot_tail(self, now):
+        """True within robot_tail_s after the robot reported our stream finished, while nothing new is playing: its
+        `sounding` flag is then only the speaker's silent hold + self tail, not hello's voice (guard_s still applies)."""
+        return self._done_at is not None and now - self._done_at < self.cfg.robot_tail_s and not self.output_busy()
 
     def _put(self, pcm):
         if self._in.full():
@@ -1157,6 +1171,7 @@ class RealtimeHub:
         elif kind in ("tts.done", "tts.stopped", "tts.error"):
             st["reported"] = True
             self._quiet_until = self.clock() + self.cfg.guard_s
+            self._done_at = self.clock()
             self._finish_turn(st["rid"], kind.split(".", 1)[1])
         self._progress.set()
 

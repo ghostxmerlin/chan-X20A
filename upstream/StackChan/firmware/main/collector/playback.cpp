@@ -52,6 +52,13 @@ std::atomic_bool voice_audio_ready{false};
 VoiceCooldown voice_cooldown;
 hearing::PlaybackOwner hearing_owner;
 std::atomic<int64_t> self_tail_until{0};
+// owner 2026-11-18 "回答后，再采样很慢": during a /mouth stream the self flag follows the audio actually written,
+// not the session (the session holds the speaker kHoldUs on silence for a next sentence, then +1.2 s tail: ~2.7 s of
+// "sounding" after every reply, the ear dropped the owner's first words). In a stream session: sounding until
+// kStreamTailUs after the last real audio frame (I2S DMA + room echo); clips keep the old rule.
+constexpr int64_t kStreamTailUs = 450000;
+std::atomic<bool> in_stream{false};
+std::atomic<int64_t> stream_audible_until{0};
 uint32_t hearing_job=0;
 int current_voice_id=0, last_voice_id=0;
 uint32_t asr_voice_received=0, asr_voice_accepted=0, asr_voice_dropped=0;
@@ -387,8 +394,10 @@ void stream_session(CoreS3AudioCodec* codec, int16_t* pcm, int16_t* zeros)
                 break;
             }
             if (underrun) { underrun = false; underrun_ms += static_cast<uint32_t>((now - underrun_since) / 1000); }
+            stream_audible_until = esp_timer_get_time() + kStreamTailUs;   // before the write: it blocks on DMA
             for (size_t at = 0; at < kStreamFrame; at += kPlaybackChunkFrames)
                 if (codec->WriteCollectorOutput(pcm + at, kPlaybackChunkFrames) != ESP_OK) break;
+            stream_audible_until = esp_timer_get_time() + kStreamTailUs;
             mouth::player_played(cur);
             { std::lock_guard<std::mutex> lock(status_mutex); ++stream_stats.frames; }
             break;
@@ -460,6 +469,7 @@ void stream_worker(void*)
             vTaskDelay(pdMS_TO_TICKS(50));
             err = amp_begin(codec);
         }
+        in_stream = true;
         if (err == ESP_OK) stream_session(codec, pcm, zeros);
         else {
             stream_report(mouth::Report::Error, pv.stream, 0, 0, 0, 0, "speaker_start");
@@ -471,8 +481,9 @@ void stream_worker(void*)
             error_code = err; cleanup_error = cleanup; error_stage = err ? "start" : cleanup ? "cleanup" : "none";
             state = err ? "failed" : "completed";
             stream_stats.writer_stack_free = uxTaskGetStackHighWaterMark(nullptr);
-            self_tail_until = esp_timer_get_time() + 1200000;
+            self_tail_until = stream_audible_until.load();   // the stream's own tail, already counted from its last frame
             gate.release();
+            in_stream = false;
         }
     }
 }
@@ -684,7 +695,9 @@ void playback_set_hearing_session(uint32_t session)
 }
 bool playback_self_sounding()
 {
-    return gate.busy() || esp_timer_get_time()<self_tail_until.load();
+    const int64_t now=esp_timer_get_time();
+    if(in_stream.load())return now<stream_audible_until.load();
+    return gate.busy() || now<self_tail_until.load();
 }
 bool playback_busy() { return gate.busy(); }
 
