@@ -115,7 +115,7 @@ HEARD_KEEP = 8                                      # candidates come from the l
 # old (against now). An onset the server VAD never turned into a segment (noise) must not stretch a later segment's
 # window back or collect later sentences' consequences; a cold open slower than this loses its opening sentence.
 COLD_MAX_S = 5.0
-GATE_REASONS = {"body_gated": "不认识的人叫它动，没动", "tool_gated": "闲聊里想用工具，挡回去了（没执行、没放垫话）", "play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
+GATE_REASONS = {"marker": "念出了事件 / 背景标记，不播", "body_gated": "不认识的人叫它动，没动", "tool_gated": "闲聊里想用工具，挡回去了（没执行、没放垫话）", "play": "the reply may play", "quiet": "only 嗯: nobody was talking to hello",
                 "unclear": "a didn't-hear question", "repeat": "word for word a recent reply",
                 "blind": "看不清 without a fresh look", "wait_look": "a look question: the answer comes from the next photo",
                 "wait_search": "a search question (查一下 / 新闻 …): the answer comes from the ear's own web search",
@@ -248,10 +248,15 @@ def norm_text(text):
     return re.sub(r"[\W_]+", "", strip_emoji(text))
 
 
+MARKER_RE = re.compile(r"^\s*[\[【（(]\s*(事件|系统|背景|你的眼睛)|\[事件\]")
+
+
 def reply_verdict(text, done, recent=(), blind=False):
     """The gate of one speech reply: None = wait for more text, "play", or why it must not play: "quiet" (only 嗯),
     "unclear" (a didn't-hear question), "repeat" (word for word one of `recent`, normalised replies), "blind" (with
     blind=True, i.e. no fresh look: 看不清 / 黑乎乎 ... said without any photo to go on)."""
+    if MARKER_RE.search(str(text or "")[:40]):
+        return "marker"                                # an echoed event / context marker: never played (2026-11-19)
     t = norm_text(text)
     if not t:
         return "play" if done else None
@@ -1887,7 +1892,17 @@ class RealtimeHub:
         # a tool (and its 我查查) only for a sentence that earns it: a call window, the classifier / a certain word, or
         # a chain already let through. Otherwise the call goes back quietly and the model answers as in chat (its
         # reply then passes the 嗯 gate like any speech turn).
+        if fc["name"] in self._skills and fc["name"] != "open_skill":      # a skill id called as a tool: open it
+            args, fc = {"skill": fc["name"]}, {**fc, "name": "open_skill"}
         given = fc["name"] == "open_skill" or fc["name"] in {t["name"] for t in self._tool_specs}
+        owner_skill = None
+        if not given and self._skills and fc["name"] in self._all_specs and self.tools_on():
+            # a tool of a skill not open yet (2026-11-19 acceptance: the model called review_period, was refused and
+            # gave up): open that skill (its tools and text join the session), then run the call as usual
+            owner_skill = next((k for k, sk in self._skills.items() if fc["name"] in sk.get("tools", [])), None)
+            if owner_skill is not None:
+                self._open_skill(owner_skill, self.clock())
+                given = True
         if given and fc["name"] in BODY_TOOLS and not self.known_person():
             # owner 2026-11-18: the body moves only for people hello knows (voice or face)
             self.stats["body_gated"] += 1

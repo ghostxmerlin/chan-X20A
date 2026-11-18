@@ -976,11 +976,13 @@ class SkillModeTest(HubBase):
         self.assertEqual(self.hub.stats["search_fillers"], 1)                       # one 我查查 for the chain
         ws.push({"type": "response.created", "response": {"id": "r3"}})
         ws.push({"type": "response.function_call_arguments.done", "response_id": "r3", "call_id": "c3",
-                 "name": "nod", "arguments": "{}"})                                  # body not opened: refused
-        ws.push({"type": "response.done", "response": {"id": "r3"}})
-        await settle(30)
+                 "name": "nod", "arguments": "{}"})                                  # body not open: opened now,
+        ws.push({"type": "response.done", "response": {"id": "r3"}})                      # then the body gate (a
+        await settle(30)                                                                 # stranger) refuses it
+        self.assertIn("body", self.hub._open_skills)
         out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
-        self.assertEqual(json.loads(out[-1]["item"]["output"])["error"]["code"], "not_available")
+        self.assertEqual(json.loads(out[-1]["item"]["output"])["error"]["code"], "refused")
+        self.assertEqual(self.rl.reply_verdict("[事件] 主人（劳埃德）出现在你面前了，打个招呼", True), "marker")
 
 
 class SkillResetTest(HubBase):

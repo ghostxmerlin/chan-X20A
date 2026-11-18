@@ -90,7 +90,16 @@ async def run(case):
                 except ValueError:
                     args = {}
                 n_calls = len([c for c in calls if c[0] != "open_skill"])
+                if name in SK:                                               # as the hub: a skill id called as a tool
+                    args, name = {"skill": name}, "open_skill"
                 given = {t["name"] for t in specs_for(opened)}
+                owner = next((k for k, sk in SK.items() if name in sk["tools"]), None) if name not in given else None
+                if owner is not None and name in ALL:                         # as the hub: open the tool's skill
+                    opened.append(owner)
+                    await ws.send(json.dumps({"type": "session.update", "session": {"tools": specs_for(opened),
+                                                                                  "instructions": instr_for(opened)}}))
+                    calls.append(("open_skill", owner + " (auto)", True))
+                    given = {t["name"] for t in specs_for(opened)}
                 if name != "open_skill" and name not in given:               # as the hub: only what it was given
                     res = {"ok": False, "error": {"code": "not_available", "message": f"没有给你 {name[:30]} 这个工具，先打开对应的技能"}}
                     calls.append((name, "refused: not given", False))
