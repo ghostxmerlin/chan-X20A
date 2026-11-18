@@ -302,8 +302,8 @@ class ToolsTest(Base):
     def test_registry(self):
         by = {t["name"]: t for t in REG["tools"]}
         self.assertEqual((by["research_status"]["group"], by["research_status"]["level"], by["research_status"]["status"]),
-                         ("world", "R", "new"))
-        self.assertEqual((by["deep_research"]["level"], by["deep_research"]["status"]), ("C", "new"))
+                         ("world", "R", "live"))
+        self.assertEqual((by["deep_research"]["level"], by["deep_research"]["status"]), ("C", "live"))
 
     def test_start_and_status(self):
         r = self.runner()
