@@ -14,3 +14,10 @@ test('tools page: every tool appears once, filter by status works', () => {
   assert.equal(params({ type: 'object', properties: {} }), '无');
   assert.match(params({ type: 'object', properties: { q: { type: 'string' } }, required: [] }), /q\?/);
 });
+test('tools page: 试一下 only for implemented read-only tools; argument skeleton', async () => {
+  const { render, skeleton } = await import('./public/tools-ui.js');
+  const html = render(reg, '', new Set(['switches_status', 'turn_head']));
+  assert.ok(html.includes('data-tool="switches_status"'));
+  assert.ok(!html.includes('data-tool="turn_head"'));            // A level: no button even if implemented
+  assert.deepEqual(skeleton({ type: 'object', properties: { q: { type: 'string' }, n: { type: 'integer', minimum: 2 }, m: { type: 'string', enum: ['a', 'b'] } }, required: ['q', 'n', 'm'] }), { q: '', n: 2, m: 'a' });
+});

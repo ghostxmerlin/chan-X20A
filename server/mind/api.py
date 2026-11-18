@@ -50,6 +50,8 @@ from .store import LANE
 from . import owner_signals
 from .library import Library, LibraryConflict, COLLECTIONS, ID_RE
 from .modes import INPUTS as MODE_INPUTS
+from . import tool_impls
+from .tools import Tools, load_registry
 
 try:                                             # ~/soul-mind/hello_log_query.py; server/common in the repository
     import hello_log_query as log_query          # (runlog puts server/common on sys.path when hello_log is not found)
@@ -250,6 +252,11 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         pc = ctx.get("pause")
         out["pause"] = pc.view(now) if pc else pause.view(pause.read(db), now)
         return out
+
+    # 工具 (B1, 2026-11-18; docs/hello-tools.md): GET /tools = the function-calling list, POST /tool/call = one call
+    tools = ctx.get("tools") or Tools(load_registry(), tool_impls.mind_tools(
+        switches=switches, store=store, mode_store=ctx.get("mode_store"),
+        ledger=(lambda day: log_query.ledger(db, day)) if log_query is not None else None))
 
     def note_owner(path, body, reply):
         """After a POST went through: tell the pause about an explicit owner input (never raises)."""
@@ -581,6 +588,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return list(db["mind_labels"].find({"at": {"$gte": lo, "$lt": hi}}, {"_id": 0}).sort("at", 1))
         if path == "/switches":
             return switches()
+        if path == "/tools":
+            return {"tools": tools.export(include_unlisted=q.get("all", ["0"])[0] == "1"), "available": tools.available()}
         if path == "/mode":
             ms = modes()
             return {"snapshot": ms.current(), "robot": ms.robot(), "log": ms.log(10)}
@@ -665,6 +674,10 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
 
     def post(path, body):
         now = int(time.time() * 1000)
+        if path == "/tool/call":                          # B1: one tool call -> the envelope (errors inside it)
+            trace = body.get("trace")
+            trace = trace if isinstance(trace, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", trace) else None
+            return tools.call(_str(body.get("name"), 60), body.get("args"), trace=trace, caller=_str(body.get("caller"), 32) or None)
         if path in DB_POST:
             return lib_post(path, body)
         if path == '/db/memory/review':
@@ -1030,7 +1043,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if url.path not in ("/settings", "/mark", "/label", "/rerun", "/place", "/place/choices", "/place/told", "/switch", "/switches", "/say", "/say/stop", "/voice/try", '/speech/settings', '/memory/edit', '/role/try',
                                 '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
                                 '/db/memory/review', '/db/extract/switch', '/db/extract/run',
-                                '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard', '/chat/stage'):
+                                '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard', '/chat/stage',
+                                '/tool/call'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats", "/mode/seq"):
                     self._send(405, {"error": "read only"})
                 else:

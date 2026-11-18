@@ -48,3 +48,9 @@
 - 每次调用记一条运行日志，类别 `call.tool.<name>`，和触发它的那句话在同一条链上；付费的带 `cost`，进当天总账、受每日上限约束。
 - 每个工具至少：一个离线测试（假数据，验证参数、返回、错误码），一个实机冒烟测试（真服务器 / 真机器人）。测过的把 `status` 改成 `live`。
 - 给千问的工具列表由注册表导出（`name`、`description`、`parameters`），只导出 `status: live` 的；C 级导出的是“提议”版本。
+
+## 6. 接口（B1 起）
+
+- mind：`GET /tools` → 给模型的函数列表（只含 `live` 且已实现的；`?all=1` 含所有已实现的）和 `available`；`POST /tool/call {name, args, trace?, caller?}` → 第 3 节的返回（错误也在返回里，HTTP 仍是 200）。实现在 `server/mind/tools.py`（框架：查参数、计时、记日志）和 `server/mind/tool_impls.py`（各工具）。注册表随 mind 部署到 `~/soul-mind/tools/registry.json`。
+- 观察台「工具」页：已实现的只读工具旁有「试一下」，填参数后经观察台转给 mind 调用，结果原样显示。
+- 已接入（`live`）：`switches_status`、`mode_status`、`cost_today`（2026-11-18）。

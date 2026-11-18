@@ -22,6 +22,13 @@
     <button data-status="new" aria-pressed="false">要新做</button>
   </div>
 </header>
+<section id="try-panel" class="try-panel" hidden aria-live="polite">
+  <h2 id="try-title">试一下</h2>
+  <label for="try-args" class="small">参数（JSON）</label>
+  <textarea id="try-args" rows="4" spellcheck="false"></textarea>
+  <div><button id="try-run">运行</button></div>
+  <pre id="try-out"></pre>
+</section>
 <main id="tools-main"></main>
 <script type="module" src="/tools-ui.js"></script>
 </body>

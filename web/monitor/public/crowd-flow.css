@@ -145,3 +145,9 @@ th { color: var(--muted); font-weight: 600; }
 .tools-filter button { font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
 .tools-filter button[aria-pressed="true"] { border-color: var(--think); color: var(--think-ink); }
 .card table td:first-child { min-width: 8em; }
+
+.try-panel { max-width: 1320px; margin: 0 auto 12px; padding: 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.try-panel h2 { font-size: 16px; margin: 0 0 6px; color: var(--think-ink); }
+.try-panel textarea { width: 100%; font: 12.5px ui-monospace, Menlo, monospace; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+.try-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px ui-monospace, Menlo, monospace; max-height: 360px; overflow: auto; }
+button.try, #try-run { font: inherit; font-size: 12.5px; margin-top: 4px; padding: 2px 10px; border-radius: 8px; border: 1px solid var(--think); background: var(--card); color: var(--think-ink); cursor: pointer; }

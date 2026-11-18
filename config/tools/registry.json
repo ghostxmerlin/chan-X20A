@@ -548,14 +548,14 @@
    "group": "self",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "被问“你现在开着什么 / 为什么不看不听 / 是不是暂停了”时用。",
    "parameters": {
     "type": "object",
     "properties": {}
    },
    "returns": "tingwu、eye、notes、realtime、mouth、billing、pause{paused, why, spent_cny, cap_cny}",
-   "source": "GET /switches",
+   "source": "GET /switches；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<20 ms",
    "cost": "无",
    "needs": [],
@@ -567,14 +567,14 @@
    "group": "self",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "被问现在是什么模式、怎么切换时用。",
    "parameters": {
     "type": "object",
     "properties": {}
    },
    "returns": "mode、name、since、how_to_switch",
-   "source": "GET /mode + mode_table",
+   "source": "GET /mode + mode_table；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<20 ms",
    "cost": "无",
    "needs": [],
@@ -586,7 +586,7 @@
    "group": "self",
    "level": "R",
    "runs_on": "mind",
-   "status": "have",
+   "status": "live",
    "description": "被问今天花了多少钱时用。",
    "parameters": {
     "type": "object",
@@ -599,7 +599,7 @@
     }
    },
    "returns": "total、by[{svc, model, amount}]",
-   "source": "GET /log/ledger",
+   "source": "GET /log/ledger；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],

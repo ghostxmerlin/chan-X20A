@@ -42,6 +42,8 @@ $SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$SPOOL && chmod 700 ~/$SPOOL"
 rsync -aic -e "$SSH" "$HERE/../../config/roles/" "$SOUL_SERVER_SSH:$MIND_DIR/roles/"     # hello's speaking roles
 PERSONA="$HERE/../../config/persona/$(cat "$HERE/../../config/persona/active")"            # hello's persona (config/persona/README.md)
 rsync -aic -e "$SSH" "$PERSONA" "$SOUL_SERVER_SSH:$MIND_DIR/persona.md"
+$SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$MIND_DIR/tools"
+rsync -aic -e "$SSH" "$HERE/../../config/tools/registry.json" "$SOUL_SERVER_SSH:$MIND_DIR/tools/registry.json"   # 工具注册表 (B1, docs/hello-tools.md)
 CLIPS="$HERE/../../.private/clip_texts.json"
 if [ -s "$CLIPS" ]; then rsync -aic -e "$SSH" "$CLIPS" "$SOUL_SERVER_SSH:$MIND_DIR/clip_texts.json"; else echo "no .private/clip_texts.json: hello's own voice is not matched by text"; fi
 $SSH "$SOUL_SERVER_SSH" "MIND_DIR=$MIND_DIR UNIT=$UNIT EAR_UNIT=${SOUL_SERVER_UNIT:-soul-spike} bash -s" < "$HERE/remote_setup.sh"
