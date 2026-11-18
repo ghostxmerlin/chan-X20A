@@ -6,12 +6,13 @@ accept (so the live tools can be exported as-is).
 """
 import json
 import re
+import sys
 import unittest
 from pathlib import Path
 
 REG = json.loads((Path(__file__).resolve().parents[1] / "config" / "tools" / "registry.json").read_text(encoding="utf-8"))
 FIELDS = ("name", "title", "group", "level", "runs_on", "status", "description", "parameters", "returns", "source",
-          "latency", "cost", "needs", "notes")
+          "latency", "cost", "needs", "notes", "example")
 RUNS_ON = {"mind", "ear", "robot", "external"}
 SCALARS = {"string", "integer", "number", "boolean"}
 
@@ -48,6 +49,14 @@ class RegistryTest(unittest.TestCase):
             self.assertTrue(t["description"] and len(t["description"]) <= 120, t["name"])
             self.assertIsInstance(t["needs"], list, t["name"])
             check_schema(self, t["name"], t["parameters"])
+
+    def test_every_example_passes_its_own_argument_checks(self):
+        # the 工具 page's 试一下 opens with the example (owner 2026-11-18: "带上默认参数，我懒得手动填")
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+        from mind.tools import validate
+        for t in REG["tools"]:
+            self.assertIsInstance(t["example"], dict, t["name"])
+            validate(t["parameters"], t["example"])
 
     def test_c_level_tools_say_how_they_are_confirmed(self):
         # docs/hello-tools.md §2: a C tool proposes; the owner asking in person counts as the confirmation

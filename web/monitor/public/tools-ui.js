@@ -65,7 +65,7 @@ async function main() {
     document.querySelectorAll('button.try').forEach(b => b.addEventListener('click', () => {
       current = reg.tools.find(t => t.name === b.dataset.tool);
       document.getElementById('try-title').textContent = `试一下：${current.title}（${current.name}）`;
-      argsBox.value = JSON.stringify(skeleton(current.parameters), null, 1);
+      argsBox.value = JSON.stringify(current.example || skeleton(current.parameters), null, 1);   // the registry's example first
       document.getElementById('try-out').textContent = '';
       panel.hidden = false; panel.scrollIntoView({ block: 'nearest' });
     }));

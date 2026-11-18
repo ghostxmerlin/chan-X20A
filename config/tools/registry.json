@@ -41,7 +41,8 @@
    "latency": "<50 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "scene_now",
@@ -60,7 +61,8 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "look_now",
@@ -88,7 +90,10 @@
     "realtime 或 eye 开关",
     "机器人相机开"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "question": "他手里拿的是什么"
+   }
   },
   {
    "name": "recent_speech",
@@ -118,7 +123,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "minutes": 5
+   }
   },
   {
    "name": "recent_sounds",
@@ -143,7 +151,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "minutes": 10
+   }
   },
   {
    "name": "robot_status",
@@ -164,7 +175,8 @@
    "needs": [
     "机器人在线"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "review_period",
@@ -204,7 +216,11 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "from": "今天上午",
+    "detail": "brief"
+   }
   },
   {
    "name": "notes_search",
@@ -243,7 +259,11 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "query": "比特币",
+    "from": "今天"
+   }
   },
   {
    "name": "speech_search",
@@ -286,7 +306,12 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "敏感内容只对主人讲（第 4 节）"
+   "notes": "敏感内容只对主人讲（第 4 节）",
+   "example": {
+    "who": "主人",
+    "query": "比特币",
+    "from": "今天"
+   }
   },
   {
    "name": "memory_search",
@@ -322,7 +347,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "query": "咖啡"
+   }
   },
   {
    "name": "knowledge_search",
@@ -361,7 +389,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "query": "公司"
+   }
   },
   {
    "name": "person_lookup",
@@ -388,7 +419,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "who": "主人"
+   }
   },
   {
    "name": "people_list",
@@ -407,7 +441,8 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "hello_said",
@@ -446,7 +481,11 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "from": "1小时前",
+    "limit": 10
+   }
   },
   {
    "name": "db_query",
@@ -495,7 +534,12 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "集合与字段白名单；不返回密钥类字段"
+   "notes": "集合与字段白名单；不返回密钥类字段",
+   "example": {
+    "collection": "conversations",
+    "from": "今天",
+    "limit": 5
+   }
   },
   {
    "name": "semantic_search",
@@ -540,7 +584,11 @@
    "latency": "<100 ms",
    "cost": "向量化按量计费",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "query": "上次说的那个板子问题",
+    "limit": 5
+   }
   },
   {
    "name": "switches_status",
@@ -559,7 +607,8 @@
    "latency": "<20 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "mode_status",
@@ -578,7 +627,8 @@
    "latency": "<20 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "cost_today",
@@ -603,7 +653,8 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "why_last_turn",
@@ -628,7 +679,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "minutes": 5
+   }
   },
   {
    "name": "capabilities",
@@ -660,7 +714,8 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "web_search",
@@ -689,7 +744,10 @@
    "needs": [
     "DashScope 密钥"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "query": "今天北京天气"
+   }
   },
   {
    "name": "search_verify",
@@ -716,7 +774,10 @@
    "latency": "3–8 s",
    "cost": "约 2–3 次搜索",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "question": "比特币现在多少美元"
+   }
   },
   {
    "name": "live_data",
@@ -755,7 +816,11 @@
    "latency": "<100 ms",
    "cost": "视接口",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "kind": "price",
+    "symbol": "BTC"
+   }
   },
   {
    "name": "deep_research",
@@ -790,7 +855,11 @@
    "latency": "分钟级",
    "cost": "较高，按任务封顶",
    "needs": [],
-   "notes": "花钱多：主人亲口要求即执行，否则生成提议；按任务封顶"
+   "notes": "花钱多：主人亲口要求即执行，否则生成提议；按任务封顶",
+   "example": {
+    "question": "桌面机器人怎么判断是不是在跟它说话",
+    "depth": "quick"
+   }
   },
   {
    "name": "say",
@@ -820,7 +889,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "频率上限：同一技能 10 秒内最多 2 句"
+   "notes": "频率上限：同一技能 10 秒内最多 2 句",
+   "example": {
+    "text": "我在呢"
+   }
   },
   {
    "name": "stop_speaking",
@@ -839,7 +911,8 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "express_eyes",
@@ -869,7 +942,10 @@
     "机器人在线",
     "0.5.x 命令线"
    ],
-   "notes": "每句最多 1 个，不许循环"
+   "notes": "每句最多 1 个，不许循环",
+   "example": {
+    "state": "happy"
+   }
   },
   {
    "name": "show_word",
@@ -899,7 +975,10 @@
     "机器人在线",
     "字在固件字库里"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "text": "在呢"
+   }
   },
   {
    "name": "play_clip",
@@ -930,7 +1009,10 @@
    "needs": [
     "机器人在线"
    ],
-   "notes": "hello 在说话时不放"
+   "notes": "hello 在说话时不放",
+   "example": {
+    "emotion": "happy"
+   }
   },
   {
    "name": "set_length",
@@ -961,7 +1043,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "mode": "detail"
+   }
   },
   {
    "name": "turn_head",
@@ -997,7 +1082,10 @@
     "机器人在线",
     "舵机可用"
    ],
-   "notes": "会关掉追踪；5 秒最多 1 次"
+   "notes": "会关掉追踪；5 秒最多 1 次",
+   "example": {
+    "to": "left45"
+   }
   },
   {
    "name": "face_front",
@@ -1018,7 +1106,8 @@
    "needs": [
     "机器人在线"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "turn_around",
@@ -1039,7 +1128,8 @@
    "needs": [
     "机器人在线"
    ],
-   "notes": "转身时看不到人"
+   "notes": "转身时看不到人",
+   "example": {}
   },
   {
    "name": "tracking",
@@ -1068,7 +1158,10 @@
     "机器人在线",
     "M12 在线"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "on": true
+   }
   },
   {
    "name": "nod",
@@ -1095,7 +1188,10 @@
    "needs": [
     "新固件"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "times": 1
+   }
   },
   {
    "name": "shake_head",
@@ -1122,7 +1218,10 @@
    "needs": [
     "新固件"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "times": 1
+   }
   },
   {
    "name": "reminder_set",
@@ -1164,7 +1263,11 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "也当计时器用"
+   "notes": "也当计时器用",
+   "example": {
+    "when": "10分钟后",
+    "text": "喝水"
+   }
   },
   {
    "name": "reminder_list",
@@ -1194,7 +1297,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "from": "今天"
+   }
   },
   {
    "name": "reminder_cancel",
@@ -1223,7 +1329,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "query": "喝水"
+   }
   },
   {
    "name": "schedule_add",
@@ -1270,7 +1379,12 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "start": "明天下午3点",
+    "title": "和客户开会",
+    "remind_before_min": 15
+   }
   },
   {
    "name": "schedule_list",
@@ -1300,7 +1414,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "from": "今天"
+   }
   },
   {
    "name": "watch_start",
@@ -1354,7 +1471,12 @@
    "latency": "<100 ms",
    "cost": "看画面的会用识图",
    "needs": [],
-   "notes": "到时间自动结束"
+   "notes": "到时间自动结束",
+   "example": {
+    "what": "owner_back",
+    "minutes": 60,
+    "how": "say"
+   }
   },
   {
    "name": "watch_list",
@@ -1373,7 +1495,8 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "watch_stop",
@@ -1397,7 +1520,8 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {}
   },
   {
    "name": "notify_owner",
@@ -1427,7 +1551,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "对外发消息，按 C 级；主人预先同意的提醒 / 盯梢可免确认"
+   "notes": "对外发消息，按 C 级；主人预先同意的提醒 / 盯梢可免确认",
+   "example": {
+    "text": "有人来找你了"
+   }
   },
   {
    "name": "switch_propose",
@@ -1468,7 +1595,12 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "name": "eye",
+    "on": true,
+    "why": "想看清现在的画面"
+   }
   },
   {
    "name": "memory_propose",
@@ -1506,7 +1638,13 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "statement": "主人喜欢喝美式咖啡",
+    "about": [
+     "主人"
+    ]
+   }
   },
   {
    "name": "person_note_propose",
@@ -1548,7 +1686,12 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "who": "主人",
+    "kind": "preference",
+    "text": "喜欢喝美式"
+   }
   },
   {
    "name": "face_learn_propose",
@@ -1577,7 +1720,10 @@
    "needs": [
     "M12 在线"
    ],
-   "notes": ""
+   "notes": "",
+   "example": {
+    "name": "小王"
+   }
   },
   {
    "name": "set_volume",
@@ -1609,7 +1755,10 @@
    "needs": [
     "机器人在线"
    ],
-   "notes": "现在的写法会存 NVS：主人亲口要求即执行，否则生成提议；加了不存版后降到 A"
+   "notes": "现在的写法会存 NVS：主人亲口要求即执行，否则生成提议；加了不存版后降到 A",
+   "example": {
+    "step": 10
+   }
   },
   {
    "name": "set_voice",
@@ -1639,7 +1788,11 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "主人亲口要求即执行，否则生成提议"
+   "notes": "主人亲口要求即执行，否则生成提议",
+   "example": {
+    "voice": "鹿野",
+    "style": "平稳清冷"
+   }
   },
   {
    "name": "set_quiet",
@@ -1665,7 +1818,10 @@
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "临时，不存设置；屏幕显示安静中"
+   "notes": "临时，不存设置；屏幕显示安静中",
+   "example": {
+    "minutes": 30
+   }
   }
  ]
 }
