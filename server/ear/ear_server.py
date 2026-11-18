@@ -1201,6 +1201,12 @@ def main():
         # all = every live tool in the session; skills = only open_skill first (owner 2026-11-18), read at session open
         rt_hub.tools_mode_fn = lambda: ((database.read_switch("realtime_tools") or {}).get("mode") or "all") \
             if database else "all"
+        try:                                       # 自动档 (2026-11-18): the local classifier, if its model is there
+            import intent
+            rt_hub.intent = intent.Auto(intent.Embedder())
+            print(f"realtime (Docking): auto head {'ready ' + str(rt_hub.intent.version) if rt_hub.intent.ready else 'not trained yet'}", flush=True)
+        except Exception as e:                     # noqa: BLE001 - no onnxruntime / no model: auto = skills
+            print(f"realtime (Docking): auto head off ({type(e).__name__})", flush=True)
     live_eye = None
     if secrets.get("DASHSCOPE_API_KEY"):
         live_eye = vision_burst.LiveEye(vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]),

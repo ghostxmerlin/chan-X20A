@@ -83,7 +83,7 @@ async function rtTools() {
     const r = await fetch('/api/mind/switches', { cache: 'no-store' });
     const sw = r.ok ? await r.json() : {};
     const t = sw.realtime_tools || {};
-    box.value = t.on ? (t.mode === 'skills' ? 'skills' : 'all') : 'off';
+    box.value = t.on ? (['skills', 'auto'].includes(t.mode) ? t.mode : 'all') : 'off';
   } catch { st.textContent = '读不到开关'; }
   let last = box.value;
   box.addEventListener('change', async () => {

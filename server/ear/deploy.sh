@@ -8,7 +8,7 @@ set -eu
 . "$(dirname "$0")/_env.sh"
 need SOUL_SERVER_SSH SOUL_SERVER_DIR SOUL_SERVER_UNIT
 cd "$HERE"
-FILES="ear_server.py ear_log.py recorder.py sound_kinds.py hearing_protocol.py tingwu.py tingwu_switch.py presence.py mouth_link.py mouth_mode.py realtime_link.py vision_burst.py web_search.py hello_db.py hello_db_import.py vision_link.py signal_link.py kws_link.py ask_api.py"
+FILES="ear_server.py ear_log.py recorder.py sound_kinds.py hearing_protocol.py tingwu.py tingwu_switch.py presence.py mouth_link.py mouth_mode.py realtime_link.py vision_burst.py web_search.py hello_db.py hello_db_import.py vision_link.py signal_link.py kws_link.py ask_api.py intent.py"
 COMMON="$HERE/../common"
 LOGFILES="$COMMON/hello_log.py $COMMON/prices.py"   # the run log's shared modules (the ear never reads the log: no hello_log_query), copied flat next to ear_server.py, before FILES
 for f in $LOGFILES; do [ -f "$f" ] || { echo "$f not found" >&2; exit 1; }; done
@@ -39,6 +39,9 @@ rsync -aic -e "$SSH" $FILES "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/"
 rsync -aic -e "$SSH" "$PERSONA" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/persona.md"
 rsync -aic -e "$SSH" "$(dirname "$PERSONA")/" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/personas/"   # every persona + voices.json (set_voice, 2026-11-18)
 rsync -aic -e "$SSH" "$HERE/../../config/skills/skills.json" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/skills.json"   # Docking skills (2026-11-18)
+rsync -aic -e "$SSH" "$HERE/../../config/skills/examples.json" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/skill_examples.json"
+$SSH "$SOUL_SERVER_SSH" "mkdir -p $SOUL_SERVER_DIR/intent-tools"   # (relative = from the home directory)
+rsync -aic -e "$SSH" "$HERE/../../tools/intent/train.py" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/intent-tools/train.py"   # nightly retraining of the auto mode
 printf '%s\n' "$VER" | $SSH "$SOUL_SERVER_SSH" "cat > '$SOUL_SERVER_DIR/CODE_VERSION'"
 $SSH "$SOUL_SERVER_SSH" "mkdir -p '$SOUL_SERVER_DIR/log-spool' && chmod 700 '$SOUL_SERVER_DIR/log-spool'"
 $SSH "$SOUL_SERVER_SSH" "

@@ -1880,3 +1880,49 @@ class MouthRoutingTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AutoModeTest(HubBase):
+    """自动档 (owner 2026-11-18): the ear's own ASR text preloads the skill before the model answers."""
+    class Head:
+        version = "test"
+        def reload(self):
+            return False
+        def decide(self, text):
+            return {"need": 0.9, "skills": ["world"], "via": "head"} if "天气" in text else {"need": 0.1, "skills": [], "via": "head"}
+
+    async def test_preload_then_expire(self):
+        def call(method, path, body=None, timeout=5):
+            if path == "/tools":
+                return 200, {"tools": [{"type": "function", "function": {"name": n, "description": n, "parameters": {"type": "object", "properties": {}}}}
+                                       for n in ("live_data", "web_search", "nod")]}
+            return 200, json.loads(json.dumps(CTX))
+        self.hub.call = call
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch, self.hub.tools_mode_fn, self.hub.intent = sw, (lambda: "auto"), self.Head()
+        ws = await self.open_ready()
+        self.assertEqual([t["name"] for t in [m for m in ws.sent if m["type"] == "session.update"][0]["session"]["tools"]],
+                         ["open_skill"])
+        self.hub.local_heard("你好呀")                                         # chit-chat: nothing loaded
+        await settle(5)
+        self.assertEqual(self.hub._open_skills, {})
+        self.hub.local_heard("明天北京天气怎么样")
+        await settle(5)
+        upd = [m for m in ws.sent if m["type"] == "session.update" and "tools" in m["session"]][-1]["session"]["tools"]
+        self.assertEqual([t["name"] for t in upd], ["open_skill", "live_data", "web_search"])
+        self.assertIn("world", self.hub._preloaded)
+        self.t[0] += self.rl.PRELOAD_KEEP_S + 1                                 # never used: it goes again
+        self.hub.step()
+        await settle(5)
+        upd = [m for m in ws.sent if m["type"] == "session.update" and "tools" in m["session"]][-1]["session"]["tools"]
+        self.assertEqual([t["name"] for t in upd], ["open_skill"])
+
+    async def test_a_used_preload_stays(self):
+        self.hub._skills = {"world": {"id": "world", "tools": ["live_data"]}}
+        self.hub._open_skills, self.hub._preloaded = {"world": 1000.0}, {"world": 1000.0}
+        self.hub._used_skill("live_data", 1001.0)
+        self.assertEqual(self.hub._preloaded, {})
+        self.hub._skill_cfg = {"keep_min": 10}
+        self.t[0] = 1001.0 + self.rl.PRELOAD_KEEP_S + 1
+        self.assertFalse(self.hub._prune_skills(self.t[0]))                   # normal keep (10 min) now

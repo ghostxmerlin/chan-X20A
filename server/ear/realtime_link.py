@@ -568,6 +568,7 @@ TOOL_OUTPUT_CHARS = 3000
 
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
 SKILL_DEPTH = 5                                        # skills mode: open_skill + its tool calls for one sentence
+PRELOAD_KEEP_S = 120.0                                 # auto: a skill preloaded for a sentence, never used, goes after this
 
 
 SKILLS_REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config", "skills", "skills.json")
@@ -977,6 +978,8 @@ class RealtimeHub:
         self._skill_cfg = {}
         self._open_skills = {}                         # skills mode: id -> opened at (clock)
         self._filler_traces = collections.deque(maxlen=16)
+        self.intent = None                             # intent.Auto (自动档): decides before the model answers
+        self._preloaded = {}                           # auto: skill id -> preloaded at (clock), not used yet
         self._next_depth = 0
         self._tool_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="rt-tool")
         self.fillers = list(fillers or [])             # [(text, pcm 24 kHz)]: "我看看哈" while waiting (load_fillers)
@@ -1266,6 +1269,8 @@ class RealtimeHub:
 
     def step(self):
         now = self.clock()
+        if self._open_skills and self._ws is not None and self._ready.is_set() and self._prune_skills(now):
+            self._push_skill_tools()                   # a preloaded skill nobody used goes again
         r = self._redo
         if r is not None:
             if now - r["at"] > REDO_S or r["tries"] > 4:
@@ -1647,6 +1652,12 @@ class RealtimeHub:
             self._tools_mode = await loop.run_in_executor(self._tool_pool, self.tools_mode_fn)
         except Exception:                              # noqa: BLE001
             self._tools_mode = "all"
+        if self._tools_mode == "auto" and self.intent is not None:
+            try:                                       # a new night's head (tools/intent/train.py)
+                if await loop.run_in_executor(self._tool_pool, self.intent.reload):
+                    log(f"realtime: auto head {getattr(self.intent, 'version', None)}", flush=True)
+            except Exception:                          # noqa: BLE001
+                pass
         try:
             status, body = await asyncio.wait_for(loop.run_in_executor(self._pool, self.call, "GET", "/tools", None,
                                                                        self.cfg.context_timeout_s),
@@ -1654,7 +1665,7 @@ class RealtimeHub:
         except Exception:                              # noqa: BLE001 - no tools this session
             return []
         specs = realtime_tools((body or {}).get("tools")) if status == 200 and isinstance(body, dict) else []
-        if self._tools_mode == "skills":
+        if self._tools_mode in ("skills", "auto"):
             cfg = load_skills()
             self._all_specs = {t["name"]: t for t in specs}
             self._skills = {sk["id"]: sk for sk in cfg.get("skills", []) if any(n in self._all_specs for n in sk.get("tools", []))}
@@ -1667,23 +1678,67 @@ class RealtimeHub:
 
     def _reset_skills(self):
         self._tools_mode, self._all_specs, self._skills, self._skill_cfg, self._open_skills = "all", {}, {}, {}, {}
+        self._preloaded = {}
+
+    def _prune_skills(self, now):
+        """Drop skills past their keep (a preloaded one never used: PRELOAD_KEEP_S) -> True when the set changed."""
+        keep = float(self._skill_cfg.get("keep_min") or 10) * 60
+        before = set(self._open_skills)
+        self._open_skills = {k: at for k, at in self._open_skills.items()
+                             if now - at < (PRELOAD_KEEP_S if k in self._preloaded else keep)}
+        self._preloaded = {k: at for k, at in self._preloaded.items() if k in self._open_skills}
+        cap = int(self._skill_cfg.get("max_open") or 3)
+        for k in sorted(self._open_skills, key=self._open_skills.get)[:-cap]:
+            del self._open_skills[k]
+            self._preloaded.pop(k, None)
+        return set(self._open_skills) != before
+
+    def _push_skill_tools(self):
+        names = []
+        for k in self._open_skills:
+            names += [n for n in self._skills[k].get("tools", []) if n in self._all_specs and n not in names]
+        self._tool_specs = [open_skill_spec(list(self._skills.values()))] + [self._all_specs[n] for n in names]
+        self._send_soon({"type": "session.update", "session": {"tools": self._tool_specs}})
+
+    def _used_skill(self, tool_name, now):
+        """A preloaded skill whose tool the model called counts as opened (normal keep)."""
+        for k in list(self._preloaded):
+            if tool_name in (self._skills.get(k) or {}).get("tools", []):
+                self._preloaded.pop(k, None)
+                self._open_skills[k] = now
+
+    def _preload(self, text, now, trace=None):
+        """自动档: the ear's own ASR text, before the model answers -> the skill(s) it likely needs, loaded now."""
+        if self.intent is None or self._tools_mode != "auto" or not self._skills or not self.tools_on() or \
+                self._ws is None or not self._ready.is_set():
+            return None
+        try:
+            d = self.intent.decide(text)
+        except Exception:                              # noqa: BLE001 - no preload, the directory still works
+            return None
+        new = [sid for sid in d.get("skills") or [] if sid in self._skills and sid not in self._open_skills]
+        self.stats["intent_checked"] += 1
+        if new:
+            self.stats["intent_preloaded"] += 1
+            for sid in new:
+                self._open_skills[sid], self._preloaded[sid] = now, now
+            self._prune_skills(now)
+            self._push_skill_tools()
+        ear_log.emit("trigger.intent", trace=trace or ear_log.new_trace(),
+                     sum=f"自动档：要工具 {d.get('need', 0):.2f}" + (f"，先装 {'、'.join(self._skills[s]['title'] for s in new)}" if new else ""),
+                     ref={"session": self.session_no}, extra={"need": d.get("need"), "skills": d.get("skills"),
+                                                              "loaded": new, "heard": str(text)[:120]})
+        return new
 
     def _open_skill(self, sid, now):
         """Open a skill: its tools join the session (session.update), kept keep_min, at most max_open at once."""
         sk = self._skills.get(sid)
         if sk is None:
             return {"ok": False, "error": {"code": "bad_args", "message": f"没有 {str(sid)[:20]} 这个技能"}}
-        keep = float(self._skill_cfg.get("keep_min") or 10) * 60
-        self._open_skills = {k: at for k, at in self._open_skills.items() if now - at < keep}
+        self._preloaded.pop(sid, None)
         self._open_skills[sid] = now
-        cap = int(self._skill_cfg.get("max_open") or 3)
-        for k in sorted(self._open_skills, key=self._open_skills.get)[:-cap]:
-            del self._open_skills[k]
-        names = []
-        for k in self._open_skills:
-            names += [n for n in self._skills[k].get("tools", []) if n in self._all_specs and n not in names]
-        self._tool_specs = [open_skill_spec(list(self._skills.values()))] + [self._all_specs[n] for n in names]
-        self._send_soon({"type": "session.update", "session": {"tools": self._tool_specs}})
+        self._prune_skills(now)
+        self._push_skill_tools()
         self.stats["skills_opened"] += 1
         mine = [n for n in sk.get("tools", []) if n in self._all_specs]
         return {"ok": True, "data": {"skill": sk["title"], "tools": mine, "guide": sk.get("guide") or "",
@@ -1711,7 +1766,9 @@ class RealtimeHub:
             self._play_filler(self.search_fillers or self.fillers, "search_filler", trace)   # "我查查哈" meanwhile
         t0 = self.clock()
         limit = SKILL_DEPTH if self._tools_mode == "skills" else TOOL_DEPTH
-        if fc["name"] == "open_skill" and self._tools_mode == "skills" and self._skills and self.tools_on() and \
+        if fc["name"] != "open_skill":
+            self._used_skill(fc["name"], self.clock())
+        if fc["name"] == "open_skill" and self._tools_mode in ("skills", "auto") and self._skills and self.tools_on() and \
                 any(t["name"] == "open_skill" for t in self._tool_specs):
             env = self._open_skill((args or {}).get("skill") if isinstance(args, dict) else None, self.clock()) \
                 if depth <= limit else {"ok": False, "error": {"code": "refused", "message": "先回答吧"}}
@@ -2498,6 +2555,7 @@ class RealtimeHub:
         now = self.clock()
         self._local_texts.append((now, str(text)[:300]))
         self._heard_log.append((now, {"trace": trace, "text": str(text)[:300], "at": self.wall_ms()}))
+        self._preload(str(text)[:300], now, trace=self._trace_now(trace))   # 自动档: before _heard_text's gates
         self._heard_text(str(text)[:300], now, trace=self._trace_now(trace))
 
     def _heard_text(self, text, now, told=False, trace=None):

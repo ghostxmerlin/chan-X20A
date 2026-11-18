@@ -930,8 +930,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             if not isinstance(body.get("on"), bool):
                 raise BadRequest("on (true/false) required")
             mode = body.get("mode")
-            if mode is not None and mode not in ("all", "skills"):
-                raise BadRequest("mode: all / skills")
+            if mode is not None and mode not in ("all", "skills", "auto"):
+                raise BadRequest("mode: all / skills / auto")
             with runlog.switch(body["name"], runlog.read_switch(db, body["name"]), body["on"], "page"):
                 db["switches"].update_one({"_id": body["name"]}, {"$set": {"on": body["on"], "at": now, "by": "page",
                                                                           **({"mode": mode} if mode else {})}}, upsert=True)
