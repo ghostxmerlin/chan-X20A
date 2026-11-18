@@ -18,6 +18,38 @@ SEARCH_TIMEOUT_S = 25.0
 SCENE_FRESH_MS = 90_000
 
 
+class VoiceBook:
+    """personas/voices.json (config/persona/voices.json): voice key -> persona file + the names people say."""
+    def __init__(self, persona_dir, voices_path, fillers_dir):
+        self.persona_dir, self.voices_path, self.fillers_dir = persona_dir, voices_path, fillers_dir
+
+    def _map(self):
+        try:
+            with open(f"{self.persona_dir}/voices.json", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {"voices": {}}
+
+    def resolve(self, name):
+        m = self._map()
+        n = str(name or "").strip().lower()
+        for key, v in (m.get("voices") or {}).items():
+            if n == key.lower() or n in [str(x).lower() for x in v.get("names") or []]:
+                return key, v
+        return None, None
+
+    def names(self):
+        return [((v.get("names") or [k])[0]) for k, v in (self._map().get("voices") or {}).items()]
+
+    def load(self, key, v):
+        import realtime_link
+        vid = realtime_link.load_voice(self.voices_path, key)
+        persona = realtime_link.build_persona(realtime_link.load_persona(f"{self.persona_dir}/{v['persona']}"))
+        fillers = realtime_link.load_fillers(f"{self.fillers_dir}/{key}")
+        search = realtime_link.load_fillers(f"{self.fillers_dir}/{key}-search")
+        return vid, persona, fillers, search
+
+
 class AskError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -32,11 +64,13 @@ def _ago(ms, now_ms):
 class Asks:
     """The handlers; hub = RealtimeHub (or None), burst = VisionBurst, presence = presence.Presence, searcher =
     web_search.dashscope_search(...) result, paused() -> list of pause reasons (empty = not paused)."""
-    def __init__(self, hub=None, burst=None, presence=None, searcher=None, paused=None, wall_ms=None, pool=None):
+    def __init__(self, hub=None, burst=None, presence=None, searcher=None, paused=None, wall_ms=None, pool=None,
+                 voices=None):
         self.hub, self.burst, self.presence, self.searcher = hub, burst, presence, searcher
         self.paused = paused or (lambda: [])
         self.wall_ms = wall_ms or (lambda: int(time.time() * 1000))
         self.pool = pool
+        self.voices = voices                             # VoiceBook (set_voice)
 
     def _hub(self):
         if self.hub is None:
@@ -141,7 +175,27 @@ class Asks:
         until = hub.set_role(args.get("role") or None, args.get("minutes"), trace=args.get("_trace"))
         return {"role": args.get("role") or None, "minutes": int((until - hub.clock()) // 60) if until else None}
 
-    NAMES = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role")
+    async def set_voice(self, args):
+        hub = self._hub()
+        if self.voices is None:
+            raise AskError("not_available", "声音表没有部署")
+        key, v = self.voices.resolve(args.get("voice") or "")
+        if key is None:
+            raise AskError("bad_args", f"能换的声音：{'、'.join(self.voices.names())}（声音要和人设配套）")
+        try:
+            vid, persona, fillers, search = await asyncio.get_running_loop().run_in_executor(
+                self.pool, self.voices.load, key, v)
+        except Exception as e:                           # noqa: BLE001
+            raise AskError("failed", f"读不到这个声音（{type(e).__name__}）") from None
+        if not vid:
+            raise AskError("not_available", f"声音 {key} 在 soul-tts 里没有")
+        if args.get("style"):
+            persona = persona + f"\n\n【这会儿的语气】{str(args['style'])[:40]}"
+        hub.set_voice(key, vid, persona, fillers, search, trace=args.get("_trace"))
+        return {"voice": key, "persona": v["persona"], "style": args.get("style"), "applies": "下一句话起（重开会话）"}
+
+    NAMES = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role",
+             "set_voice")
 
     async def handle(self, name, args):
         if name not in self.NAMES:

@@ -277,6 +277,13 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         with runlog.switch(name, runlog.read_switch(db, name), on, "tool"):
             db["switches"].update_one({"_id": name}, {"$set": {"on": on, "at": now_, "by": "tool"}}, upsert=True)
 
+    def set_voice_kept(args):
+        """set_voice (C): the ear switches now; the choice is kept (switches rt_voice) for the ear's next start."""
+        data = ear_ask("set_voice", args)
+        db["switches"].update_one({"_id": "rt_voice"}, {"$set": {"voice": data.get("voice"), "style": args.get("style"),
+                                                                 "at": int(time.time() * 1000), "by": "tool"}}, upsert=True)
+        return data
+
     tools = ctx.get("tools") or Tools(registry, tool_impls.mind_tools(
         switches=switches, store=store, mode_store=ctx.get("mode_store"), write_switch=write_switch,
         scope_fn=lambda: speech_settings.scope(current_settings()[0])["id"],
@@ -284,7 +291,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         ledger=(lambda day: log_query.ledger(db, day)) if log_query is not None else None,
         settings_fn=lambda: current_settings()[0], registry=registry,
         flows=(lambda lo, hi, kinds, limit: log_query.flows(db, lo, hi, kinds=kinds, limit=limit)) if log_query is not None else None)
-        | tool_impls.ear_tools(ear_ask)
+        | tool_impls.ear_tools(ear_ask) | {"set_voice": set_voice_kept}
         | tool_impls.live_tools(ear_search=lambda q: ear_ask("web_search", {"query": q}), llm_env=ctx.get("env"),
                                 chat=_llm.chat, tz=current_settings()[0].get("tz") or "Asia/Shanghai")
         | (daily_tools(ctx["daily"]) if ctx.get("daily") else {}),

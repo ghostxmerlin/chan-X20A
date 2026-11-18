@@ -479,7 +479,8 @@ def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
     return out
 
 
-def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None, role=None, manner=None):
+def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None, role=None, manner=None,
+                 persona=None):
     """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
     where the voice model tended to miss them; owner 2026-11-14). looks: look_lines() of the vision burst (else mind's
     注视： line, if the context has one)."""
@@ -490,7 +491,7 @@ def instructions(context_text=None, seen=None, recent=None, looks=None, scene=No
             eye[key] = line[len(key):]
         else:
             rest.append(line)
-    out = PERSONA + (f"\n\n【临时角色】{role}" if role else "") + (f"\n\n【这会儿怎么接话】{manner}" if manner else "") + \
+    out = (persona or PERSONA) + (f"\n\n【临时角色】{role}" if role else "") + (f"\n\n【这会儿怎么接话】{manner}" if manner else "") + \
         (f"\n\n【这会儿的回答长短】{length}" if length else "") + \
         ("\n\n【背景】\n" + "\n".join(rest) if rest else "")
     # Anti-repeat (owner 2026-11-15 "meet 经常卡在重复的一句话"): hello's last replies, also across a session rotation.
@@ -557,7 +558,8 @@ def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False, tu
 
 # L6 (owner 2026-11-18 "工具也给 qwen 吧"): behind the 千问用工具 switch (realtime_tools, default off). The tool list is
 # mind's GET /tools (live tools) minus these: hello speaks for itself; a 38 s cross-check is too slow for a reply.
-TOOL_SKIP = frozenset(("say", "stop_speaking", "search_verify", "set_voice"))
+TOOL_SKIP = frozenset(("say", "stop_speaking", "search_verify", "set_voice",
+                       "db_query"))     # security review 2026-11-18: raw records stay out of a voice anyone can talk to
 TOOL_DEPTH = 3                                         # tool calls in a row for one sentence
 TOOL_TIMEOUT_S = 30.0
 TOOL_OUTPUT_CHARS = 3000
@@ -934,6 +936,8 @@ class RealtimeHub:
         self.searcher = None                           # web_search.dashscope_search(key) (ear_server wires it)
         self.search_fillers = []                       # [(text, pcm)]: "我查查哈" (load_fillers, <voice>-search)
         self.tools_switch = None                       # 千问用工具 (realtime_tools): .on; None = off
+        self.persona = None                            # set_voice: the persona that goes with the voice (None = PERSONA)
+        self.voice_key = None
         self._tool_specs = []                          # this session's tools (realtime format)
         self._next_depth = 0
         self._tool_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="rt-tool")
@@ -1448,7 +1452,8 @@ class RealtimeHub:
         self._seen_sent, self._seen_at = seen, self.clock()
         self._looks_dirty, self._looks_sent_at = False, self.clock()
         return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()),
-                            self._scene_line(), self._length_line(), self._role_line(), self._manner_line())
+                            self._scene_line(), self._length_line(), self._role_line(), self._manner_line(),
+                            self.persona)
 
     # ---- reply length (see LENGTH_S) ----
     def _length_mode(self, now=None):
@@ -1607,7 +1612,9 @@ class RealtimeHub:
                                              "mode_status", "capabilities"):
             self._play_filler(self.search_fillers or self.fillers, "search_filler", trace)   # "我查查哈" meanwhile
         t0 = self.clock()
-        if args is None or not isinstance(args, dict):
+        if fc["name"] not in {t["name"] for t in self._tool_specs}:     # only what this session was given
+            env = {"ok": False, "error": {"code": "not_available", "message": f"没有给你 {fc['name'][:30]} 这个工具"}}
+        elif args is None or not isinstance(args, dict):
             env = {"ok": False, "error": {"code": "bad_args", "message": "参数不是合法的 JSON"}}
         elif depth > TOOL_DEPTH:
             env = {"ok": False, "error": {"code": "refused", "message": "这句话已经连着用了好几次工具，先回答吧"}}
@@ -1653,6 +1660,20 @@ class RealtimeHub:
                                                                                    "text": self._next_prompt}]}})
         self._send_soon({"type": "response.create"})
         return "sent"
+
+    def set_voice(self, key, voice_id, persona, fillers=None, search_fillers=None, trace=None, by="tool"):
+        """Switch Docking's voice and the persona that goes with it (owner 2026-11-18). The voice is set when a session
+        opens: an open session is closed and reopens with the new voice on the next speech."""
+        if not voice_id:
+            raise ValueError("no voice id")
+        self.voice, self.voice_key, self.persona = voice_id, key, persona
+        self.fillers = list(fillers or [])
+        self.search_fillers = list(search_fillers or [])
+        ear_log.emit("trigger.voice", trace=trace or ear_log.new_trace(), by=by, sum=f"换声音：{key}",
+                     ref={"session": self.session_no}, extra={"voice": key})
+        if self.state != "closed":
+            self.close("voice")
+        self._write_status(self.clock())
 
     def stop_speaking(self):
         return self._interrupt(self.clock())
@@ -2759,7 +2780,8 @@ class RealtimeHub:
                 "available": bool(self.key and self.voice), "on": self.switch.on,
                 "hour_used_s": int(self.hour_used(now)), "turns": self.stats["turns"],
                 "cost_cny": round(self.stats["cost_micro_cny"] / 1e6, 4), "at": self.wall_ms(),
-                "quiet": self.quiet_on(now), "low": self.low_on(now), "role": self.role_text(now)})
+                "quiet": self.quiet_on(now), "low": self.low_on(now), "role": self.role_text(now),
+                "voice_key": self.voice_key})
         except Exception:                              # noqa: BLE001
             pass
 

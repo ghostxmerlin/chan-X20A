@@ -25,6 +25,7 @@ if [ "${1:-}" = "--dry-run" ]; then
   # shellcheck disable=SC2086
   rsync -aicn -e "$SSH" $FILES "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/"
   rsync -aicn -e "$SSH" "$PERSONA" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/persona.md"
+  rsync -aicn -e "$SSH" "$(dirname "$PERSONA")/" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/personas/"
   echo "(would write $SOUL_SERVER_DIR/CODE_VERSION: $VER; would create $SOUL_SERVER_DIR/log-spool)"
   echo "(dry run: nothing copied; lines starting with '<' would be sent)"
   exit 0
@@ -36,6 +37,7 @@ rsync -aic -e "$SSH" $LOGFILES "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/"
 # shellcheck disable=SC2086
 rsync -aic -e "$SSH" $FILES "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/"
 rsync -aic -e "$SSH" "$PERSONA" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/persona.md"
+rsync -aic -e "$SSH" "$(dirname "$PERSONA")/" "$SOUL_SERVER_SSH:$SOUL_SERVER_DIR/personas/"   # every persona + voices.json (set_voice, 2026-11-18)
 printf '%s\n' "$VER" | $SSH "$SOUL_SERVER_SSH" "cat > '$SOUL_SERVER_DIR/CODE_VERSION'"
 $SSH "$SOUL_SERVER_SSH" "mkdir -p '$SOUL_SERVER_DIR/log-spool' && chmod 700 '$SOUL_SERVER_DIR/log-spool'"
 $SSH "$SOUL_SERVER_SSH" "

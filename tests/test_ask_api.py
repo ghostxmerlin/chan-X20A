@@ -108,3 +108,28 @@ class AskApiTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VoiceBookTest(unittest.IsolatedAsyncioTestCase):
+    async def test_set_voice_loads_the_matching_persona(self):
+        import os
+        import tempfile
+        d = tempfile.mkdtemp()
+        json.dump({"voices": {"ly01": {"persona": "luye.md", "names": ["鹿野"]},
+                              "me01": {"persona": "owner.md", "names": ["主人的声音", "我的声音"]}}},
+                  open(os.path.join(d, "voices.json"), "w"), ensure_ascii=False)
+        open(os.path.join(d, "owner.md"), "w").write("你是 hello，借用主人的声音。")
+        open(os.path.join(d, "tts.json"), "w").write(json.dumps({"voices": {"me01": {"voice": "vid-me"}}}))
+        got = []
+
+        class Hub(FakeHub):
+            def set_voice(self, key, vid, persona, fillers, search, trace=None):
+                got.append((key, vid, persona))
+        asks = ask_api.Asks(hub=Hub(), voices=ask_api.VoiceBook(d, os.path.join(d, "tts.json"), os.path.join(d, "fillers")))
+        out = await asks.set_voice({"voice": "我的声音", "style": "急一点"})
+        self.assertEqual((out["voice"], out["persona"]), ("me01", "owner.md"))
+        self.assertEqual(got[0][:2], ("me01", "vid-me"))
+        self.assertIn("借用主人的声音", got[0][2])
+        self.assertIn("【这会儿的语气】急一点", got[0][2])
+        with self.assertRaises(ask_api.AskError):
+            await asks.set_voice({"voice": "无限"})

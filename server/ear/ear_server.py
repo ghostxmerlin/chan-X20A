@@ -1216,7 +1216,9 @@ def main():
     asks = ask_api.Asks(hub=rt_hub, burst=burst, presence=presence,
                         searcher=rt_hub.searcher if rt_hub is not None and getattr(rt_hub, "searcher", None) else
                         (web_search.dashscope_search(secrets["DASHSCOPE_API_KEY"]) if secrets.get("DASHSCOPE_API_KEY") else None),
-                        paused=pause.reasons)
+                        paused=pause.reasons,
+                        voices=ask_api.VoiceBook(os.path.expanduser("~/soul-spike/personas"), a.realtime_voices,
+                                                 os.path.expanduser("~/soul-spike/fillers")))
 
     hearing_ctx = argparse.Namespace(models=models, ex=ex, rec_root=rec_root, database=database,
                                      tingwu_keys=tingwu_keys, tw_switch=tw_paid,
@@ -1320,6 +1322,16 @@ def main():
                     print(f"ask api: off ({e})", flush=True)
             if rt_hub is not None:
                 rt_hub.start()
+
+                async def kept_voice():            # set_voice's choice survives a restart (switches rt_voice)
+                    try:
+                        doc = await asyncio.to_thread(database.read_switch, "rt_voice") if database else None
+                        if doc and doc.get("voice") and doc["voice"] != a.realtime_voice:
+                            out = await asks.set_voice({"voice": doc["voice"], "style": doc.get("style")})
+                            print(f"realtime (Docking): kept voice {out['voice']}", flush=True)
+                    except Exception as e:         # noqa: BLE001 - the default voice stays
+                        print(f"realtime (Docking): kept voice not applied ({type(e).__name__})", flush=True)
+                asyncio.create_task(kept_voice())
             try:
                 await stopper.wait()
             finally:

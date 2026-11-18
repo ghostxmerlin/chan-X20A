@@ -22,6 +22,7 @@ from .runlog import hello_log
 
 CODES = ("bad_args", "not_available", "switch_off", "paused", "budget", "robot_offline", "timeout", "refused",
          "failed")
+MODEL_CALLERS = ("qwen",)                         # callers that are models (security review 2026-11-18)
 _HERE = Path(__file__).resolve()
 REGISTRY_PATHS = (_HERE.parents[1] / "tools" / "registry.json",                # deployed: ~/soul-mind/tools/
                   _HERE.parents[2] / "config" / "tools" / "registry.json")     # repository: config/tools/
@@ -119,6 +120,8 @@ class Tools:
         try:
             if spec is None:
                 raise ToolError("not_available", f"没有叫 {str(name)[:40]} 的工具")
+            if caller in MODEL_CALLERS and spec.get("status") != "live":   # a model only gets what is tested
+                raise ToolError("not_available", f"「{spec['title']}」还没接入")
             fn = self.impls.get(name)
             if fn is None:
                 raise ToolError("not_available", f"「{spec['title']}」还没做好")

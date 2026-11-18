@@ -1816,14 +1816,14 @@
    "group": "settings",
    "level": "C",
    "runs_on": "ear",
-   "status": "new",
+   "status": "live",
    "description": "主人要 hello 换一个声音（音色、语气）时用；Docking 换声音要重开会话。",
    "parameters": {
     "type": "object",
     "properties": {
      "voice": {
       "type": "string",
-      "description": "声音名，如 鹿野、无限",
+      "description": "声音名：鹿野（默认）或 主人的声音 / 我的声音；声音和人设配套（config/persona/voices.json）",
       "maxLength": 20
      },
      "style": {
@@ -1834,14 +1834,13 @@
     }
    },
    "returns": "voice、style、applied_at",
-   "source": "新：Docking 会话的 voice（开会话时设）+ soul-tts voices.json 的 instruction",
+   "source": "耳朵 POST /ask set_voice（server/ear/ask_api.py VoiceBook）：换 Docking 的声音 + 配套人设 + 配套垫话，重开会话；选择存在 switches rt_voice，耳朵重启后照旧",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "主人亲口要求即执行，否则生成提议",
+   "notes": "主人亲口要求即执行，否则生成提议；能换的只有配了人设的声音（鹿野 luye.md、主人 owner.md）",
    "example": {
-    "voice": "鹿野",
-    "style": "平稳清冷"
+    "voice": "鹿野"
    }
   },
   {

@@ -1,0 +1,8 @@
+{
+ "_note": "Docking voices and the persona each one loads (owner 2026-11-18: the voice must match the persona; only the owner's own voice can be switched to besides 鹿野). Key = soul-tts voice key; names = what people say.",
+ "default": "ly01",
+ "voices": {
+  "ly01": {"persona": "luye.md", "names": ["鹿野", "默认", "原来的", "ly01"]},
+  "me01": {"persona": "owner.md", "names": ["主人", "我的声音", "主人的声音", "主人自己的声音", "me01"]}
+ }
+}

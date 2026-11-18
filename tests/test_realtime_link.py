@@ -834,6 +834,15 @@ class LengthTest(HubBase):
         self.assertIn("眼前有 3 个人", self.hub._length_line())
 
 
+class VoiceTest(HubBase):
+    async def test_set_voice_reopens_with_the_voice_and_persona(self):
+        ws = await self.open_ready()
+        self.hub.set_voice("me01", "vid-me", "【人设】借用主人的声音")
+        self.assertEqual(self.hub.state, "closed")
+        self.assertEqual(self.hub.voice, "vid-me")
+        self.assertTrue(self.hub._instructions().startswith("【人设】借用主人的声音"))
+
+
 class ToolCallTest(HubBase):
     """L6 2026-11-18: Qwen calls hello's tools in Docking (switch realtime_tools); probe: supported by the model."""
     async def test_a_tool_call_round_trip(self):
@@ -871,6 +880,22 @@ class ToolCallTest(HubBase):
         ws.push({"type": "response.created", "response": {"id": "r2"}})
         await settle(5)
         self.assertEqual((self.hub._turns["r2"]["kind"], self.hub._turns["r2"]["gate"]), ("tool_answer", "play"))
+
+    async def test_a_tool_not_given_is_refused(self):
+        calls = []
+        self.hub.call = lambda m, p, b=None, t=5: (calls.append(p), (200, {"tools": []} if p == "/tools" else json.loads(json.dumps(CTX))))[1]
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch = sw
+        ws = await self.open_ready()
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": "r1", "call_id": "c9",
+                 "name": "db_query", "arguments": "{}"})
+        ws.push({"type": "response.done", "response": {"id": "r1"}})
+        await settle(30)
+        self.assertNotIn("/tool/call", calls)
+        out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
+        self.assertEqual(json.loads(out[0]["item"]["output"])["error"]["code"], "not_available")
 
     async def test_tools_off_by_default(self):
         ws = await self.open_ready()

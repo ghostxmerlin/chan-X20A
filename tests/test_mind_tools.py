@@ -437,7 +437,7 @@ class ProposalTest(unittest.TestCase):
         self.t = [NOW]
         self.p = Proposals(self.db, clock_ms=lambda: self.t[0], emit=lambda *a, **k: None)
         self.ran = []
-        reg = {"tools": [{"name": "switch_propose", "title": "提议改开关", "level": "C",
+        reg = {"tools": [{"name": "switch_propose", "title": "提议改开关", "level": "C", "status": "live",
                           "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "on": {"type": "boolean"}},
                                          "required": ["name", "on"]}}]}
         self.tools = Tools(reg, {"switch_propose": lambda a: (self.ran.append(a), {"on": a["on"]})[1]},
@@ -614,3 +614,12 @@ class DbQueryTest(unittest.TestCase):
         for bad in ({"collection": "memory_items"}, {"collection": "sounds", "fields": ["secret"]}):
             with self.assertRaises(ToolError):
                 t["db_query"](bad)
+
+
+class ModelCallerTest(unittest.TestCase):
+    def test_a_model_gets_live_tools_only(self):
+        reg = {"tools": [{"name": "a", "title": "A", "level": "R", "status": "new", "parameters": {"type": "object", "properties": {}}}]}
+        t = Tools(reg, {"a": lambda args: {"ok": 1}}, log=lambda *a, **k: None)
+        self.assertEqual(t.call("a", {}, caller="qwen")["error"]["code"], "not_available")
+        self.assertTrue(t.call("a", {}, caller="page")["ok"])
+
