@@ -883,6 +883,22 @@ class SkillModeTest(HubBase):
         self.assertEqual(json.loads(out[-1]["item"]["output"])["error"]["code"], "not_available")
 
 
+class SkillResetTest(HubBase):
+    async def test_skills_do_not_outlive_their_session(self):
+        self.hub._tools_mode, self.hub._skills = "skills", {"world": {"id": "world", "tools": ["live_data"]}}
+        self.hub._all_specs = {"live_data": {"type": "function", "name": "live_data"}}
+        ws = await self.open_ready()                                   # tools off: a new session resets them
+        self.assertEqual((self.hub._skills, self.hub._all_specs), ({}, {}))
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": "r1", "call_id": "c1",
+                 "name": "open_skill", "arguments": '{"skill": "world"}'})
+        ws.push({"type": "response.done", "response": {"id": "r1"}})
+        await settle(30)
+        out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
+        self.assertEqual(json.loads(out[-1]["item"]["output"])["error"]["code"], "not_available")
+        self.assertFalse(any(m["type"] == "session.update" and "tools" in m["session"] for m in ws.sent))
+
+
 class VoiceTest(HubBase):
     async def test_set_voice_reopens_with_the_voice_and_persona(self):
         ws = await self.open_ready()

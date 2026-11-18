@@ -1395,6 +1395,7 @@ class RealtimeHub:
             self._ws = ws
             await self._take_context(ctx_fut)
             instr = self._instructions()
+            self._reset_skills()                       # nothing carries over from the last session (security review)
             self._tool_specs = await self._load_tools() if self.tools_on() else []
             await ws.send(json.dumps({"type": "session.update", "session": session_config(
                 self.voice, instr, self.cfg.silence_ms, self.cfg.vad_threshold, self.cfg.search, self.cfg.turn,
@@ -1664,6 +1665,9 @@ class RealtimeHub:
         log(f"realtime: session tools: {len(specs)}", flush=True)
         return specs
 
+    def _reset_skills(self):
+        self._tools_mode, self._all_specs, self._skills, self._skill_cfg, self._open_skills = "all", {}, {}, {}, {}
+
     def _open_skill(self, sid, now):
         """Open a skill: its tools join the session (session.update), kept keep_min, at most max_open at once."""
         sk = self._skills.get(sid)
@@ -1707,7 +1711,8 @@ class RealtimeHub:
             self._play_filler(self.search_fillers or self.fillers, "search_filler", trace)   # "我查查哈" meanwhile
         t0 = self.clock()
         limit = SKILL_DEPTH if self._tools_mode == "skills" else TOOL_DEPTH
-        if fc["name"] == "open_skill" and self._skills:
+        if fc["name"] == "open_skill" and self._tools_mode == "skills" and self._skills and self.tools_on() and \
+                any(t["name"] == "open_skill" for t in self._tool_specs):
             env = self._open_skill((args or {}).get("skill") if isinstance(args, dict) else None, self.clock()) \
                 if depth <= limit else {"ok": False, "error": {"code": "refused", "message": "先回答吧"}}
         elif fc["name"] not in {t["name"] for t in self._tool_specs}:     # only what this session was given
