@@ -660,6 +660,10 @@ class CalledTest(HubBase):
 class SearchTaskTest(HubBase):
     """Owner 2026-11-18: BTC price wrong; "核实" was promised twice and never done. A search stays a task until answered,
     given up by the owner, or honestly unresolved; refused answers are sent again."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.hub.cfg.turn = "server_vad"     # the search logic itself; the smart_turn search gate: SearchGateTest
+
     def searcher(self, answers):
         self.asked = []
         it = iter(answers)
@@ -813,6 +817,34 @@ class SceneTest(HubBase):
         self.assertNotIn("大约一分钟前", instr)
 
 
+class SearchGateTest(HubBase):
+    """2026-11-18 18:12: "别扔了就行，那只能去网上搜搜看有没有" said to a colleague started a search hello read out."""
+    async def test_a_search_word_waits_for_a_real_reply(self):
+        asked = []
+        self.hub.searcher = lambda q: (asked.append(q), "二手市场数据")[1]
+        ws = await self.open_ready()
+        self.hub.local_heard("别扔了就行，那只能去网上搜搜看有没有")
+        await settle(10)
+        self.assertEqual(asked, [])                                   # not yet
+        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "去网上搜搜看"})
+        await settle(20)
+        self.assertEqual(asked, [])                                   # not for hello: no search
+        self.assertEqual(self.hub.stats["search_gated"], 1)
+        self.t[0] += 5
+        self.hub.local_heard("帮我搜一下明天的天气")
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio_transcript.delta", "delta": "好的，我来查一下明天的天气"})
+        await settle(20)
+        self.assertEqual(asked, ["帮我搜一下明天的天气"])                 # a real reply: the search runs
+        self.hub._search_wait = None                                   # that search is answered (one at a time)
+        self.t[0] += 5
+        self.hub.called("asr")
+        self.hub.local_heard("搜一下比特币")                               # inside a call: at once
+        await settle(20)
+        self.assertEqual(asked[-1], "搜一下比特币")
+
+
 class VisionGateTest(HubBase):
     """Owner 2026-11-18: "决定视觉爆发的前提是过了qwen的拒识闸门，别一有人说话就爆发" (smart_turn_v2)."""
     class Burst:
@@ -871,6 +903,10 @@ class VisionGateTest(HubBase):
 
 class SearchAnswerTest(HubBase):
     """Owner 2026-11-16: "让其搜索新闻，效果不好" (the model never searched) and "搜索需要触发……你查查，查一下，帮我找之类的"."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.hub.cfg.turn = "server_vad"     # the search logic itself; the smart_turn search gate: SearchGateTest
+
     def hints(self, ws):
         return [m["item"]["content"][0]["text"] for m in ws.sent if m["type"] == "conversation.item.create"]
 

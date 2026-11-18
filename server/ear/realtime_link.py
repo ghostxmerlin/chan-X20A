@@ -849,6 +849,7 @@ class RealtimeHub:
         self._inject_id = None                         # the server id of the item that goes with _next_kind
         self._pending_vision = None                    # a burst / look the ear's ASR heard, waiting for the model's verdict
         self._scene = None                             # (at_ms, text): the newest instantly recognised camera photo
+        self._pending_search = None                    # a search the ear's ASR heard, waiting for the model's verdict
         self._length = None                            # (mode, at): the owner's 详细点 / 简单点 (see LENGTH_S)
         self._called_until = 0.0                       # inside a call window (hello / Dynames): see CALLED_S
         self._called_at = None                         # the last call (merges sources that heard the same call)
@@ -1183,7 +1184,7 @@ class RealtimeHub:
         c = self._called_text
         if c is not None and now - c["at"] > CALLED_ANSWER_WAIT_S and self._resp is None and not self.output_busy():
             self._answer_called(c["text"], now, c["trace"], "千问没有回答")
-        p = self._pending_vision
+        p = self._pending_vision or self._pending_search
         if p is not None and now - p["at"] > VISION_GATE_S:
             self._release_vision(now, None)            # no verdict came (no session, model silent): no burst
         if not self.in_crowd():
@@ -1951,7 +1952,7 @@ class RealtimeHub:
             self.stats["muted_order"] += 1
             self._log_gate(rid, turn, v, done)
             return
-        if turn.get("kind") == "speech" and self._pending_vision is not None:
+        if turn.get("kind") == "speech" and (self._pending_vision is not None or self._pending_search is not None):
             q = reply_verdict(turn.get("tx"), done)
             if q is None:
                 return                                 # too little of the reply yet to tell 「嗯」 from an answer
@@ -1971,8 +1972,9 @@ class RealtimeHub:
                 log("realtime: reply muted (wait_look)", flush=True)
                 self._log_gate(rid, turn, v, done)
                 return
-            asked = next((t for t in [turn.get("heard")] + [t for at, t in self._local_texts if now - at <= 3]
-                          if t and is_search_ask(t)), None)
+            asked = None if self.cfg.turn != "server_vad" else \
+                next((t for t in [turn.get("heard")] + [t for at, t in self._local_texts if now - at <= 3]
+                      if t and is_search_ask(t)), None)  # smart_turn: only through the pending gate (_release_vision)
             if asked is not None:
                 self._start_search_wait(asked, now, turn.get("trace"))
             w = self._search_wait
@@ -2113,8 +2115,14 @@ class RealtimeHub:
         else:
             self._vision_from(text, now, trace, look, key)
         if not look and not self._task_follow(text, now, trace) and is_search_ask(text):
-            self._task_open(text, now, trace)
-            self._start_search_wait(text, now, trace, task=self._qtask)
+            if self.cfg.turn != "server_vad" and not self.in_called(now):
+                # 2026-11-18 18:12: "别扔了就行，那只能去网上搜搜看有没有" (to a colleague) started a search that hello then
+                # read out. Same gate as the burst: the search waits for the model's real reply to this sentence.
+                if self._pending_search is None or now - self._pending_search["at"] > 1.0 or not told:
+                    self._pending_search = {"text": text, "at": now, "trace": trace}
+            else:
+                self._task_open(text, now, trace)
+                self._start_search_wait(text, now, trace, task=self._qtask)
         r = self._rescue
         if r is not None and not r["sent"] and now - r["at"] <= RESCUE_S:
             r["texts"].append(text)
@@ -2137,7 +2145,17 @@ class RealtimeHub:
                 log(f"realtime: burst trigger failed\n{traceback.format_exc().rstrip()}", flush=True)
 
     def _release_vision(self, now, accepted, why=None):
-        """The realtime model's verdict on the sentence a pending burst / look waits for."""
+        """The realtime model's verdict on the sentence a pending burst / look / search waits for."""
+        q, self._pending_search = self._pending_search, None
+        if q is not None:
+            if accepted and now - q["at"] <= VISION_GATE_S:
+                self._task_open(q["text"], now, q["trace"])
+                self._start_search_wait(q["text"], now, q["trace"], task=self._qtask)
+            else:
+                self.stats["search_gated"] += 1
+                ear_log.emit("gate.realtime", trace=q["trace"] or ear_log.new_trace(),
+                             sum=f"没去搜：{why or ('千问判不是跟我说' if accepted is False else '没等到千问判定')} {q['text'][:30]}",
+                             extra={"verdict": "search_gated", "heard": q["text"][:300]})
         p, self._pending_vision = self._pending_vision, None
         if p is None:
             return
