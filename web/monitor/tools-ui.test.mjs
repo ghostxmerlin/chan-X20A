@@ -30,3 +30,9 @@ test('proposal list escapes and shows both buttons', async () => {
   assert.ok(html.includes('30 分钟前'));
   assert.ok(proposalHtml([]).includes('没有待确认'));
 });
+
+test('the page proxy never forwards owner: true', async () => {
+  const { stripOwner } = await import('./mind.mjs');
+  assert.equal(JSON.parse(stripOwner('{"name":"set_voice","args":{},"owner":true}')).owner, undefined);
+  assert.equal(stripOwner('not json'), null);
+});

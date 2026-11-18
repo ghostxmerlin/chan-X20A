@@ -90,6 +90,11 @@ export class MindProxy {
   if(!POST_PATHS.has(path))return {status:400,body:'不允许的写入'};
   const maxBody=['/settings','/speech/settings'].includes(path)?512*1024:MAX_BODY;
   if(typeof bodyText!=='string'||Buffer.byteLength(bodyText)>maxBody)return {status:413,body:'内容过长'};
+  if(path==='/tool/call'){        // security review 2026-11-18: the page never claims to be the owner in person
+   const stripped=stripOwner(bodyText);
+   if(stripped===null)return {status:400,body:'参数不是合法的 JSON'};
+   bodyText=stripped;
+  }
   if(!this.tunnel())return {status:503,body:'情景服务连接中'};
   // a rerun may wait for two model calls (90 s each)
   try{return await this.requestFn(this.target,path,{Authorization:`Bearer ${this.token}`},{method:'POST',body:bodyText,timeout:200000});}
@@ -99,6 +104,12 @@ export class MindProxy {
 }
 
 // env: process.env; dotenv: the repo .env. SOUL_MIND_LOCAL set = the local demo (its own token, never .env's).
+export function stripOwner(bodyText){
+ // C-level tools from the page go through 待确认 (POST /proposal/decide); only server-side callers may say owner
+ try{const b=JSON.parse(bodyText);if(!b||typeof b!=='object'||Array.isArray(b))return null;delete b.owner;return JSON.stringify(b);}
+ catch{return null;}
+}
+
 export function mindFromEnv(env,dotenv){
  if(env.SOUL_MIND_LOCAL){
   if(!env.SOUL_MIND_LOCAL_TOKEN)throw new Error('SOUL_MIND_LOCAL 需要同时给 SOUL_MIND_LOCAL_TOKEN（演示脚本打印的那一行）');
