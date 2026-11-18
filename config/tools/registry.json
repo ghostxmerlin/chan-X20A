@@ -662,7 +662,7 @@
    "group": "self",
    "level": "R",
    "runs_on": "mind",
-   "status": "wrap",
+   "status": "live",
    "description": "被问“你刚才为什么没回答 / 为什么这么说”时用：读那一轮的判定链。",
    "parameters": {
     "type": "object",
@@ -675,7 +675,7 @@
     }
    },
    "returns": "turns[{time, heard, verdict, reason, said}]",
-   "source": "运行日志 /log + /log/chain（gate.realtime、heard.called…）",
+   "source": "运行日志 /log + /log/chain（gate.realtime、heard.called…）；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -690,7 +690,7 @@
    "group": "self",
    "level": "R",
    "runs_on": "mind",
-   "status": "new",
+   "status": "live",
    "description": "被问“你能做什么 / 你会不会…”时用：读这份注册表和当前开关。",
    "parameters": {
     "type": "object",
@@ -710,7 +710,7 @@
     }
    },
    "returns": "tools[{title, group, available, why_not}]",
-   "source": "新：读 config/tools/registry.json + 开关",
+   "source": "新：读 config/tools/registry.json + 开关；POST /tool/call（server/mind/tool_impls.py）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],

@@ -317,3 +317,54 @@ class SpeechToolsTest(unittest.TestCase):
     def test_hello_said(self):
         d = self.t["hello_said"]({"from": "1小时前"})
         self.assertEqual([(x["mode"], x["said"]) for x in d["lines"]], [("对话", "七点半"), ("Docking", "在呢")])
+
+
+class SelfToolsTest(unittest.TestCase):
+    def setUp(self):
+        self.db = FakeDB()
+        rows = [
+            {"_id": "a1", "kind": "heard.asr", "at": NOW - 60_000, "trace": "t1", "sum": "别扔了就行，去网上搜搜看"},
+            {"_id": "a2", "kind": "gate.realtime", "at": NOW - 58_000, "trace": "t1", "sum": "千问判：不是跟我说",
+             "extra": {"verdict": "ambient"}},
+            {"_id": "b1", "kind": "heard.called", "at": NOW - 30_000, "trace": "t2", "sum": "被叫了：语音模块听到 hello"},
+            {"_id": "b2", "kind": "heard.asr", "at": NOW - 29_000, "trace": "t2", "sum": "今天几号"},
+            {"_id": "b3", "kind": "gate.realtime", "at": NOW - 28_000, "trace": "t2", "sum": "play", "extra": {"verdict": "play"}},
+            {"_id": "b4", "kind": "call.realtime.turn", "at": NOW - 27_000, "trace": "t2", "sum": "今天是11月18号。", "ok": True,
+             "extra": {"state": "done"}},
+            {"_id": "c1", "kind": "heard.asr", "at": NOW - 10_000, "trace": "t3", "sum": "嗯嗯"},
+            {"_id": "d1", "kind": "heard.asr", "at": NOW - 90_000, "trace": "t4", "sum": "你算对了吗"},
+            {"_id": "d2", "kind": "gate.realtime", "at": NOW - 89_000, "trace": "t4", "sum": "muted_quiet 嗯",
+             "extra": {"verdict": "muted_quiet"}},
+            {"_id": "d3", "kind": "call.realtime.turn", "at": NOW - 89_000, "trace": "t4", "sum": "嗯", "ok": True,
+             "extra": {"state": "muted_quiet", "kind": "speech"}},
+        ]
+        self.calls = []
+
+        def flows(lo, hi, kinds, limit):
+            self.calls.append((lo, hi))
+            return [r for r in rows if lo <= r["at"] < hi and r["kind"] in kinds]
+        reg = load_registry()
+        sw = lambda: {"tingwu": {"on": False}, "eye": {"on": True}, "notes": {"on": True}, "realtime": {"on": True},
+                      "mouth": {"mode": "tts"}, "pause": {"paused": False}}
+        self.t = tool_impls.mind_tools(switches=sw, store=Store(self.db), clock_ms=lambda: NOW, flows=flows, registry=reg)
+
+    def test_why_last_turn(self):
+        d = self.t["why_last_turn"]({"minutes": 2})
+        self.assertEqual(self.calls, [(NOW - 120_000, NOW)])
+        first, second = d["turns"][0], d["turns"][1]
+        self.assertEqual((first["heard"], first["called"], first["said"]),
+                         ("今天几号", "被叫了：语音模块听到 hello", "今天是11月18号。"))
+        self.assertEqual(second["steps"], ["千问判断不是跟它说，没有回答"])
+        self.assertEqual(len(d["turns"]), 3)                                  # a bare heard line is left out
+        d = self.t["why_last_turn"]({"minutes": 5})
+        muted = next(t for t in d["turns"] if t["heard"] == "你算对了吗")
+        self.assertEqual((muted["said"], muted["steps"]), (None, ["千问只回了「嗯」，当成不是跟它说，没播"]))
+
+    def test_capabilities(self):
+        d = self.t["capabilities"]({})
+        groups = {g["group"] for g in d["can_do"]}
+        self.assertTrue({"解释自己", "回顾与查询"} <= groups)
+        self.assertIn("转头", d["not_yet"])
+        self.assertIn("听悟（第二路转写）", d["senses_off"])
+        only = self.t["capabilities"]({"group": "move"})
+        self.assertEqual(only["can_do"], [])

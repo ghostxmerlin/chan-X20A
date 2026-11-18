@@ -41,7 +41,24 @@ def _people(s, names):
     return out
 
 
-def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, settings_fn=None):
+VERDICT_ZH = {
+    "play": "说出来了", "muted_quiet": "千问只回了「嗯」，当成不是跟它说，没播", "muted_unclear": "是一句「没听清」的反问，没播",
+    "muted_repeat": "和刚说过的一模一样，没播", "muted_blind": "没有新照片却说看不清，没播",
+    "muted_wait_look": "先等照片看清了再答", "muted_wait_search": "先等联网搜索的结果再答", "muted_order": "那句是给机器人的口令，不回答",
+    "ambient": "千问判断不是跟它说，没有回答", "refused_busy": "它想主动说时有人在说话，被千问拒了",
+    "search_gated": "没去搜：没等到千问真的回答", "burst_gated": "没开视觉爆发：没等到千问真的回答",
+    "called_answer": "被叫了，照样回答", "order": "是给机器人的直接口令，不回答"}
+KIND_ZH_TURN = {"greet": "看到主人，主动打招呼", "greet_short": "看到主人，主动打招呼", "tap": "有人点了它，打招呼",
+                "rescue": "补救：重新正经回答", "look_answer": "看了照片后回答", "search_answer": "联网查到后回答",
+                "called": "被叫了，照样回答"}
+WHY_KINDS = ("heard.asr", "heard.called", "gate.realtime", "gate.rescue", "call.realtime.turn", "trigger.task",
+             "trigger.burst", "call.search", "trigger.length")
+
+
+def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, settings_fn=None, flows=None,
+               registry=None):
+    """flows(lo, hi, kinds, limit) = the run log query (hello_log_query.flows bound to the db); registry = the tools
+    registry (capabilities reads it)."""
     """name -> fn(args): switches = api's switches(); store.enabled() = the 情景 switch; ledger(db_day) = the run log's
     day ledger (hello_log_query.ledger bound to the db), None when the log query is not deployed."""
     now_ms = clock_ms or (lambda: int(time.time() * 1000))
@@ -383,8 +400,72 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
                 "lines": [{"time": tool_time.label(o["at"], s["tz"]), "mode": o["mode"], "heard": o["heard"], "said": o["said"]}
                           for o in out[:limit]]}
 
-    return {"switches_status": switches_status, "mode_status": mode_status, "cost_today": cost_today,
-            "scene_now": scene_now, "notes_search": notes_search, "review_period": review_period,
-            "memory_search": memory_search, "knowledge_search": knowledge_search, "person_lookup": person_lookup,
-            "people_list": people_list, "speech_search": speech_search, "recent_speech": recent_speech,
-            "recent_sounds": recent_sounds, "hello_said": hello_said}
+    # ---- B5: 解释自己 ----
+    def why_last_turn(args):
+        """The last turns' decision chains from the run log: what was heard, called or not, each gate's verdict and why,
+        what was said or done. One entry per trace, newest first."""
+        if flows is None:
+            raise ToolError("not_available", "运行日志查询没有部署")
+        s, now = settings(), now_ms()
+        minutes = args.get("minutes") or 5
+        rows = flows(now - minutes * 60_000, now, WHY_KINDS, 400)
+        by = {}
+        for r in sorted(rows, key=lambda r: r["at"]):
+            key = r.get("trace") or r.get("_id")
+            t = by.setdefault(key, {"at": r["at"], "heard": None, "called": None, "steps": [], "said": None})
+            k, x = r.get("kind"), r.get("extra") or {}
+            if k == "heard.asr":
+                t["heard"] = t["heard"] or (r.get("sum") or "")
+            elif k == "heard.called":
+                t["called"] = r.get("sum")
+            elif k == "gate.realtime":
+                v = x.get("verdict") or ""
+                t["steps"].append(VERDICT_ZH.get(v, v) or (r.get("sum") or ""))
+                if not t["heard"] and x.get("heard"):
+                    h = x["heard"]
+                    t["heard"] = h if isinstance(h, str) else "；".join(i.get("text", "") for i in h if isinstance(i, dict))[:120] or None
+            elif k == "gate.rescue":
+                t["steps"].append(f"补救：{x.get('outcome')}")
+            elif k == "call.realtime.turn":
+                if x.get("state") == "done":                # played; a muted reply is in steps already
+                    t["said"] = r.get("sum")
+                kind = x.get("kind")
+                if kind in KIND_ZH_TURN:
+                    t["steps"].insert(0, KIND_ZH_TURN[kind])
+            elif k in ("trigger.task", "trigger.burst", "call.search", "trigger.length"):
+                t["steps"].append(r.get("sum") or k)
+        turns = sorted(by.values(), key=lambda t: -t["at"])
+        turns = [t for t in turns if t["steps"] or t["said"] or t["called"]] or turns
+        out = []
+        for t in turns[:8]:
+            if not t["steps"] and not t["said"]:
+                t["steps"] = ["没有回答：千问没有接这句（或声音没送上去）"]
+            out.append({"time": tool_time.label(t["at"], s["tz"], with_day=False), "heard": t["heard"],
+                        "called": t["called"], "steps": t["steps"][:6], "said": t["said"]})
+        return {"minutes": minutes, "turns": out}
+
+    def capabilities(args):
+        reg = registry or {}
+        groups = reg.get("groups", {})
+        want = args.get("group")
+        can, later = {}, []
+        for t in reg.get("tools", []):
+            if want and t["group"] != want:
+                continue
+            if t["name"] in impls and t.get("status") == "live":
+                can.setdefault(groups.get(t["group"], t["group"]), []).append({"title": t["title"], "use": t["description"]})
+            else:
+                later.append(t["title"])
+        sw = switches_status({})
+        on = [v["title"] for v in sw["switches"].values() if v["on"]]
+        off = [v["title"] for v in sw["switches"].values() if not v["on"]]
+        return {"can_do": [{"group": g, "tools": ts} for g, ts in can.items()], "not_yet": later,
+                "senses_on": on, "senses_off": off, "paused": sw["pause"]["paused"]}
+
+    impls = {"switches_status": switches_status, "mode_status": mode_status, "cost_today": cost_today,
+             "scene_now": scene_now, "notes_search": notes_search, "review_period": review_period,
+             "memory_search": memory_search, "knowledge_search": knowledge_search, "person_lookup": person_lookup,
+             "people_list": people_list, "speech_search": speech_search, "recent_speech": recent_speech,
+             "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
+             "capabilities": capabilities}
+    return impls
