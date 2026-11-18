@@ -329,9 +329,18 @@ class Asks:
     async def robot_status(self, args):
         return status_view(await self._robot("status", {}, args.get("_trace")))
 
+    async def test_turn(self, args):
+        """Long-run check only (never a model tool: not in the registry): a sentence through the real Docking path."""
+        hub = self._docking()
+        sp = {"band": args.get("band"), "name": args.get("voice")} if args.get("band") else None
+        r = await hub.test_turn(str(args.get("text") or "")[:200], speaker=sp, called=bool(args.get("called")))
+        if r != "sent":
+            raise AskError("not_available", f"测试没送出（{r}）")
+        return {"sent": True}
+
     NAMES = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role",
              "express_eyes", "show_word", "play_clip", "turn_head", "face_front", "turn_around", "tracking", "nod",
-             "shake_head", "set_volume", "face_learn_propose", "robot_status", "set_voice")
+             "shake_head", "set_volume", "face_learn_propose", "robot_status", "set_voice", "test_turn")
 
     async def handle(self, name, args):
         if name not in self.NAMES:

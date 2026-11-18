@@ -483,7 +483,7 @@ def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
 
 
 def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None, role=None, manner=None,
-                 persona=None, skills=None):
+                 persona=None, skills=None, speaker=None):
     """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
     where the voice model tended to miss them; owner 2026-11-14). looks: look_lines() of the vision burst (else mind's
     注视： line, if the context has one)."""
@@ -515,6 +515,8 @@ def instructions(context_text=None, seen=None, recent=None, looks=None, scene=No
         eyes.extend(looks)
     elif eye.get("注视："):
         eyes.append(f"注视（最近 3 分钟，新的在前）：{eye['注视：']}")
+    if speaker:                                        # 2026-11-18: who said the newest sentence (the ear's voiceprint)
+        eyes.append(f"声音（刚才那句话）：{speaker}")
     if scene:                                          # 即时画面 (2026-11-18): the newest uploaded photo, seconds old
         eyes.append(f"摄像头刚拍到的（{scene}）")
     elif eye.get("画面："):
@@ -554,9 +556,12 @@ def session_config(voice, instr, silence_ms=500, threshold=0.5, search=False, tu
         # a turn is meant for the model (multi-person scenes); a turn it rejects gets no response, only an
         # ambient_audio_transcription event. Fields: type, threshold only (no silence_duration_ms). Set at open only.
         cfg["turn_detection"] = {"type": turn, "threshold": threshold}
-    if search:
+    if search and not tools:
         cfg["enable_search"] = True
     if tools:                                          # L6 2026-11-18: Qwen calls hello's tools (probe: supported)
+        # probe 2026-11-18 23:58: enable_search together with function tools makes every response fail (InternalError
+        # "An internal error occurred while generating the response", status failed); with tools, searching is the
+        # web_search tool's job (verify / realtime skills)
         cfg["tools"], cfg["tool_choice"] = tools, "auto"
     return cfg
 
@@ -1006,6 +1011,7 @@ class RealtimeHub:
         self._filler_traces = collections.deque(maxlen=16)
         self._tool_ok_traces = collections.deque(maxlen=16)   # sentences whose tool calls passed the tool gate
         self._speakers = collections.deque(maxlen=16)  # (at, band, voice name) of the ear's recent sentences
+        self._speaker_sent = None
         self.intent = None                             # intent.Auto (自动档): decides before the model answers
         self._preloaded = {}                           # auto: skill id -> preloaded at (clock), not used yet
         self._next_depth = 0
@@ -1526,7 +1532,7 @@ class RealtimeHub:
         self._looks_dirty, self._looks_sent_at = False, self.clock()
         return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()),
                             self._scene_line(), self._length_line(), self._role_line(), self._manner_line(),
-                            self.persona, self._skills_block())
+                            self.persona, self._skills_block(), self._speaker_text())
 
     # ---- reply length (see LENGTH_S) ----
     def _length_mode(self, now=None):
@@ -1808,6 +1814,17 @@ class RealtimeHub:
                 return band, name
         return None, None
 
+    def _speaker_text(self, now=None):
+        band, name = self._speaker_now(self.clock() if now is None else now)
+        if band is None:
+            return None
+        owner = self.ctx.get("owner") or {}
+        if band == "known" and name and name in (owner.get("voice_names") or []):
+            return f"{owner.get('call') or '主人'}（按声纹认出，是主人本人）"
+        if band == "known":
+            return "认识的家里人（按声纹认出）"
+        return "不认识的声音"
+
     def owner_in_person(self, now=None):
         """Owner 2026-11-18 "亲口算本人": the sentence was in the owner's own voice (voiceprint band known, one of the
         owner's voice names) -> a C tool runs at once."""
@@ -1969,6 +1986,26 @@ class RealtimeHub:
         if self.state != "closed":
             self.close("voice")
         self._write_status(self.clock())
+
+    async def test_turn(self, text, speaker=None, called=False, wait_s=8.0):
+        """A test sentence through the real path (the long-run check, 2026-11-18): the ear's own ASR text (preload,
+        tool gate, who said it) and the same words as the user's turn of the live session. -> "sent" / why not."""
+        if called:
+            self.called("text", text=text)
+        elif self.state == "closed" and self.want():
+            self._open(self.clock(), "test")
+        t0 = self.clock()
+        while not (self._ws is not None and self._ready.is_set()):
+            if self.clock() - t0 > wait_s:
+                return "not_ready"
+            await asyncio.sleep(0.2)
+        if self.busy():
+            return "busy"
+        self.local_heard(text, speaker=speaker)
+        self._send_soon({"type": "conversation.item.create", "item": {"type": "message", "role": "user",
+                                                                      "content": [{"type": "input_text", "text": str(text)[:200]}]}})
+        self._send_soon({"type": "response.create"})
+        return "sent"
 
     def stop_speaking(self):
         return self._interrupt(self.clock())
@@ -2692,6 +2729,10 @@ class RealtimeHub:
         self._local_texts.append((now, str(text)[:300]))
         if isinstance(speaker, dict):                  # who said it (the ear's voiceprint): 亲口 / 认识的人
             self._speakers.append((now, speaker.get("band"), speaker.get("name")))
+            said = self._speaker_text(now)
+            if said != self._speaker_sent and self._ws is not None and self._ready.is_set():
+                self._speaker_sent = said              # the model learns the speaker changed (owner vs a stranger)
+                self._send_instructions("speaker", self._trace_now(trace))
         self._heard_log.append((now, {"trace": trace, "text": str(text)[:300], "at": self.wall_ms()}))
         self._preload(str(text)[:300], now, trace=self._trace_now(trace))   # 自动档: before _heard_text's gates
         self._heard_text(str(text)[:300], now, trace=self._trace_now(trace))

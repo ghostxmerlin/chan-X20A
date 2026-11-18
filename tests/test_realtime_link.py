@@ -1062,6 +1062,11 @@ class ToolCallTest(HubBase):
         out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
         self.assertEqual(json.loads(out[0]["item"]["output"])["error"]["code"], "not_available")
 
+    def test_no_builtin_search_with_tools(self):
+        cfg = self.rl.session_config("v", "i", search=True, tools=[{"type": "function", "name": "x"}])
+        self.assertNotIn("enable_search", cfg)                         # probe: both together = every reply fails
+        self.assertTrue(self.rl.session_config("v", "i", search=True)["enable_search"])
+
     async def test_tools_off_by_default(self):
         ws = await self.open_ready()
         self.assertNotIn("tools", [m for m in ws.sent if m["type"] == "session.update"][0]["session"])

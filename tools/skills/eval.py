@@ -90,7 +90,11 @@ async def run(case):
                 except ValueError:
                     args = {}
                 n_calls = len([c for c in calls if c[0] != "open_skill"])
-                if name != "open_skill" and n_calls >= rl.SKILL_DEPTH:      # as the hub: enough, answer now
+                given = {t["name"] for t in specs_for(opened)}
+                if name != "open_skill" and name not in given:               # as the hub: only what it was given
+                    res = {"ok": False, "error": {"code": "not_available", "message": f"没有给你 {name[:30]} 这个工具，先打开对应的技能"}}
+                    calls.append((name, "refused: not given", False))
+                elif name != "open_skill" and n_calls >= rl.SKILL_DEPTH:      # as the hub: enough, answer now
                     res = {"ok": False, "error": {"code": "refused", "message": rl.TOOL_ENOUGH}}
                     calls.append((name, "refused: enough", False))
                 elif name == "open_skill":
