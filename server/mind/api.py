@@ -258,6 +258,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
     ear_ask = ctx.get("ear_ask") or tool_impls.ear_asker(token)
     from . import llm as _llm
     from .proposals import Proposals
+    from .daily import tools as daily_tools
     proposals = ctx.get("proposals") or Proposals(db)
 
     def write_switch(name, on):
@@ -280,7 +281,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         flows=(lambda lo, hi, kinds, limit: log_query.flows(db, lo, hi, kinds=kinds, limit=limit)) if log_query is not None else None)
         | tool_impls.ear_tools(ear_ask)
         | tool_impls.live_tools(ear_search=lambda q: ear_ask("web_search", {"query": q}), llm_env=ctx.get("env"),
-                                chat=_llm.chat, tz=current_settings()[0].get("tz") or "Asia/Shanghai"),
+                                chat=_llm.chat, tz=current_settings()[0].get("tz") or "Asia/Shanghai")
+        | (daily_tools(ctx["daily"]) if ctx.get("daily") else {}),
         proposals=proposals, describe=tool_impls.DESCRIBE)
 
     def note_owner(path, body, reply):

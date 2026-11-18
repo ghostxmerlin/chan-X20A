@@ -129,3 +129,92 @@ def span(frm, to, now_ms, tz="Asia/Shanghai", default_ms=24 * 3600_000, max_ms=3
 def label(ms, tz="Asia/Shanghai", with_day=True):
     dt = datetime.fromtimestamp(ms / 1000, ZoneInfo(tz))
     return dt.strftime("%m-%d %H:%M" if with_day else "%H:%M")
+
+
+# ---- future times (L4 2026-11-18: reminders and schedule) ----
+FUTURE_DAYS = {"今天": 0, "今日": 0, "今晚": 0, "明天": 1, "明日": 1, "明早": 1, "明晚": 1, "后天": 2, "大后天": 3}
+
+
+def future(text, now_ms, tz="Asia/Shanghai"):
+    """A moment from now on as people say it -> epoch ms. 10分钟后 / 半小时后 / 2小时后 / 3天后 · 明天早上8点 / 今晚8点 /
+    后天下午3点半 / 下周三上午10点 / 周五 / 8点（today, or tomorrow when 8点 has passed） · 2026-11-19 09:00 / 11-19 09:00."""
+    zone = ZoneInfo(tz)
+    now = datetime.fromtimestamp(now_ms / 1000, zone)
+    t = re.sub(r"\s+", " ", str(text or "").strip())
+    if not t:
+        raise ToolError("bad_args", "时间是空的")
+    if t in ("马上", "现在", "立刻"):
+        return now_ms + 5_000
+    m = re.fullmatch(r"(\d+(?:\.\d+)?|[一两二三四五六七八九十半]{1,3})个?(分钟|分|小时|钟头|天)(以?后|之后)", t)
+    if m:
+        n = _num(m.group(1)) if m.group(1) not in ("半",) else 0.5
+        unit = {"分钟": 60_000, "分": 60_000, "小时": 3600_000, "钟头": 3600_000, "天": 86400_000}[m.group(2)]
+        return now_ms + int(n * unit)
+    if t in ("半小时后", "半个小时后", "半小时之后"):
+        return now_ms + 1800_000
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2}) (\d{1,2}):(\d{2})", t) or \
+        re.fullmatch(r"()(\d{1,2})-(\d{1,2}) (\d{1,2}):(\d{2})", t)
+    if m:
+        y = int(m.group(1)) if m.group(1) else now.year
+        try:
+            p = datetime(y, int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)), tzinfo=zone)
+        except ValueError:
+            raise ToolError("bad_args", f"没有这个时间：{t}") from None
+        if not m.group(1) and p < now:
+            p = p.replace(year=y + 1)
+        return _ms(p)
+    day, rest, explicit = None, t, False
+    for w, ahead in sorted(FUTURE_DAYS.items(), key=lambda kv: -len(kv[0])):
+        if rest.startswith(w):
+            day = (now + timedelta(days=ahead)).replace(hour=0, minute=0, second=0, microsecond=0)
+            rest, explicit = rest[len(w):], True
+            if w in ("今晚", "明晚"):
+                rest = "晚上" + rest
+            elif w == "明早":
+                rest = "早上" + rest
+            break
+    if day is None:
+        m = re.match(r"(下下|下|本|这)?(?:周|星期|礼拜)([一二三四五六日天])", rest)
+        if m:
+            monday = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            monday += timedelta(weeks={"下": 1, "下下": 2}.get(m.group(1) or "", 0))
+            day, rest, explicit = monday + timedelta(days=WEEKDAY[m.group(2)]), rest[m.end():], True
+            if not m.group(1) and day + timedelta(days=1) <= now:          # a bare 周三 already gone: next week's
+                day += timedelta(weeks=1)
+    base = day or now.replace(hour=0, minute=0, second=0, microsecond=0)
+    part = next((p for p in sorted(PARTS, key=len, reverse=True) if rest.startswith(p)), None)
+    if part:
+        rest = rest[len(part):]
+    m = re.fullmatch(r"(\d{1,2}|[一两二三四五六七八九十]{1,3})(?:点|:|：)(半|一刻|三刻|\d{1,2}|[一二三四五]十[一二三四五六七八九]?)?分?", rest) \
+        if rest else None
+    if m:
+        h = int(_num(m.group(1)))
+        g = m.group(2)
+        mi = 30 if g == "半" else 15 if g == "一刻" else 45 if g == "三刻" else int(_num(g)) if g else 0
+        if part in ("下午", "晚上", "傍晚", "夜里") and h < 12:
+            h += 12
+        if part == "中午" and h < 6:
+            h += 12
+        p = base.replace(hour=min(h, 23), minute=min(mi, 59))
+        if p <= now and not explicit:
+            if part is None and h < 12 and p + timedelta(hours=12) > now:   # "8点" said at 19:00 = 20:00
+                p += timedelta(hours=12)
+            else:
+                p += timedelta(days=1)
+        if p <= now:
+            raise ToolError("bad_args", f"「{t}」已经过去了")
+        return _ms(p)
+    if rest:
+        raise ToolError("bad_args", f"看不懂时间「{t}」，可以说 10分钟后、明天早上8点、下周三下午3点")
+    if part:                                              # a part alone: its start (明天早上 = 8:00 for 早上)
+        a = {"早上": 8, "早晨": 8, "上午": 9, "中午": 12, "下午": 15, "傍晚": 18, "晚上": 20, "夜里": 22, "凌晨": 6, "白天": 9}[part]
+        p = base + timedelta(hours=a)
+        if p <= now and not explicit:
+            p += timedelta(days=1)
+        if p <= now:
+            raise ToolError("bad_args", f"「{t}」已经过去了")
+        return _ms(p)
+    if day is not None:
+        p = day + timedelta(hours=9)                      # a day alone: 9:00 that day
+        return _ms(p if p > now else now + timedelta(minutes=1))
+    raise ToolError("bad_args", f"看不懂时间「{t}」")

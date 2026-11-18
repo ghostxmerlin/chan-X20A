@@ -486,3 +486,116 @@ class ProposalTest(unittest.TestCase):
         n = t["person_note_propose"]({"who": "小王", "kind": "preference", "text": "喜欢喝茶"})
         self.assertTrue(n["saved"])
         self.assertEqual(db["people_notes"].find_one({"text": "喜欢喝茶"})["person_id"], "p_aaaaaaaaaaaa")
+
+
+class FutureTimeTest(unittest.TestCase):
+    def test_future_words(self):
+        from mind import tool_time as tt
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        z = ZoneInfo("Asia/Shanghai")
+        now = int(datetime(2026, 11, 18, 19, 30, tzinfo=z).timestamp() * 1000)     # a Wednesday evening
+        f = lambda w: datetime.fromtimestamp(tt.future(w, now) / 1000, z).strftime("%m-%d %H:%M")
+        self.assertEqual(f("10分钟后"), "11-18 19:40")
+        self.assertEqual(f("半小时后"), "11-18 20:00")
+        self.assertEqual(f("两小时后"), "11-18 21:30")
+        self.assertEqual(f("明天早上8点"), "11-19 08:00")
+        self.assertEqual(f("今晚8点半"), "11-18 20:30")
+        self.assertEqual(f("8点"), "11-18 20:00")
+        self.assertEqual(f("7点"), "11-19 07:00")
+        self.assertEqual(f("后天下午3点"), "11-20 15:00")
+        self.assertEqual(f("下周三上午10点"), "11-25 10:00")
+        self.assertEqual(f("周五"), "11-20 09:00")
+        self.assertEqual(f("明天下午"), "11-19 15:00")
+        self.assertEqual(f("11-19 09:00"), "11-19 09:00")
+        with self.assertRaises(ToolError):
+            tt.future("今天下午3点", now)
+        with self.assertRaises(ToolError):
+            tt.future("改天吧", now)
+
+
+class DailyTest(unittest.TestCase):
+    def setUp(self):
+        from mind.daily import Daily
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        self.db = FakeDB()
+        self.t = [int(datetime(2026, 11, 18, 19, 30, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp() * 1000)]
+        self.said, self.ok = [], True
+        self.d = Daily(self.db, say=lambda text: (self.said.append(text), self.ok)[1], clock_ms=lambda: self.t[0],
+                       settings_fn=lambda: {"tz": "Asia/Shanghai", "owner": {"display": "主人", "face_names": ["me"]}},
+                       emit=lambda *a, **k: None)
+        self.here(True)
+
+    def here(self, on):
+        self.db["switches"].update_one({"_id": "presence_status"}, {"$set": {"at": self.t[0], "faces": 1 if on else 0,
+                                        "face_at": self.t[0] if on else None}}, upsert=True)
+
+    def test_reminder_said_when_due_held_when_nobody(self):
+        r = self.d.reminder_set("10分钟后", "喝水")
+        self.assertEqual(r["when"], "11-18 19:40")
+        self.d.tick()
+        self.assertEqual(self.said, [])
+        self.t[0] += 10 * 60_000
+        self.db["switches"].update_one({"_id": "presence_status"}, {"$set": {"at": self.t[0], "faces": 0,
+                                        "face_at": self.t[0] - 20 * 60_000}})
+        self.d.tick()
+        self.assertEqual(self.said, [])                                         # nobody there: held
+        self.assertEqual(self.d.reminder_list()["items"][0]["state"], "held")
+        self.t[0] += 30 * 60_000
+        self.here(True)
+        self.d.tick()
+        self.assertEqual(self.said, ["刚才没人在，现在补上提醒：喝水"])
+        self.assertEqual(self.d.reminder_list()["total"], 0)
+
+    def test_busy_retries_and_repeat(self):
+        self.d.reminder_set("1分钟后", "吃药", repeat="daily")
+        self.t[0] += 61_000
+        self.here(True)
+        self.ok = False
+        self.d.tick()
+        self.ok = True
+        self.d.tick()
+        self.assertEqual(self.said, ["提醒一下：吃药", "提醒一下：吃药"])
+        nxt = self.d.reminder_list()["items"]
+        self.assertEqual((len(nxt), nxt[0]["when"]), (1, "11-19 19:31"))
+
+    def test_schedule_and_cancel(self):
+        s = self.d.schedule_add("明天下午3点", "和客户开会", place="会议室", remind_before_min=15)
+        self.assertEqual(s["start"], "11-19 15:00")
+        self.assertEqual(self.d.schedule_list("明天")["items"][0]["title"], "和客户开会")
+        self.assertEqual(self.d.schedule_list("今天")["total"], 0)
+        self.t[0] = self.d.db["reminders"].find_one({"kind": "schedule"})["due"]
+        self.here(True)
+        self.d.tick()
+        self.assertEqual(self.said, ["日程提醒：和客户开会，还有 15 分钟，在会议室。"])
+        self.d.reminder_set("明天早上8点", "带伞")
+        self.assertEqual(self.d.reminder_cancel(query="带伞")["cancelled"], 1)
+        with self.assertRaises(ToolError):
+            self.d.reminder_cancel(query="不存在")
+
+    def test_watches(self):
+        self.here(False)
+        self.d.watch_start("person_enter", minutes=30)
+        self.d.tick()
+        self.t[0] += 10_000
+        self.here(True)
+        self.d.tick()
+        self.assertEqual(self.said, ["主人，有人来了。"])
+        self.d.watch_start("owner_back")
+        self.t[0] += 10_000
+        self.db["vision"].insert_one({"event": "face_named", "name": "me", "at": self.t[0] - 2000})
+        self.d.tick()
+        self.assertEqual(self.said[-1], "主人，欢迎回来。")
+        self.d.watch_start("sound", sound="敲门", minutes=5)
+        self.t[0] += 10_000
+        self.db["sounds"].insert_one({"t": self.t[0] - 1000, "label": "敲门"})
+        self.d.tick()
+        self.assertEqual(self.said[-1], "主人，听到敲门了。")
+        w = self.d.watch_start("person_leave", minutes=1)
+        self.assertEqual(self.d.watch_list()["total"], 1)
+        self.t[0] += 61_000
+        self.d.tick()
+        self.assertEqual(self.d.watch_list()["total"], 0)                       # expired
+        with self.assertRaises(ToolError):
+            self.d.watch_start("person_enter", how="notify")

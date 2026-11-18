@@ -1259,11 +1259,11 @@
     ]
    },
    "returns": "reminder_id、at",
-   "source": "新：mind 提醒表 + 到点触发说话",
+   "source": "server/mind/daily.py（hello.reminders / hello.watches，每 10 秒检查，经耳朵 say 说出来）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
-   "notes": "也当计时器用",
+   "notes": "到点 hello 在 Docking 里说出来；没人在就先攒着，有人回来再说（最多 12 小时）；正在说话就 10 秒后再试",
    "example": {
     "when": "10分钟后",
     "text": "喝水"
@@ -1293,7 +1293,7 @@
     }
    },
    "returns": "reminders[{id, at, text, repeat}]",
-   "source": "新：mind 提醒表",
+   "source": "server/mind/daily.py（hello.reminders / hello.watches，每 10 秒检查，经耳朵 say 说出来）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1325,7 +1325,7 @@
     }
    },
    "returns": "cancelled",
-   "source": "新：mind 提醒表",
+   "source": "server/mind/daily.py（hello.reminders / hello.watches，每 10 秒检查，经耳朵 say 说出来）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1375,7 +1375,7 @@
     ]
    },
    "returns": "event_id",
-   "source": "新：mind 日程表（以后可接外部日历）",
+   "source": "server/mind/daily.py（hello.reminders / hello.watches，每 10 秒检查，经耳朵 say 说出来）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1410,7 +1410,7 @@
     }
    },
    "returns": "events[{id, start, end, title, place}]",
-   "source": "新：mind 日程表",
+   "source": "server/mind/daily.py（hello.reminders / hello.watches，每 10 秒检查，经耳朵 say 说出来）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1467,11 +1467,11 @@
     ]
    },
    "returns": "watch_id、until",
-   "source": "新：mind 规则 + ear 事件（M12 来去、声音种类、即时画面）",
+   "source": "server/mind/daily.py（hello.reminders / hello.watches，每 10 秒检查，经耳朵 say 说出来）",
    "latency": "<100 ms",
    "cost": "看画面的会用识图",
    "needs": [],
-   "notes": "到时间自动结束",
+   "notes": "what：person_enter 有人来 / person_leave 人走了 / named_person 某人出现（who）/ sound 某种声音（sound，按声音类别名）/ owner_back 主人回来；scene_change 还不行；how 只能 say（还没有通知渠道）；默认盯 60 分钟，到了说一次就结束",
    "example": {
     "what": "owner_back",
     "minutes": 60,
@@ -1491,7 +1491,7 @@
     "properties": {}
    },
    "returns": "watches[{id, what, until}]",
-   "source": "新",
+   "source": "server/mind/daily.py（hello.reminders / hello.watches，每 10 秒检查，经耳朵 say 说出来）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],
@@ -1516,7 +1516,7 @@
     }
    },
    "returns": "stopped",
-   "source": "新",
+   "source": "server/mind/daily.py（hello.reminders / hello.watches，每 10 秒检查，经耳朵 say 说出来）",
    "latency": "<100 ms",
    "cost": "无",
    "needs": [],

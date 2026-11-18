@@ -414,6 +414,18 @@ def main():
     pause_ctl = pause.Controller(db, settings_fn=lambda: settings_store.current()[0], ledger_fn=ledger)
     say_worker.paused_fn = auto_worker.paused_fn = pause_ctl.paused
     threading.Thread(target=pause_ctl.run, daemon=True).start()
+    # 日常 (L4 2026-11-18): reminders / schedule / watches, said by hello through the ear's say ask (Docking)
+    from . import daily as daily_mod, tool_impls as _ti
+    _ask = _ti.ear_asker(token, timeout=10)
+
+    def _daily_say(text):
+        try:
+            _ask("say", {"text": text})
+            return True
+        except Exception:                        # noqa: BLE001 - busy / not in Docking / ear down: try again later
+            return False
+    daily = daily_mod.Daily(db, say=_daily_say, settings_fn=lambda: settings_store.current()[0])
+    threading.Thread(target=daily.run, daemon=True).start()
     if env:
         threading.Thread(target=say_worker.run, daemon=True).start()
         if tts:
@@ -424,7 +436,8 @@ def main():
                                                                          "tts": tts, "say_worker": say_worker,
                                                                          "say_auto": say_auto_live, "mode_store": mode_store,
                                                                          "billing": billing, "round_gate": round_gate,
-                                                                         "chat": chat, "pause": pause_ctl}), daemon=True).start()
+                                                                         "chat": chat, "pause": pause_ctl, "daily": daily}),
+                     daemon=True).start()
     cursor = store.state().get("cursor_minute")
     print(f"mind: lane {LANE}, cursor {cursor}, api 127.0.0.1:{a.api_port}, mode {mode_store.current()['mode']} "
           f"seq {mode_store.seq()}, billing {'on' if billing.allowed() else 'off'} (start = 全开)", flush=True)
