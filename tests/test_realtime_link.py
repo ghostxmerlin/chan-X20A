@@ -985,6 +985,61 @@ class SkillModeTest(HubBase):
         self.assertEqual(self.rl.reply_verdict("[事件] 主人（劳埃德）出现在你面前了，打个招呼", True), "marker")
 
 
+class SpeakerAndPlaceholderTest(HubBase):
+    """2026-11-19 09:52: the owner's face in view, the voiceprint only "unsure" -> the speaker line said 不认识的声音,
+    the model refused 「转过身去」 itself; 【刚才的对话】 carried [tool_refused], which the model then said as a reply."""
+    async def test_unsure_voice_is_not_a_stranger_and_a_named_face_counts(self):
+        self.hub.ctx = json.loads(json.dumps(CTX))
+        now = self.hub.clock()
+        self.hub._speakers.append((now, "unsure", None))
+        self.assertNotIn("不认识", self.hub._speaker_text(now))
+        self.hub.watch.event({"event": "face_named", "face": 1, "name": "boss_face"}, now)
+        said = self.hub._speaker_text(now)
+        self.assertIn("阿大", said)                                           # the owner's call, from the face
+        self.hub._speakers.append((now, "unknown", None))
+        self.assertIn("不认识的声音", self.hub._speaker_text(now))
+        self.assertIn("阿大", self.hub._speaker_text(now))
+
+    def test_unsure_owner_voice_moves_the_body_but_is_not_in_person(self):
+        """2026-11-19 10:09: the owner's voice scored 0.43-0.56 on his print (known = 0.6), runner-up ~0.25: unsure.
+        Owner 2026-11-18 "认人策略可以考虑多种": a clear lead on the owner's own print counts for the body only."""
+        self.hub.ctx = {**json.loads(json.dumps(CTX)), "owner": {"face_names": ["me"], "call": "主人", "voice_names": ["me"]}}
+        self.hub.active = lambda: True
+        self.hub.in_crowd = lambda: True
+        self.hub.local_heard("转过身去", speaker={"band": "unsure", "name": "me", "score": 0.48,
+                                              "runner_up": {"name": "主人", "score": 0.22}})
+        self.assertTrue(self.hub.known_person())
+        self.assertFalse(self.hub.owner_in_person())                        # a C tool still needs the full bar
+        self.assertIn("像主人", self.hub._speaker_text())
+        self.t[0] += 10
+        self.hub.local_heard("转过身去", speaker={"band": "unsure", "name": "me", "score": 0.42,
+                                              "runner_up": {"name": "小王", "score": 0.38}})
+        self.assertFalse(self.hub.known_person())                           # no clear lead: not the owner
+        self.t[0] += 10
+        self.hub.ctx["owner"]["voice_names"] = ["me", "主人"]                 # live: both prints are the owner's
+        self.hub.local_heard("转过身去", speaker={"band": "unsure", "name": "me", "score": 0.44,
+                                              "runner_up": {"name": "主人", "score": 0.41}})
+        self.assertTrue(self.hub.known_person())
+        self.t[0] += 10
+        self.hub.local_heard("转过身去", speaker={"band": "unsure", "name": "guest", "score": 0.5, "runner_up": None})
+        self.assertFalse(self.hub.known_person())                           # someone else's print
+
+    def test_placeholders_never_play_or_enter_recent_talk(self):
+        v = self.rl.reply_verdict
+        for t in ("[tool_refused]", "[tool_answer] 好", " [speech]"):
+            self.assertEqual(v(t, True), "marker", t)
+        self.assertEqual(v("[笑] 好呀", True), "play")
+        now = self.hub.clock()
+        first = {"kind": "speech", "heard": "转过身去。", "trace": "t1"}
+        self.hub._turns["a"], self.hub._turns["b"] = first, {"kind": "tool_refused", "trace": "t1"}
+        self.hub._recent.append((now, self.hub._turns["b"], "我还不认识你呢。"))
+        self.assertEqual(self.hub._recent_pairs(), [("转过身去。", "我还不认识你呢。")])
+        self.hub._recent.append((now, {"kind": "tool_answer", "trace": "x", "chain_heard": "报告机身状态。"}, "电量满格。"))
+        self.assertEqual(self.hub._recent_pairs()[-1][0], "报告机身状态。")
+        self.hub._recent.append((now, {"kind": "tool_answer", "trace": "nothing"}, "音量四十。"))
+        self.assertNotIn("[", self.hub._recent_pairs()[-1][0])
+
+
 class SkillResetTest(HubBase):
     async def test_skills_do_not_outlive_their_session(self):
         self.hub._tools_mode, self.hub._skills = "skills", {"world": {"id": "world", "tools": ["live_data"]}}

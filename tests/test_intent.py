@@ -32,6 +32,9 @@ class IntentTest(unittest.TestCase):
         self.assertEqual(intent.rule("十分钟后提醒我喝水"), "daily")
         self.assertEqual(intent.rule("明天北京天气怎么样"), "world")
         self.assertEqual(intent.rule("转过来看着我"), "body")
+        # 2026-11-19 09:32: the owner's commands the tool gate refused (classifier 0.22 / 0.35, no rule word)
+        for t in ("转过身去", "报告机身状态", "身体状态怎么样", "放点好玩的台词", "放段音乐", "放个声音"):
+            self.assertEqual(intent.rule(t), "body", t)
         self.assertIsNone(intent.rule("哈哈好吧"))
 
     def test_auto_head_files_and_reload(self):

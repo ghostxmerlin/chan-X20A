@@ -248,7 +248,7 @@ def norm_text(text):
     return re.sub(r"[\W_]+", "", strip_emoji(text))
 
 
-MARKER_RE = re.compile(r"^\s*[\[【（(]\s*(事件|系统|背景|你的眼睛)|\[事件\]")
+MARKER_RE = re.compile(r"^\s*[\[【（(]\s*(事件|系统|背景|你的眼睛)|\[事件\]|^\s*\[[a-z_]+\]")   # [tool_refused]: a kind placeholder
 
 
 def reply_verdict(text, done, recent=(), blind=False):
@@ -586,6 +586,7 @@ SKILL_DEPTH = 5                                        # skills mode: open_skill
 PRELOAD_KEEP_S = 120.0
 MAX_SKILL_TOOLS = 16                                   # tools of open skills at once
 TOOL_GATE_TEXT_S = 8.0
+UNSURE_LEAD = 0.1                                      # an unsure voiceprint names its top match only this far ahead
 BODY_TOOLS = frozenset(("turn_head", "face_front", "turn_around", "tracking", "nod", "shake_head", "express_eyes",
                         "show_word", "play_clip", "set_volume"))      # move / express (robot_status only reads)                                 # the ear's own ASR texts this recent count for the tool gate                                 # auto: a skill preloaded for a sentence, never used, goes after this
 
@@ -952,6 +953,7 @@ class RealtimeHub:
         self._live_instr = None                        # the instructions last sent (run log: each turn's system input)
         self._turn = None                              # the turn the next response.created belongs to
         self._turns = {}                               # response id -> turn
+        self._next_heard = None                        # the sentence a tool chain answers (see _run_tool)
         self._speech_end = None
         self._next_kind = "speech"
         self._inject_id = None                         # the server id of the item that goes with _next_kind
@@ -1828,7 +1830,20 @@ class RealtimeHub:
             return f"{owner.get('call') or '主人'}（按声纹认出，是主人本人）"
         if band == "known":
             return "认识的家里人（按声纹认出）"
-        return "不认识的声音"
+        # 2026-11-19 09:52: the owner's face in view, the voiceprint only "unsure" -> 不认识的声音 made the model refuse
+        # 「转过身去」 itself. Unsure is not a stranger; a face M12 names in view says who is most likely speaking.
+        voice = ("听着像主人（声纹没完全确定）" if self._owner_voice(name) else "声纹没听准是谁") if band == "unsure" \
+            else "不认识的声音"
+        try:
+            faces = [f.get("name") for f in self.watch.recent(self.clock() if now is None else now) if f.get("name")]
+        except Exception:                              # noqa: BLE001
+            faces = []
+        if faces:
+            names = self.ctx.get("names") or {}
+            who = "、".join(dict.fromkeys(f"主人（{owner.get('call') or '主人'}）" if n in (owner.get("face_names") or [])
+                                          else (names.get(n) or n) for n in faces))
+            return f"{voice}；人脸识别认出眼前是{who}，多半是认识的人在说"
+        return voice
 
     def owner_in_person(self, now=None):
         """Owner 2026-11-18 "亲口算本人": the sentence was in the owner's own voice (voiceprint band known, one of the
@@ -1837,12 +1852,20 @@ class RealtimeHub:
         owner = self.ctx.get("owner") or {}
         return band == "known" and bool(name) and name in (owner.get("voice_names") or [])
 
+    def _owner_voice(self, name):
+        return bool(name) and name in ((self.ctx.get("owner") or {}).get("voice_names") or [])
+
     def known_person(self, now=None):
         """Owner 2026-11-18 "身体可以只是认识的人才响应，认人策略可以考虑多种": a known voice (any enrolled voiceprint:
         owner, family) on the newest sentence, or a face M12 named in view right now."""
         now = self.clock() if now is None else now
-        band, _ = self._speaker_now(now)
+        band, name = self._speaker_now(now)
         if band == "known":
+            return True
+        if band == "unsure" and self._owner_voice(name):
+            # 2026-11-19 10:09: in the office the owner's voice scored 0.43-0.56 on his own print (known = 0.6) with
+            # the runner-up ~0.25 behind -> unsure every time. For the body only, a clear lead on the owner's own print
+            # counts (亲口 / C tools still need "known": owner_in_person).
             return True
         try:
             return any(f.get("name") for f in self.watch.recent(now))
@@ -1888,6 +1911,12 @@ class RealtimeHub:
         except ValueError:
             args = None
         self.stats["tool_calls"] += 1
+        # the sentence this chain answers, carried to the follow-up reply (its line in 【刚才的对话】)
+        heard = turn.get("chain_heard") or turn.get("heard")
+        if not heard:
+            now = self.clock()
+            heard = next((t for at, t in reversed(self._local_texts) if now - at <= TOOL_GATE_TEXT_S), None)
+        self._next_heard = str(heard)[:120] if heard else None
         # 工具门 (owner 2026-11-18 "我不想让闲聊触发了工具调用，这个太伤"): smart_turn let the sentence through, but
         # a tool (and its 我查查) only for a sentence that earns it: a call window, the classifier / a certain word, or
         # a chain already let through. Otherwise the call goes back quietly and the model answers as in chat (its
@@ -2329,13 +2358,24 @@ class RealtimeHub:
         """The live M12 line for the burst's recognition prompt (names as hello calls them), or None."""
         return self._seen() if self.ctx else None
 
+    def _chain_heard(self, turn):
+        """A tool / event reply's line in 【刚才的对话】: the sentence that started its chain (same trace), never a
+        "[tool_refused]" placeholder (2026-11-19 09:52: the model copied it as its own reply)."""
+        if turn.get("chain_heard"):
+            return turn["chain_heard"]
+        tr = turn.get("trace")
+        for t in list(self._turns.values())[::-1]:
+            if tr and t.get("trace") == tr and t.get("heard") and t.get("kind") in ("speech", "rescue"):
+                return t["heard"]
+        return "（接着上一句）" if turn.get("kind") in ("tool_answer", "tool_refused") else "（hello 自己开口）"
+
     def _recent_pairs(self):
         now = self.clock()
         out = []
         for at, turn, reply in self._recent:
             if now - at <= self.cfg.recent_s:
                 heard = turn.get("heard") if turn.get("kind") in ("speech", "rescue", "look_answer", "search_answer") \
-                    else f"[{turn.get('kind')}]"
+                    else self._chain_heard(turn)
                 out.append(((heard or "")[:60], reply))
         return out
 
@@ -2491,6 +2531,9 @@ class RealtimeHub:
             if turn.get("kind") == "speech":
                 self._called_text = None
             turn["tool_depth"] = self._next_depth if turn.get("kind") == "tool_answer" else 0
+            if turn.get("kind") in ("tool_answer", "tool_refused") and self._next_heard:
+                turn["chain_heard"] = self._next_heard
+            self._next_heard = None
             self._next_kind, self._turn, self._next_depth = "speech", None, 0
             self._next_trace = self._next_prompt = self._inject_id = None
             turn.update({"rid": rid, "session": n, "response_at": now, "first_delta": None, "sound_at": None,
@@ -2743,7 +2786,14 @@ class RealtimeHub:
         now = self.clock()
         self._local_texts.append((now, str(text)[:300]))
         if isinstance(speaker, dict):                  # who said it (the ear's voiceprint): 亲口 / 认识的人
-            self._speakers.append((now, speaker.get("band"), speaker.get("name")))
+            band, name = speaker.get("band"), speaker.get("name")
+            if band == "unsure":                       # a top match only with a clear lead (see owner_voice_lead)
+                ru = speaker.get("runner_up") or {}
+                sc, rs = speaker.get("score"), ru.get("score")
+                same = self._owner_voice(name) and self._owner_voice(ru.get("name"))   # both the owner's prints
+                if not isinstance(sc, (int, float)) or isinstance(rs, (int, float)) and sc - rs < UNSURE_LEAD and not same:
+                    name = None
+            self._speakers.append((now, band, name))
             said = self._speaker_text(now)
             if said != self._speaker_sent and self._ws is not None and self._ready.is_set():
                 self._speaker_sent = said              # the model learns the speaker changed (owner vs a stranger)
