@@ -19,7 +19,7 @@
 
 <nav class="bar" aria-label="页面目录"><div class="wrap">
   <a href="#skills">技能</a><a href="#flow">调用流程</a><a href="#watch">以后怎么审核</a><a href="#todo">要关注的事</a>
-  <a class="other" href="/tools.html">工具清单</a><a class="other" style="margin-left:0" href="/log.html">日志</a>
+  <a class="other" href="/tools.html">工具清单</a><a class="other next" href="/log.html">日志</a>
 </div></nav>
 
 <main>
@@ -28,9 +28,9 @@
     <h2>技能</h2>
     <p class="lead">按本地分类器认的 8 个大类分组。分类器认出大类，自动档就把这一类下面的技能先装上。工具名后面是它的中文名，左边的色条是级别。</p>
     <div class="legend">
-      <span><i style="background:var(--l-r)"></i>R 只读</span>
-      <span><i style="background:var(--l-a)"></i>A 动作，直接做</span>
-      <span><i style="background:var(--l-c)"></i>C 要确认：主人亲口说才直接做，别人说的进「待确认」</span>
+      <span><i class="sw-r"></i>R 只读</span>
+      <span><i class="sw-a"></i>A 动作，直接做</span>
+      <span><i class="sw-c"></i>C 要确认：主人亲口说才直接做，别人说的进「待确认」</span>
     </div>
     <p class="meta" id="uncovered"></p>
   </div>
@@ -42,10 +42,10 @@
     <h2>一句话怎么走到工具</h2>
     <p class="lead">自动档现在的真实顺序，照耳朵（<code>server/ear/realtime_link.py</code>）和 mind（<code>server/mind/tools.py</code>）的代码画的。左边的色条是这一步在哪里跑。</p>
     <div class="legend">
-      <span><i style="background:var(--lane-ear)"></i>耳朵（服务器本机，不花钱）</span>
-      <span><i style="background:var(--lane-qwen)"></i>千问（云端，按 token 计费）</span>
-      <span><i style="background:var(--lane-mind)"></i>mind（服务器，执行工具）</span>
-      <span><i style="background:var(--warn-bg);outline:1px solid var(--warn)"></i>被挡回或要注意</span>
+      <span><i class="sw-ear"></i>耳朵（服务器本机，不花钱）</span>
+      <span><i class="sw-qwen"></i>千问（云端，按 token 计费）</span>
+      <span><i class="sw-mind"></i>mind（服务器，执行工具）</span>
+      <span><i class="sw-warn"></i>被挡回或要注意</span>
     </div>
   </div>
   <figure>
@@ -68,7 +68,7 @@
     <div class="mode" data-mode="技能"><b>技能<span class="tag" hidden>现在</span></b>只给目录，模型自己决定开哪个。没有第 ② 步。验收 43/49。</div>
     <div class="mode" data-mode="自动"><b>自动<span class="tag" hidden>现在</span></b>目录加分类器提前装。验收 48/49。</div>
   </div>
-  <p class="lead" style="margin-top:12px">带工具的会话都关掉千问自带的搜索：两样同时开，每一句回答都会失败。搜索改走 <code>web_search</code> 工具。</p>
+  <p class="lead mt-s">带工具的会话都关掉千问自带的搜索：两样同时开，每一句回答都会失败。搜索改走 <code>web_search</code> 工具。</p>
 </div></section>
 
 <section id="watch"><div class="wrap">
@@ -91,7 +91,7 @@
       <tr><td class="k"><code>call.realtime.turn</code></td><td>这一轮的回答文字、token、花费</td><td>在</td></tr>
     </tbody>
   </table></div>
-  <p class="lead" style="margin-top:10px">这些现在都归在日志页新加的「技」一栏，默认显示（以前落在「系」里，默认被排除）。</p>
+  <p class="lead mt-s">这些现在都归在日志页新加的「技」一栏，默认显示（以前落在「系」里，默认被排除）。</p>
 
   <div class="prose mt">
     <h3>建议：观察台加一页「调用审核」</h3>

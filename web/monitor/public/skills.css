@@ -118,3 +118,18 @@ td.k { white-space: nowrap; font-weight: 500; }
 footer { padding: 36px 0; color: var(--muted); font-size: 13px; }
 @media (max-width: 520px) { h1 { font-size: 23px; } .cards { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* 2026-11-19: the monitor's CSP drops inline style attributes, so every colour is a class */
+.group { --gc: var(--accent); }
+.g-look { --gc: var(--g-look); } .g-recall { --gc: var(--g-recall); } .g-world { --gc: var(--g-world); }
+.g-daily { --gc: var(--g-daily); } .g-body { --gc: var(--g-body); } .g-manner { --gc: var(--g-manner); }
+.g-self { --gc: var(--g-self); } .g-note { --gc: var(--g-note); } .g-free { --gc: var(--g-free); }
+.gname { color: var(--gc); }
+.chip { --lc: var(--muted); }
+.lv-r { --lc: var(--l-r); } .lv-a { --lc: var(--l-a); } .lv-c { --lc: var(--l-c); } .lv-free { --lc: var(--g-free); }
+.legend i.sw-r { background: var(--l-r); } .legend i.sw-a { background: var(--l-a); } .legend i.sw-c { background: var(--l-c); }
+.legend i.sw-ear { background: var(--lane-ear); } .legend i.sw-qwen { background: var(--lane-qwen); }
+.legend i.sw-mind { background: var(--lane-mind); } .legend i.sw-warn { background: var(--warn-bg); outline: 1px solid var(--warn); }
+.md li.sub { margin-left: 14px; list-style: circle; }
+.mt-s { margin-top: 12px; }
+nav.bar a.other.next { margin-left: 0; }

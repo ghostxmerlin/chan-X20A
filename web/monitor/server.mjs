@@ -13,6 +13,13 @@ import { parseEnv } from 'node:util';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export const root = path.resolve(directory, '../..');
+// docs/day/<YYYY-MM-DD>.json (Claude's plan for a working day); no date: the newest file. Only that name pattern is read.
+export function readDay(dir, date) {
+  const name = date == null || date === '' ? fs.readdirSync(dir).filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().at(-1) :
+    /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}.json` : null;
+  if (!name) throw new Error('no day');
+  return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+}
 // config/skills: the directory (skills.json) with each skill's full text (skills/<id>.md, as the ear loads it) as md
 export function readSkills(dir) {
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'skills.json'), 'utf8'));
@@ -33,7 +40,8 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/crowd-flow.html', ['crowd-flow.html', 'text/html; charset=utf-8']], ['/crowd-flow.css', ['crowd-flow.css', 'text/css; charset=utf-8']],
     ['/crowd-plan.html', ['crowd-plan.html', 'text/html; charset=utf-8']], ['/crowd-plan.css', ['crowd-plan.css', 'text/css; charset=utf-8']], ['/crowd-plan.js', ['crowd-plan.js', 'text/javascript; charset=utf-8']],
     ['/tools.html', ['tools.html', 'text/html; charset=utf-8']], ['/tools-ui.js', ['tools-ui.js', 'text/javascript; charset=utf-8']],
-    ['/skills.html', ['skills.html', 'text/html; charset=utf-8']], ['/skills-ui.js', ['skills-ui.js', 'text/javascript; charset=utf-8']], ['/skills.css', ['skills.css', 'text/css; charset=utf-8']]]);
+    ['/skills.html', ['skills.html', 'text/html; charset=utf-8']], ['/skills-ui.js', ['skills-ui.js', 'text/javascript; charset=utf-8']], ['/skills.css', ['skills.css', 'text/css; charset=utf-8']],
+    ['/day.html', ['day.html', 'text/html; charset=utf-8']], ['/day-ui.js', ['day-ui.js', 'text/javascript; charset=utf-8']], ['/day.css', ['day.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -107,6 +115,11 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     if (url.pathname === '/api/tools') {             // A2 (2026-11-18): the tool registry, config/tools/registry.json
       try { res.setHeader('Content-Type', 'application/json'); res.end(fs.readFileSync(path.join(root, 'config/tools/registry.json'))); }
       catch { respond(503, '读不到工具注册表'); }
+      return;
+    }
+    if (url.pathname === '/api/day') {               // 2026-11-19: the day's plan, docs/day/<date>.json (newest without ?date)
+      try { res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(readDay(path.join(root, 'docs/day'), url.searchParams.get('date')))); }
+      catch { respond(404, '没有这一天的计划'); }
       return;
     }
     if (url.pathname === '/api/skills') {            // 2026-11-19: the Docking skills, config/skills/skills.json + skills/<id>.md

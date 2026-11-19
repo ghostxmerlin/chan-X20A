@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>今天的工作</title>
+  <link rel="stylesheet" href="/day.css">
+  <script type="module" src="/day-ui.js"></script>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="top-row">
+    <h1 id="title">今天的工作</h1>
+    <span class="links"><a href="/skills.html">技能</a><a href="/log.html">日志</a><a href="/">← 观察台</a></span>
+  </div>
+  <p class="goal" id="goal"></p>
+  <p class="muted" id="updated"></p>
+</div></header>
+<main class="wrap" id="day"><p class="muted">读取中…</p></main>
+<footer class="wrap"><p class="muted">计划文件在仓库 <code>docs/day/&lt;日期&gt;.json</code>，Claude 做事时随时更新；页面每 30 秒刷新一次。</p></footer>
+</body>
+</html>

@@ -26,7 +26,7 @@ export function md(text) {
     if (m) {
       const nested = /^\s{2,}/.test(l);
       if (!nested && list !== 'ul') { close(); out.push('<ul>'); list = 'ul'; }
-      out.push(`<li${nested ? ' style="margin-left:14px;list-style:circle"' : ''}>${inline(m[1])}</li>`); continue;
+      out.push(`<li${nested ? ' class="sub"' : ''}>${inline(m[1])}</li>`); continue;
     }
     m = l.match(/^(\d+)\.\s+(.*)/);
     if (m) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol'; } out.push(`<li>${inline(m[2])}</li>`); continue; }
@@ -43,12 +43,13 @@ export function toolIndex(reg) {
   return out;
 }
 
-const LV = { R: '--l-r', A: '--l-a', C: '--l-c' };
+// the page's CSP (default-src 'self') drops inline style attributes: colours go through classes
+const LV = { R: 'lv-r', A: 'lv-a', C: 'lv-c' };
 export function chip(name, tools, nAll) {
-  if (name === '*') return `<span class="chip" style="--lc:var(--g-free)">全部工具<small>${nAll} 个</small></span>`;
+  if (name === '*') return `<span class="chip lv-free">全部工具<small>${nAll} 个</small></span>`;
   const t = tools[name];
   if (!t || t.status !== 'live') return `<span class="chip missing" title="工具注册表里没有，或还没接入">${esc(name)}<small>未接入</small></span>`;
-  return `<span class="chip" style="--lc:var(${LV[t.level] || '--muted'})" title="${esc(t.level)} 级">${esc(name)}<small>${esc(t.title)}</small></span>`;
+  return `<span class="chip ${LV[t.level] || ''}" title="${esc(t.level)} 级">${esc(name)}<small>${esc(t.title)}</small></span>`;
 }
 
 export function liveCount(tools) {
@@ -68,7 +69,7 @@ export function groupsHtml(cfg, tools) {
   return groups.map(([g, name, note]) => {
     const sk = skills.filter(s => (s.group || s.id) === g);
     if (!sk.length) return '';
-    return `<div class="group" style="--gc:var(--g-${esc(g)},var(--accent))"><div class="group-head"><span class="gname" style="color:var(--gc)">${esc(name)}</span><span class="gid">${esc(g)}</span><span class="gnote">${esc(note)}</span></div><div class="cards">` +
+    return `<div class="group g-${/^[a-z]+$/.test(g) ? g : 'other'}"><div class="group-head"><span class="gname">${esc(name)}</span><span class="gid">${esc(g)}</span><span class="gnote">${esc(note)}</span></div><div class="cards">` +
       sk.map(s => {
         const free = (s.tools || []).includes('*');
         return `<article class="card" id="skill-${esc(s.id)}"><div class="t"><h3>${esc(s.title)}</h3><span class="id">${esc(s.id)}</span></div>

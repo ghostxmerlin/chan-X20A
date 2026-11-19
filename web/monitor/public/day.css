@@ -1,0 +1,58 @@
+/* 今天的工作 (2026-11-19): one column; the tasks as rows with a status pill; questions on top. No inline styles (the
+   monitor's CSP drops them): every colour is a class. */
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --fg: #1b2230; --muted: #5d6676; --line: #dde1e8; --soft: #eceff4;
+  --accent: #2f5bd3; --doing: #2f5bd3; --done: #1e7a46; --wait: #8a6d0b; --you: #b4540a; --later: #7a8394;
+  --doing-bg: #e8eefc; --done-bg: #e5f4ea; --wait-bg: #fbf3d9; --you-bg: #fdf0e3; --later-bg: #eef0f3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --surface: #1a1f28; --fg: #e4e8ef; --muted: #9aa3b2; --line: #2c3340; --soft: #222834;
+    --accent: #7f9ef5; --doing: #8fb0ff; --done: #6fcf97; --wait: #e2c15a; --you: #f0a35e; --later: #9aa3b2;
+    --doing-bg: #1f2a44; --done-bg: #17301f; --wait-bg: #33290f; --you-bg: #3a2a1a; --later-bg: #232832;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.65 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+a { color: var(--accent); }
+.wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+header { padding: 24px 0 8px; }
+.top-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+h1 { font-size: 24px; margin: 0; }
+h2 { font-size: 18px; margin: 28px 0 10px; }
+p { margin: 0; }
+.muted { color: var(--muted); font-size: 13px; }
+.goal { margin-top: 8px; max-width: 70ch; }
+.links a { margin-left: 12px; font-size: 14px; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.box.you { border-color: var(--you); }
+.box ol, .box ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.timeline { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+.timeline b { white-space: nowrap; }
+.tasks { display: flex; flex-direction: column; gap: 12px; }
+.task { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.task .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.task .n { font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.task h3 { font-size: 16px; margin: 0; flex: 1 1 auto; }
+.ask { color: var(--muted); font-size: 14px; }
+.ask::before { content: "你说："; }
+.found { font-size: 14px; }
+.found::before { content: "现状："; font-weight: 600; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.steps li { display: flex; gap: 8px; align-items: baseline; }
+.pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.s-todo { background: var(--soft); color: var(--muted); }
+.s-doing { background: var(--doing-bg); color: var(--doing); }
+.s-done { background: var(--done-bg); color: var(--done); }
+.s-waiting { background: var(--wait-bg); color: var(--wait); }
+.s-needs_you { background: var(--you-bg); color: var(--you); }
+.s-later { background: var(--later-bg); color: var(--later); }
+.steps li.done { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+.bar { height: 4px; background: var(--soft); border-radius: 2px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--done); }
+.w0 { width: 0; } .w1 { width: 10%; } .w2 { width: 20%; } .w3 { width: 30%; } .w4 { width: 40%; } .w5 { width: 50%; }
+.w6 { width: 60%; } .w7 { width: 70%; } .w8 { width: 80%; } .w9 { width: 90%; } .w10 { width: 100%; }
+footer { padding: 32px 0; }
+@media (max-width: 520px) { .timeline { grid-template-columns: 1fr; } }
