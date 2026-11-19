@@ -1,5 +1,6 @@
-// Nod / shake (fw/head_gesture.h, collector-0.5.10): the waypoints (+-8 deg, clamped, back to the start), the
-// no-room refusal, legs advancing on a complete trajectory or the leg timeout, the overall timeout and cancel.
+// Nod / shake (fw/head_gesture.h, collector-0.5.10, 0.5.11): the waypoints (clamped, back to the start; one-sided when
+// one side has no room), the no-room refusal, legs advancing on a complete trajectory or the leg timeout, the
+// overall timeout and cancel.
 #include "head_gesture.h"
 #include <cassert>
 #include <cstdio>
@@ -9,13 +10,17 @@ using namespace collector;
 int main()
 {
     GesturePlan p;
-    assert(plan_gesture(100, kGestureAmpTenths, 2, 50, 850, p));            // pitch 10 deg, floor 5 deg
+    assert(plan_gesture(100, 80, 2, 50, 850, p));                            // pitch 10 deg, floor 5 deg, amp 8
     assert(p.count == 5 && p.points[0] == 50 && p.points[1] == 180 && p.points[2] == 50 && p.points[3] == 180 && p.points[4] == 100);
-    assert(plan_gesture(0, kGestureAmpTenths, 1, -900, 900, p));             // yaw at the front, one cycle
-    assert(p.count == 3 && p.points[0] == -80 && p.points[1] == 80 && p.points[2] == 0);
-    assert(plan_gesture(890, 80, 1, -900, 900, p) && p.points[1] == 900 && p.points[2] == 890);   // clamped high
-    assert(plan_gesture(30, 80, 1, 50, 850, p) && p.points[0] == 50 && p.points[2] == 50);      // below the floor: starts at it
-    assert(plan_gesture(850, 80, 1, 50, 850, p) && p.points[1] == 850);       // 77..85: 8 deg of room is enough
+    assert(plan_gesture(0, kShakeAmpTenths, 1, -900, 900, p));               // yaw at the front, one cycle, +-15
+    assert(p.count == 3 && p.points[0] == -150 && p.points[1] == 150 && p.points[2] == 0);
+    assert(plan_gesture(890, 80, 1, -900, 900, p) && p.count == 2 && p.points[0] == 810 && p.points[1] == 890);   // at the edge: one side
+    // 2026-11-19: the saved pitch on its 5 deg floor (head at 3.7): no room below -> up 12 and back, twice
+    assert(plan_gesture(37, kNodAmpTenths, 2, 50, 850, p));
+    assert(p.count == 4 && p.points[0] == 170 && p.points[1] == 50 && p.points[2] == 170 && p.points[3] == 50);
+    assert(plan_gesture(100, kNodAmpTenths, 1, 50, 850, p));                 // 10 deg: 5 of room below < 6 -> one-sided
+    assert(p.count == 2 && p.points[0] == 220 && p.points[1] == 100);
+    assert(plan_gesture(850, 80, 1, 50, 850, p) && p.count == 2 && p.points[0] == 770 && p.points[1] == 850);   // top: down and back
     assert(!plan_gesture(20, 80, 1, 50, 100, p));                            // 5..10 deg: no room
     assert(!plan_gesture(0, 80, 3, -900, 900, p) && !plan_gesture(0, 80, 0, -900, 900, p) && !plan_gesture(0, 0, 1, -900, 900, p));
 

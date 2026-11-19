@@ -1071,7 +1071,7 @@ esp_err_t remote_gesture(bool nod, int cycles, const char** why, uint32_t* reque
     const int lower = nod ? std::max<int>(limits.x, kPitchSettingMinimum) : std::max<int>(limits.x, -kWebYawRangeTenths);
     const int upper = nod ? std::min<int>(limits.y, kPitchSettingMaximum) : std::min<int>(limits.y, kWebYawRangeTenths);
     GesturePlan plan;
-    if (!plan_gesture(fb.angle, kGestureAmpTenths, cycles, lower, upper, plan)) { *why = "no_room"; return ESP_ERR_INVALID_STATE; }
+    if (!plan_gesture(fb.angle, nod ? kNodAmpTenths : kShakeAmpTenths, cycles, lower, upper, plan)) { *why = "no_room"; return ESP_ERR_INVALID_STATE; }
     gesture_plan = plan; gesture_nod = nod; gesture_pending = true; ++gesture_seq;
     if (request_seq) *request_seq = gesture_seq;
     *why = nullptr;

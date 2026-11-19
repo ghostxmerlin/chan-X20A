@@ -254,7 +254,7 @@ void run_job(const Job& j)
         const bool nod = j.c.verb == Verb::Nod;
         if (remote_gesture(nod, j.c.value, &why, &seq) != ESP_OK) return answer(j.c.id, j.gen, why ? why : "failed");
         return answer(j.c.id, j.gen, nullptr, [&](ArduinoJson::JsonObject d) {
-            d["gesture"] = nod ? "nod" : "shake"; d["times"] = j.c.value; d["seq"] = seq; d["amp_deg"] = kGestureAmpTenths / 10;
+            d["gesture"] = nod ? "nod" : "shake"; d["times"] = j.c.value; d["seq"] = seq; d["amp_deg"] = (nod ? kNodAmpTenths : kShakeAmpTenths) / 10;
         });
     }
     case Verb::Volume: {
