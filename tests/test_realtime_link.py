@@ -280,6 +280,36 @@ class SessionTest(HubBase):
         self.assertIn("instructions", updates[1]["session"])
 
 
+class TurnSwitchTest(HubBase):
+    """智能断句 switch (owner 2026-11-19 night): set_turn changes the turn detection; an open, idle session reopens with it."""
+    async def test_switching_off_reopens_the_idle_session_with_server_vad(self):
+        ws = await self.open_ready()
+        self.assertEqual(ws.sent[0]["session"]["turn_detection"]["type"], "smart_turn_v2")
+        self.assertTrue(self.hub.set_turn(False))
+        self.hub.step()
+        await settle(20)
+        self.assertGreaterEqual(len(self.wss), 2)
+        self.assertEqual(self.wss[-1].sent[0]["session"]["turn_detection"]["type"], "server_vad")
+        self.assertFalse(self.hub.set_turn(False))     # same value: nothing happens
+
+    async def test_a_reply_in_flight_is_not_cut_off(self):
+        ws = await self.open_ready()
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        await settle()
+        self.hub.set_turn(False)
+        self.hub.step()
+        await settle(10)
+        self.assertEqual(len(self.wss), 1)             # waits for the reply to finish
+        self.assertEqual(self.hub.state, "open")
+
+    async def test_the_status_says_which_turn_detection_runs(self):
+        await self.open_ready()
+        self.hub.set_turn(False)
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(self.recs.status[-1]["turn"], "server_vad")
+
+
 class InputTest(HubBase):
     async def test_silence_is_not_sent_speech_is_with_preroll(self):
         ws = await self.open_ready()

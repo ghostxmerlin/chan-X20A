@@ -210,3 +210,16 @@ test('paused: why and since when, in Beijing time', ()=>{
  assert.equal(sw.pauseView({pause:{known:true,paused:false,reasons:[],cap_cny:72,spent_cny:7.2}}).spend,'今天 $1.00 / $10');
  assert.match(sw.pauseView(PAUSE({spent_usd:11,over:true,override:true})).spend,/已按 9 放行/);
 });
+
+test('智能断句: on by default, toggles realtime_smart_turn, says when the ear has not switched yet', ()=>{
+ const now=Date.now();
+ const on={realtime_smart_turn:{on:true},realtime:{on:true},realtime_status:{running:[],available:true,at:now,stale:false,turn:'smart_turn_v2'}};
+ let v=sw.switchView(robot(),true,{enabled:false},on);
+ assert.equal(v.turn.on,true);assert.match(v.turn.detail,/千问判断/);
+ assert.deepEqual(sw.toggleRequest('turn',null,on),{kind:'switch',body:{name:'realtime_smart_turn',on:false}});
+ const off={...on,realtime_smart_turn:{on:false}};
+ v=sw.switchView(robot(),true,{enabled:false},off);
+ assert.equal(v.turn.on,false);assert.match(v.turn.detail,/按停顿/);assert.match(v.turn.detail,/正在换/);
+ assert.deepEqual(sw.toggleRequest('turn',null,off).body.on,true);
+ assert.equal(sw.switchView(robot(),true,{enabled:false},null).turn.known,false);
+});

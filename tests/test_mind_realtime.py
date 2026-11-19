@@ -165,6 +165,12 @@ class EndpointTest(Base):
         with urllib.request.urlopen(req, timeout=5) as r:
             sw = json.load(r)
         self.assertEqual(sw['realtime'], {'on': False, 'at': None})          # default off
+        self.assertTrue(sw['realtime_smart_turn']['on'])                     # 智能断句: no document = on (the ear's default)
+        req = urllib.request.Request(f'http://127.0.0.1:{server.server_address[1]}/switches', method='POST',
+                                     data=json.dumps({'name': 'realtime_smart_turn', 'on': False}).encode(),
+                                     headers={'Authorization': 'Bearer k', 'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            self.assertFalse(json.load(r)['realtime_smart_turn']['on'])
 
 
 class BillingRealtimeTest(unittest.TestCase):

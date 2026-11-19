@@ -145,6 +145,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._called_until = 0.0                       # inside a call window (hello / Dynames): see CALLED_S
         self._called_at = None                         # the last call (merges sources that heard the same call)
         self._called_text = None                       # {text, at, trace}: a called sentence still waiting for an answer
+        self._turn_changed = False                     # 智能断句 switched while a session was open: close it when idle
         self._called_trace = None                      # the call's run-log trace: the next sentence in the window joins it
         self._order_at = None                          # the last direct order (Unit ASR command word): see ORDER_S
         self._qtask = None                             # the open search task {topic, at, tries, results, answered, ...}
@@ -407,6 +408,12 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         p = self._pending_vision or self._pending_search
         if p is not None and now - p["at"] > VISION_GATE_S:
             self._release_vision(now, None)            # no verdict came (no session, model silent): no burst
+        if self._turn_changed and self.state == "open" and self._resp is None and not self.output_busy() \
+                and self._tool_wait is None and not self._sounding:
+            self._turn_changed = False
+            self.close("turn_changed")                 # reopens at once below (in crowd) with the new turn detection
+        elif self._turn_changed and self.state == "closed":
+            self._turn_changed = False
         if not self.in_crowd():
             self._need_speech, self._greet, self._appear = False, None, None
         if not self.want():
@@ -1178,6 +1185,20 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                             "ask_kind": ask_kind(turn.get("heard") or next((h["text"] for h in heard), "")),
                             "length_mode": self._length_mode()})
 
+    def set_turn(self, smart):
+        """智能断句 switch (owner 2026-11-19 night: "做一个开关，控制 smart turn on/off，然后给我们的网页前端用"):
+        smart_turn_v2 (DashScope judges whether a sentence is over and meant for hello) or server_vad (a pause ends the
+        sentence). The type is set when a session opens, so an open session closes once idle (no reply, no tool) and
+        the next one opens with the new setting. Returns True when it changed."""
+        turn = "smart_turn_v2" if smart else "server_vad"
+        if turn == self.cfg.turn:
+            return False
+        log(f"realtime: turn detection {self.cfg.turn} -> {turn} (智能断句 switch)", flush=True)
+        self.cfg.turn = turn
+        self._turn_changed = self.state != "closed"
+        self._status_at = -1e9                         # the page sees the new value at the next step
+        return True
+
     def _write_status(self, now):
         self._status_at = now
         if self.db is None:
@@ -1190,7 +1211,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                 "cost_cny": round(self.stats["cost_micro_cny"] / 1e6, 4), "at": self.wall_ms(),
                 "quiet": self.quiet_on(now), "low": self.low_on(now), "role": self.role_text(now),
                 "debug": {"since_ms": self._debug_since_ms} if self.debug_on(now) else None,
-                "voice_key": self.voice_key})
+                "voice_key": self.voice_key, "turn": self.cfg.turn})
         except Exception:                              # noqa: BLE001
             pass
 
