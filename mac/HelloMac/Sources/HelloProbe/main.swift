@@ -72,7 +72,7 @@ var spyHolder: TextSpy? = nil        // WSLink holds its logic weakly
 var mouthLinkHolder: WSLink? = nil
 tunnel.onState = { s in
     print("tunnel: \(s)")
-    guard s == "up" else { return }
+    guard s == "up", spyHolder == nil else { return }     // links once (a tunnel restart keeps them)
     spyHolder = TextSpy(mouth)
     let spy = spyHolder!
     let mouthLink = WSLink(name: "mouth", url: cfg.url("/mouth"), token: token, queue: core, logic: spy)
@@ -141,5 +141,6 @@ func ttsSay(_ line: String) {
     print("tts say: \(out.contains("\"id\"") ? "accepted" : "answer \(out.prefix(120))")")
 }
 
+tunnel.stopOnSignals()
 tunnel.start()
 dispatchMain()

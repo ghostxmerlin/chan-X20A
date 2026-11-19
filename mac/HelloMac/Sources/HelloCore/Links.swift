@@ -60,7 +60,7 @@ public final class WSLink: NSObject, Transport, URLSessionWebSocketDelegate {
         gen += 1
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 10
+        req.timeoutInterval = 3600            // review: a long-lived socket (ticks / pings keep it alive; no 10 s idle cut)
         let t = session.webSocketTask(with: req)
         t.maximumMessageSize = 1 << 20
         task = t
@@ -120,12 +120,12 @@ public final class WSLink: NSObject, Transport, URLSessionWebSocketDelegate {
     // Transport
     public func send(text: String) {
         guard let t = task, state == "open" else { return }
-        t.send(.string(text)) { [weak self] e in if let e { self?.queue.async { self?.drop("send: \(e.localizedDescription)") } } }
+        t.send(.string(text)) { [weak self] e in if let e { self?.queue.async { if self?.task === t { self?.drop("send: \(e.localizedDescription)") } } } }
     }
 
     public func send(data: Data) {
         guard let t = task, state == "open" else { return }
-        t.send(.data(data)) { [weak self] e in if let e { self?.queue.async { self?.drop("send: \(e.localizedDescription)") } } }
+        t.send(.data(data)) { [weak self] e in if let e { self?.queue.async { if self?.task === t { self?.drop("send: \(e.localizedDescription)") } } } }
     }
 
     public func reconnect(_ why: String) { queue.async { self.drop(why) } }

@@ -12,6 +12,8 @@ public final class VisionLogic: LinkLogic {
     public private(set) var eventsSent = 0, framesSent = 0
     public var now: () -> UInt64 = monoUs
     public var onError: ((String) -> Void)?
+    /// each (re)connect: the camera's change rule starts over, so the first frame after it goes (review 2026-11-19)
+    public var onOpen: (() -> Void)?
 
     public init(id: DeviceIdentity) { self.id = id }
 
@@ -21,6 +23,7 @@ public final class VisionLogic: LinkLogic {
         transport?.send(text: Wire.json(["type": "hello", "source": id.source,
                                          "device": ["device_id": id.deviceId, "boot_id": id.bootId, "firmware": id.firmware,
                                                     "protocol": "soul-vision/1"]]))
+        onOpen?()
     }
 
     public func closed(_ why: String) { open = false }

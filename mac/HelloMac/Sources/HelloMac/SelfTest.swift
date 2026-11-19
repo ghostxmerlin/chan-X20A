@@ -54,6 +54,17 @@ enum AppSelfTest {
                 check(events == ["playing", "progress", "done"] && played == 600, "speaker reports: \(events) played \(played)")
             }
         }
+        // review 2026-11-19: tts.end arriving after the last buffer already played still ends the stream
+        do {
+            let out = AudioOut(queue: q, offline: true)
+            var last = ""
+            out.onEvent = { e in if case .done = e { last = "done" } }
+            q.sync { out.begin(stream: 9); for _ in 0..<4 { out.push(stream: 9, pcm: [Int16](repeating: 500, count: 1440)) } }
+            for _ in 0..<8 { q.sync { out.renderForTest(frames: 1440) }; q.sync {} }
+            q.sync { out.finish(stream: 9) }
+            q.sync {}
+            check(last == "done", "a late tts.end still gives done")
+        }
         print("app self-test: \(fails == 0 ? "passed" : "\(fails) failed")")
         return fails == 0 ? 0 : 1
     }

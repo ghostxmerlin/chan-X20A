@@ -57,7 +57,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         session.startRunning()
         deviceName = dev.localizedName
         running = true
-        change.reset()
+        resetChange()
     }
 
     func stop() {
@@ -67,6 +67,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 
     func snap(_ id: Int) { camQueue.async { self.pendingSnap = id } }
+
+    /// the change rule starts over (camera restart, vision link reopened): on the camera queue (review: a race)
+    func resetChange() { camQueue.async { self.change.reset() } }
 
     /// faces off: every track lost (on the camera queue, where the tracker lives)
     func clearFaces() { camQueue.async { let ev = self.tracker.clear(); if !ev.isEmpty { self.onFaceEvents?(ev) } } }

@@ -167,6 +167,7 @@ test("mouth: digits, cmd, stage, power-on 9 until ok") {
     check(nine?["value"] as? Int == 9 && nine?["source"] as? String == "quick", "power-on 9")
     clk.us += 10_500_000; m.tick()
     check(tr.texts.filter { $0["type"] as? String == "mode_input" }.count == 2, "resent after 10 s")
+    check(dg.digits.filter { $0 == 9 }.count == 1, "the local half of 9 once, not on every resend")
     m.received(text: Wire.json(["type": "mode_result", "seq": 2, "code": "ok", "toast": "ALL ON"]))
     clk.us += 10_500_000; m.tick()
     check(tr.texts.filter { $0["type"] as? String == "mode_input" }.count == 2, "not after ok")
@@ -184,7 +185,10 @@ test("mouth: digits, cmd, stage, power-on 9 until ok") {
 test("vision: hello, events with seq, frames, ping after 15 s") {
     let v = VisionLogic(id: ident), tr = RecordingTransport(), clk = FakeClock()
     v.transport = tr; v.now = clk.now
+    var reopened = 0
+    v.onOpen = { reopened += 1 }
     v.opened()
+    check(reopened == 1, "onOpen on each open")
     check(tr.texts[0]["type"] as? String == "hello" && ((tr.texts[0]["device"] as? [String: Any])?["protocol"] as? String) == "soul-vision/1", "hello")
     v.event("face_found", ["face": 1, "box": [1, 2, 3, 4], "prob": 0.9])
     check(tr.texts[1]["event"] as? String == "face_found" && tr.texts[1]["seq"] as? Int == 1 && tr.texts[1]["type"] as? String == "vision", "event")

@@ -55,6 +55,8 @@ final class Hello: MouthDelegate {
         }
         hearing.onEvent = { [weak self] e in self?.heard(e) }
         vision.onError = { [weak self] m in self?.log("视觉：\(m)") }
+        vision.onOpen = { [weak self] in self?.camera.resetChange() }
+        mic.onRestart = { [weak self] m in self?.log(m) }
         mic.onPCM = { [weak self] pcm, us in self?.core.async { self?.hearing.feed(pcm, firstUs: us) } }
         mic.onLevel = { [weak self] p in self?.micPeak = max(self?.micPeak ?? 0, p) }
         camera.onFrame = { [weak self] jpeg, w, h, us, diff, snap in
@@ -80,8 +82,9 @@ final class Hello: MouthDelegate {
             guard let self else { return }
             self.linkState["隧道"] = s
             self.onChange?()
-            if s == "up" { for l in self.links { l.start() } }
+            if s == "up" { for l in self.links { l.start() } }      // WSLink.start is idempotent (task == nil guard)
         }
+        tunnel.stopOnSignals()
         tunnel.start()
         let t = DispatchSource.makeTimerSource(queue: core)
         t.schedule(deadline: .now() + 1, repeating: .milliseconds(100))

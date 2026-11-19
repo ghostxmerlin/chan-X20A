@@ -206,7 +206,7 @@ public final class MouthLogic: LinkLogic {
         guard nineOwed, handshaken, nineTries < 30, force || now() - nineAt >= 10_000_000 else { return }
         nineTries += 1
         nineAt = now()
-        nineSeq = sendDigit(9, source: "quick")
+        nineSeq = sendDigit(9, source: "quick", local: nineTries == 1)   // review: the local half once, not every resend
     }
 
     // ---- inputs from the Mac (the robot's touch screen / voice module stand-ins) ----
@@ -230,8 +230,8 @@ public final class MouthLogic: LinkLogic {
 
     /// Digits 0 / 9 / 1 are mind's (mode_input); 4-8 are local modes; the robot runs its own half of 0 / 9.
     @discardableResult
-    public func sendDigit(_ v: Int, source: String) -> Int {
-        if v == 0 || v == 9 { delegate?.localDigit(v) }
+    public func sendDigit(_ v: Int, source: String, local: Bool = true) -> Int {
+        if local && (v == 0 || v == 9) { delegate?.localDigit(v) }
         if (4...8).contains(v) {
             var val = ModeRules.Value(); val.digit = v
             input(.digit, value: val, by: source)

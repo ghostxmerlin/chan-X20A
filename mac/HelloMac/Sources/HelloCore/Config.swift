@@ -43,6 +43,18 @@ public final class Tunnel {
 
     public func start() { want = true; launch() }
 
+    /// The ssh child dies with us: SIGTERM / SIGINT / SIGHUP stop the tunnel, then exit (a plain kill used to orphan it).
+    public func stopOnSignals() {
+        for s in [SIGTERM, SIGINT, SIGHUP] {
+            signal(s, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: s, queue: .main)
+            src.setEventHandler { [weak self] in self?.proc?.terminate(); exit(0) }
+            src.resume()
+            signalSources.append(src)
+        }
+    }
+    private var signalSources: [DispatchSourceSignal] = []
+
     public func stop() {
         want = false
         proc?.terminate()
@@ -54,6 +66,13 @@ public final class Tunnel {
 
     private func launch() {
         guard want, proc == nil else { return }
+        // 2026-11-19 night: an orphaned tunnel (a killed app) on the port made a dead launch look "up", and every retry
+        // reopened the links. A busy port is reported and retried, never taken for ours.
+        if Self.portOpen(cfg.localPort) {
+            set("busy: 127.0.0.1:\(cfg.localPort) 已被别的程序占用")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.launch() }
+            return
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         var args = cfg.sshOptions + ["-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
@@ -78,7 +97,7 @@ public final class Tunnel {
 
     private func waitUp(_ n: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self, self.proc != nil else { return }
+            guard let self, let p = self.proc, p.isRunning else { return }
             if Self.portOpen(self.cfg.localPort) { self.set("up") }
             else if n < 60 { self.waitUp(n + 1) }
         }

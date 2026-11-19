@@ -59,9 +59,13 @@ final class AudioIn {
     var onLevel: ((Float) -> Void)?
     private(set) var running = false
     private(set) var deviceName = "—"
+    private var device: AudioDeviceID?
+    private var observer: NSObjectProtocol?
+    var onRestart: ((String) -> Void)?
 
     func start(device: AudioDeviceID?) throws {
         stop()
+        self.device = device
         let e = AVAudioEngine()
         let input = e.inputNode
         if let device, let unit = input.audioUnit {
@@ -79,6 +83,13 @@ final class AudioIn {
         try e.start()
         engine = e
         running = true
+        // review 2026-11-19: the engine stops on a configuration change (device / AirPods / rate): start it again
+        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: e,
+                                                          queue: .main) { [weak self] _ in
+            guard let self, self.running else { return }
+            do { try self.start(device: self.device); self.onRestart?("麦克风换了设置，已重新打开：\(self.deviceName)") }
+            catch { self.running = false; self.onRestart?("麦克风换了设置，重新打开失败：\(error.localizedDescription)") }
+        }
         deviceName = AudioDevices.inputs().first { $0.id == device }?.name ?? "默认麦克风"
     }
 
@@ -90,6 +101,7 @@ final class AudioIn {
     }
 
     func stop() {
+        if let o = observer { NotificationCenter.default.removeObserver(o); observer = nil }
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
@@ -207,7 +219,8 @@ final class AudioOut: SpeechOutput {
         guard s == stream else { return }
         finished = true
         if !started { startPlaying() }
-        if queuedMs == 0 { stream = nil; onEvent?(.done(stream: s, playedMs: 0)) }
+        // review 2026-11-19: tts.end after the last buffer already played: no completion comes any more, so done now
+        if queuedMs == 0 || (started && playedMs >= queuedMs) { stream = nil; onEvent?(.done(stream: s, playedMs: playedMs)) }
     }
 
     func stop(stream s: UInt32) {
