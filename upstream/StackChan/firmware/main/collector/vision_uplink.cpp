@@ -109,7 +109,12 @@ bool send_body(hearing::HearingSocket& socket, bool& sent_any)
         sent_any = true;
     }
     body::Summary s;
-    if (!body_take_summary(esp_timer_get_time(), s)) return true;
+    // the window's raw samples (0.5.14): PSRAM, once; without it the summary still goes, without raw
+    static body::RawSample* raw = static_cast<body::RawSample*>(
+        heap_caps_calloc(body::kRawMax, sizeof(body::RawSample), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    int raw_n = 0;
+    int64_t raw_t0 = 0;
+    if (!body_take_summary(esp_timer_get_time(), s, raw, raw ? &raw_n : nullptr, &raw_t0)) return true;
     ArduinoJson::JsonDocument msg;
     msg["type"] = "body"; msg["seq"] = s.seq; msg["t_us"] = s.t_us; msg["now_us"] = esp_timer_get_time();
     msg["n"] = s.samples;
@@ -123,6 +128,19 @@ bool send_body(hearing::HearingSocket& socket, bool& sent_any)
     if (s.mag) {
         auto m = msg["mag"].to<ArduinoJson::JsonArray>();
         for (float v : s.mag_ut) m.add(r2(v));
+    }
+    if (!s.still && raw && raw_n > 0) {          // moving (or the head turning): the 50 Hz samples go too
+        msg["raw_t0_us"] = raw_t0;
+        if (s.raw_over) msg["raw_over"] = s.raw_over;
+        auto arr = msg["raw"].to<ArduinoJson::JsonArray>();
+        for (int i = 0; i < raw_n; ++i) {
+            const auto& r = raw[i];
+            auto row = arr.add<ArduinoJson::JsonArray>();
+            row.add(r.dt_ms);
+            for (int k = 0; k < 3; ++k) row.add(r.a_mg[k]);
+            for (int k = 0; k < 3; ++k) row.add(r.g_dps10[k]);
+            row.add(r.self);
+        }
     }
     if (!send_doc(socket, msg)) return false;
     sent_any = true;

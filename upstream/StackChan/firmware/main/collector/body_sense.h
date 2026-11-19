@@ -40,6 +40,16 @@ constexpr int64_t kShakeWinUs = 1000000, kShakeCoolUs = 3000000;
 constexpr int kNearOver = 10, kFarOver = 4, kNearReads = 2, kFarReads = 5;
 constexpr int kBaseCreep = 1;
 constexpr int kEvQueue = 8;
+// 0.5.14 (owner 2026-11-19 "注意区分走路和剧烈晃动"): the window's raw samples go up with a summary that was not
+// still, so walking / shaking / bumps can be told apart from real recordings (the Mac only gets 1 Hz over serial).
+constexpr int kRawMax = 64;
+
+struct RawSample {
+    uint16_t dt_ms = 0;        // since the window's first sample
+    int16_t a_mg[3]{};         // accel, milli-g (with gravity)
+    int16_t g_dps10[3]{};      // gyro, 0.1 dps
+    uint8_t self = 0;          // the robot's own servos were moving
+};
 
 enum class Ev : uint8_t { none, picked_up, put_down, shaken, near, far };
 
@@ -75,6 +85,7 @@ struct Summary {
     float lux = -1;
     bool mag = false;
     float mag_ut[3]{};
+    uint32_t raw_over = 0;     // samples beyond kRawMax in this window (not kept)
 };
 
 class Sense {
@@ -82,6 +93,17 @@ public:
     void imu(float ax, float ay, float az, float gx, float gy, float gz, int64_t t_us, bool self_moving)
     {
         if (!start_us_) start_us_ = t_us;
+        if (raw_n_ < kRawMax) {
+            if (!raw_n_) raw_t0_ = t_us;
+            RawSample& r = raw_[raw_n_++];
+            r.dt_ms = static_cast<uint16_t>(std::min<int64_t>((t_us - raw_t0_) / 1000, 65535));
+            const float in[6] = {ax / kG * 1000.0f, ay / kG * 1000.0f, az / kG * 1000.0f, gx * 10.0f, gy * 10.0f, gz * 10.0f};
+            int16_t* outp[6] = {&r.a_mg[0], &r.a_mg[1], &r.a_mg[2], &r.g_dps10[0], &r.g_dps10[1], &r.g_dps10[2]};
+            for (int i = 0; i < 6; ++i) *outp[i] = static_cast<int16_t>(std::max(-32767.0f, std::min(32767.0f, std::round(in[i]))));
+            r.self = self_moving ? 1 : 0;
+        } else {
+            ++raw_over_;
+        }
         const float a = std::sqrt(ax * ax + ay * ay + az * az);
         const float dev = std::fabs(a / kG - 1.0f);
         const float w = std::sqrt(gx * gx + gy * gy + gz * gz);
@@ -143,8 +165,9 @@ public:
     void light(float lux) { lux_ = lux; }
     void magnetic(const float ut[3]) { mag_ = true; std::copy(ut, ut + 3, mag_ut_); }
 
-    // The window's summary once kWindowUs passed since the last one (false before). Resets the window.
-    bool take_summary(int64_t now_us, Summary& s)
+    // The window's summary once kWindowUs passed since the last one (false before). Resets the window. raw (0.5.14):
+    // when given (room for kRawMax), the window's raw samples are copied there and raw_n says how many.
+    bool take_summary(int64_t now_us, Summary& s, RawSample* raw = nullptr, int* raw_n = nullptr, int64_t* raw_t0 = nullptr)
     {
         if (!win_us_) { win_us_ = now_us; return false; }
         if (now_us - win_us_ < kWindowUs) return false;
@@ -162,6 +185,9 @@ public:
         s.held = held_; s.self_moving = self_;
         s.prox = prox_; s.prox_base = base_; s.prox_max = prox_max_; s.near = near_; s.lux = lux_;
         s.mag = mag_; std::copy(mag_ut_, mag_ut_ + 3, s.mag_ut);
+        s.raw_over = raw_over_;
+        if (raw && raw_n) { std::copy(raw_, raw_ + raw_n_, raw); *raw_n = raw_n_; if (raw_t0) *raw_t0 = raw_t0_; }
+        raw_n_ = 0; raw_over_ = 0;
         win_us_ = now_us; n_ = moved_n_ = 0; sx_ = sy_ = sz_ = sa_ = 0; dev_max_ = gyro_max_ = 0; self_ = false; prox_max_ = prox_;
         if (!held_) peak_g_ = peak_dps_ = 0;
         return true;
@@ -194,6 +220,10 @@ private:
     int prox_ = -1, prox_max_ = -1, base_ = -1, near_n_ = 0, far_n_ = 0;
     float lux_ = -1, mag_ut_[3]{};
     Event q_[kEvQueue]{};
+    RawSample raw_[kRawMax]{};
+    int raw_n_ = 0;
+    uint32_t raw_over_ = 0;
+    int64_t raw_t0_ = 0;
     int q_head_ = 0, q_n_ = 0;
 };
 
@@ -201,6 +231,7 @@ private:
 
 namespace collector {
 // collector.cpp: the robot's one Sense (PSRAM, behind its own lock); the vision uplink takes from it.
-bool body_take_summary(int64_t now_us, body::Summary& out);
+bool body_take_summary(int64_t now_us, body::Summary& out, body::RawSample* raw = nullptr, int* raw_n = nullptr,
+                       int64_t* raw_t0 = nullptr);
 bool body_take_event(body::Event& out);
 }

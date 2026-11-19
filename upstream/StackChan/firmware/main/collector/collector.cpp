@@ -2364,11 +2364,11 @@ void run()
 } // namespace collector
 
 namespace collector {
-bool body_take_summary(int64_t now_us, body::Summary& out)
+bool body_take_summary(int64_t now_us, body::Summary& out, body::RawSample* raw, int* raw_n, int64_t* raw_t0)
 {
     std::lock_guard<std::mutex> lock(body_mutex);
     auto* b = body_sense_locked();
-    return b && b->take_summary(now_us, out);
+    return b && b->take_summary(now_us, out, raw, raw_n, raw_t0);
 }
 bool body_take_event(body::Event& out)
 {

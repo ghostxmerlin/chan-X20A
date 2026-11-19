@@ -11,10 +11,15 @@ The robot's own sensors, which used to reach only the Mac monitor:
        its slow baseline, prox_max the window's largest (0.5.13); lux; mag: the BMM150 field (uT). Fields missing when the sensor had nothing.
   {"type":"body_ev","ev":"picked_up|put_down|shaken|near|far","seq":N,"t_us":...,"now_us":...,
    "held_ms"?, "prox"?, "peak_g"?, "peak_dps"?}     one event
+  0.5.14: a summary that was not still also carries "raw_t0_us" and "raw": [[dt_ms, ax, ay, az (milli-g), gx, gy, gz
+       (0.1 dps), self], ...] (the window's 50 Hz samples, at most 64; "raw_over" = how many more there were). Written as
+       one line per summary to <recordings>/body/<session>.jsonl (kept, like every recording), never to Mongo.
 Stored in hello.body (Mongo): every event (kind "ev") and a summary every STORE_EVERY_S or when held / near / still
 changed (kind "sum"); each event is one run-log row seen.body. The hub's 【你的眼睛】 gets line() (身体感觉：...).
 """
 import collections
+import json
+import os
 import time
 
 import ear_log
@@ -40,8 +45,9 @@ def _wall_ms(msg, received_ms):
 
 
 class BodySense:
-    def __init__(self, db=None, clock_ms=None, hub=None):
+    def __init__(self, db=None, clock_ms=None, hub=None, recordings_root=None):
         self.db = db
+        self.recordings_root = recordings_root      # raw samples go to <root>/body/<session>.jsonl
         self.hub = hub                              # the realtime hub: an event refreshes its instructions
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.latest = None                          # the newest summary {fields..., at}
@@ -62,6 +68,7 @@ class BodySense:
         if isinstance(mag, list) and len(mag) == 3 and all(_num(v) for v in mag):
             doc["mag"] = mag
         doc["at"] = _wall_ms(msg, now)
+        self._keep_raw(msg, doc, session)
         self.latest = doc
         self.stats["summaries"] += 1
         flags = tuple(doc.get(k) for k in ("held", "near", "still"))
@@ -70,6 +77,26 @@ class BodySense:
             self.db.body({**doc, "kind": "sum", "session": session, "device": device, "seq": msg.get("seq"),
                           "received": now})
             self.stats["stored"] += 1
+
+    def _keep_raw(self, msg, doc, session):
+        raw = msg.get("raw")
+        if self.recordings_root is None or not session or not isinstance(raw, list) or not raw:
+            return
+        rows = [r for r in raw[:128] if isinstance(r, list) and len(r) == 8 and all(_num(v) for v in r)]
+        if not rows:
+            return
+        safe = "".join(c if c.isalnum() or c in "-_/" else "_" for c in str(session)).strip("/")
+        path = os.path.join(self.recordings_root, "body", safe + ".jsonl")
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({**{k: v for k, v in doc.items()}, "seq": msg.get("seq"), "t_us": msg.get("t_us"),
+                                    "raw_t0_us": msg.get("raw_t0_us"), "raw_over": msg.get("raw_over"), "raw": rows},
+                                   separators=(",", ":")) + "\n")
+            self.stats["raw_lines"] += 1
+        except OSError as e:                         # disk full / permissions: the summary still counts
+            self.stats["raw_failed"] += 1
+            print(f"body raw not stored ({session}): {type(e).__name__}", flush=True)
 
     def on_event(self, msg, session=None, device=None):
         ev = msg.get("ev")

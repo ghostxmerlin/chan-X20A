@@ -112,6 +112,28 @@ class BodySenseTest(unittest.TestCase):
         self.assertEqual(self.logs[0][1]["sum"], "被晃了几下（最猛 1.2 g）")
 
 
+class RawTest(unittest.TestCase):
+    def test_raw_rows_go_to_a_file_not_the_database(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            db = FakeDb()
+            b = body_sense.BodySense(db=db, clock_ms=lambda: T0, recordings_root=root)
+            with mock.patch.object(body_sense.ear_log, "emit", lambda *a, **k: None):
+                b.on_summary(summary(still=False, raw_t0_us=1, raw=[[0, 1, 2, 1000, 5, 6, 7, 0], [20, 1, 2, "x", 5, 6, 7, 0],
+                                                                    [40, 1, 2, 990, 5, 6, 7, 1]]), "20261119/1400-x-v1", "dev")
+            self.assertNotIn("raw", db.rows[0])
+            self.assertNotIn("raw", b.latest)
+            with open(os.path.join(root, "body", "20261119", "1400-x-v1.jsonl")) as f:
+                line = json.loads(f.readline())
+            self.assertEqual(line["raw"], [[0, 1, 2, 1000, 5, 6, 7, 0], [40, 1, 2, 990, 5, 6, 7, 1]])
+            self.assertEqual(b.stats["raw_lines"], 1)
+
+    def test_no_root_no_file(self):
+        b = body_sense.BodySense(clock_ms=lambda: T0)
+        b.on_summary(summary(raw=[[0, 1, 2, 3, 4, 5, 6, 0]]), "s", "d")
+        self.assertEqual(b.stats["raw_lines"], 0)
+
+
 class VisionLinkBodyTest(unittest.TestCase):
     def test_body_messages_go_to_the_hook_after_hello(self):
         got = []

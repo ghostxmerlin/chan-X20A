@@ -100,6 +100,18 @@ int main()
         assert(!s.take_summary(t + 500000, m));
         assert(s.take_summary(t + 1000000, m) && m.seq == 2 && !m.imu && m.samples == 0);
     }
+    {   // raw samples (0.5.14): copied with the summary, scaled, capped at kRawMax, reset per window
+        Sense s; int64_t t = 1000000;
+        Summary m; RawSample raw[kRawMax]; int n = -1; int64_t t0 = 0;
+        assert(!s.take_summary(t, m));
+        for (int i = 0; i < 50; ++i, t += kStep) s.imu(0, kG * 0.5f, kG, 12.34f, 0, -1000, t, i >= 40);
+        assert(s.take_summary(t, m, raw, &n, &t0) && n == 50 && t0 == 1000000);
+        assert(raw[0].dt_ms == 0 && raw[49].dt_ms == 980 && raw[0].a_mg[1] == 500 && raw[0].a_mg[2] == 1000);
+        assert(raw[0].g_dps10[0] == 123 && raw[0].g_dps10[2] == -10000 && raw[0].self == 0 && raw[45].self == 1);
+        for (int i = 0; i < 80; ++i, t += kStep) s.imu(0, 0, kG, 0, 0, 0, t, false);
+        assert(s.take_summary(t + 1000000, m, raw, &n) && n == kRawMax && m.raw_over == 16);
+        assert(s.take_summary(t + 2000000, m, raw, &n) && n == 0);
+    }
     {   // the queue keeps the newest kEvQueue events
         Sense s; int64_t t = 0;
         for (int i = 0; i < 6; ++i) { s.proximity(0, t += 100000); s.proximity(50, t += 100000); s.proximity(50, t += 100000);

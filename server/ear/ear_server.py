@@ -1194,7 +1194,7 @@ def main():
             print(f"realtime (Docking): tool fillers {({g: len(c) for g, c in rt_hub.tool_fillers.items()})}", flush=True)
     print(f"realtime (Docking): {'ready, follows the switch' if rt_hub else 'off (no key, no voice or --realtime off)'}", flush=True)
     # 身体感觉 (collector-0.5.12, owner 2026-11-19): the robot's IMU / proximity / light summary and events, on /vision
-    body = body_sense.BodySense(db=database, hub=rt_hub)
+    body = body_sense.BodySense(db=database, hub=rt_hub, recordings_root=rec_root)
     if rt_hub is not None:
         rt_hub.body = body
     burst = None                                   # 视觉爆发 (2026-11-15): "注意看" in crowd, only with the realtime hub
