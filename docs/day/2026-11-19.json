@@ -1,7 +1,7 @@
 {
  "date": "2026-11-19",
  "title": "今天的工作",
- "updated": "2026-11-19 18:24",
+ "updated": "2026-11-19 19:27",
  "goal": "白天把 1、3、4 做出能用的第一版，2、5 定好做法；下班前定好服务器分层方案，夜里长跑按方案重构。",
  "timeline": [
   {
@@ -210,12 +210,36 @@
      "status": "done"
     },
     {
-     "text": "夜里长跑执行，早上看 docs/longrun-2026-11-19.md 和代码结构页的前后对比",
+     "text": "Fable 审计（受话判断 / 漏答）：smart_turn 下约 80% 的话千问没判定；叫了有话只答 44%，点屏幕 0/5；建议一个裁决器 + 必答看门的。报告 docs/audits/2026-11-19-fable-architecture.md",
+     "status": "done"
+    },
+    {
+     "text": "A 重构：realtime_link 3640 → 1218 行 + 9 个文件，ear_server 1391 → 498 行 + ear_hearing；往上调 11 → 7；每一步和基线逐个比对 0 变化，重构前后离线回放一样",
+     "status": "done"
+    },
+    {
+     "text": "B 必答现状测试（叫了 / 点了之后千问沉默没人答、断线 30 秒内叫不醒，都照实记下）",
+     "status": "done"
+    },
+    {
+     "text": "C 先看见：每句话一张卡片 → 日志 gate.addressed；漏答漏斗页 /funnel.html（部署后有数据）",
+     "status": "done"
+    },
+    {
+     "text": "D 断句对比：千问自己只切出一小部分话，smart_turn 和 server_vad 都低；第二轮（更低门槛）在跑",
      "status": "doing"
     },
     {
-     "text": "Fable 审计（受话判断 / 漏答）：smart_turn 下约 80% 的话千问没判定；叫了有话只答 44%，点屏幕 0/5；建议一个裁决器 + 必答看门的。报告 docs/audits/2026-11-19-fable-architecture.md",
-     "status": "done"
+     "text": "E 必答看门的：在 must-answer-guard 分支，测试通过，等你早上定",
+     "status": "needs_you"
+    },
+    {
+     "text": "没做：mind 的 api.py / tool_impls.py（闭包结构，要改写才能拆）、公告板读写函数、长句里的英文口令词",
+     "status": "later"
+    },
+    {
+     "text": "早上：看 docs/longrun-2026-11-19.md，定部署和看门的",
+     "status": "needs_you"
     }
    ],
    "found": "现状：服务器 7 个进程，耳朵 10.5k 行（realtime_link.py 一个文件 3640 行），mind 15.6k 行；89 个文件，11 处「往上调」。"

@@ -28,7 +28,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import realtime_link as rl  # noqa: E402
 from realtime_offline import CONTEXT, FakeRobot, Modes, Records, Switch, vad_flags  # noqa: E402
 
-SETTINGS = {"smart": ("smart_turn_v2", "vad"), "smart_all": ("smart_turn_v2", "all"), "server_vad": ("server_vad", "vad")}
+# name -> (turn, gate, threshold or None = the live value, silence_ms or None)
+SETTINGS = {"smart": ("smart_turn_v2", "vad", None, None), "smart_all": ("smart_turn_v2", "all", None, None),
+            "server_vad": ("server_vad", "vad", None, None),
+            "server_vad_t04": ("server_vad", "vad", 0.4, 800), "server_vad_t03": ("server_vad", "vad", 0.3, 800),
+            "smart_t03": ("smart_turn_v2", "vad", 0.3, None)}
 VERDICT_S = 6.0
 FRAME = 960                       # 60 ms at 16 kHz, as the ear feeds
 
@@ -48,12 +52,16 @@ def segments(flags):
 
 
 async def run_one(name, clip, flags, key, voice):
-    turn, gate = SETTINGS[name]
+    turn, gate, thr, sil = SETTINGS[name]
     hub_ref = [None]
     robot = FakeRobot(hub_ref)
     hub = rl.RealtimeHub(key=key, voice=voice, modes=Modes(robot), call=lambda *x: (200, CONTEXT), switch=Switch(),
                          db=Records())
     hub.cfg.turn, hub.cfg.gate = turn, gate
+    if thr is not None:
+        hub.cfg.vad_threshold = thr
+    if sil is not None:
+        hub.cfg.silence_ms = sil
     hub_ref[0] = hub
     rl.log = lambda *x, **k: None
     events = []                                   # (t, kind) from Qwen
@@ -92,7 +100,8 @@ async def run_one(name, clip, flags, key, voice):
                      "after_s": round(hit[0] - end_t, 2) if hit else None})
     n = len(rows)
     lat = sorted(r["after_s"] for r in rows if r["after_s"] is not None)
-    return {"setting": name, "turn": turn, "gate": gate, "segments": n,
+    return {"setting": name, "turn": turn, "gate": gate, "threshold": hub.cfg.vad_threshold, "silence_ms": hub.cfg.silence_ms,
+            "segments": n,
             "answer": sum(r["verdict"] == "answer" for r in rows), "ambient": sum(r["verdict"] == "ambient" for r in rows),
             "none": sum(r["verdict"] == "none" for r in rows),
             "covered_pct": round(100 * sum(r["verdict"] != "none" for r in rows) / n, 1) if n else None,
