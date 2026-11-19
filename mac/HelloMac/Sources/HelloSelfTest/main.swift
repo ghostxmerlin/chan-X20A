@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import HelloCore
 
@@ -74,6 +75,152 @@ test("SEA1 / SPK1 / SVF1 framing") {
     let hl = Int([UInt8](f)[4]) | Int([UInt8](f)[5]) << 8
     check(f.prefix(4) == Data("SVF1".utf8) && f.count == 6 + hl + 3, "svf1 layout")
     check(Wire.svf1(header: [:], jpeg: Data(count: 40000)) == nil, "svf1 over 32 KiB refused")
+}
+
+// ---- links (a recording transport, a fake clock) ----
+final class FakeClock { var us: UInt64 = 1_000_000; func now() -> UInt64 { us } }
+let ident = DeviceIdentity(deviceId: "a1b2c3d4e5f6", bootId: "0011223344556677")
+
+test("hearing: declaration, SEA1 seq from 0, self flag before the packet, tick watchdog") {
+    let h = HearingLogic(id: ident), tr = RecordingTransport(), clk = FakeClock()
+    h.transport = tr; h.now = clk.now
+    h.opened()
+    let decl = tr.texts[0]
+    check(decl["type"] as? String == "audio" && decl["framing"] as? String == "sea1" && decl["sample_rate"] as? Int == 24000,
+          "declaration \(decl)")
+    check((decl["source"] as? String ?? "").hasPrefix("stackchan"), "stackchan source")
+    h.feed([Int16](repeating: 100, count: 1440 * 2 + 10), firstUs: 5_000_000)
+    check(tr.datas.count == 2, "two packets")
+    check(tr.types() == ["audio", "self"], "self sent once before the first packet: \(tr.types())")
+    let b0 = [UInt8](tr.datas[0]), b1 = [UInt8](tr.datas[1])
+    check(b0[4] == 0 && b1[4] == 1, "seq 0, 1")
+    check(Wire.le32test(b1, 8) == 5_060_000, "capture time +60 ms")
+    h.setSounding(true)
+    h.feed([Int16](repeating: 0, count: 1440), firstUs: 5_120_000)
+    check(tr.texts.last?["sounding"] as? Bool == true, "self on change")
+    h.received(text: Wire.json(["type": "tick", "seq": 1, "events": [["type": "audio", "format": "opus"]]]))
+    check(h.isAcked && h.ticks == 1, "ack on a tick")
+    clk.us += 3_100_000
+    h.watchdog()
+    check(tr.reconnects.count == 1, "3 s without a tick reconnects")
+}
+
+final class FakeDelegate: MouthDelegate {
+    var verbs: [String] = [], stages: [String] = [], toasts: [String] = [], digits: [Int] = []
+    func command(_ verb: String, args: [String: Any]) -> (ok: Bool, error: String?, data: [String: Any]) {
+        verbs.append(verb); return (true, nil, ["state": args["state"] ?? ""])
+    }
+    func stage(_ stage: String) { stages.append(stage) }
+    func burst(_ m: [String: Any]) {}
+    func toast(_ text: String, code: String) { toasts.append(text) }
+    func snap(id: Int) {}
+    func localDigit(_ value: Int) { digits.append(value) }
+}
+
+test("mouth: hello, boot report, a stream played and reported, tap stops it") {
+    let clk = FakeClock(), out = ClockSpeechOutput(); out.now = clk.now
+    let m = MouthLogic(id: ident, output: out), tr = RecordingTransport(), dg = FakeDelegate()
+    m.transport = tr; m.delegate = dg; m.now = clk.now
+    m.opened()
+    check(tr.texts[0]["type"] as? String == "hello" && tr.texts[0]["boot_id"] as? String == ident.bootId &&
+          (tr.texts[0]["codecs"] as? [String]) == ["opus"], "robot hello")
+    m.received(text: Wire.json(["type": "hello", "codec": "opus", "frame_ms": 60, "sample_rate": 24000]))
+    let rep = tr.texts[1]
+    check(rep["type"] as? String == "mode_report" && rep["mode"] as? String == "crowd" && rep["by"] as? String == "boot" &&
+          rep["input"] as? String == "boot" && (rep["effects"] as? [String]) == ["stop_speech"], "boot report \(rep)")
+    check(!tr.types().contains("mode_input"), "no power-on 9 unless asked")
+    m.received(text: Wire.json(["type": "tts.start", "stream": 0x40000001, "codec": "opus", "sample_rate": 24000, "frame_ms": 60]))
+    check(m.speaking && m.sounding, "speaking")
+    let enc = OpusEncoder()!
+    for i in 0..<5 {
+        let pkt = enc.encode([Int16](repeating: 0, count: 1440))!
+        m.received(data: Wire.makeSpk1(stream: 0x40000001, seq: UInt32(i), opus: pkt))
+    }
+    check(tr.types().contains("tts.playing"), "playing after the prebuffer")
+    m.received(text: Wire.json(["type": "tts.end", "stream": 0x40000001, "frames": 5, "duration_ms": 300]))
+    clk.us += 200_000; out.tick()
+    check(tr.types().contains("tts.progress"), "progress")
+    clk.us += 200_000; out.tick()
+    let done = tr.texts.first { $0["type"] as? String == "tts.done" }
+    check(done?["played_ms"] as? Int == 300, "done with played_ms 300: \(String(describing: done))")
+    check(!m.speaking && m.sounding, "450 ms tail")
+    clk.us += 500_000
+    check(!m.sounding, "tail over")
+    // a second stream; a tap while it plays stops it (crowd: STOP + stop_speech)
+    m.received(text: Wire.json(["type": "tts.start", "stream": 0x40000002, "codec": "opus", "sample_rate": 24000, "frame_ms": 60]))
+    let o = m.touch(double: false)
+    check(o.toast == "STOP" && o.effects == [.stopSpeech], "tap while speaking: \(o.toast)")
+    check(tr.types().contains("tts.stopped") && !m.speaking, "stopped reported")
+    let tapRep = tr.texts.last { $0["type"] as? String == "mode_report" }!
+    check(tapRep["input"] as? String == "tap" && tapRep["by"] as? String == "touch", "tap reported")
+    let quiet = m.touch(double: true)
+    check(quiet.toast == "QUIET", "double tap = quiet")
+}
+
+test("mouth: digits, cmd, stage, power-on 9 until ok") {
+    let clk = FakeClock(), out = ClockSpeechOutput(); out.now = clk.now
+    let m = MouthLogic(id: ident, output: out), tr = RecordingTransport(), dg = FakeDelegate()
+    m.transport = tr; m.delegate = dg; m.now = clk.now; m.powerOnNine = true
+    m.opened()
+    m.received(text: Wire.json(["type": "hello", "codec": "opus", "frame_ms": 60, "sample_rate": 24000]))
+    let nine = tr.texts.first { $0["type"] as? String == "mode_input" }
+    check(nine?["value"] as? Int == 9 && nine?["source"] as? String == "quick", "power-on 9")
+    clk.us += 10_500_000; m.tick()
+    check(tr.texts.filter { $0["type"] as? String == "mode_input" }.count == 2, "resent after 10 s")
+    m.received(text: Wire.json(["type": "mode_result", "seq": 2, "code": "ok", "toast": "ALL ON"]))
+    clk.us += 10_500_000; m.tick()
+    check(tr.texts.filter { $0["type"] as? String == "mode_input" }.count == 2, "not after ok")
+    m.received(text: Wire.json(["type": "cmd", "id": 7, "do": "eyes", "args": ["state": "happy"]]))
+    let r = tr.texts.last!
+    check(r["type"] as? String == "cmd_result" && r["id"] as? Int == 7 && r["ok"] as? Bool == true, "cmd_result \(r)")
+    m.received(text: Wire.json(["type": "chat_stage", "stage": "think", "at_ms": 1]))
+    check(dg.stages == ["think"] && dg.verbs == ["eyes"], "stage + verb")
+    m.sendDigit(0, source: "touch")
+    check(dg.digits.contains(0) && tr.texts.last?["value"] as? Int == 0, "0 = local half + mind")
+    m.sendDigit(6, source: "touch")
+    check(m.modes.state.mode == .companion, "6 = companion locally")
+}
+
+test("vision: hello, events with seq, frames, ping after 15 s") {
+    let v = VisionLogic(id: ident), tr = RecordingTransport(), clk = FakeClock()
+    v.transport = tr; v.now = clk.now
+    v.opened()
+    check(tr.texts[0]["type"] as? String == "hello" && ((tr.texts[0]["device"] as? [String: Any])?["protocol"] as? String) == "soul-vision/1", "hello")
+    v.event("face_found", ["face": 1, "box": [1, 2, 3, 4], "prob": 0.9])
+    check(tr.texts[1]["event"] as? String == "face_found" && tr.texts[1]["seq"] as? Int == 1 && tr.texts[1]["type"] as? String == "vision", "event")
+    v.frame(jpeg: Data([0xFF, 0xD8, 0, 0]), width: 320, height: 240, captureUs: 5, diff: 9, snap: 3)
+    check(tr.datas.count == 1 && tr.datas[0].prefix(4) == Data("SVF1".utf8), "frame")
+    clk.us += 16_000_000; v.keepAlive()
+    check(tr.texts.last?["type"] as? String == "ping", "ping")
+}
+
+test("frame change: first goes, same picture never, a change after 1 s") {
+    var fc = FrameChange()
+    let a = [UInt8](repeating: 100, count: 192)
+    check(fc.shouldSend(a, atUs: 0) != nil, "first")
+    check(fc.shouldSend(a.map { $0 &+ 20 }, atUs: 2_000_000) == nil, "brightness only: no")
+    var b = a; for i in 0..<10 { b[i] = 200 }
+    check(fc.shouldSend(b, atUs: 500_000) == nil, "too soon")
+    check(fc.shouldSend(b, atUs: 2_000_000) == 10, "10 cells changed")
+}
+
+test("faces: found, named once, lost after 1.5 s; the book keeps 20 per name") {
+    let book = FaceBook(url: nil, threshold: 0.9)
+    let me: [Float] = (0..<64).map { Float($0 % 7) + 1 }
+    book.add("owner", me)
+    let tk = FaceTracker(book: book)
+    var ev = tk.update([FaceSeen(box: CGRect(x: 100, y: 100, width: 80, height: 80), prob: 0.95, print: me)], atUs: 1_000_000)
+    check(ev.map(\.0) == ["face_found", "face_named"], "found + named: \(ev.map(\.0))")
+    check(ev[1].1["name"] as? String == "owner", "name")
+    ev = tk.update([FaceSeen(box: CGRect(x: 104, y: 102, width: 80, height: 80), prob: 0.95, print: me)], atUs: 1_200_000)
+    check(ev.isEmpty, "same track, named once")
+    ev = tk.update([], atUs: 2_800_000)
+    check(ev.map(\.0) == ["face_lost"] && ev[0].1["reason"] as? String == "timeout", "lost")
+    let other: [Float] = (0..<64).map { Float(($0 * 13) % 5) - 2 }
+    for i in 0..<3 { ev = tk.update([FaceSeen(box: CGRect(x: 300, y: 50, width: 60, height: 60), prob: 0.9, print: other)], atUs: 3_000_000 + UInt64(i) * 100_000) }
+    check(tk.tracks.count == 1 && tk.tracks[0].decided && tk.tracks[0].name == nil, "a stranger after three looks")
+    for _ in 0..<25 { book.add("owner", me) }
+    check(book.people["owner"]?.count == 20, "20 per name")
 }
 
 var failedTests: [String] = []
