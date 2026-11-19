@@ -305,3 +305,9 @@ test('千问判定: rejections counted, newest first, shown in the drawer',async
  assert.match(html,/他们在聊午饭/);
  assert.doesNotMatch(ui.qwenHtml(ui.qwenSummary([])),/<td>\d\d:/);
 });
+
+test('body sense rows (collector-0.5.12): 见 category, 身 glyph, the event in the title', ()=>{
+ assert.equal(ui.category('seen.body'),'see');
+ assert.equal(ui.kindTitle({kind:'seen.body',extra:{ev:'picked_up'}}),'身体感觉：被拿起来了');
+ assert.equal(ui.kindTitle({kind:'seen.body',extra:{ev:'odd'}}),'身体感觉：odd');
+});

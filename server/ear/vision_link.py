@@ -14,6 +14,8 @@ is online or vision events are waiting. Messages:
          memory for it). Types: wake cover uncover light dark bright enter leave near far look look_end nod shake tilt
          smile; the robot drops any other. Stored like every vision event and one run-log row seen.m12 each; nothing
          reacts to them yet (owner 2026-11-17: 先呈现事件出来).
+  {"type":"body",...} / {"type":"body_ev","ev":...}   the body sense (collector-0.5.12, body_sense.py): to on_body(kind,
+         msg, session, source) when given; nothing stored here
   {"type":"ping"}
   binary "SVF1" + u16le header length + JSON {"type":"frame","seq","t_us","now_us","w","h","diff","bytes"}
          + JPEG: one body-camera frame (collector-0.4.75+), saved under <recordings>/frames/<session>/
@@ -159,9 +161,10 @@ def session_key(source, number, epoch=None):
 
 
 class VisionLink:
-    def __init__(self, db, number, peer, recordings_root=None, on_event=None, on_frame=None):
+    def __init__(self, db, number, peer, recordings_root=None, on_event=None, on_frame=None, on_body=None):
         self.db, self.number, self.peer = db, number, peer
-        self.on_event, self.on_frame = on_event, on_frame
+        self.on_event, self.on_frame, self.on_body = on_event, on_frame, on_body
+        self.body = 0
         self.recordings_root = recordings_root
         self.session = None
         self.device = None                       # the hello's device dict (boot_id)
@@ -214,6 +217,16 @@ class VisionLink:
                         self.on_event(m)
                     except Exception as e:        # noqa: BLE001 - the hook never costs the link
                         print(f"vision hook failed: {type(e).__name__}", flush=True)
+            return None
+        if kind in ("body", "body_ev"):
+            if self.session is None:
+                return {"type": "error", "message": "hello first"}
+            self.body += 1
+            if self.on_body is not None:
+                try:
+                    self.on_body(kind, msg, self.session, self.source)
+                except Exception as e:            # noqa: BLE001 - the hook never costs the link
+                    print(f"body hook failed: {type(e).__name__}", flush=True)
             return None
         if kind == "ping":
             return None
@@ -280,8 +293,8 @@ class VisionLink:
                                                   "frames": self.frames})
 
 
-async def serve_link(ws, db, number, peer, recordings_root=None, on_event=None, on_frame=None):
-    link = VisionLink(db, number, peer, recordings_root, on_event, on_frame)
+async def serve_link(ws, db, number, peer, recordings_root=None, on_event=None, on_frame=None, on_body=None):
+    link = VisionLink(db, number, peer, recordings_root, on_event, on_frame, on_body)
     try:
         while True:
             try:

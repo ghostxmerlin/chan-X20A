@@ -2212,3 +2212,28 @@ class FreeSkillTest(HubBase):
         self.t[0] += 5 * 60 + 1
         self.assertTrue(self.hub._prune_skills(self.t[0]))
         self.assertEqual(set(self.hub._open_skills), {"a"})               # free goes after 5 min, a stays
+
+
+class BodyLineTest(HubBase):
+    """collector-0.5.12 (owner 2026-11-19): the body sense's line goes in 【你的眼睛】; an event re-sends the instructions."""
+    async def test_body_line_in_the_eyes_and_a_broken_body_costs_nothing(self):
+        text = self.rl.instructions("", body="身体感觉：被拿起来了（3 秒前）", skills="技能")
+        eyes = text.index("【你的眼睛】")
+        self.assertGreater(text.index("身体感觉：被拿起来了"), eyes)
+        self.assertLess(text.index("身体感觉"), text.index("【此刻打开的技能】"))
+        self.assertNotIn("身体感觉", self.rl.instructions("", body=None))
+
+        class Body:
+            def __init__(self, line=None, boom=False):
+                self.l, self.boom = line, boom
+
+            def line(self, now_ms):
+                if self.boom:
+                    raise RuntimeError("x")
+                return self.l
+        self.hub.body = Body("身体感觉：有东西靠得很近（1 秒前）")
+        self.assertEqual(self.hub._body_line(), "身体感觉：有东西靠得很近（1 秒前）")
+        self.hub.body = Body(boom=True)
+        self.assertIsNone(self.hub._body_line())
+        self.hub.body_changed()
+        self.assertTrue(self.hub._looks_dirty or self.hub._ws is None)

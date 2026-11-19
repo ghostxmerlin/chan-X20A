@@ -389,4 +389,8 @@ protected:
     uitk::SpringOptions_t map_speed_to_spring_options(int speed);
 };
 
+// collector-0.5.12 (body sense): GetHAL().millis() of the newest goal written to any servo, 0 = never. Read from other
+// tasks (the IMU's, to tell the head's own motion from being handled); one relaxed atomic, no bus access.
+uint32_t last_goal_write_ms();
+
 }  // namespace stackchan::motion

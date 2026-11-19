@@ -148,6 +148,11 @@ class HelloDB:
             key["ev"] = doc["ev"]
         self._put("upsert", "vision", key, doc)
 
+    def body(self, doc):
+        """One body-sense row (body_sense.py, collector-0.5.12): kind "ev" (every event) or "sum" (a summary, sampled)."""
+        self._put("upsert", "body", {"session": doc.get("session"), "kind": doc.get("kind"), "seq": doc.get("seq"),
+                                     "received": doc.get("received")}, doc)
+
     def realtime_turn(self, doc):
         """One 围观 realtime response (timings, transcript lengths, usage, cost; never text)."""
         self._put("upsert", "realtime_turns", {"tid": doc["tid"]}, doc)

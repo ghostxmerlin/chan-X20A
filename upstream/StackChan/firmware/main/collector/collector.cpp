@@ -9,6 +9,7 @@
 #include "playback.h"
 #include "hearing.h"
 #include "vision_uplink.h"
+#include "body_sense.h"
 #include "mouth_link.h"
 #include "robot_cmd.h"
 #include "burst_indicator.h"
@@ -39,6 +40,7 @@
 #include <hal/board/hal_bridge.h>
 #include <hal/board/stackchan_display.h>
 #include <hal/drivers/bmi270/bmi270.h>
+#include <stackchan/motion/servo.h>
 #include <hal/drivers/environment/ltr553.h>
 #include <hal/drivers/environment/optical_runtime.h>
 #include <hal/drivers/Si12T/Si12T.h>
@@ -151,6 +153,23 @@ environment::OpticalRuntimeDiagnostic optical_runtime;
 // Removing it concurrently with unrelated board I2C traffic is not supported by
 // IDF and can fail with "Wrong I2C status". Do not hot-remove this fixed device.
 i2c_master_dev_handle_t optical_device = nullptr;
+// Body sense (collector-0.5.12, body_sense.h): fed by the sensor and environment tasks, taken by the vision uplink.
+// In PSRAM (created on first use); body_mutex is never held together with sensor_mutex.
+std::mutex body_mutex;
+body::Sense* body_state = nullptr;
+body::Sense* body_sense_locked()
+{
+    if (!body_state) {
+        void* mem = heap_caps_calloc(1, sizeof(body::Sense), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (mem) body_state = new (mem) body::Sense();
+    }
+    return body_state;
+}
+bool self_moving_now()
+{
+    const uint32_t goal = stackchan::motion::last_goal_write_ms();
+    return goal && static_cast<uint32_t>(esp_timer_get_time() / 1000) - goal < body::kSelfMoveMs;
+}
 constexpr size_t kImuHistory = 100; // 2 seconds at 50 Hz; loss after this is reported.
 std::array<Sensors, kImuHistory> imu_history;
 std::vector<SsidItem> networks;
@@ -442,11 +461,22 @@ void sensor_task(void*)
         }
         sample.timestamp_us = esp_timer_get_time();
         ++sample.seq;
+        environment::MagneticSample mag;
         {
             std::lock_guard<std::mutex> lock(sensor_mutex);
             sensors = sample;
             magnetic_sample = imu.getMagnetometer();
+            mag = magnetic_sample;
             imu_history[sample.seq % kImuHistory] = sample;
+        }
+        if (sample.imu_valid) {
+            const bool self = self_moving_now();
+            std::lock_guard<std::mutex> lock(body_mutex);
+            if (auto* b = body_sense_locked()) {
+                const auto& d = sample.imu;
+                b->imu(d.accel_x, d.accel_y, d.accel_z, d.gyro_x, d.gyro_y, d.gyro_z, sample.imu_us, self);
+                if (mag.valid) b->magnetic(mag.field_ut);
+            }
         }
         xTaskDelayUntil(&wake, pdMS_TO_TICKS(20));
     }
@@ -520,9 +550,18 @@ void environment_task(void*)
                     [](TickType_t* previous, TickType_t period) { return xTaskDelayUntil(previous, period) == pdTRUE; },
                     [](TickType_t ticks) { vTaskDelay(ticks); }, [] { return xTaskGetTickCount(); });
                 optical.poll();
-                std::lock_guard<std::mutex> lock(sensor_mutex);
-                light_sample = optical.light(); proximity_sample = optical.proximity();
-                optical_runtime = bus_io.runtime;
+                const auto light = optical.light();
+                const auto prox = optical.proximity();
+                {
+                    std::lock_guard<std::mutex> lock(sensor_mutex);
+                    light_sample = light; proximity_sample = prox;
+                    optical_runtime = bus_io.runtime;
+                }
+                std::lock_guard<std::mutex> lock(body_mutex);
+                if (auto* b = body_sense_locked()) {
+                    if (prox.valid && prox.has_raw && !prox.saturated) b->proximity(prox.raw, prox.timestamp_us);
+                    if (light.valid) b->light(light.lux);
+                }
             }
         }
     }
@@ -2323,3 +2362,18 @@ void run()
     }
 }
 } // namespace collector
+
+namespace collector {
+bool body_take_summary(int64_t now_us, body::Summary& out)
+{
+    std::lock_guard<std::mutex> lock(body_mutex);
+    auto* b = body_sense_locked();
+    return b && b->take_summary(now_us, out);
+}
+bool body_take_event(body::Event& out)
+{
+    std::lock_guard<std::mutex> lock(body_mutex);
+    auto* b = body_sense_locked();
+    return b && b->take_event(out);
+}
+}

@@ -46,6 +46,7 @@ import recorder
 import ear_log
 import hello_db
 import vision_link
+import body_sense
 import signal_link
 import tingwu as tingwu_rt
 import tingwu_switch
@@ -1039,7 +1040,8 @@ def _frame_hooks(burst, live_eye):
     return on_frame
 
 
-async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=None, presence=None, live_eye=None):
+async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=None, presence=None, live_eye=None,
+                       body=None):
     """One /vision connection (vision_link.py), with its run-log link.open / link.close. -> the VisionLink.
     Every M12 event goes to presence first (a face lifts an away pause here at once), then to 围观."""
     print(f"+ {peer} vision v{number}", flush=True)
@@ -1054,7 +1056,8 @@ async def serve_vision(ws, peer, number, database, rec_root, rt_hub=None, burst=
     try:
         link = await vision_link.serve_link(ws, database, number, f"{peer[0]}:{peer[1]}", rec_root,
                                             on_event=on_event if rt_hub or presence is not None else None,
-                                            on_frame=_frame_hooks(burst, live_eye))
+                                            on_frame=_frame_hooks(burst, live_eye),
+                                            on_body=body.on_link if body is not None else None)
     finally:
         if presence is not None:
             presence.vision_closed(number)
@@ -1190,6 +1193,10 @@ def main():
             rt_hub.tool_fillers = realtime_link.load_tool_fillers(rt_hub.filler_base, a.realtime_voice)
             print(f"realtime (Docking): tool fillers {({g: len(c) for g, c in rt_hub.tool_fillers.items()})}", flush=True)
     print(f"realtime (Docking): {'ready, follows the switch' if rt_hub else 'off (no key, no voice or --realtime off)'}", flush=True)
+    # 身体感觉 (collector-0.5.12, owner 2026-11-19): the robot's IMU / proximity / light summary and events, on /vision
+    body = body_sense.BodySense(db=database, hub=rt_hub)
+    if rt_hub is not None:
+        rt_hub.body = body
     burst = None                                   # 视觉爆发 (2026-11-15): "注意看" in crowd, only with the realtime hub
     if rt_hub is not None:
         burst = vision_burst.VisionBurst(rt_hub, vision_burst.dashscope_look(secrets["DASHSCOPE_API_KEY"]), db=database)
@@ -1304,7 +1311,7 @@ def main():
             vision_no[0] += 1
             try:
                 await serve_vision(ws, ws.remote_address, vision_no[0], database, rec_root, rt_hub, burst, presence,
-                                   live_eye)
+                                   live_eye, body)
             finally:
                 vision_active.discard(ws)
             return

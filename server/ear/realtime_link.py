@@ -208,6 +208,8 @@ PERSONA_RULES = (
     "“注视”是有人让你“注意看”之后你一张一张仔细看到的照片（新的在前，最准）。有人问你能不能看见、看到了谁、看到了什么，"
     "就把这两样合起来回答：谁在（认得的叫名字，不认得的说个大概），在做什么，周围什么样；"
     "两样都没有，就说现在没看清。不要说自己没有眼睛、看不见。\n"
+    "- 你也有身体感觉：【你的眼睛】里的“身体感觉”来自机身的传感器（被拿起来、放下、晃了几下、有东西靠得很近）。"
+    "刚发生的可以自然地带一句（比如被拿起来时问一句要带我去哪），不要每次都提；没有这一行就是身体好好放着。\n"
     "- 有人问刚才、最近、今天早些时候发生了什么、聊了什么，先照背景里的“最近的情景”和“最近的纪要”回答，"
     "可以带上大概的时间；里面没有的就说不记得了，不要编。")
 PERSONA = build_persona(load_persona())
@@ -512,7 +514,7 @@ def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
 
 
 def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None, role=None, manner=None,
-                 persona=None, skills=None, speaker=None):
+                 persona=None, skills=None, speaker=None, body=None):
     """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
     where the voice model tended to miss them; owner 2026-11-14). looks: look_lines() of the vision burst (else mind's
     注视： line, if the context has one)."""
@@ -550,6 +552,8 @@ def instructions(context_text=None, seen=None, recent=None, looks=None, scene=No
         eyes.append(f"摄像头刚拍到的（{scene}）")
     elif eye.get("画面："):
         eyes.append(f"摄像头照片识图（大约一分钟前）：{eye['画面：']}")
+    if body:                                           # 身体感觉 (collector-0.5.12): IMU / proximity events, held now
+        eyes.append(body)
     if eyes:
         out += "\n\n【你的眼睛】\n" + "\n".join(eyes)
     if skills:                                         # the open skills' full text (owner 2026-11-18): here, not in the
@@ -1059,6 +1063,7 @@ class RealtimeHub:
         self._search_filler_last = None
         self._look_question = None
         self.burst = None                              # vision_burst.VisionBurst (ear_server wires it)
+        self.body = None                               # body_sense.BodySense (ear_server wires it; collector-0.5.12)
         self._looks = collections.deque(maxlen=LOOKS_KEEP)    # (at wall ms, text): memory only, never logged
         self._looks_dirty, self._looks_sent_at = False, None
         self._seg = None                                 # the segment in progress {start, trace} (speech_started .. stopped)
@@ -1570,7 +1575,18 @@ class RealtimeHub:
         self._looks_dirty, self._looks_sent_at = False, self.clock()
         return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()),
                             self._scene_line(), self._length_line(), self._role_line(), self._manner_line(),
-                            self.persona, self._skills_block(), self._speaker_text())
+                            self.persona, self._skills_block(), self._speaker_text(), self._body_line())
+
+    def _body_line(self):
+        try:
+            return self.body.line(self.wall_ms()) if self.body is not None else None
+        except Exception:                              # noqa: BLE001 - a body-sense bug never costs the instructions
+            return None
+
+    def body_changed(self):
+        """A body event (picked up, put down, shaken, near / far): re-send the instructions (debounced like a look)."""
+        self._looks_dirty = True
+        self._push_looks(self.clock())
 
     # ---- reply length (see LENGTH_S) ----
     def _length_mode(self, now=None):

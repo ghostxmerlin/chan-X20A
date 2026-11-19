@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "vision_uplink.h"
+#include "body_sense.h"
 #include "camera_frames.h"
 #include "hearing.h"
 #include "hearing_socket.h"
@@ -13,6 +14,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <new>
@@ -84,7 +86,48 @@ void fill(ArduinoJson::JsonDocument& msg, const M12VisionEvent& v, uint32_t seq,
     if (v.reason[0]) msg["reason"] = std::string(v.reason);
 }
 
-bool wanted() { return m12_snapshot().online || m12_vision_pending() > 0 || camera_streaming(); }
+// 0.5.12: the body sense goes once a second whatever the M12 does, so the link stays up whenever a backend is set
+// (it used to close 30 s after the M12 went offline with nothing queued).
+bool wanted() { return true; }
+
+float r2(float v) { return std::round(v * 100.0f) / 100.0f; }
+
+// Body sense (0.5.12, body_sense.h): the events first, then the window's summary when one is due. false only when
+// the socket failed (a taken event is not put back).
+bool send_body(hearing::HearingSocket& socket, bool& sent_any)
+{
+    body::Event e;
+    for (int i = 0; i < 4 && body_take_event(e); ++i) {
+        ArduinoJson::JsonDocument msg;
+        msg["type"] = "body_ev"; msg["ev"] = body::ev_name(e.ev); msg["seq"] = e.seq;
+        msg["t_us"] = e.t_us; msg["now_us"] = esp_timer_get_time();
+        if (e.held_ms >= 0) msg["held_ms"] = e.held_ms;
+        if (e.prox >= 0) msg["prox"] = e.prox;
+        if (e.peak_g > 0) msg["peak_g"] = r2(e.peak_g);
+        if (e.peak_dps > 0) msg["peak_dps"] = std::round(e.peak_dps);
+        if (!send_doc(socket, msg)) return false;
+        sent_any = true;
+    }
+    body::Summary s;
+    if (!body_take_summary(esp_timer_get_time(), s)) return true;
+    ArduinoJson::JsonDocument msg;
+    msg["type"] = "body"; msg["seq"] = s.seq; msg["t_us"] = s.t_us; msg["now_us"] = esp_timer_get_time();
+    msg["n"] = s.samples;
+    if (s.imu) {
+        msg["pitch"] = r2(s.pitch_deg); msg["roll"] = r2(s.roll_deg); msg["acc_g"] = r2(s.acc_g);
+        msg["dev_g"] = r2(s.dev_max_g); msg["gyro"] = std::round(s.gyro_max_dps); msg["moved"] = r2(s.moved);
+    }
+    msg["still"] = s.still; msg["held"] = s.held; msg["self"] = s.self_moving;
+    if (s.prox >= 0) { msg["prox"] = s.prox; msg["prox_base"] = s.prox_base; msg["near"] = s.near; }
+    if (s.lux >= 0) msg["lux"] = r2(s.lux);
+    if (s.mag) {
+        auto m = msg["mag"].to<ArduinoJson::JsonArray>();
+        for (float v : s.mag_ut) m.add(r2(v));
+    }
+    if (!send_doc(socket, msg)) return false;
+    sent_any = true;
+    return true;
+}
 
 // "SVF1" + u16le header length + JSON header + JPEG, built in PSRAM. false only when the socket
 // failed; a frame that is too big or finds no memory is skipped (counted) and the link stays.
@@ -179,6 +222,8 @@ void run(void*)
                     std::lock_guard<std::mutex> lock(mutex); ++sent; last_sent_us = esp_timer_get_time();
                 }
             }
+            bool body_sent = false;
+            if (ok) ok = send_body(socket, body_sent);
             bool frame_sent = false;
             // 0.4.98 (review 2026-11-15): M12 events first. A frame (up to 3 s to send) never goes while events
             // are still queued or a crowd-tap look is running; it is skipped, not queued: the next pass takes the
@@ -231,7 +276,7 @@ void run(void*)
                 }
             }
             const int64_t now = esp_timer_get_time();
-            if (n || frame_sent) last_tx = now;
+            if (n || frame_sent || body_sent) last_tx = now;
             if (ok && now - last_tx >= kPingUs) {
                 ArduinoJson::JsonDocument ping; ping["type"] = "ping";
                 ok = send_doc(socket, ping); last_tx = now;

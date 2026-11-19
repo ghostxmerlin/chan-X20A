@@ -10,6 +10,8 @@ namespace collector {
 // independent of continuous hearing. Same backend host, port and token as hearing, path
 // "/vision". One task (PSRAM stack) connects whenever the backend is configured, reconnects
 // on its own, and drains m12_take_vision_events(); events wait in the M12 queue meanwhile.
+// 0.5.12: also the body sense (body_sense.h): {"type":"body",...} once a second and {"type":"body_ev","ev":...}; the
+// link now stays up whenever a backend is configured.
 void vision_uplink_init(const std::string& device_id, const std::string& boot_id);
 void vision_uplink_json(ArduinoJson::JsonObject out);
 

@@ -5,6 +5,7 @@
  */
 #include "servo.h"
 #include <hal/hal.h>
+#include <atomic>
 #include <cmath>
 
 using namespace uitk;
@@ -82,8 +83,16 @@ void Servo::update()
     }
 }
 
+static std::atomic<uint32_t> g_last_goal_write_ms{0};
+
+uint32_t last_goal_write_ms()
+{
+    return g_last_goal_write_ms.load(std::memory_order_relaxed);
+}
+
 void Servo::note_goal_write()
 {
+    g_last_goal_write_ms.store(GetHAL().millis() | 1u, std::memory_order_relaxed);   // never 0 once written
     _rest_released        = false;
     _last_goal_write_tick = _last_tick;
     _hold_pending         = true;
