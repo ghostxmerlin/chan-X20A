@@ -38,7 +38,12 @@ class DebugModeTest(unittest.TestCase):
                                         "debug": {"since_ms": T0, "until_ms": None, "open": True}}, upsert=True)
 
     def say(self, at, text, own=False):
-        self.db["speech"].insert_one({"t": at, "text": text, "speaker": {"name": "me"}, "self": own})
+        # the ear's real shape (2026-11-19 bug): self = {sounding, moving}; hello's own line = her text while sounding
+        if own:
+            from mind import selfvoice
+            selfvoice.set_spoken([text])
+        self.db["speech"].insert_one({"t": at, "text": text, "speaker": {"name": "me"},
+                                      "self": {"sounding": own, "moving": False}})
 
     def test_notes_alert_and_end(self):
         self.assertEqual(self.w.tick(), "off")

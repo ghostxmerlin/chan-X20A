@@ -21,7 +21,7 @@ import re
 import threading
 import time
 
-from . import docs_kb, model_calls, pause
+from . import docs_kb, model_calls, pause, selfvoice
 from .runlog import hello_log
 
 COLL = "debug_sessions"
@@ -123,7 +123,10 @@ class Worker:
         doc = self.session(st["since_ms"])
         rows = list(self.db["speech"].find({"t": {"$gt": doc["scanned_to"], "$lte": now}},
                                            {"_id": 0, "t": 1, "text": 1, "speaker": 1, "self": 1}).sort("t", 1).limit(80))
-        rows = [r for r in rows if not r.get("self") and (r.get("text") or "").strip()]
+        # hello's own voice is not what somebody said (as recent_speech does): `self` is {sounding, moving}, not a flag
+        # (2026-11-19 17:00: every row was dropped as hello's own and the first session got no notes)
+        rows = [r for r in rows if (r.get("text") or "").strip() and
+                not selfvoice.is_hello(r.get("text") or "", bool((r.get("self") or {}).get("sounding")))]
         if not rows:
             return "quiet"
         if len(rows) < NEW_MIN and now - self.last_scan < SCAN_S * 1000:
