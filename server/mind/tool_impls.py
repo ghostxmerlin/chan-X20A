@@ -75,7 +75,7 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
         data = {"switches": out,
                 "mouth": {"mode": mouth, "title": MOUTH_TITLES.get(mouth, mouth)},
                 "pause": {"paused": bool(p.get("paused")), "why": PAUSE_WHY.get(p.get("why"), p.get("why")),
-                          "spent_cny": p.get("spent_cny"), "cap_cny": p.get("cap_cny")}}
+                          "spent_usd": p.get("spent_usd"), "cap_usd": p.get("cap_usd")}}
         if "billing" in sw:
             data["billing_on"] = bool(sw["billing"].get("on"))
         return data

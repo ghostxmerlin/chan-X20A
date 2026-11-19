@@ -138,7 +138,7 @@ export function formFromSettings(s){
   speech_text:!!s.sources?.speech_text,tingwu:!!s.sources?.tingwu,sounds:!!s.sources?.sounds,vision:!!s.sources?.vision,
   fusion_enabled:!!s.fusion?.enabled,model:s.fusion?.model||'gpt-6-luna',persona:s.persona||'',
   // the one daily cap and the away pause (2026-11-17, server/mind/pause.py)
-  cap_cny:s.pause?.cap_cny_per_day??20,usd_cny:s.pause?.usd_cny??7.2,away_min:s.pause?.away_min??10};
+  cap_usd:s.pause?.cap_usd_per_day??10,usd_cny:s.pause?.usd_cny??7.2,away_min:s.pause?.away_min??10};
 }
 export function settingsFromForm(v,base){
  const s=JSON.parse(JSON.stringify(base||{}));
@@ -148,8 +148,8 @@ export function settingsFromForm(v,base){
  s.work={...(s.work||{}),days:list(v.work_days).map(Number),start:v.work_start,end:v.work_end};
  s.sources={...(s.sources||{}),speech_text:v.speech_text,tingwu:v.tingwu,sounds:v.sounds,vision:v.vision};
  s.fusion={...(s.fusion||{}),enabled:v.fusion_enabled,model:v.model};
- s.pause={...(s.pause||{}),cap_cny_per_day:Number(v.cap_cny),usd_cny:Number(v.usd_cny),away_min:Number(v.away_min)};
- delete s.budget_usd_per_day;                     // replaced by pause.cap_cny_per_day (2026-11-17)
+ s.pause={...(s.pause||{}),cap_usd_per_day:Number(v.cap_usd),usd_cny:Number(v.usd_cny),away_min:Number(v.away_min)};
+ delete s.budget_usd_per_day;delete s.pause.cap_cny_per_day;   // money in USD (2026-11-19): pause.cap_usd_per_day
  return s;
 }
 const chk=(name,on,label)=>`<label class="chk"><input type="checkbox" name="${name}"${on?' checked':''}> ${escapeHtml(label)}</label>`;
@@ -166,7 +166,7 @@ export function settingsHtml(v,names){
  <fieldset><legend>工作时段</legend><label>工作日（1=周一）<input name="work_days" value="${escapeHtml(v.work_days)}"></label><label>从<input name="work_start" value="${escapeHtml(v.work_start)}"></label><label>到<input name="work_end" value="${escapeHtml(v.work_end)}"></label></fieldset>
  <fieldset><legend>交给模型的信息</legend>${chk('speech_text',v.speech_text,'话的内容')}${chk('tingwu',v.tingwu,'听悟')}${chk('sounds',v.sounds,'声音事件')}${chk('vision',v.vision,'视觉')}</fieldset>
  <fieldset><legend>模型</legend>${chk('fusion_enabled',v.fusion_enabled,'每分钟融合')}<label>模型<select name="model">${['gpt-6-luna','gpt-6.1-terra'].map(m=>`<option${m===v.model?' selected':''}>${m}</option>`).join('')}</select></label></fieldset>
- <fieldset><legend>花费上限和没人暂停</legend><label>每天花费上限（元，所有付费项合计：听悟、Docking、识图、说话、模型；北京时间按天）<input name="cap_cny" value="${escapeHtml(v.cap_cny)}"></label><label>美元折算人民币<input name="usd_cny" value="${escapeHtml(v.usd_cny)}"></label><label>没人多少分钟后暂停付费项（没看到脸、没听到认识的声音、没按开关）<input name="away_min" value="${escapeHtml(v.away_min)}"></label></fieldset>
+ <fieldset><legend>花费上限和没人暂停</legend><label>每天花费上限（美元，所有付费项合计：听悟、Docking、识图、说话、模型；北京时间按天）<input name="cap_usd" value="${escapeHtml(v.cap_usd)}"></label><label>美元折算人民币<input name="usd_cny" value="${escapeHtml(v.usd_cny)}"></label><label>没人多少分钟后暂停付费项（没看到脸、没听到认识的声音、没按开关）<input name="away_min" value="${escapeHtml(v.away_min)}"></label></fieldset>
  <label>性格与语气（现在只存不用）<textarea name="persona" rows="2">${escapeHtml(v.persona)}</textarea></label>
  <label>修改说明<input name="note" placeholder="比如：补上同事A"></label>`;
 }
@@ -176,7 +176,7 @@ function readForm(root){
  return {self_facts:val('self_facts'),environment:val('environment'),place:val('place'),owner_display:val('owner_display'),owner_aliases:val('owner_aliases'),owner_voice:checked('owner_voice'),owner_face:checked('owner_face'),
   people:[...root.querySelectorAll('.person')].map(p=>({display:p.querySelector('[name=p_display]').value,voice:p.querySelector('[name=p_voice]').value,face:p.querySelector('[name=p_face]').value})),
   work_days:val('work_days'),work_start:val('work_start'),work_end:val('work_end'),speech_text:on('speech_text'),tingwu:on('tingwu'),sounds:on('sounds'),vision:on('vision'),
-  fusion_enabled:on('fusion_enabled'),model:val('model'),cap_cny:val('cap_cny'),usd_cny:val('usd_cny'),away_min:val('away_min'),persona:val('persona'),note:val('note')};
+  fusion_enabled:on('fusion_enabled'),model:val('model'),cap_usd:val('cap_usd'),usd_cny:val('usd_cny'),away_min:val('away_min'),persona:val('persona'),note:val('note')};
 }
 async function postJson(path,obj){
  const r=await fetch('/api/mind'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj),signal:AbortSignal.timeout(210000)});

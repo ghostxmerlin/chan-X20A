@@ -100,7 +100,7 @@ def validate(s):
         if not isinstance(src.get(k), bool):
             errs.append(f"sources.{k}: true or false")
     pz = settings_mod._merge(settings_mod.DEFAULTS["pause"], s.get("pause") if isinstance(s.get("pause"), dict) else {})
-    for key, lo, hi in (("away_min", 1, 240), ("cap_cny_per_day", 0.5, 1000), ("usd_cny", 1, 20)):
+    for key, lo, hi in (("away_min", 1, 240), ("cap_usd_per_day", 0.1, 200), ("usd_cny", 1, 20)):
         v = pz.get(key)
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi):
             errs.append(f"pause.{key}: number {lo}–{hi}")

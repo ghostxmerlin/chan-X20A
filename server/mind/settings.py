@@ -30,7 +30,8 @@ DEFAULTS = {
     # The one daily cap and the away pause (2026-11-17, mind/pause.py): today's spend over every paid item (the run
     # log's ledger, USD at usd_cny) against cap_cny_per_day; nobody seen / known voice / owner input for away_min
     # minutes pauses the paid items. Replaces budget_usd_per_day (mind's own model calls only), which is not read.
-    "pause": {"away_min": 10, "cap_cny_per_day": 20.0, "usd_cny": 7.2},
+    # owner 2026-11-19: money in USD, the daily cap is $10 (was cap_cny_per_day ¥20, no longer read; dropped on save)
+    "pause": {"away_min": 10, "cap_usd_per_day": 10.0, "usd_cny": 7.2},
     "speech": speech_settings.defaults(),
     "memory": {"learning": True, "apply": True},
     # 深入研究 (2026-11-18, mind/research.py): aihubmix model (Responses API + web_search), the per-task cap (counted in
@@ -46,6 +47,8 @@ def drop_legacy(s):
     if isinstance(s, dict):
         for k in LEGACY_KEYS:
             s.pop(k, None)
+        if isinstance(s.get("pause"), dict):
+            s["pause"].pop("cap_cny_per_day", None)      # replaced by pause.cap_usd_per_day (2026-11-19)
     return s
 
 

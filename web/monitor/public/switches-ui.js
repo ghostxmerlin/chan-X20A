@@ -52,12 +52,12 @@ export function switchView(robot,fresh,mind,switches=null){
  const rRunning=!rKnown||rs.stale?null:Array.isArray(rs.running)?rs.running.length>0:null;
  const meet={known:rKnown,on:rOn,can:rKnown&&(rOn||rAvail!==false),running:rRunning,
   detail:!rKnown?'Docking 服务未连接':rAvail===false?'服务器没配语音模型':!rOn?'闭嘴：Docking 不说话':
-   rRunning===true?'正在对话（约 0.003 元/轮）':rRunning===null?'状态未知':'待命：Docking 模式有人说话就开口'};
+   rRunning===true?'正在对话（约 $0.0004/轮）':rRunning===null?'状态未知':'待命：Docking 模式有人说话就开口'};
  let cost;
  if(!hearingKnown||!mindKnown)cost='花费状态未知';
  else{
   const paying=[];
-  if(tingwuRunning===true)paying.push('听悟（约 0.9 元/小时）');
+  if(tingwuRunning===true)paying.push('听悟（约 $0.13/小时）');
   const tingwuUnknown=tingwuRunning===null&&hearing.on&&(tingwuOn||!swKnown)&&tingwuAvailable!==false;
   if(m.on&&senses)paying.push('情景模型');
   const eyeSelected=eyeOn&&camOn&&eyeAvailable!==false;
@@ -75,12 +75,14 @@ export function switchView(robot,fresh,mind,switches=null){
 // pause.away_min minutes, or when today's spend over everything paid reached the one daily cap; the switches stay as
 // the owner left them. /api/mind/switches carries it as `pause`. Times in Beijing time, like the log page.
 const BJ_TIME=ms=>new Date(ms).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
-const yuan=v=>typeof v==='number'?'¥'+v.toFixed(2):'未知';
+const usd=v=>typeof v==='number'?'$'+v.toFixed(2):'未知';     // money in USD (owner 2026-11-19)
 export function pauseView(switches){
  const p=switches?.pause;
  if(!p||!p.known)return {known:false,paused:false,spend:'今天花费：未知',text:'',cls:''};
- const cap=typeof p.cap_cny==='number'?'¥'+(Number.isInteger(p.cap_cny)?p.cap_cny:p.cap_cny.toFixed(2)):'?';
- const spend=`今天 ${yuan(p.spent_cny)} / ${cap}`+(p.override?'（已按 9 放行）':p.warn&&!p.over?'（已过 80%）':'');
+ const rate=typeof p.usd_cny==='number'&&p.usd_cny>0?p.usd_cny:7.2;
+ const $u=(u,c)=>typeof u==='number'?u:typeof c==='number'?c/rate:null;
+ const capU=$u(p.cap_usd,p.cap_cny),cap=capU==null?'?':'$'+(Number.isInteger(capU)?capU:capU.toFixed(2));
+ const spend=`今天 ${usd($u(p.spent_usd,p.spent_cny))} / ${cap}`+(p.override?'（已按 9 放行）':p.warn&&!p.over?'（已过 80%）':'');
  if(!p.paused)return {known:true,paused:false,spend,text:'',cls:p.warn?'warn':''};
  const why=[];
  if(p.reasons?.includes('budget'))why.push('今天花费到上限（北京时间 0 点、按 9 或调高上限恢复）');
@@ -92,7 +94,7 @@ export function pauseView(switches){
 export function mouthView(switches){
  const mode=switches?.mouth?.mode;
  if(!['off','clips','tts'].includes(mode))return {known:false,mode:'unknown',detail:'状态未知'};
- return {known:true,mode,detail:{clips:'听到说话按情绪放 SD 台词',tts:'情绪台词关；用下面的按钮说（每句约 ¥0.005）',off:'不放台词，也不说'}[mode]};
+ return {known:true,mode,detail:{clips:'听到说话按情绪放 SD 台词',tts:'情绪台词关；用下面的按钮说（每句约 $0.0007）',off:'不放台词，也不说'}[mode]};
 }
 export function mouthRequest(mode){return {kind:'switch',body:{name:'mouth',mode}};}
 
@@ -169,7 +171,7 @@ export class SwitchBar{
   const hearing='<div class="switch switch-group" id="sw-hearing" role="group" aria-label="听觉档位"><b>听觉</b><span id="sw-hearing-state">—</span>'+
    LEVELS.map(([k,label])=>`<button id="sw-hearing-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-hearing-detail">—</small></div>';
   const vision='<div class="switch switch-group" id="sw-vision" role="group" aria-label="视觉档位"><b>视觉</b><span id="sw-vision-state">—</span>'+
-   VLEVELS.map(([k,label])=>`<button id="sw-vision-${k}" aria-pressed="false" disabled${k==='recognize'?' title="每分钟用 haiku 看一次画面（约 2 元/天）"':''}>${label}</button>`).join('')+'<small id="sw-vision-detail">—</small></div>';
+   VLEVELS.map(([k,label])=>`<button id="sw-vision-${k}" aria-pressed="false" disabled${k==='recognize'?' title="每分钟用 haiku 看一次画面（约 $0.28/天）"':''}>${label}</button>`).join('')+'<small id="sw-vision-detail">—</small></div>';
   const mouth='<div class="switch switch-group" id="sw-mouth" role="group" aria-label="嘴"><b>嘴</b><span id="sw-mouth-state">—</span>'+
    MLEVELS.map(([k,label])=>`<button id="sw-mouth-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-mouth-detail">—</small></div>';
   root.innerHTML=hearing+vision+mouth+['mind','notes','meet'].map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+

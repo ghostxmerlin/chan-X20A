@@ -69,7 +69,7 @@ class FrameworkTest(unittest.TestCase):
 
 class Pause:
     def view(self, now):
-        return {"paused": True, "why": "away", "spent_cny": 3.2, "cap_cny": 20}
+        return {"paused": True, "why": "away", "spent_cny": 3.2, "cap_cny": 72, "spent_usd": 0.444, "cap_usd": 10.0}
 
 
 class MindToolsTest(unittest.TestCase):
@@ -88,7 +88,7 @@ class MindToolsTest(unittest.TestCase):
         d = self.impls()["switches_status"]({})
         self.assertEqual(d["switches"]["eye"], {"title": "识别（看画面）", "on": True})
         self.assertEqual(d["switches"]["realtime"]["title"], "Docking（实时对话）")
-        self.assertEqual(d["pause"], {"paused": True, "why": "没人在，暂停花钱的功能", "spent_cny": 3.2, "cap_cny": 20})
+        self.assertEqual(d["pause"], {"paused": True, "why": "没人在，暂停花钱的功能", "spent_usd": 0.444, "cap_usd": 10.0})
         self.assertEqual(d["mouth"], {"mode": "tts", "title": "合成说话"})
 
     def test_mode_status(self):
@@ -115,7 +115,7 @@ class MindToolsTest(unittest.TestCase):
         self.assertEqual(d["total"], {"CNY": 1.234567, "USD": 0.02})
         self.assertAlmostEqual(d["total_usd"], 1.234567 / 7.2 + 0.02, places=3)   # owner 2026-11-19: quoted in USD
         self.assertAlmostEqual(d["top"][0]["usd"], 1.234567 / 7.2, places=3)
-        self.assertAlmostEqual(d["cap_usd"], 20 / 7.2, places=2)
+        self.assertAlmostEqual(d["cap_usd"], 10.0, places=2)
         with self.assertRaises(ToolError):
             self.impls()["cost_today"]({})                       # no log query deployed
         with self.assertRaises(ToolError):

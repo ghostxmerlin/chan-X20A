@@ -18,7 +18,7 @@ from mind.settings_store import SettingsStore  # noqa: E402
 from mind.store import Store  # noqa: E402
 
 MIN = 60_000
-CFG = pause.config({})
+CFG = pause.config({'pause': {'cap_usd_per_day': 2.5, 'usd_cny': 8.0}})     # ¥20 cap: the numbers below
 MIDNIGHT = pause.next_midnight(T0)          # T0 is 2026-11-10 16:40 Beijing
 
 
@@ -32,8 +32,10 @@ def kinds(events):
 
 
 class DecideAwayTest(unittest.TestCase):
-    def test_defaults_are_ten_minutes_twenty_yuan_and_7_2(self):
-        self.assertEqual((CFG['away_ms'], CFG['cap_cny'], CFG['usd_cny']), (10 * MIN, 20.0, 7.2))
+    def test_defaults_are_ten_minutes_ten_dollars_and_7_2(self):
+        d = pause.config({})                                   # owner 2026-11-19: $10 a day, set in USD
+        self.assertEqual((d['away_ms'], d['cap_usd'], d['cap_cny'], d['usd_cny']), (10 * MIN, 10.0, 72.0, 7.2))
+        self.assertEqual(pause.config({'pause': {'cap_cny_per_day': 5}})['cap_usd'], 10.0)   # the old key is not read
         self.assertEqual(pause.config({'pause': {'away_min': 3}})['away_ms'], 3 * MIN)
 
     def test_ten_minutes_without_a_face_a_known_voice_or_an_owner_input_pauses(self):
@@ -120,7 +122,7 @@ class DecideBudgetTest(unittest.TestCase):
     def test_raising_the_cap_lifts_it(self):
         doc, _ = decide(now=T0, presence=self.present(T0), spend=21.0)
         doc, ev = decide(doc, now=T0 + MIN, presence=self.present(T0 + MIN), spend=21.0,
-                         cfg=pause.config({'pause': {'cap_cny_per_day': 30}}))
+                         cfg=pause.config({'pause': {'cap_usd_per_day': 3.75, 'usd_cny': 8.0}}))
         self.assertEqual((doc['on'], ev[-1][1]['extra']['why']), (False, 'cap'))
 
     def test_unknown_spend_never_pauses(self):
@@ -179,7 +181,7 @@ class ControllerTest(unittest.TestCase):
         self.assertFalse(self.c.tick()['on'])
 
     def test_nine_over_the_cap_lifts_the_budget_pause(self):
-        self.spend[0] = {'total': {'USD': 3.0}}                       # 21.6 CNY
+        self.spend[0] = {'total': {'USD': 10.5}}                      # over the $10 default
         self.c.note_owner('page')                                     # someone is here
         self.assertTrue(pause.budget_stop(self.db, self.now[0]))
         self.c.note_owner('asr:digit')                                # not a 9: still over
@@ -193,8 +195,9 @@ class ControllerTest(unittest.TestCase):
         self.now[0] = T0 + 11 * MIN
         self.c.tick()
         v = self.c.view()
-        self.assertEqual((v['paused'], v['why'], v['away_since'], v['spent_cny'], v['cap_cny']),
-                         (True, 'away', T0 + 11 * MIN, 5.0, 20.0))
+        self.assertEqual((v['paused'], v['why'], v['away_since'], v['spent_cny'], v['cap_cny'], v['cap_usd']),
+                         (True, 'away', T0 + 11 * MIN, 5.0, 72.0, 10.0))
+        self.assertAlmostEqual(v['spent_usd'], 5.0 / 7.2, places=3)
 
     def test_the_ledger_is_read_at_most_every_30_s(self):
         n = [0]
@@ -277,7 +280,7 @@ class PauseApiTest(unittest.TestCase):
         self.now[0] = T0 + 11 * MIN
         self.ctl.tick()
         p = self.call('/switches')[1]['pause']
-        self.assertEqual((p['paused'], p['why'], p['cap_cny']), (True, 'away', 20.0))
+        self.assertEqual((p['paused'], p['why'], p['cap_cny'], p['cap_usd']), (True, 'away', 72.0, 10.0))
 
     def test_page_switches_are_owner_inputs_the_ears_hush_is_not(self):
         self.call('/switches', {'name': 'notes', 'on': False})
@@ -320,7 +323,7 @@ class AwayOffTest(unittest.TestCase):
         cfg = pause.config({"pause": {"away_min": 10, "away_off_until": T0 + 3600_000}})
         args = dict(now=T0 + 1800_000, presence={}, owner_at=None, owner_what=None, unknown_n=0, started_at=T0)
         self.assertEqual(pause.decide({}, cfg=cfg, spend=1.0, **args)[0]["reasons"], [])
-        self.assertEqual(pause.decide({}, cfg=cfg, spend=25.0, **args)[0]["reasons"], ["budget"])
+        self.assertEqual(pause.decide({}, cfg=cfg, spend=80.0, **args)[0]["reasons"], ["budget"])
         late = dict(args, now=T0 + 4000_000)
         self.assertEqual(pause.decide({}, cfg=cfg, spend=1.0, **late)[0]["reasons"], ["away"])
         self.assertIsNone(pause.config({"pause": {}})["away_off_until"])

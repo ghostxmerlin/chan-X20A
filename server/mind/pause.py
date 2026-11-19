@@ -9,7 +9,7 @@ Two reasons, either one pauses:
           no explicit owner input for settings pause.away_min minutes (default 10). Ordinary speech is NOT presence
           (a TV talks all evening). Back = any M12 face, a known voice, or an explicit owner input (ASR word, DualKey,
           screen tap / quick page, a web switch).
-  budget  today's spend (Beijing day) over all paid items reached pause.cap_cny_per_day (default 20 CNY). Computed
+  budget  today's spend (Beijing day) over all paid items reached pause.cap_usd_per_day (default $10, owner 2026-11-19; was ¥20). Computed
           from the run log's ledger (every record with a cost: 听悟, 围观 realtime + search, 视觉爆发, eye, tts, every
           luna / terra call), USD converted at pause.usd_cny (default 7.2). A warning (budget.warn) at 80 %. Lasts
           until Beijing midnight, until the owner presses 9 (that day only), or until the cap is raised above today's
@@ -40,7 +40,7 @@ from .runlog import hello_log
 DOC = 'pause'
 PRESENCE = 'presence_status'
 BJ = ZoneInfo('Asia/Shanghai')
-DEFAULTS = {'away_min': 10, 'cap_cny_per_day': 20.0, 'usd_cny': 7.2}
+DEFAULTS = {'away_min': 10, 'cap_usd_per_day': 10.0, 'usd_cny': 7.2}
 WARN_RATIO = 0.8
 TICK_S = 5
 SPEND_EVERY_MS = 30_000          # the ledger is read at most this often (and at once after a day change)
@@ -59,13 +59,21 @@ def _is_num(v):
 
 
 def config(s):
-    """{away_ms, away_min, cap_cny, usd_cny} from settings (pause.*), defaults for anything missing."""
+    """{away_ms, away_min, cap_usd, cap_cny, usd_cny} from settings (pause.*), defaults for anything missing. The cap is
+    set in USD; the ledger mixes CNY and USD, so the comparison itself stays in CNY (cap_cny = cap_usd × usd_cny). An
+    old pause.cap_cny_per_day is not read."""
     p = {**DEFAULTS, **{k: v for k, v in ((s or {}).get('pause') or {}).items() if _is_num(v)}}
     off = ((s or {}).get('pause') or {}).get('away_off_until')
-    return {'away_min': p['away_min'], 'away_ms': int(p['away_min'] * 60_000), 'cap_cny': float(p['cap_cny_per_day']),
-            'usd_cny': float(p['usd_cny']),
+    cap_usd, rate = float(p['cap_usd_per_day']), float(p['usd_cny'])
+    return {'away_min': p['away_min'], 'away_ms': int(p['away_min'] * 60_000), 'cap_usd': cap_usd,
+            'cap_cny': round(cap_usd * rate, 4), 'usd_cny': rate,
             # owner 2026-11-18 (a night of development): no away pause until this epoch ms; the budget cap stays
             'away_off_until': int(off) if _is_num(off) else None}
+
+
+def _usd(cny, b):
+    rate = b.get('usd_cny') if _is_num(b.get('usd_cny')) and b.get('usd_cny') > 0 else DEFAULTS['usd_cny']
+    return round(cny / rate, 4) if _is_num(cny) else None
 
 
 def day_of(ms):
@@ -171,7 +179,7 @@ def decide(prev, *, now, cfg, presence, owner_at, owner_what, spend, unknown_n, 
     money = {'spent_cny': spend, 'cap_cny': cfg['cap_cny']}
     if warn and doc['warned_day'] != day:
         doc['warned_day'] = day
-        events.append(('budget.warn', {'by': 'rule', 'sum': f'今天已花 ¥{spend:.2f} / 上限 ¥{cfg["cap_cny"]:.0f}（80%）',
+        events.append(('budget.warn', {'by': 'rule', 'sum': f'今天已花 ${spend / cfg["usd_cny"]:.2f} / 上限 ${cfg["cap_cny"] / cfg["usd_cny"]:.2f}（80%）',
                                        'extra': {**money, 'day': day}}))
     if reasons and reasons != was:
         added = [r for r in reasons if r not in was]
@@ -322,6 +330,7 @@ def view(doc, now_ms):
             'budget_until': doc.get('budget_until') if 'budget' in reasons else None,
             'last_presence': doc.get('last_presence'), 'presence_by': doc.get('presence_by'),
             'away_min': doc.get('away_min'), 'day': b.get('day'), 'spent_cny': b.get('spent_cny'),
-            'cap_cny': b.get('cap_cny'), 'warn': bool(b.get('warn')), 'over': bool(b.get('over')),
+            'cap_cny': b.get('cap_cny'), 'spent_usd': _usd(b.get('spent_cny'), b), 'cap_usd': _usd(b.get('cap_cny'), b),
+            'warn': bool(b.get('warn')), 'over': bool(b.get('over')),
             'override': bool(b.get('override')), 'unknown_n': b.get('unknown_n') or 0, 'at': doc.get('at'),
             'known': bool(doc)}
