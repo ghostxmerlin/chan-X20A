@@ -544,6 +544,8 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
                 "shown": len(out), "rows": out}
 
     _semantic = semantic.search_tool(db, embed, settings, names_of, now_ms)    # 按意思找 (semantic.py)
+    from . import docs_kb
+    doc_search = docs_kb.search_tool(db, embed, now_ms)                        # 查资料 (docs_kb.py, 2026-11-19)
 
     def semantic_gated(args):
         """Memory hits go through the same gate as memory_search (security review 2026-11-18): only memories in
@@ -572,7 +574,7 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
              "recent_sounds": recent_sounds, "hello_said": hello_said, "why_last_turn": why_last_turn,
              "capabilities": capabilities, "switch_propose": switch_propose, "memory_propose": memory_propose,
              "person_note_propose": person_note_propose,
-             "semantic_search": semantic_gated, "db_query": db_query}
+             "semantic_search": semantic_gated, "doc_search": doc_search, "db_query": db_query}
     if research is not None:                     # 深入研究 (mind/research.py Runner): deep_research, research_status
         from . import research as research_mod
         impls.update(research_mod.tools(research))

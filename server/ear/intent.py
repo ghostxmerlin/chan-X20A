@@ -20,6 +20,8 @@ MARGIN = 0.03                  # ... and this much ahead of the nearest chit-cha
 RULES = (     # first match wins; certain words only (the embedding layer handles the rest)
     ("daily", re.compile(r"提醒|闹钟|叫我一下|叫醒我|日程|安排|几点.*(开会|出发)|分钟后|小时后|告诉我一声|跟我说一声|盯着")),
     ("world", re.compile(r"天气|下雨|气温|多少度|汇率|兑|币价|比特币|以太坊|股价|新闻|搜一下|搜搜|查一下|查查|上网|网上|研究一下")),
+    # 查资料 (2026-11-19, skill docs in group world): the owner's project material
+    ("world", re.compile(r"(?i)资料|文档|知识库|手册|寄存器|引脚|GPIO|ICN ?7\d{3}|ET170|PA130|指纹模组|模组|Tab5|X10A|AIdea|SDCP|UART|固件分支|分支说明|[A-Z]{2,3}-\d{3}")),
     ("body", re.compile(r"转过来|转过去|转身|向左|向右|左转|右转|看着我|点点头|点头|摇摇头|摇头|表情|音量|大声点|小声点|声音大|声音小|电量|跟着我转|转过身|机身|身体状态|台词|放.{0,3}(声音|音乐|音频|歌)")),
     ("manner", re.compile(r"详细(一点|点|些|说)|简单(点|些|说)|说重点|安静|别插话|别插嘴|在聊天|看电视|扮演|当个|做回你自己|可以说话了|啰嗦")),
     ("recall", re.compile(r"上次|昨天|前天|前几天|之前|以前|还记得|记不记得|刚才.*(说|聊)|上周|上个月|今天上午|今天早上")),

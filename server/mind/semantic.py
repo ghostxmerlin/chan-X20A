@@ -5,6 +5,9 @@ What is embedded (never single speech sentences):
   knowledge  knowledge_items heads with status active: name + aliases + statement
   notes      conversations (纪要) with a title or notes: title + notes
   segment    mind_segments (片段, live lane, newest version per start): summary title + text
+  doc        doc_chunks (资料, 2026-11-19, mind/docs_kb.py: the owner's project material, imported by folder): project +
+             title + text. Synced like the rest, but semantic_search never searches it (recall stays personal); the
+             doc_search tool does (docs_kb.py, vectors + exact words).
 Vectors live in Mongo hello.vectors, one per source:
   {_id: "<kind>:<source id>", kind, sid, ref {...how to open it}, text_hash, text (≤ 60-char preview), vec [floats,
    unit length], model, dim, when (the source's time, ms), at (written, ms)}
@@ -51,12 +54,14 @@ DIM = 512                                                              # env MIN
 PRICE_CNY_PER_M = {"text-embedding-v4": 0.5, "qwen3.7-text-embedding": 0.5, "qwen3.7-text-embedding-flash": 0.125}
 BATCH = {"text-embedding-v4": 10, "qwen3.7-text-embedding": 20, "qwen3.7-text-embedding-flash": 20}
 PRICE_BASIS = "semantic.PRICE_CNY_PER_M (help.aliyun.com/zh/model-studio/embedding, 2026-11-18)"
-TEXT_MAX = 600                  # characters embedded per source (ours are short: notes ~50, segments ≤ 320)
+TEXT_MAX = 2000                 # characters embedded per source (notes ~50, segments ≤ 320; doc chunks ≤ ~2800, 2026-11-19)
 PREVIEW = 60
 CHUNK = 50                      # texts per embed() call in a sync: the budget is checked between chunks
 TIMEOUT_S = 30
-KINDS = ("memory", "knowledge", "notes", "segment")
-KIND_ZH = {"memory": "记忆", "knowledge": "知识", "notes": "纪要", "segment": "片段"}
+KINDS = ("memory", "knowledge", "notes", "segment")    # semantic_search (recall): personal kinds only
+DOC_KINDS = ("doc",)                                    # doc_search (docs_kb.py)
+ALL_KINDS = KINDS + DOC_KINDS                           # what a sync keeps up to date
+KIND_ZH = {"memory": "记忆", "knowledge": "知识", "notes": "纪要", "segment": "片段", "doc": "资料"}
 COLL = "vectors"
 SYNC_EVERY_S = 600              # the periodic incremental sync (runner, MIND_SEMANTIC_SYNC=1)
 SYNC_BUDGET_CNY = 0.5           # at most this much per periodic sync (new items are a few cents a day)
@@ -206,14 +211,20 @@ def sources(db, kind):
             text = _join(sm.get("title"), sm.get("text"))
             if text:
                 out.append({"sid": str(start), "text": text, "when": start, "ref": {"start": start, "end": g.get("end")}})
+    elif kind == "doc":
+        for c in db["doc_chunks"].find({}, {"_id": 1, "project": 1, "project_title": 1, "title": 1, "text": 1, "at": 1}):
+            text = _join(c.get("project_title"), c.get("title")) + "\n" + str(c.get("text") or "")
+            if c.get("text"):
+                out.append({"sid": c["_id"], "text": text, "when": c.get("at"),
+                            "ref": {"chunk": c["_id"], "project": c.get("project")}})
     else:
         raise ValueError(f"unknown kind {kind}")
     return out
 
 
-def _kinds(kinds):
-    kinds = list(kinds or KINDS)
-    bad = [k for k in kinds if k not in KINDS]
+def _kinds(kinds, default=KINDS):
+    kinds = list(kinds or default)
+    bad = [k for k in kinds if k not in ALL_KINDS]
     if bad:
         raise ValueError(f"unknown kinds {bad}")
     return kinds
@@ -223,7 +234,7 @@ def plan(db, kinds=None):
     """What a sync would do: (todo [{_id, kind, sid, text, hash, when, ref}] newest first, stale ids, counts)."""
     mdl, d = model(), dim()
     todo, stale, counts = [], [], {}
-    for kind in _kinds(kinds):
+    for kind in _kinds(kinds, ALL_KINDS):
         have = {r["_id"]: (r.get("text_hash"), r.get("model"), r.get("dim"))
                 for r in db[COLL].find({"kind": kind}, {"_id": 1, "text_hash": 1, "model": 1, "dim": 1})}
         now_ids, n_todo = set(), 0
@@ -450,7 +461,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("backfill", help="embed what is missing or changed, stop before --budget CNY")
     b.add_argument("--budget", type=float, default=5.0)
-    b.add_argument("--kinds", default=",".join(KINDS))
+    b.add_argument("--kinds", default=",".join(ALL_KINDS))
     b.add_argument("--dry-run", action="store_true", help="count and estimate only, no model call, nothing written")
     sub.add_parser("status", help="counts per kind and what a full sync would cost (no model call)")
     s = sub.add_parser("search", help="one query (one small paid call)")
@@ -467,7 +478,7 @@ def main(argv=None):
     key = os.environ.get("DASHSCOPE_API_KEY") or hub.get("DASHSCOPE_API_KEY")
     from pymongo import MongoClient
     db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
-    kinds = [k for k in getattr(a, "kinds", ",".join(KINDS)).split(",") if k]
+    kinds = [k for k in getattr(a, "kinds", ",".join(ALL_KINDS)).split(",") if k]
     if a.cmd in ("status",) or (a.cmd == "backfill" and a.dry_run):
         r = sync(db, kinds, budget_cny=getattr(a, "budget", 0.0), dry_run=True)
         print(json.dumps(r, ensure_ascii=False, indent=1))

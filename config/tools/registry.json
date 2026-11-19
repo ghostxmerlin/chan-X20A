@@ -611,6 +611,48 @@
    }
   },
   {
+   "name": "doc_search",
+   "title": "查资料",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "live",
+   "description": "在主人的项目资料里找（指纹模组、Tab5/X10A、AIdea 手机）：按意思找 + 型号、引脚、条目号按字面找。工作上的技术问题先查这个，不要凭印象答。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string",
+      "description": "要查的问题或关键词；有型号、引脚、条目号（ICN7332、GPIO17、HW-035）就写进去",
+      "maxLength": 80
+     },
+     "project": {
+      "type": "string",
+      "description": "只在一个项目里找（不写 = 全部）：指纹模组 / Tab5 / AIdea",
+      "maxLength": 20
+     },
+     "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 6
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "returns": "query, project, how（按意思 / 按字面）, hits[{project, id, title, status, source, branch?, text}], say；没找到时 note",
+   "source": "server/mind/docs_kb.py：Mongo doc_chunks（按文件夹导入）+ semantic.py kind doc 的向量；POST /tool/call（server/mind/tool_impls.py）",
+   "latency": "~0.3–1 s（一次向量化 + 几次字面查询）",
+   "cost": "每次一次向量化（约 $0.000002）；导入后的建索引约 $0.02",
+   "needs": [],
+   "notes": "资料在仓库外（公司资料）：Mac ~/soul/knowledge-base → 服务器 ~/soul-kb，python3 -m mind.docs_kb import ~/soul-kb 后 python3 -m mind.semantic backfill --kinds doc。状态是推测 / 未解决 / 没实板验证的要说明。",
+   "example": {
+    "query": "ICN7332 和 ICN7352 录入次数有什么不同",
+    "project": "指纹模组"
+   }
+  },
+  {
    "name": "switches_status",
    "title": "开关状态",
    "group": "self",

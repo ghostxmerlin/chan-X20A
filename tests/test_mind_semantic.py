@@ -81,7 +81,7 @@ class SyncTest(unittest.TestCase):
     def test_backfill_every_kind_once(self):
         r = semantic.sync(self.db, embed_fn=self.embed, now_ms=NOW)
         self.assertEqual({k: v["embedded"] for k, v in r["kinds"].items()},
-                         {"memory": 1, "knowledge": 1, "notes": 2, "segment": 2})      # c3 has no text, replay lane not
+                         {"memory": 1, "knowledge": 1, "notes": 2, "segment": 2, "doc": 0})   # c3 has no text, replay lane not; no material
         self.assertEqual((r["embedded"], r["left"], r["stopped"]), (6, 0, None))
         self.assertAlmostEqual(r["spent_cny"], semantic.cost_cny(sum(len(t) for t in self.embed.texts())), places=9)
         v = self.db["vectors"].find_one({"_id": "segment:" + str(at(2026, 11, 18, 9))})

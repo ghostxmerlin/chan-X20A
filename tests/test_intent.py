@@ -36,6 +36,9 @@ class IntentTest(unittest.TestCase):
         for t in ("转过身去", "报告机身状态", "身体状态怎么样", "放点好玩的台词", "放段音乐", "放个声音"):
             self.assertEqual(intent.rule(t), "body", t)
         self.assertIsNone(intent.rule("哈哈好吧"))
+        # 2026-11-19 查资料 (skill docs, group world)
+        for t in ("ICN7332 录入几次", "指纹模组的模板分区是怎么回事", "Tab5 的 HW-035 讲了什么", "资料里怎么说", "GPIO17 是干嘛的"):
+            self.assertEqual(intent.rule(t), "world", t)
 
     def test_auto_head_files_and_reload(self):
         d = tempfile.mkdtemp()
