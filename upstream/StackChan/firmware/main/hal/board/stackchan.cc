@@ -186,6 +186,25 @@ public:
         return ESP_OK;
     }
 
+    // collector-0.5.18 (owner 2026-11-19 "一直插着电，但掉到了92%"): read only, for the power diagnosis. 0x00 status 1
+    // (bit5 VBUS good, bit0 input current limited), 0x01 status 2 (bits 6:5 battery current 01 charge / 10 discharge,
+    // bit3 VINDPM, bits 2:0 charge phase), 0x15 VINDPM, 0x16 input current limit, 0x34..0x3B ADC: battery, TS, VBUS,
+    // VSYS (mV, 14 bit).
+    esp_err_t TryReadDiag(uint8_t& st1, uint8_t& st2, uint8_t& vindpm, uint8_t& ilim, uint16_t& bat_mv, uint16_t& vbus_mv,
+                          uint16_t& sys_mv)
+    {
+        uint8_t s[2] = {}, lim[2] = {}, adc[8] = {};
+        esp_err_t err = TryReadRegs(0x00, s, 2);
+        if (err == ESP_OK) err = TryReadRegs(0x15, lim, 2);
+        if (err == ESP_OK) err = TryReadRegs(0x34, adc, 8);
+        if (err != ESP_OK) return err;
+        st1 = s[0]; st2 = s[1]; vindpm = lim[0]; ilim = lim[1];
+        bat_mv = uint16_t(((adc[0] & 0x3F) << 8) | adc[1]);
+        vbus_mv = uint16_t(((adc[4] & 0x3F) << 8) | adc[5]);
+        sys_mv = uint16_t(((adc[6] & 0x3F) << 8) | adc[7]);
+        return ESP_OK;
+    }
+
     esp_err_t TryReadBatteryLevel(int& level)
     {
         uint8_t battery_level = 0;
@@ -394,6 +413,7 @@ private:
         bool battery_level_valid = false;
         int64_t timestamp_us = 0;
         bool latest_read_valid = false;
+        hal_bridge::PowerDiag diag{};    // 0.5.18
     };
 
     i2c_master_bus_handle_t i2c_bus_;
@@ -440,9 +460,25 @@ private:
         int battery_level       = 0;
         esp_err_t status_err    = pmic_->TryReadPowerStatus(has_external_power, charging, discharging);
         esp_err_t level_err     = pmic_->TryReadBatteryLevel(battery_level);
+        uint8_t st1 = 0, st2 = 0, vindpm = 0, ilim = 0;
+        uint16_t bat_mv = 0, vbus_mv = 0, sys_mv = 0;
+        const esp_err_t diag_err = pmic_->TryReadDiag(st1, st2, vindpm, ilim, bat_mv, vbus_mv, sys_mv);
 
         {
             std::lock_guard<std::mutex> lock(power_state_mutex_);
+            if (diag_err == ESP_OK) {
+                auto& d = power_state_.diag;
+                d.valid = true; d.status1 = st1; d.status2 = st2; d.vindpm_reg = vindpm; d.ilim_reg = ilim;
+                d.bat_mv = bat_mv; d.vbus_mv = vbus_mv; d.sys_mv = sys_mv;
+                const bool vbus_good = st1 & 0x20;
+                const uint8_t dir = (st2 >> 5) & 3;
+                if (vbus_good) {
+                    ++d.samples_vbus;
+                    if (dir == 2) ++d.discharging_on_vbus;      // plugged in, yet the battery feeds the load
+                    if (st1 & 0x01) ++d.current_limited;         // the input current limit is holding it
+                    if (st2 & 0x08) ++d.vindpm_active;           // the source voltage sags under the load
+                }
+            }
             power_state_.latest_read_valid = status_err == ESP_OK && level_err == ESP_OK;
             if (power_state_.latest_read_valid) power_state_.timestamp_us = esp_timer_get_time();
             if (status_err == ESP_OK) {
@@ -798,6 +834,13 @@ public:
         return aw9523_->SetSpeakerReset(held);
     }
 
+    bool GetPowerDiag(hal_bridge::PowerDiag& out)
+    {
+        std::lock_guard<std::mutex> lock(power_state_mutex_);
+        out = power_state_.diag;
+        return out.valid;
+    }
+
     bool GetPowerSnapshot(int& level, bool& charging, int64_t& timestamp_us)
     {
         std::lock_guard<std::mutex> lock(power_state_mutex_);
@@ -819,6 +862,11 @@ esp_err_t hal_bridge::board_set_speaker_reset(bool held)
 int hal_bridge::board_speaker_reset_state()
 {
     return speaker_reset_state.load();
+}
+
+bool hal_bridge::board_get_power_diag(hal_bridge::PowerDiag& out)
+{
+    return static_cast<M5StackCoreS3Board&>(Board::GetInstance()).GetPowerDiag(out);
 }
 
 bool hal_bridge::board_get_power_snapshot(int& level, bool& charging, int64_t& timestamp_us)

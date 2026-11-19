@@ -43,6 +43,14 @@ TouchPoint_t get_touch_point();
 void set_collector_mode(bool enabled);
 bool is_collector_mode();
 bool board_get_power_snapshot(int& level, bool& charging, int64_t& timestamp_us);
+// collector-0.5.18: the AXP2101's raw power state (read only) and counters since boot, one sample per power poll.
+struct PowerDiag {
+    bool valid = false;
+    uint8_t status1 = 0, status2 = 0, vindpm_reg = 0, ilim_reg = 0;
+    uint16_t bat_mv = 0, vbus_mv = 0, sys_mv = 0;
+    uint32_t samples_vbus = 0, discharging_on_vbus = 0, current_limited = 0, vindpm_active = 0;
+};
+bool board_get_power_diag(PowerDiag& out);
 // Collector playback only. State is -1 when the last hardware check failed.
 esp_err_t board_set_speaker_reset(bool held);
 int board_speaker_reset_state();

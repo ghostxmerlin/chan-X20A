@@ -1122,6 +1122,19 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     power["battery_percent"] = level;
     power["charging"] = charging;
     power["timestamp_us"] = power_us;
+    hal_bridge::PowerDiag pd;
+    if (hal_bridge::board_get_power_diag(pd)) {          // 0.5.18: why it drains while plugged in
+        static constexpr int kIlimMa[] = {100, 500, 900, 1000, 1500, 2000, 2000, 2000};
+        static constexpr const char* kPhase[] = {"trickle", "pre", "cc", "cv", "done", "not_charging", "?", "?"};
+        static constexpr const char* kDir[] = {"standby", "charge", "discharge", "?"};
+        auto p = power["pmic"].to<JsonObject>();
+        p["vbus_good"] = bool(pd.status1 & 0x20); p["vbus_mv"] = pd.vbus_mv; p["bat_mv"] = pd.bat_mv; p["sys_mv"] = pd.sys_mv;
+        p["battery_current"] = kDir[(pd.status2 >> 5) & 3]; p["charge_phase"] = kPhase[pd.status2 & 7];
+        p["input_limit_ma"] = kIlimMa[pd.ilim_reg & 7]; p["input_limited"] = bool(pd.status1 & 0x01);
+        p["vindpm_mv"] = 3880 + 80 * (pd.vindpm_reg & 0x0F); p["vindpm_active"] = bool(pd.status2 & 0x08);
+        p["samples_on_vbus"] = pd.samples_vbus; p["discharging_on_vbus"] = pd.discharging_on_vbus;
+        p["limited_on_vbus"] = pd.current_limited; p["vindpm_on_vbus"] = pd.vindpm_active;
+    }
     auto health = doc["health"].to<JsonObject>();
     serial_monitor_stats(doc["monitor"].to<JsonObject>());
     health["heap_free"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
