@@ -17,12 +17,18 @@
 
 <main class="wrap">
 
-<h2>要你定的三件事</h2>
+<h2>你定的（下班前）</h2>
+<div class="box"><ol>
+  <li><b>部署</b>：夜里不部署，早上你看过汇总再部署。</li>
+  <li><b>范围</b>：照「夜里做 / 不做」做。</li>
+  <li><b>离线回放验收</b>：做，上限 $1（重构前后各跑一次对比）。</li>
+</ol></div>
+<details><summary class="muted">当时的三个问题</summary>
 <div class="box you"><ol>
   <li><b>部署</b>：夜里全部通过后自动部署（部署完跑冒烟检查，不对自动退回旧代码），还是只留在分支上，早上你看过我再部署？<span class="rec">我建议：早上你看过再部署。夜里没人看着，出问题要等到早上才发现。</span></li>
   <li><b>范围</b>：下面「夜里做 / 不做」可以吗？</li>
   <li><b>花钱的验收</b>：要不要用录音离线回放（真连千问，几美分）再验证一遍 Docking 行为没变？<span class="rec">我建议：要，上限 $1。</span></li>
-</ol></div>
+</ol></div></details>
 
 <p class="goal"><a href="/code.html">看每个文件的结构 →</a>（89 个文件，每个多少行、在哪一层、调了谁；现在有 11 处「往上调」）</p>
 
