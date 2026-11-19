@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>漏答漏斗</title>
+  <link rel="stylesheet" href="/layers.css">
+  <script type="module" src="/funnel-ui.js"></script>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="top-row">
+    <h1>漏答漏斗 · <span id="day"></span></h1>
+    <span class="links"><a href="/docking.html">Docking 流程</a><a href="/log.html">日志</a><a href="/day.html">今天</a><a href="/">← 观察台</a></span>
+  </div>
+  <p class="goal">耳朵听到的每一句话，分成「必答 / 该答 / 可能 / 不像跟它说」（只是记录用的打分，不影响判定），看最后答了没有、没答的死在哪：千问没判定、千问判不是跟我说、被哪道门挡了。数据是日志里的 <code>gate.addressed</code>；换一天：地址后面加 <code>?day=2026-11-20</code>。</p>
+</div></header>
+<main class="wrap" id="funnel"><p class="muted">读取中…</p></main>
+<footer class="wrap"><p class="muted">Fable 审计（docs/audits/2026-11-19-fable-architecture.md）第 0 步「先看见」。一句话对哪个回答，是按时间对的，两句挨得很近时偶尔会错配。</p></footer>
+</body>
+</html>
