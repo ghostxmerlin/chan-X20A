@@ -2512,3 +2512,74 @@ class ModeWordTest(HubBase):
             glyphs = re.search(r'kGlyphs = "([^"]*)"', h.read_text(encoding="utf-8")).group(1)
             shown = {"调试中", "安静中", "少插话", "角色中", "在听", *self.rl.TOOL_WORD.values(), *self.rl.TOOL_WORD_GROUP.values()}
             self.assertEqual([w for w in shown if any(c not in glyphs for c in w)], [])
+
+
+class MustAnswerPinTest(CalledTest):
+    """PIN, 2026-11-19 night (Fable's audit 4.3, docs/audits/2026-11-19-fable-architecture.md): what happens today after a
+    call or a tap, written down before the must-answer guard (Fable step 1) changes it. Asserts marked GAP are today's
+    missed answers: the guard is meant to turn them around, and its change will show up exactly there."""
+    async def silent_sentence(self, ws, text):
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        await settle(10)
+        self.hub.local_heard(text)                    # the ear's own text; Qwen sends nothing for it
+        self.t[0] += 3.0
+        self.hub.step()
+        await settle(20)
+
+    async def test_gap_a_call_then_qwen_silent_gets_no_answer(self):
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        await self.silent_sentence(ws, "今天天气怎么样")
+        self.assertEqual(self.hints(ws), [])          # GAP: no fallback for an ASR / name / tap call
+
+    async def test_gap_a_tap_then_qwen_silent_gets_no_answer(self):
+        ws = await self.open_ready()
+        self.hub.touched()
+        await self.silent_sentence(ws, "今天天气怎么样")
+        self.assertEqual(self.hints(ws), [])          # GAP: the tap's must-answer has no fallback either
+
+    async def test_a_call_word_in_the_text_then_qwen_silent_is_answered(self):
+        ws = await self.open_ready()
+        self.hub.local_heard("hello，今天天气怎么样")
+        self.t[0] += self.rl.CALLED_ANSWER_WAIT_S + 0.5
+        self.hub.step()
+        await settle(20)
+        self.assertEqual(len(self.hints(ws)), 1)      # today the only fallback: a sentence that starts with the name
+
+    async def test_a_call_then_only_en_is_rescued(self):
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "conversation.item.input_audio_transcription.completed", "transcript": "今天天气怎么样"})
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
+        await settle(20)
+        self.assertEqual(self.recs.turns[-1]["state"], "muted_quiet")
+        self.assertEqual(self.hints(ws), [self.rl.rescue_text("今天天气怎么样")])
+
+    async def test_a_call_then_the_same_short_answer_as_before_plays(self):
+        ws = await self.open_ready()
+        await self.play_one(ws, "r0")                 # hello said 你好呀😀 a moment ago
+        self.hub.called("asr")
+        ws.push({"type": "input_audio_buffer.speech_started"})
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(120)).decode()})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "你好呀😀"})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
+        await settle(20)
+        # measured 2026-11-19: this short repeat plays; Fable's repeat-gate misses (23 / 113 follow-ups) are longer
+        # answers repeated word for word within recent_s: reproduce from the run log before calling it a gap
+        self.assertEqual(self.recs.turns[-1]["state"], "done")
+
+    async def test_gap_a_call_inside_the_retry_wait_does_not_reopen(self):
+        await self.open_ready()
+        self.hub.close("upstream")
+        self.hub._retry_at = self.hub.clock() + 30     # as after an upstream failure (retry_s)
+        self.hub.called("asr")
+        self.hub.step()
+        await settle(10)
+        self.assertEqual(self.hub.state, "closed")     # GAP: deaf until the retry wait is over
