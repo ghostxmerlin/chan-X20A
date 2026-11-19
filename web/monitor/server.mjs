@@ -43,6 +43,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/skills.html', ['skills.html', 'text/html; charset=utf-8']], ['/skills-ui.js', ['skills-ui.js', 'text/javascript; charset=utf-8']], ['/skills.css', ['skills.css', 'text/css; charset=utf-8']],
     ['/day.html', ['day.html', 'text/html; charset=utf-8']], ['/day-ui.js', ['day-ui.js', 'text/javascript; charset=utf-8']], ['/day.css', ['day.css', 'text/css; charset=utf-8']],
     // 2026-11-19: the refactor plan and the code map (docs/arch/code-map.json from tools/arch/code_map.py)
+    ['/docking.html', ['docking.html', 'text/html; charset=utf-8']], ['/docking-ui.js', ['docking-ui.js', 'text/javascript; charset=utf-8']],
     ['/layers.html', ['layers.html', 'text/html; charset=utf-8']], ['/layers.css', ['layers.css', 'text/css; charset=utf-8']],
     ['/code.html', ['code.html', 'text/html; charset=utf-8']], ['/code-ui.js', ['code-ui.js', 'text/javascript; charset=utf-8']]]);
   const server = http.createServer((req, res) => {

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Docking 流程</title>
+  <link rel="stylesheet" href="/skills.css">
+  <script type="module" src="/docking-ui.js"></script>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <div class="top-row">
+    <h1>Docking 流程（2026-11-19 晚）</h1>
+    <span><a href="/skills.html">技能</a>　<a href="/day.html">今天</a>　<a href="/">← 观察台</a></span>
+  </div>
+  <p class="lead">一句话在 Docking（自动档）里从听到到说出来的十步，包括今天加的：点屏幕必答 / 停、工具运行时算在说话、各种模式和时长、调试模式、被晃说一句、资料问答。左边竖线是回头路，右边是每一步可能被挡回或分出去的情况。</p>
+  <div class="legend mt-s"><span><i class="sw-ear"></i>耳朵</span><span><i class="sw-qwen"></i>千问</span><span><i class="sw-mind"></i>mind</span><span><i class="sw-warn"></i>挡回 / 打断</span></div>
+</div></header>
+<main class="wrap">
+  <figure><div class="svgbox" id="flow"></div>
+  <figcaption>红框是今天的新规矩：工具运行时算在说话，点屏幕或喊 hello 能打断。机器人自己的模式（Docking / IDLE / 字幕）不在这张图里，这里只讲 Docking 里面。</figcaption></figure>
+  <div id="tables"></div>
+</main>
+<footer class="wrap"><p>来源：server/ear/realtime_link.py（耳朵）、server/mind/docs_qa.py · debug_mode.py（mind）、固件 0.5.15–0.5.18。</p></footer>
+</body>
+</html>
