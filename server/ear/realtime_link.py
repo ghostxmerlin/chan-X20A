@@ -402,6 +402,30 @@ BLIND_HOLD_CHARS = 16                               # a reply that mentions 看 
 FILLER_MAX_S = 2.5                                  # "我看看哈" only this soon after the question (else it waits quietly)
 
 
+# owner 2026-11-19: 「我查查」 alone is too few - a filler picked by the situation (the tool), at random. look = the look
+# fillers (<voice>/); the others <voice>-<group>/ (tools/voice/make_tool_fillers.py). Tools not listed: search.
+FILLER_GROUP = {
+    **{n: "look" for n in ("look_now", "scene_now")},
+    **{n: "recall" for n in ("memory_search", "semantic_search", "speech_search", "hello_said", "knowledge_search",
+                             "notes_search", "person_lookup", "people_list", "recent_speech", "recent_sounds",
+                             "review_period", "why_last_turn", "cost_today")},
+    **{n: "daily" for n in ("reminder_set", "reminder_list", "reminder_cancel", "schedule_add", "schedule_list",
+                            "watch_start", "watch_list", "watch_stop", "memory_propose", "person_note_propose",
+                            "switch_propose")},
+}
+TOOL_FILLER_GROUPS = ("search", "recall", "daily")
+
+
+def load_tool_fillers(base, voice):
+    """{group: [(text, pcm)]} from <base>/<voice>-<group>/ (groups that are missing are left out)."""
+    out = {}
+    for g in TOOL_FILLER_GROUPS:
+        clips = load_fillers(os.path.join(base, f"{voice}-{g}"))
+        if clips:
+            out[g] = clips
+    return out
+
+
 def load_fillers(folder):
     """Pre-made "我看看哈" clips (owner 2026-11-15: say one while waiting for the look) in the meet voice:
     <folder>/fillers.json {"sample_rate": 24000, "clips": [{"file", "text", "ms"}]} + raw PCM16 mono files.
@@ -1008,6 +1032,9 @@ class RealtimeHub:
         self._search_question = None
         self.searcher = None                           # web_search.dashscope_search(key) (ear_server wires it)
         self.search_fillers = []                       # [(text, pcm)]: "我查查哈" (load_fillers, <voice>-search)
+        self.tool_fillers = {}                         # {group: [(text, pcm)]} (load_tool_fillers), by FILLER_GROUP
+        self.filler_base = None                        # ~/soul-spike/fillers: set_voice reloads tool_fillers from it
+        self._filler_last_by = {}                      # group -> the clip played last (never twice in a row)
         self.tools_switch = None                       # 千问用工具 (realtime_tools): .on; None = off
         self.persona = None                            # set_voice: the persona that goes with the voice (None = PERSONA)
         self.screen_word = None                        # fn(text, hold_s): a word under the eyes (robot command line)
@@ -1980,9 +2007,12 @@ class RealtimeHub:
                 self._send_soon({"type": "response.create"})
             return
         quick = ("open_skill", "set_length", "set_quiet", "set_role", "who_is_here", "switches_status", "mode_status",
-                 "capabilities")
+                 "capabilities", "robot_status", "set_voice") + tuple(BODY_TOOLS)     # moving needs no 我查查
         if given and fc["name"] not in quick and not self._filler_in_chain(trace):
-            self._play_filler(self.search_fillers or self.fillers, "search_filler", trace)   # "我查查哈" meanwhile
+            group = FILLER_GROUP.get(fc["name"], "search")
+            clips = self.fillers if group == "look" else \
+                self.tool_fillers.get(group) or self.tool_fillers.get("search") or self.search_fillers or self.fillers
+            self._play_filler(clips, "search_filler", trace, group=group)     # by the situation, at random
         t0 = self.clock()
         # owner 2026-11-19 "修": skills and auto allow SKILL_DEPTH real tool calls a sentence (open_skill not counted,
         # as tools/skills/eval.py measured); before, auto used TOOL_DEPTH 3 with open_skill counted
@@ -2064,6 +2094,8 @@ class RealtimeHub:
         self.voice, self.voice_key, self.persona = voice_id, key, persona
         self.fillers = list(fillers or [])
         self.search_fillers = list(search_fillers or [])
+        if self.filler_base:
+            self.tool_fillers = load_tool_fillers(self.filler_base, key)
         ear_log.emit("trigger.voice", trace=trace or ear_log.new_trace(), by=by, sum=f"换声音：{key}",
                      ref={"session": self.session_no}, extra={"voice": key})
         if self.state != "closed":
@@ -2192,15 +2224,20 @@ class RealtimeHub:
         w["filler"] = True
         self._play_filler(self.fillers, "look_filler", w.get("trace"))
 
-    def _play_filler(self, clips, kind, trace):
-        """One pre-made clip (look_filler / search_filler), never the one played last of that kind."""
+    def _play_filler(self, clips, kind, trace, group=None):
+        """One pre-made clip (look_filler / search_filler), never the one played last of that kind (or group)."""
         if not clips:
             return
         now = self.clock()
-        last = self._filler_last if kind == "look_filler" else self._search_filler_last
+        if group is not None:
+            last = self._filler_last_by.get(group)
+        else:
+            last = self._filler_last if kind == "look_filler" else self._search_filler_last
         picks = [i for i in range(len(clips)) if i != last] or [0]
         i = picks[self.rng.randrange(len(picks))]
-        if kind == "look_filler":
+        if group is not None:
+            self._filler_last_by[group] = i
+        elif kind == "look_filler":
             self._filler_last = i
         else:
             self._search_filler_last = i
@@ -2214,7 +2251,7 @@ class RealtimeHub:
         log(f"realtime: session {self.session_no} {kind.replace('_', ' ')}", flush=True)
         ear_log.emit("filler.play", trace=trace, sum=clips[i][0][:60] or None,
                      ref={"rid": rid, "session": self.session_no},
-                     extra={"kind": kind, "clip": i, "audio_ms": self._turns[rid]["audio_ms"]})
+                     extra={"kind": kind, "clip": i, "group": group, "audio_ms": self._turns[rid]["audio_ms"]})
         self._out_put(("pcm", rid, pcm))
         self._out_put(("end", rid, b""))
 

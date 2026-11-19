@@ -1044,6 +1044,51 @@ class AutoChainTest(HubBase):
         self.assertTrue(any(f["extra"]["action"] in ("close", "unload_unused") for k, f in events if k == "trigger.skill"))
 
 
+class ToolFillerTest(HubBase):
+    """Owner 2026-11-19: 「我查查」 picked by the situation (the tool), at random, never twice in a row; moving: none."""
+    async def test_filler_by_situation(self):
+        events = []
+        self.rl.ear_log.emit, old = (lambda kind, **f: events.append((kind, f))), self.rl.ear_log.emit
+        self.addCleanup(setattr, self.rl.ear_log, "emit", old)
+        names = ("look_now", "reminder_set", "memory_search", "live_data", "nod")
+
+        def call(method, path, body=None, timeout=5):
+            if path == "/tools":
+                return 200, {"tools": [{"type": "function", "function": {"name": n, "description": n, "parameters": {"type": "object", "properties": {}}}}
+                                       for n in names]}
+            if path == "/tool/call":
+                return 200, {"ok": True, "data": {}, "error": None}
+            return 200, {**json.loads(json.dumps(CTX)), "owner": {"face_names": [], "call": "主人", "voice_names": ["me"]}}
+        self.hub.call = call
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch = sw
+        pcm = b"\x00\x00" * 2400
+        self.hub.fillers = [("我看看哈", pcm)]
+        self.hub.tool_fillers = {"search": [("我查查哈", pcm), ("我找找看", pcm)],
+                                 "recall": [("我想想啊", pcm), ("我翻翻记录", pcm)], "daily": [("好，我记一下", pcm)]}
+        ws = await self.open_ready()
+        played = []
+        for i, name in enumerate(names + ("live_data",)):
+            self.t[0] += 30                                                          # each its own sentence
+            self.hub.local_heard("hello 帮我弄一下", speaker={"band": "known", "name": "me", "score": 0.8, "runner_up": None})
+            self.hub.called("asr")
+            rid = f"f{i}"
+            ws.push({"type": "response.created", "response": {"id": rid}})
+            ws.push({"type": "response.function_call_arguments.done", "response_id": rid, "call_id": "c" + rid,
+                     "name": name, "arguments": "{}"})
+            ws.push({"type": "response.done", "response": {"id": rid}})
+            await settle(30)
+            ws.push({"type": "response.created", "response": {"id": rid + "e"}})
+            ws.push({"type": "response.done", "response": {"id": rid + "e"}})
+            await settle(10)
+            got = [f for k, f in events if k == "filler.play"]
+            played.append((got[-1]["extra"]["group"], got[-1]["sum"]) if len(got) > len(played) - played.count(None) else None)
+        groups = [p[0] if p else None for p in played]
+        self.assertEqual(groups, ["look", "daily", "recall", "search", None, "search"])   # nod: no filler
+        self.assertNotEqual(played[3][1], played[5][1])                               # never twice in a row
+
+
 class SpeakerAndPlaceholderTest(HubBase):
     """2026-11-19 09:52: the owner's face in view, the voiceprint only "unsure" -> the speaker line said 不认识的声音,
     the model refused 「转过身去」 itself; 【刚才的对话】 carried [tool_refused], which the model then said as a reply."""

@@ -1186,6 +1186,9 @@ def main():
             rt_hub.search_fillers = realtime_link.load_fillers(
                 os.path.expanduser(f"~/soul-spike/fillers/{a.realtime_voice}-search"))
             print(f"realtime (Docking): web search on search words, {len(rt_hub.search_fillers)} search fillers", flush=True)
+            rt_hub.filler_base = os.path.expanduser("~/soul-spike/fillers")      # tool fillers by situation (11-19)
+            rt_hub.tool_fillers = realtime_link.load_tool_fillers(rt_hub.filler_base, a.realtime_voice)
+            print(f"realtime (Docking): tool fillers {({g: len(c) for g, c in rt_hub.tool_fillers.items()})}", flush=True)
     print(f"realtime (Docking): {'ready, follows the switch' if rt_hub else 'off (no key, no voice or --realtime off)'}", flush=True)
     burst = None                                   # 视觉爆发 (2026-11-15): "注意看" in crowd, only with the realtime hub
     if rt_hub is not None:
