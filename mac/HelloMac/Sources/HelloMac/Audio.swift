@@ -56,6 +56,7 @@ final class AudioIn {
     private var converter: AVAudioConverter?
     private let out = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24000, channels: 1, interleaved: true)!
     var onPCM: (([Int16], UInt64) -> Void)?
+    var onBuffer: ((AVAudioPCMBuffer) -> Void)?          // raw, for the voice module
     var onLevel: ((Float) -> Void)?
     private(set) var running = false
     private(set) var deviceName = "—"
@@ -111,6 +112,7 @@ final class AudioIn {
     func handle(_ buf: AVAudioPCMBuffer, mono: AVAudioFormat) {      // internal: the app's --selftest feeds it
         let n = Int(buf.frameLength)
         guard n > 0, let ch = buf.floatChannelData, let conv = converter else { return }
+        onBuffer?(buf)
         let now = monoUs()
         let firstUs = now - UInt64(Double(n) / buf.format.sampleRate * 1_000_000)
         // channel 0 only, as the robot (FW/hearing.cpp:407)

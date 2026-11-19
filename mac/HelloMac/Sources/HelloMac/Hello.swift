@@ -19,6 +19,7 @@ final class Hello: MouthDelegate {
     let book: FaceBook
     private var links: [WSLink] = []
     let voices = Voices()
+    let voiceModule = VoiceModule()
     private var policy = ResponsePolicy()
     private var quiet = QuietWait()
     private var timer: DispatchSourceTimer?
@@ -60,6 +61,10 @@ final class Hello: MouthDelegate {
         vision.onError = { [weak self] m in self?.log("视觉：\(m)") }
         vision.onOpen = { [weak self] in self?.camera.resetChange() }
         mic.onRestart = { [weak self] m in self?.log(m) }
+        mic.onBuffer = { [weak self] b in self?.voiceModule.append(b) }
+        voiceModule.muted = { [weak self] in self?.core.sync { self?.mouth.sounding ?? false } ?? false }
+        voiceModule.onState = { [weak self] s in self?.log(s) }
+        voiceModule.onWord = { [weak self] w, k in self?.core.async { self?.asrWord(w, k) } }
         mic.onPCM = { [weak self] pcm, us in self?.core.async { self?.hearing.feed(pcm, firstUs: us) } }
         mic.onLevel = { [weak self] p in self?.micPeak = max(self?.micPeak ?? 0, p) }
         camera.onFrame = { [weak self] jpeg, w, h, us, diff, snap in
@@ -102,6 +107,7 @@ final class Hello: MouthDelegate {
         t.resume()
         timer = t
         if mic { setHearing(true) } else { hearingOn = false }
+        if mic && UserDefaults.standard.bool(forKey: "voiceModule") { voiceModule.start() }
         if useCamera { setCamera(true) } else { cameraOn = false }
         DispatchQueue.main.async { self.face?.setMode(self.mouth.modes.label, colour: self.mouth.modes.colour) }
     }
@@ -185,6 +191,36 @@ final class Hello: MouthDelegate {
         if let eye = Respond.eye(for: emo) { DispatchQueue.main.async { self.face?.play(eye, seconds: Double(pcm.count) / 24000) } }
         log("\(why)：PLAY-\(String(format: "%03d", id))（\(emo)）")
         return true
+    }
+
+    // ---- the voice module's words (core queue), as FW/asr_unit.cpp:177-191 ----
+    private func asrWord(_ word: String, _ kind: AsrWords.Kind) {
+        log("口令：\(word)")
+        switch kind {
+        case .wake:
+            mouth.asrWake()
+            return
+        default:
+            mouth.asrOrder(word)                  // Docking skips the sentence that carried an order
+        }
+        switch kind {
+        case .mode(let input): let o = mouth.input(input, by: "asr"); DispatchQueue.main.async { self.face?.showToast(o.toast) }
+        case .digit(let d): mouth.sendDigit(d, source: "asr")
+        case .motion(let w):
+            let g = w.contains("left") ? "left" : w.contains("right") ? "right" : w == "up" || w == "down" ? "nod" : "front"
+            DispatchQueue.main.async { self.face?.gesture(g) }
+        case .volume(let how):
+            let v: Float = ["increase": min(1, out.volume + 0.2), "decrease": max(0.1, out.volume - 0.2),
+                            "maximum": 1, "medium": 0.6, "minimum": 0.1][how] ?? out.volume
+            out.volume = v
+            DispatchQueue.main.async { self.face?.showToast("VOL \(Int(v * 100))") }
+        default: break
+        }
+    }
+
+    func setVoiceModule(_ on: Bool) {
+        if on { voiceModule.start() } else { voiceModule.stop(); log("语音口令：关") }
+        UserDefaults.standard.set(on, forKey: "voiceModule")
     }
 
     // ---- hearing events ----

@@ -274,6 +274,19 @@ test("mouth: a local clip plays as sounding, reports nothing, yields to a server
     check(m.speaking, "the server stream took over")
 }
 
+test("voice module words: whole utterance only, kinds as the robot") {
+    check(AsrWords.match("Hello.")?.kind == .wake, "hello = wake")
+    check(AsrWords.match("Hi, A.S.R.")?.kind == .wake, "hi ASR = wake")
+    check(AsrWords.match("Turn left!")?.kind == .motion("turn left"), "turn left = motion")
+    check(AsrWords.match("9")?.kind == .digit(9) && AsrWords.match("nine")?.kind == .digit(9), "9 / nine = digit")
+    check(AsrWords.match("Play")?.kind == .mode(.play), "play = mode input")
+    check(AsrWords.match("increase volume")?.kind == .volume("increase"), "volume")
+    check(AsrWords.match("Okay")?.kind == .other, "ok = other")
+    check(AsrWords.match("hello how are you") == nil, "a word inside a sentence is talk")
+    check(AsrWords.match("你好") == nil, "not a module word")
+    check(AsrWords.words.count == 42, "the module's 42 words")
+}
+
 var failedTests: [String] = []
 for (name, body) in tests {
     let before = failures

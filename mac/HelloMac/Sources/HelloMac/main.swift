@@ -104,10 +104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stylePop.target = self; stylePop.action = #selector(stylePicked)
         stack.addArrangedSubview(row("眼睛", stylePop))
         let boxes = NSStackView(); boxes.orientation = .horizontal; boxes.spacing = 10
-        for (k, title) in [("hear", "听觉"), ("cam", "摄像头"), ("up", "上传画面"), ("faces", "认人"), ("pre", "小画面")] {
+        for (k, title) in [("hear", "听觉"), ("cam", "摄像头"), ("up", "上传画面"), ("faces", "认人"), ("asr", "语音口令"), ("pre", "小画面")] {
             let b = NSButton(checkboxWithTitle: title, target: self, action: #selector(toggled(_:)))
             b.identifier = NSUserInterfaceItemIdentifier(k)
-            b.state = k == "pre" ? .off : .on
+            b.state = k == "pre" ? .off : k == "asr" ? (UserDefaults.standard.bool(forKey: "voiceModule") ? .on : .off) : .on
             checks[k] = b
             boxes.addArrangedSubview(b)
         }
@@ -194,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "up": h.setUpload(on)
         case "faces": h.setFaces(on)
         case "pre": showPreview = on; if !on { face.setPreview(nil) }
+        case "asr": h.setVoiceModule(on)
         default: break
         }
     }

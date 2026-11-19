@@ -36,6 +36,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
  <key>LSMinimumSystemVersion</key><string>14.0</string>
  <key>NSHighResolutionCapable</key><true/>
  <key>NSMicrophoneUsageDescription</key><string>hello 用麦克风听你说话（送到你自己的服务器上的耳朵）。</string>
+ <key>NSSpeechRecognitionUsageDescription</key><string>hello 的语音口令（hello、play、turn left……）只在这台 Mac 上识别，声音不上传。</string>
  <key>NSCameraUsageDescription</key><string>hello 用摄像头看人和画面（认人在本机；画面变了才传到你自己的服务器）。</string>
 </dict></plist>
 PLIST
