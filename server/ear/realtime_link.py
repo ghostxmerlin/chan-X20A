@@ -209,6 +209,7 @@ PERSONA_RULES = (
     "“注视”是有人让你“注意看”之后你一张一张仔细看到的照片（新的在前，最准）。有人问你能不能看见、看到了谁、看到了什么，"
     "就把这两样合起来回答：谁在（认得的叫名字，不认得的说个大概），在做什么，周围什么样；"
     "两样都没有，就说现在没看清。不要说自己没有眼睛、看不见。\n"
+    "- 收到“[事件] 你刚被人用力晃了几下”时：照事件说的，自然地说一句就够。\n"
     "- 你也有身体感觉：【你的眼睛】里的“身体感觉”来自机身的传感器（被拿起来、放下、晃了几下、有东西靠得很近）。"
     "刚发生的可以自然地带一句（比如被拿起来时问一句要带我去哪），不要每次都提；没有这一行就是身体好好放着。\n"
     "- 有人问刚才、最近、今天早些时候发生了什么、聊了什么，先照背景里的“最近的情景”和“最近的纪要”回答，"
@@ -317,6 +318,10 @@ CALLED_S = 10.0
 # TOUCH_S of the tap is answered whatever the gates say (it is a call window, only longer); hello says 在听 under the
 # eyes until she starts on it. A tap while she speaks stops her; a double tap is 安静一下 (touch_quiet).
 TOUCH_S = 20.0
+# owner 2026-11-19 "我刚才使劲摇晃了机器人，没有任何反应": being shaken hard (body_sense shaken) is an event hello answers in
+# one line of her own (queued like a greeting: waits for quiet, none in 安静 / 少插话), at most once per SHAKEN_SAY_S.
+SHAKEN_SAY_S = 60.0
+SHAKEN_TEXT = "[事件] 你刚被人用力晃了几下：照你的性格自然地说一句（抗议、喊晕、问他干嘛都行），一句话就够，不提传感器，每次换个说法。"
 CALLED_ANSWER_WAIT_S = 2.5
 CALL_RE = re.compile(r"^\W*(hello|hallo|哈喽|哈罗|嗨喽|dynames|dynamis|デュナメス)\W*", re.I)
 CALLED_SOURCES = {"asr": "语音模块听到 hello", "name": "关键词耳朵听到 Dynames", "text": "句子开头叫了 hello / Dynames",
@@ -1063,6 +1068,7 @@ class RealtimeHub:
         self.screen_word = None                        # fn(text, hold_s): a word under the eyes (robot command line)
         self._touch_word = False                       # 在听 is under the eyes (touched)
         self._tool_wait = None                         # {trace, name, since}: a tool is running (see TOOL_WORD)
+        self._last_shaken_say = None                   # SHAKEN_SAY_S
         self._tool_cancelled = set()                   # traces whose running tool was interrupted
         self.voice_key = None
         self._tool_specs = []                          # this session's tools (realtime format)
@@ -1659,6 +1665,22 @@ class RealtimeHub:
             return self.body.line(self.wall_ms()) if self.body is not None else None
         except Exception:                              # noqa: BLE001 - a body-sense bug never costs the instructions
             return None
+
+    def body_event(self, ev, fields=None):
+        """A body-sense event (body_sense.py). shaken: hello says one line about it (see SHAKEN_SAY_S). -> True if queued."""
+        if ev != "shaken" or not self.armed():
+            return False
+        now = self.clock()
+        if self._last_shaken_say is not None and now - self._last_shaken_say < SHAKEN_SAY_S:
+            return False
+        if self._greet is not None and self._greet.get("kind") != "body":
+            return False                               # a greeting waiting goes first
+        self._last_shaken_say = now
+        self._greet = {"at": now, "kind": "body", "pick": None, "text": SHAKEN_TEXT}
+        self.stats["shaken_said"] += 1
+        if self.state == "closed" and self.want():
+            self._open(now, "body")
+        return True
 
     def body_changed(self):
         """A body event (picked up, put down, shaken, near / far): re-send the instructions (debounced like a look)."""
@@ -3285,18 +3307,20 @@ class RealtimeHub:
                 text = greet_text(call, "short", word=SHORT_WORDS[pick])
             else:
                 text = greet_text(call, "long", tuple(self._said))
+        elif g["kind"] == "body":
+            text = g["text"]
         else:
             text = tap_text(g["pick"], self.ctx.get("names") or {}, owner.get("face_names") or [], call or "主人")
         self._greet = None
-        if g["kind"] == "owner" or (g["pick"]["kind"] == "known" and g["pick"]["face"]["name"] in
+        if g["kind"] == "owner" or (g["kind"] == "tap" and g["pick"]["kind"] == "known" and g["pick"]["face"]["name"] in
                                     (owner.get("face_names") or [])):
             self._last_greet = now
         if g["kind"] == "owner" and g.get("size", "long") == "long":
             self._last_long = now
         self._next_kind = ("greet" if g.get("size", "long") == "long" else "greet_short") if g["kind"] == "owner" \
-            else "tap"
+            else "body" if g["kind"] == "body" else "tap"
         self._next_trace, self._next_prompt = ear_log.new_trace(), text
-        ear_log.emit("trigger.greet", trace=self._next_trace, by="tap" if g["kind"] == "tap" else "m12",
+        ear_log.emit("trigger.greet", trace=self._next_trace, by={"tap": "tap", "body": "body"}.get(g["kind"], "m12"),
                      sum=f"招呼 {self._next_kind}", ref={"session": self.session_no},
                      extra={"kind": self._next_kind, "pick": (g.get("pick") or {}).get("kind")})
         self.stats["greeted"] += 1

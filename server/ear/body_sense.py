@@ -114,6 +114,8 @@ class BodySense:
                      extra={"ev": ev, **fields, "device": device})
         if self.hub is not None:
             try:
+                if hasattr(self.hub, "body_event"):
+                    self.hub.body_event(ev, fields)
                 self.hub.body_changed()
             except Exception as e:                  # noqa: BLE001 - the hook never costs the link
                 print(f"body hook failed: {type(e).__name__}", flush=True)

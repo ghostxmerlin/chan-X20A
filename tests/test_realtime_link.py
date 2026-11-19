@@ -2359,3 +2359,24 @@ class ToolBusyTest(HubBase):
         self.assertEqual(self.hub.stats["tool_interrupted"], 1)
         release.set()
         await settle(30)
+
+
+class ShakenSayTest(HubBase):
+    """Owner 2026-11-19 "使劲摇晃了机器人，没有任何反应": being shaken is an event hello answers in one line, once a minute."""
+    async def test_shaken_once_a_minute_and_not_in_quiet(self):
+        ws = await self.open_ready()
+        self.assertTrue(self.hub.body_event("shaken", {"peak_g": 1.1}))
+        self.assertFalse(self.hub.body_event("picked_up"))
+        self.hub.step()
+        await settle(10)
+        sent = [m for m in ws.sent if m["type"] == "conversation.item.create"]
+        self.assertIn("用力晃了几下", json.dumps(sent[-1], ensure_ascii=False))
+        self.assertEqual(ws.sent[-1]["type"], "response.create")
+        self.assertFalse(self.hub.body_event("shaken"))                    # within SHAKEN_SAY_S
+        self.t[0] += self.rl.SHAKEN_SAY_S + 1
+        self.hub.set_quiet("quiet")
+        self.assertTrue(self.hub.body_event("shaken"))
+        n = len(ws.sent)
+        self.hub.step()
+        await settle(10)
+        self.assertFalse(any(m["type"] == "response.create" for m in ws.sent[n:]))   # 安静: not said
