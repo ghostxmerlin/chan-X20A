@@ -59,6 +59,7 @@ final class Hello: MouthDelegate {
             }
         }
         hearing.onEvent = { [weak self] e in self?.heard(e) }
+        hearing.onOpen = { [weak self] in self?.policy.newSession(); self?.quiet.clear() }   // on core
         vision.onError = { [weak self] m in self?.log("视觉：\(m)") }
         vision.onOpen = { [weak self] in self?.camera.resetChange() }
         mic.onRestart = { [weak self] m in self?.log(m) }
@@ -66,7 +67,10 @@ final class Hello: MouthDelegate {
         voiceModule.muted = { [weak self] in self?.core.sync { self?.mouth.sounding ?? false } ?? false }
         voiceModule.onState = { [weak self] s in self?.log(s) }
         voiceModule.onWord = { [weak self] w, k in self?.core.async { self?.asrWord(w, k) } }
-        mic.onPCM = { [weak self] pcm, us in self?.core.async { self?.hearing.feed(pcm, firstUs: us) } }
+        mic.onPCM = { [weak self] pcm, us in
+            guard let self, self.hearingOn else { return }          // hearing off: nothing goes up (the voice module still hears)
+            self.core.async { self.hearing.feed(pcm, firstUs: us) }
+        }
         mic.onLevel = { [weak self] p in self?.micPeak = max(self?.micPeak ?? 0, p) }
         camera.onFrame = { [weak self] jpeg, w, h, us, diff, snap in
             self?.core.async {
@@ -95,7 +99,10 @@ final class Hello: MouthDelegate {
             guard let self else { return }
             self.linkState["隧道"] = s
             self.onChange?()
-            if s == "up" { for l in self.links { l.start() } }      // WSLink.start is idempotent (task == nil guard)
+            if s == "up" {                                          // WSLink.start is idempotent (task == nil guard)
+                self.linksStarted = true
+                for (i, l) in self.links.enumerated() where i != 0 || self.hearingOn { l.start() }
+            }
         }
         tunnel.stopOnSignals()
         tunnel.start()
@@ -112,7 +119,7 @@ final class Hello: MouthDelegate {
         t.resume()
         timer = t
         if mic { setHearing(true) } else { hearingOn = false }
-        if mic && UserDefaults.standard.bool(forKey: "voiceModule") { voiceModule.start() }
+        if mic && UserDefaults.standard.bool(forKey: "voiceModule") { voiceModule.start(); ensureMic() }
         if useCamera { setCamera(true) } else { cameraOn = false }
         DispatchQueue.main.async { self.face?.setMode(self.mouth.modes.label, colour: self.mouth.modes.colour) }
     }
@@ -125,9 +132,20 @@ final class Hello: MouthDelegate {
     // ---- owner switches ----
     func setHearing(_ on: Bool) {
         hearingOn = on
-        if on { do { try mic.start(device: micDevice); log("麦克风：\(mic.deviceName)") } catch { log("麦克风打不开：\(error.localizedDescription)") } }
-        else { mic.stop() }
+        if linksStarted { if on { links[0].start() } else { links[0].stop() } }   // the robot's hearing link runs only while listening
+        ensureMic(restart: on)
         onChange?()
+    }
+
+    private var linksStarted = false
+
+    /// The mic runs while hearing or the voice module wants it (the module must hear "nine" after a "zero").
+    func ensureMic(restart: Bool = false) {
+        let need = hearingOn || voiceModule.wanted
+        if need && (restart || !mic.running) {
+            do { try mic.start(device: micDevice); log("麦克风：\(mic.deviceName)\(hearingOn ? "" : "（只给语音口令）")") }
+            catch { log("麦克风打不开：\(error.localizedDescription)") }
+        } else if !need && mic.running { mic.stop() }
     }
 
     func setCamera(_ on: Bool) {
@@ -203,7 +221,7 @@ final class Hello: MouthDelegate {
         log("口令：\(word)")
         switch kind {
         case .wake:
-            mouth.asrWake()
+            mouth.asrWake(word: word == "hi asr" ? "hi A S R" : word == "hi m five" ? "Hi M Five" : "hello")
             return
         default:
             mouth.asrOrder(word)                  // Docking skips the sentence that carried an order
@@ -226,6 +244,7 @@ final class Hello: MouthDelegate {
     func setVoiceModule(_ on: Bool) {
         if on { voiceModule.start() } else { voiceModule.stop(); log("语音口令：关") }
         UserDefaults.standard.set(on, forKey: "voiceModule")
+        ensureMic()
     }
 
     // ---- hearing events ----

@@ -24,11 +24,15 @@ public final class HearingLogic: LinkLogic {
     /// Every event the ear posts on the ticks (speech, sound, enroll, speakers, keyword ...), plus "audio" (the ack).
     public var onEvent: (([String: Any]) -> Void)?
     public var onTick: (([String: Any]) -> Void)?
+    /// a new session: the ear numbers its sentences from s-1 again (review 2026-11-20)
+    public var onOpen: (() -> Void)?
 
     public init(id: DeviceIdentity) { self.id = id }
 
     public func opened() {
         open = true; acked = false; seq = 0; sentSelf = nil; pending = []; lastTickUs = now()
+        serverSpeaking = false; lastSpeakingUs = 0
+        onOpen?()
         transport?.send(text: Wire.json([
             "type": "audio", "format": "opus", "sample_rate": 24000, "channels": 1, "frame_ms": 60, "framing": "sea1",
             "source": id.source,

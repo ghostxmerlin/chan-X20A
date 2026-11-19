@@ -272,11 +272,11 @@ public final class MouthLogic: LinkLogic {
     }
 
     /// The voice module's wake word ("hello"): the robot stops its own speech and tells the ear.
-    public func asrWake() {
+    public func asrWake(word: String = "hello") {
         let interrupted = speaking
         output.stopAll()
         wakeCount += 1
-        transport?.send(text: Wire.json(["type": "asr_wake", "word": "hello", "n": wakeCount, "interrupted": interrupted]))
+        transport?.send(text: Wire.json(["type": "asr_wake", "word": word, "n": wakeCount, "interrupted": interrupted]))
     }
 
     public func asrOrder(_ word: String) {

@@ -103,6 +103,11 @@ test("hearing: declaration, SEA1 seq from 0, self flag before the packet, tick w
     clk.us += 3_100_000
     h.watchdog()
     check(tr.reconnects.count == 1, "3 s without a tick reconnects")
+    var opens = 0
+    h.onOpen = { opens += 1 }
+    h.received(text: Wire.json(["type": "tick", "speaking": true]))
+    h.opened()
+    check(opens == 1 && !h.serverSpeaking, "a new session: onOpen, the ear's speaking flag cleared")
 }
 
 final class FakeDelegate: MouthDelegate {
@@ -253,6 +258,9 @@ test("responses: clip by emotion, one per 10 s, happy every second, quiet wait")
     p.accepted(now: 40_000_000)
     check(p.consider(id: 5, emotion: "happy", speech: true, selfSounding: false, ageMs: 300, now: 60_000_000, random: 0, tags: tags) == 0, "second happy waits")
     check(p.consider(id: 6, emotion: "happy", speech: true, selfSounding: false, ageMs: 300, now: 70_000_000, random: 0, tags: tags) != 0, "every second happy")
+    p.accepted(now: 70_000_000)
+    p.newSession()                                  // the ear restarts its ids at s-1 on a new hearing session
+    check(p.consider(id: 1, emotion: "sad", speech: true, selfSounding: false, ageMs: 300, now: 90_000_000, random: 0, tags: tags) == 3, "a new session: s-1 answers again")
     var q = QuietWait()
     q.hold(3, now: 0)
     check(q.poll(now: 1_000_000, speaking: false, lastSpeech: 0) == .wait, "not yet quiet 1.5 s")

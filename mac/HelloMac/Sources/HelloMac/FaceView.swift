@@ -102,8 +102,10 @@ final class FaceView: NSView {
     }
 
     /// The robot's gestures without servos: the eyes move instead.
+    private var gesturing = false
     func gesture(_ kind: String) {
-        let base = eyes.frame
+        gesturing = true
+        let base = NSRect(x: gazeX, y: 70, width: bounds.width, height: bounds.height - 120)
         let steps: [CGFloat]
         switch kind {
         case "nod": steps = [0, -18, 0, -18, 0]
@@ -116,6 +118,7 @@ final class FaceView: NSView {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.15) { [weak self] in
                 guard let self else { return }
                 self.eyes.frame = kind == "nod" ? base.offsetBy(dx: 0, dy: d) : base.offsetBy(dx: d, dy: 0)
+                if i == steps.count - 1 { self.gesturing = false; self.needsLayout = true }   // back to the gaze
             }
         }
     }
@@ -126,7 +129,7 @@ final class FaceView: NSView {
     func gaze(at x: CGFloat?, mirror: Bool) {
         var target: CGFloat = 0
         if let x { target = max(-1, min(1, (x - 320) / 320)) * 40 * (mirror ? 1 : -1) }
-        guard abs(target - gazeX) > 3 else { return }
+        guard !gesturing, abs(target - gazeX) > 3 else { return }
         gazeX = target
         NSAnimationContext.runAnimationGroup { c in
             c.duration = 0.35

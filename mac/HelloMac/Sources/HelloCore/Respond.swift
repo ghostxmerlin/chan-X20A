@@ -45,6 +45,9 @@ public struct ResponsePolicy {
     }
 
     public mutating func accepted(now: UInt64) { lastResponse = now }
+
+    /// a new hearing session (the ear's ids restart): seen starts over, the 10 s gap and the happy count stay
+    public mutating func newSession() { seen = 0 }
 }
 
 /// QuietWait: a chosen clip waits for 1.5 s without speech (the ear's VAD flag on every tick) and is dropped after 10 s.
