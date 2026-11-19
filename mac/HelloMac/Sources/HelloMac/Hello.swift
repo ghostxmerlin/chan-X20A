@@ -84,6 +84,10 @@ final class Hello: MouthDelegate {
             }
         }
         camera.onEnrolled = { [weak self] name, n in self?.log("人脸录入 \(name)：\(n) 张") }
+        camera.onFaces = { [weak self] boxes in                       // the eyes follow the largest face
+            let x = boxes.max { $0.width < $1.width }.map { $0.midX }
+            DispatchQueue.main.async { self?.face?.gaze(at: x, mirror: UserDefaults.standard.bool(forKey: "gazeMirror")) }
+        }
     }
 
     func start(mic: Bool = true, camera useCamera: Bool = true) {

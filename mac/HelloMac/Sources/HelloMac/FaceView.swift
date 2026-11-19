@@ -54,7 +54,7 @@ final class FaceView: NSView {
         modeLabel.frame = NSRect(x: 14, y: h - 36, width: 160, height: 28)
         burst.frame = NSRect(x: w - 220, y: h - 34, width: 210, height: 24); burst.alignment = .right
         toast.frame = NSRect(x: 170, y: h - 34, width: w - 400, height: 26)
-        eyes.frame = NSRect(x: 0, y: 70, width: w, height: h - 120)
+        eyes.frame = NSRect(x: gazeX, y: 70, width: w, height: h - 120)
         preview.frame = NSRect(x: w - 170, y: 76, width: 160, height: 120)
         word.frame = NSRect(x: 10, y: 52, width: w - 20, height: 42)
         dots.frame = NSRect(x: 10, y: 22, width: w - 20, height: 32)
@@ -117,6 +117,20 @@ final class FaceView: NSView {
                 guard let self else { return }
                 self.eyes.frame = kind == "nod" ? base.offsetBy(dx: 0, dy: d) : base.offsetBy(dx: d, dy: 0)
             }
+        }
+    }
+
+    // ---- gaze: no servos, so the eyes lean toward the face the camera sees (the robot's tracking stand-in) ----
+    private var gazeX: CGFloat = 0
+    /// x: the face centre in the camera's 640 px width, nil = nobody: back to the middle. mirror: flip left / right.
+    func gaze(at x: CGFloat?, mirror: Bool) {
+        var target: CGFloat = 0
+        if let x { target = max(-1, min(1, (x - 320) / 320)) * 40 * (mirror ? 1 : -1) }
+        guard abs(target - gazeX) > 3 else { return }
+        gazeX = target
+        NSAnimationContext.runAnimationGroup { c in
+            c.duration = 0.35
+            eyes.animator().frame = NSRect(x: gazeX, y: 70, width: bounds.width, height: bounds.height - 120)
         }
     }
 

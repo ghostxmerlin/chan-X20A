@@ -109,14 +109,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stylePop.target = self; stylePop.action = #selector(stylePicked)
         stack.addArrangedSubview(row("眼睛", stylePop))
         let boxes = NSStackView(); boxes.orientation = .horizontal; boxes.spacing = 10
-        for (k, title) in [("hear", "听觉"), ("cam", "摄像头"), ("up", "上传画面"), ("faces", "认人"), ("asr", "语音口令"), ("pre", "小画面")] {
+        let boxes2 = NSStackView(); boxes2.orientation = .horizontal; boxes2.spacing = 10
+        for (k, title) in [("hear", "听觉"), ("cam", "摄像头"), ("up", "上传画面"), ("faces", "认人"), ("asr", "语音口令"), ("pre", "小画面"), ("mirror", "眼睛左右反")] {
             let b = NSButton(checkboxWithTitle: title, target: self, action: #selector(toggled(_:)))
             b.identifier = NSUserInterfaceItemIdentifier(k)
-            b.state = k == "pre" ? .off : k == "asr" ? (UserDefaults.standard.bool(forKey: "voiceModule") ? .on : .off) : .on
+            b.state = k == "pre" ? .off : k == "asr" ? (UserDefaults.standard.bool(forKey: "voiceModule") ? .on : .off)
+                : k == "mirror" ? (UserDefaults.standard.bool(forKey: "gazeMirror") ? .on : .off) : .on
             checks[k] = b
-            boxes.addArrangedSubview(b)
+            (["hear", "cam", "up", "faces"].contains(k) ? boxes : boxes2).addArrangedSubview(b)
         }
         stack.addArrangedSubview(boxes)
+        stack.addArrangedSubview(boxes2)
         let btns = NSStackView(); btns.orientation = .horizontal
         btns.addArrangedSubview(NSButton(title: "说 hello", target: self, action: #selector(wake)))
         btns.addArrangedSubview(NSButton(title: "单击", target: self, action: #selector(tap1)))
@@ -206,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "faces": h.setFaces(on)
         case "pre": showPreview = on; if !on { face.setPreview(nil) }
         case "asr": h.setVoiceModule(on)
+        case "mirror": UserDefaults.standard.set(on, forKey: "gazeMirror")
         default: break
         }
     }
