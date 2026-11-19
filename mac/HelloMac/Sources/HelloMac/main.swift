@@ -212,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+if CommandLine.arguments.contains("--selftest") { exit(AppSelfTest.run()) }
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

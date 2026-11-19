@@ -72,8 +72,7 @@ final class AudioIn {
         }
         let inFmt = input.outputFormat(forBus: 0)
         guard inFmt.sampleRate > 0 else { throw NSError(domain: "hello", code: 1, userInfo: [NSLocalizedDescriptionKey: "麦克风不可用（权限？）"]) }
-        let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inFmt.sampleRate, channels: 1, interleaved: false)!
-        converter = AVAudioConverter(from: mono, to: out)
+        let mono = prepare(rate: inFmt.sampleRate)
         input.installTap(onBus: 0, bufferSize: 2048, format: inFmt) { [weak self] buf, when in
             self?.handle(buf, mono: mono)
         }
@@ -83,6 +82,13 @@ final class AudioIn {
         deviceName = AudioDevices.inputs().first { $0.id == device }?.name ?? "默认麦克风"
     }
 
+    /// The converter for an input rate -> the mono format the tap's channel 0 is copied into.
+    func prepare(rate: Double) -> AVAudioFormat {
+        let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
+        converter = AVAudioConverter(from: mono, to: out)
+        return mono
+    }
+
     func stop() {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
@@ -90,7 +96,7 @@ final class AudioIn {
         running = false
     }
 
-    private func handle(_ buf: AVAudioPCMBuffer, mono: AVAudioFormat) {
+    func handle(_ buf: AVAudioPCMBuffer, mono: AVAudioFormat) {      // internal: the app's --selftest feeds it
         let n = Int(buf.frameLength)
         guard n > 0, let ch = buf.floatChannelData, let conv = converter else { return }
         let now = monoUs()
@@ -131,12 +137,25 @@ final class AudioOut: SpeechOutput {
     private var started = false, finished = false
     var volume: Float = 0.8 { didSet { player.volume = volume } }
 
-    init(queue: DispatchQueue) {
+    private let offline: Bool
+
+    /// offline: no speaker (the app's --selftest renders by hand and counts the reports).
+    init(queue: DispatchQueue, offline: Bool = false) {
         self.queue = queue
+        self.offline = offline
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: fmt)
         player.volume = volume
+        if offline {
+            try? engine.enableManualRenderingMode(.offline, format: fmt, maximumFrameCount: 4096)
+        }
         try? engine.start()
+    }
+
+    /// --selftest: render `frames` of output by hand (offline mode only).
+    func renderForTest(frames: AVAudioFrameCount) {
+        guard offline, let b = AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat, frameCapacity: frames) else { return }
+        _ = try? engine.renderOffline(frames, to: b)
     }
 
     func begin(stream s: UInt32) {
@@ -170,7 +189,7 @@ final class AudioOut: SpeechOutput {
 
     private func schedule(_ b: AVAudioPCMBuffer) {
         let g = gen, ms = Int(b.frameLength) * 1000 / 24000
-        player.scheduleBuffer(b, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+        player.scheduleBuffer(b, completionCallbackType: offline ? .dataRendered : .dataPlayedBack) { [weak self] _ in
             self?.queue.async {
                 guard let self, g == self.gen, let s = self.stream else { return }
                 self.playedMs += ms
