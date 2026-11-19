@@ -97,7 +97,8 @@
   "kws/kws_server.py": 1,
   "kws/spotter.py": 3,
   "kws/kws_tool.py": "tool",
-  "kws/export_onnx.py": "tool"
+  "kws/export_onnx.py": "tool",
+  "ear/rt_base.py": 2
  },
  "zh": {
   "ear/ear_server.py": "耳朵的入口：参数、装配、四条机器人连线分发、本地 ASR 和声纹",
@@ -143,13 +144,14 @@
   "common/hello_log_query.py": "运行日志查询（日志页、花费）",
   "common/prices.py": "价格表",
   "kws/kws_server.py": "关键词耳朵服务（Dynames）",
-  "kws/spotter.py": "关键词检测"
+  "kws/spotter.py": "关键词检测",
+  "ear/rt_base.py": "Docking 的模块级部分：常量、文字和说明的小函数、小类（从 realtime_link 原样搬出）"
  },
  "allowed": [
   {
-   "from": "ear/realtime_link.py",
+   "from": "ear/rt_base.py",
    "to": "ear/mouth_link.py",
-   "why": "2026-11-19 现状，夜里第一阶段要清掉"
+   "why": "2026-11-19 现状，夜里第一阶段要清掉（4.2.1 随代码搬到 rt_base）"
   },
   {
    "from": "mind/library.py",

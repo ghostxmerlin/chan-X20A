@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 17:27",
- "commit": "63492ff",
+ "generated": "2026-11-19 17:59",
+ "commit": "dcae0b0",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -174,17 +174,14 @@
   },
   "ear/realtime_link.py": {
    "pkg": "ear",
-   "lines": 3641,
+   "lines": 2744,
    "layer": 2,
    "zh": "Docking 会话的全部：千问协议、回答闸门、模式、技能和工具、招呼和事件、触摸、说明拼装",
    "doc": "围观模式 realtime voice session (spike, 2026-11-14): hello talks with the people around her through DashScope's",
    "imports": [
-    "ear/ear_log.py",
     "ear/intent.py",
-    "ear/mode_span.py",
-    "ear/mouth_link.py",
-    "ear/vision_burst.py",
-    "ear/web_search.py"
+    "ear/rt_base.py",
+    "ear/vision_burst.py"
    ],
    "collections": []
   },
@@ -207,6 +204,20 @@
    "zh": null,
    "doc": "Keep everything the ear receives, for later review. Nothing here ever deletes.",
    "imports": [],
+   "collections": []
+  },
+  "ear/rt_base.py": {
+   "pkg": "ear",
+   "lines": 931,
+   "layer": 2,
+   "zh": "Docking 的模块级部分：常量、文字和说明的小函数、小类（从 realtime_link 原样搬出）",
+   "doc": "Docking hub, the module level: constants, the text and prompt helpers, small classes (moved out of",
+   "imports": [
+    "ear/ear_log.py",
+    "ear/mode_span.py",
+    "ear/mouth_link.py",
+    "ear/web_search.py"
+   ],
    "collections": []
   },
   "ear/signal_link.py": {
@@ -1345,7 +1356,7 @@
  },
  "violations": [
   {
-   "from": "ear/realtime_link.py",
+   "from": "ear/rt_base.py",
    "to": "ear/mouth_link.py",
    "from_layer": 2,
    "to_layer": 1
@@ -1414,8 +1425,8 @@
  "unassigned": [],
  "totals": {
   "ear": {
-   "modules": 25,
-   "lines": 10498
+   "modules": 26,
+   "lines": 10532
   },
   "mind": {
    "modules": 57,
