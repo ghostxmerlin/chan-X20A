@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 19:00",
- "commit": "caca4e5",
+ "generated": "2026-11-19 19:08",
+ "commit": "5e2ff48",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -202,12 +202,13 @@
   },
   "ear/realtime_link.py": {
    "pkg": "ear",
-   "lines": 1204,
+   "lines": 1219,
    "layer": 2,
    "zh": "Docking 会话的全部：千问协议、回答闸门、模式、技能和工具、招呼和事件、触摸、说明拼装",
    "doc": "围观模式 realtime voice session (spike, 2026-11-14): hello talks with the people around her through DashScope's",
    "imports": [
     "ear/rt_base.py",
+    "ear/rt_cards.py",
     "ear/rt_events.py",
     "ear/rt_gate.py",
     "ear/rt_interrupt.py",
@@ -253,6 +254,18 @@
    ],
    "collections": []
   },
+  "ear/rt_cards.py": {
+   "pkg": "ear",
+   "lines": 55,
+   "layer": 2,
+   "zh": "每句话一张卡片：当时的证据、后来的结局、影子分，写 gate.addressed（先看见，Fable 第 0 步）",
+   "doc": "Docking hub: one card per sentence the ear heard (Fable's audit step 0 \"先看见\", 2026-11-19): the evidence at that",
+   "imports": [
+    "ear/rt_base.py",
+    "ear/rt_rules.py"
+   ],
+   "collections": []
+  },
   "ear/rt_events.py": {
    "pkg": "ear",
    "lines": 154,
@@ -278,7 +291,7 @@
   },
   "ear/rt_interrupt.py": {
    "pkg": "ear",
-   "lines": 174,
+   "lines": 175,
    "layer": 2,
    "zh": "Docking 的叫名字、口令、触摸、闭嘴和打断（叫到窗口、必答、停、双击安静）",
    "doc": "Docking hub: 叫名字、口令、触摸、闭嘴和打断 — 叫到的窗口、点屏幕必答 / 停、双击安静、停下自己的回答和正在跑的工具（2026-11-19 refactor 4.2.4, moved from realtime_link.py unchanged).",
@@ -312,7 +325,7 @@
   },
   "ear/rt_rules.py": {
    "pkg": "ear",
-   "lines": 35,
+   "lines": 71,
    "layer": 3,
    "zh": "Docking 回答闸门的判定（纯函数）：口令 / 调试 / 安静 / 少插话、等照片、等搜索",
    "doc": "Docking's reply-gate decisions as pure functions (2026-11-19 refactor 4.2.9, after Fable's audit 4.3: \"把判断写成纯函数",
@@ -1547,8 +1560,8 @@
  "unassigned": [],
  "totals": {
   "ear": {
-   "modules": 35,
-   "lines": 10686
+   "modules": 36,
+   "lines": 10793
   },
   "mind": {
    "modules": 57,

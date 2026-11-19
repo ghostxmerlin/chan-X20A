@@ -107,7 +107,8 @@
   "ear/rt_looks.py": 2,
   "ear/rt_gate.py": 2,
   "ear/rt_rules.py": 3,
-  "ear/ear_hearing.py": 1
+  "ear/ear_hearing.py": 1,
+  "ear/rt_cards.py": 2
  },
  "zh": {
   "ear/ear_server.py": "耳朵的入口：参数、装配、连线分发（听觉流水线在 ear_hearing）",
@@ -163,7 +164,8 @@
   "ear/rt_looks.py": "Docking 的看和搜：人脸、画面、注视、视觉爆发词、身体感觉、联网搜索的等待",
   "ear/rt_gate.py": "Docking 的回答闸门和补救（播不播、嗯门、重复门、补救）",
   "ear/rt_rules.py": "Docking 回答闸门的判定（纯函数）：口令 / 调试 / 安静 / 少插话、等照片、等搜索",
-  "ear/ear_hearing.py": "听的流水线：本地识别、声纹、声音标签、降噪、录音、听悟、一条听觉连线（从 ear_server 原样搬出）"
+  "ear/ear_hearing.py": "听的流水线：本地识别、声纹、声音标签、降噪、录音、听悟、一条听觉连线（从 ear_server 原样搬出）",
+  "ear/rt_cards.py": "每句话一张卡片：当时的证据、后来的结局、影子分，写 gate.addressed（先看见，Fable 第 0 步）"
  },
  "allowed": [
   {

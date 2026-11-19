@@ -2583,3 +2583,58 @@ class MustAnswerPinTest(CalledTest):
         self.hub.step()
         await settle(10)
         self.assertEqual(self.hub.state, "closed")     # GAP: deaf until the retry wait is over
+
+
+class SentenceCardTest(HubBase):
+    """Fable's step 0 (2026-11-19): every sentence the ear hears gets a card (evidence at that moment) and, after
+    CARD_WAIT_S, one gate.addressed row with its outcome and a shadow score that decides nothing."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.rows = []
+        import ear_log
+        self._emit = ear_log.emit
+        ear_log.emit = lambda kind, **f: (self.rows.append((kind, f)), self._emit(kind, **f))[1]
+
+    async def asyncTearDown(self):
+        import ear_log
+        ear_log.emit = self._emit
+        await super().asyncTearDown()
+
+    def cards(self):
+        return [f for k, f in self.rows if k == "gate.addressed"]
+
+    async def test_a_called_sentence_qwen_never_judged_is_must_and_none(self):
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        self.hub.local_heard("今天天气怎么样")
+        self.t[0] += self.rl.CARD_WAIT_S if hasattr(self.rl, "CARD_WAIT_S") else 10.0
+        self.hub.step()
+        await settle(10)
+        c = self.cards()[-1]["extra"]
+        self.assertEqual((c["level"], c["outcome"], c["called_source"], c["question"]), ("must", "none", "asr", False))
+        self.assertNotIn("text", c)                                   # the words stay in heard.asr only
+
+    async def test_an_ambient_sentence_and_an_answered_one(self):
+        ws = await self.open_ready()
+        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "他们在聊午饭"})
+        await settle(10)
+        self.hub.local_heard("他们在聊午饭")
+        self.t[0] += 8.0
+        await self.play_one(ws, "r1")                                  # a reply that played, before the ear's text
+        self.t[0] += 1.0
+        self.hub.local_heard("你好呀")
+        self.t[0] += 10.5
+        self.hub.step()
+        await settle(10)
+        outs = [c["extra"]["outcome"] for c in self.cards()]
+        self.assertIn("ambient", outs)
+        self.assertIn("answered", outs)
+
+    def test_score(self):
+        import rt_rules
+        self.assertEqual(rt_rules.address_score({"touch": True, "called": True}), (80, "must"))
+        self.assertEqual(rt_rules.address_score({"follow_s": 5.0, "question": True}), (40, "should"))
+        self.assertEqual(rt_rules.address_score({"you": True, "faces": 1}), (20, "maybe"))
+        self.assertEqual(rt_rules.address_score({"follow_s": 60.0}), (0, "low"))
+        self.assertEqual(rt_rules.card_outcome([("ambient", None), ("turn", "muted_quiet")]), "muted:quiet")
+        self.assertEqual(rt_rules.card_outcome([]), "none")

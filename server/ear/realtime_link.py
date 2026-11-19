@@ -80,6 +80,7 @@ import rt_base as _rt_base  # noqa: E402
 # every name of rt_base (also the underscore ones), so the moved code resolves exactly as before
 globals().update({_k: _v for _k, _v in vars(_rt_base).items() if not _k.startswith("__")})
 from rt_gate import GateMixin  # noqa: E402
+from rt_cards import CardsMixin  # noqa: E402
 from rt_looks import LooksMixin  # noqa: E402
 from rt_tools import ToolsMixin  # noqa: E402
 from rt_skills import SkillsMixin  # noqa: E402
@@ -88,7 +89,7 @@ from rt_events import EventsMixin  # noqa: E402
 from rt_manner import MannerMixin  # noqa: E402
 
 
-class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMixin, LooksMixin, GateMixin):
+class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMixin, LooksMixin, GateMixin, CardsMixin):
     def __init__(self, *, key, voice, modes, call, switch, db=None, connect=None, encoder_factory=None,
                  cfg=None, clock=time.monotonic, wall_ms=None, rng=None, fillers=None):
         if connect is None:
@@ -206,6 +207,9 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._filler_traces = collections.deque(maxlen=16)
         self._tool_ok_traces = collections.deque(maxlen=16)   # sentences whose tool calls passed the tool gate
         self._speakers = collections.deque(maxlen=16)  # (at, band, voice name) of the ear's recent sentences
+        self._cards = collections.deque(maxlen=64)     # sentence cards waiting for their outcome (rt_cards, 2026-11-19)
+        self._card_events = collections.deque(maxlen=256)   # (at, turn / ambient, state) for the cards
+        self._called_source = None                     # the last call's source (asr / name / text / touch)
         self._speaker_sent = None
         self.intent = None                             # intent.Auto (自动档): decides before the model answers
         self._preloaded = {}                           # auto: skill id -> preloaded at (clock), not used yet
@@ -438,6 +442,10 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                 self._open_skills["debug"] = now       # kept open for the whole debug session
             else:
                 self._open_skill("debug", now, via="auto_open")
+        try:
+            self._cards_settle(now)                    # 先看见: cards whose outcome is in (gate.addressed)
+        except Exception as e:                         # noqa: BLE001
+            _log_failed("cards", e)
         if self._mode_word_at is not None and now - self._mode_word_at > 1800:
             self._show_mode_word()                     # a long / open-ended mode: the robot's word holds an hour at most
         if self._greet is not None and now - self._greet["at"] > self.cfg.greet_max_age_s:
@@ -768,6 +776,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
             if self._turn is turn:
                 self._turn = None
             self.stats["ambient"] += 1
+            self._card_note("ambient")
             called = self.in_called(now) or self._called_text is not None
             if self.on_transcript:
                 self.on_transcript("ambient", text)
@@ -955,6 +964,10 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                 self._speaker_sent = said              # the model learns the speaker changed (owner vs a stranger)
                 self._send_instructions("speaker", self._trace_now(trace))
         self._heard_log.append((now, {"trace": trace, "text": str(text)[:300], "at": self.wall_ms()}))
+        try:                                           # 先看见 (2026-11-19): the sentence's card, logged later
+            self._card_new(str(text)[:300], trace, speaker, now)
+        except Exception as e:                         # noqa: BLE001 - a card never costs the sentence
+            _log_failed("card", e)
         self._preload(str(text)[:300], now, trace=self._trace_now(trace))   # 自动档: before _heard_text's gates
         self._heard_text(str(text)[:300], now, trace=self._trace_now(trace))
 
@@ -1130,6 +1143,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                "audio_ms": turn.get("audio_ms"), "usage": usage, "cost_cny": cost_cny(turn.get("usage"))}
         self.stats["turns"] += 1
         self.stats["cost_micro_cny"] += int(doc["cost_cny"] * 1e6)
+        if turn.get("kind") not in LOCAL_KINDS:
+            self._card_note("turn", state)             # the sentence cards (rt_cards) read what became of their turn
         log(f"realtime: turn {turn.get('session')}/{turn.get('kind')} {state}: ear speech end->audio "
             f"{timings['ear_speech_end_to_first_audio_ms']} ms (server VAD end->audio "
             f"{timings['speech_end_to_first_audio_ms']} ms), ->robot sound {timings['ear_speech_end_to_robot_sound_ms']} ms, "

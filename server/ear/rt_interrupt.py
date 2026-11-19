@@ -18,6 +18,7 @@ class InterruptMixin:
         now = self.clock()
         merged = self._called_at is not None and now - self._called_at < 2.0
         self._called_at, self._called_until = now, now + CALLED_S
+        self._called_source = source
         self.stats["called_" + source] += 1
         stopped = self._interrupt(now) or interrupted
         self._quiet_until = 0.0
