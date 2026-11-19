@@ -13,6 +13,15 @@ import { parseEnv } from 'node:util';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export const root = path.resolve(directory, '../..');
+// config/skills: the directory (skills.json) with each skill's full text (skills/<id>.md, as the ear loads it) as md
+export function readSkills(dir) {
+  const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'skills.json'), 'utf8'));
+  for (const sk of cfg.skills || []) {
+    if (!/^[\w-]+$/.test(String(sk.id))) continue;
+    try { sk.md = fs.readFileSync(path.join(dir, 'skills', `${sk.id}.md`), 'utf8'); } catch { sk.md = null; }
+  }
+  return cfg;
+}
 export function createMonitorServer(monitor, controls = new Controls(monitor,{loadHearingConfig:()=>existingHearingConfig(path.join(root,'.env'))}), mind = null) {
   const assets = new Map([['/speech-settings.js', ['speech-settings.js','text/javascript; charset=utf-8']], ['/', ['index.html', 'text/html; charset=utf-8']],
     ['/hearing-ui.js', ['hearing-ui.js','text/javascript; charset=utf-8']], ['/servo-tuning-ui.js', ['servo-tuning-ui.js','text/javascript; charset=utf-8']], ['/wifi-ui.js', ['wifi-ui.js','text/javascript; charset=utf-8']], ['/eyes-ui.js', ['eyes-ui.js', 'text/javascript; charset=utf-8']], ['/control-ui.js', ['control-ui.js', 'text/javascript; charset=utf-8']], ['/voice-ui.js', ['voice-ui.js', 'text/javascript; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/m12-ui.js', ['m12-ui.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
@@ -23,7 +32,8 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/log.html', ['log.html', 'text/html; charset=utf-8']], ['/log-ui.js', ['log-ui.js', 'text/javascript; charset=utf-8']], ['/log.css', ['log.css', 'text/css; charset=utf-8']],
     ['/crowd-flow.html', ['crowd-flow.html', 'text/html; charset=utf-8']], ['/crowd-flow.css', ['crowd-flow.css', 'text/css; charset=utf-8']],
     ['/crowd-plan.html', ['crowd-plan.html', 'text/html; charset=utf-8']], ['/crowd-plan.css', ['crowd-plan.css', 'text/css; charset=utf-8']], ['/crowd-plan.js', ['crowd-plan.js', 'text/javascript; charset=utf-8']],
-    ['/tools.html', ['tools.html', 'text/html; charset=utf-8']], ['/tools-ui.js', ['tools-ui.js', 'text/javascript; charset=utf-8']]]);
+    ['/tools.html', ['tools.html', 'text/html; charset=utf-8']], ['/tools-ui.js', ['tools-ui.js', 'text/javascript; charset=utf-8']],
+    ['/skills.html', ['skills.html', 'text/html; charset=utf-8']], ['/skills-ui.js', ['skills-ui.js', 'text/javascript; charset=utf-8']], ['/skills.css', ['skills.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -97,6 +107,11 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     if (url.pathname === '/api/tools') {             // A2 (2026-11-18): the tool registry, config/tools/registry.json
       try { res.setHeader('Content-Type', 'application/json'); res.end(fs.readFileSync(path.join(root, 'config/tools/registry.json'))); }
       catch { respond(503, '读不到工具注册表'); }
+      return;
+    }
+    if (url.pathname === '/api/skills') {            // 2026-11-19: the Docking skills, config/skills/skills.json + skills/<id>.md
+      try { res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(readSkills(path.join(root, 'config/skills')))); }
+      catch { respond(503, '读不到技能文件'); }
       return;
     }
     if (url.pathname === '/api/state') {

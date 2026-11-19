@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>hello 技能</title>
+  <link rel="stylesheet" href="/skills.css">
+  <script type="module" src="/skills-ui.js"></script>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <div class="top-row">
+    <h1>hello 的技能</h1>
+    <a href="/">← 观察台</a>
+  </div>
+  <p class="lead">Docking 里千问先找技能，再用技能里的工具。技能卡片每次打开页面都从仓库里的 <code>config/skills/</code> 现读，改了技能文件刷新就能看到；流程图按 2026-11-19 的代码画。</p>
+  <div class="stats" id="stats"></div>
+</div></header>
+
+<nav class="bar" aria-label="页面目录"><div class="wrap">
+  <a href="#skills">技能</a><a href="#flow">调用流程</a><a href="#watch">以后怎么审核</a><a href="#todo">要关注的事</a>
+  <a class="other" href="/tools.html">工具清单</a><a class="other" style="margin-left:0" href="/log.html">日志</a>
+</div></nav>
+
+<main>
+<section id="skills"><div class="wrap">
+  <div class="sec-head">
+    <h2>技能</h2>
+    <p class="lead">按本地分类器认的 8 个大类分组。分类器认出大类，自动档就把这一类下面的技能先装上。工具名后面是它的中文名，左边的色条是级别。</p>
+    <div class="legend">
+      <span><i style="background:var(--l-r)"></i>R 只读</span>
+      <span><i style="background:var(--l-a)"></i>A 动作，直接做</span>
+      <span><i style="background:var(--l-c)"></i>C 要确认：主人亲口说才直接做，别人说的进「待确认」</span>
+    </div>
+    <p class="meta" id="uncovered"></p>
+  </div>
+  <div id="groups"><p class="lead">读取中…</p></div>
+</div></section>
+
+<section id="flow"><div class="wrap">
+  <div class="sec-head">
+    <h2>一句话怎么走到工具</h2>
+    <p class="lead">自动档现在的真实顺序，照耳朵（<code>server/ear/realtime_link.py</code>）和 mind（<code>server/mind/tools.py</code>）的代码画的。左边的色条是这一步在哪里跑。</p>
+    <div class="legend">
+      <span><i style="background:var(--lane-ear)"></i>耳朵（服务器本机，不花钱）</span>
+      <span><i style="background:var(--lane-qwen)"></i>千问（云端，按 token 计费）</span>
+      <span><i style="background:var(--lane-mind)"></i>mind（服务器，执行工具）</span>
+      <span><i style="background:var(--warn-bg);outline:1px solid var(--warn)"></i>被挡回或要注意</span>
+    </div>
+  </div>
+  <figure>
+    <div class="svgbox" id="flow-svg"></div>
+    <figcaption>第 ⑥ 步的红框是画图时发现的问题：一句话最多调几次工具，技能档是 5 次，自动档实际是 3 次，而且打开技能也算 1 次。验收脚本按 5 次算，所以 48/49 是在比真机宽的条件下测出来的。见「要关注的事」第 1 条。</figcaption>
+  </figure>
+
+  <h3 class="mt">模型手里此刻有什么（自动档）</h3>
+  <div class="hold">
+    <div><b>一直在：技能目录</b>一个 <code>open_skill</code> 工具，里面列全部技能，每个一句「什么时候用」加它的工具名。</div>
+    <div><b>用到才有：打开的技能</b>最多 4 个技能、16 个工具。技能全文放在说明的【此刻打开的技能】里，撤掉就删，不留在对话历史。</div>
+    <div><b>多久撤</b>打开的留 10 分钟；分类器提前装的没用上，2 分钟撤；自由发挥给全部工具，留 5 分钟。</div>
+    <div><b>说话人</b>说明里写着「声音（刚才那句话）」：主人本人、认识的家里人，还是不认识的声音。</div>
+  </div>
+
+  <h3 class="mt">四个档位的差别</h3>
+  <div class="modes">
+    <div class="mode" data-mode="关"><b>关<span class="tag" hidden>现在</span></b>不带工具。千问自带的联网搜索照常开。</div>
+    <div class="mode" data-mode="全部工具"><b>全部工具<span class="tag" hidden>现在</span></b>每轮直接带 48 个工具，约 5668 个输入 token，每轮重新计费。没有第 ② ④ 步。</div>
+    <div class="mode" data-mode="技能"><b>技能<span class="tag" hidden>现在</span></b>只给目录，模型自己决定开哪个。没有第 ② 步。验收 43/49。</div>
+    <div class="mode" data-mode="自动"><b>自动<span class="tag" hidden>现在</span></b>目录加分类器提前装。验收 48/49。</div>
+  </div>
+  <p class="lead" style="margin-top:12px">带工具的会话都关掉千问自带的搜索：两样同时开，每一句回答都会失败。搜索改走 <code>web_search</code> 工具。</p>
+</div></section>
+
+<section id="watch"><div class="wrap">
+  <div class="sec-head">
+    <h2>以后怎么审核调用</h2>
+    <p class="lead">优化要靠你看过真实的调用、标出哪里不对。下面是现在能看到的、还缺的，和建议的做法。</p>
+  </div>
+  <div class="prose">
+    <h3>现在能看到的</h3>
+    <p>日志页点任何一条的「看整条链路」，能看到同一句话的一串记录：</p>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>日志里的类型</th><th>说的是什么</th><th>在不在这句话的链路上</th></tr></thead>
+    <tbody>
+      <tr><td class="k"><code>trigger.intent</code></td><td>分类器的分数、认出的大类、先装了哪些技能</td><td>在</td></tr>
+      <tr><td class="k"><code>trigger.skill</code></td><td>模型打开了哪个技能</td><td class="gap">不在：每次另起一个新编号，从链路里看不到</td></tr>
+      <tr><td class="k"><code>call.realtime.tool</code></td><td>千问调了什么工具、参数、第几次、成败</td><td>在</td></tr>
+      <tr><td class="k"><code>call.tool.*</code></td><td>mind 执行的结果：成败、耗时、花费</td><td>在，但<span class="gap">工具返回的内容没记</span></td></tr>
+      <tr><td class="k"><code>gate.realtime</code></td><td>被工具门、身体门挡回的；回答过没过「嗯」门</td><td>在</td></tr>
+      <tr><td class="k"><code>call.realtime.turn</code></td><td>这一轮的回答文字、token、花费</td><td>在</td></tr>
+    </tbody>
+  </table></div>
+  <p class="lead" style="margin-top:10px">还缺两样：提前装了但没用上的技能没有单独记录（只在耳朵的计数里）；工具调用那条上没写当时是谁在说话。</p>
+
+  <div class="prose mt">
+    <h3>建议：观察台加一页「调用审核」</h3>
+    <p>日志页按时间排，适合查问题，不适合审核。审核页按句子排：每一句碰到过工具的话一张卡片，从听到到回答一眼看完，你只需要点一个标记。</p>
+    <p>哪些句子进来：调过工具的；分类器提前装了技能的；被工具门或身体门挡回的；还有分类器说要工具、模型却没调的（可能漏了）。意思几乎一样的句子合成一张，标一次算一次。</p>
+  </div>
+  <div class="mock" aria-label="审核卡片示例">
+    <div class="ex">示例卡片：只示意格式，里面的数字是编的</div>
+    <div><b>「比特币现在多少钱」</b> · 主人本人（声纹） · 叫过 hello</div>
+    <ol>
+      <li>分类器：要工具 0.93，大类 world → 先装实时数据、查证到底、深入研究</li>
+      <li>放「我查一下」</li>
+      <li><code>live_data {"kind":"price","symbol":"BTC"}</code> → 成功，1.2 秒，返回：价格、24 小时涨跌、来源 CoinGecko</li>
+      <li>回答：「比特币现在六万三千多美元，24 小时跌了 1.7%……」 · 首个声音 2.4 秒 · ¥0.02</li>
+    </ol>
+    <div class="marks"><span>对</span><span>不该调</span><span>该调没调</span><span>技能选错</span><span>参数或结果不对</span><span>回答没用上结果</span><span>太慢</span><span>写一句备注</span></div>
+  </div>
+
+  <div class="prose mt"><h3>你的标记流到哪里</h3></div>
+  <div class="tbl"><table>
+    <thead><tr><th>标记</th><th>改什么</th><th>怎么验证</th></tr></thead>
+    <tbody>
+      <tr><td class="k">不该调 / 该调没调</td><td>分类器的标注（每晚 04:20 重新训练），必要时调工具门的门槛</td><td>第二天看同类句子</td></tr>
+      <tr><td class="k">技能选错</td><td>技能的「什么时候用 / 不用」，或者它的大类</td><td rowspan="3">这句话加进验收句（<code>tools/skills/cases.json</code>），改完重跑验收，不能比原来差</td></tr>
+      <tr><td class="k">参数或结果不对</td><td>技能里的参数例子；工具本身的说明或实现</td></tr>
+      <tr><td class="k">回答没用上结果</td><td>技能的「回答」一段</td></tr>
+      <tr><td class="k">太慢</td><td>工具本身（数据源、超时），或者不该放垫话的放了</td><td>审核页上的耗时</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="prose mt">
+    <h3>每天一行数字</h3>
+    <p>审核页顶上放当天的汇总，用来判断要不要细看：句子数、提前装了几次及用上的比例、工具调用数和成功率、被工具门挡回、被身体门挡回、次数到顶、新进的待确认、工具和技能多花的钱。</p>
+    <h3>分工</h3>
+    <p>你叫我的时候，我先把一段时间的卡片过一遍，明显的我先标好并注明是我标的，拿不准的留给你。分类器的标注照旧由我校正，不用付费模型。改技能、改分类器之前都先跑验收。</p>
+    <h3>先后</h3>
+    <p>先补日志的缺口（技能打开记到这句话的链路上、记下工具返回的摘要和说话人、记下没用上的预装），再做审核页。这些都还没动，等你说做。</p>
+  </div>
+</div></section>
+
+<section id="todo"><div class="wrap">
+  <div class="sec-head">
+    <h2>要关注的事</h2>
+    <p class="lead">2026-11-19 早上整理。前四条是画流程图时对着代码发现的，昨晚的汇总里没有。</p>
+  </div>
+  <div class="todo">
+    <div>
+      <h3>该修的</h3>
+      <ol>
+        <li><span class="pill fix">要修</span><b>自动档一句话只能调 3 次工具，不是 5 次。</b>耳朵只在「技能」档用 5 次，自动档用的是旧的 3 次，而且打开技能也算一次。所以「打开技能 → 查 → 再查」之后，第三个工具就被挡。验收脚本按 5 次算，没测出来。改一行，要重新部署耳朵。</li>
+        <li><span class="pill fix">要修</span><b>自由发挥里的「查证」一定会超时。</b><code>search_verify</code> 要 38 秒左右，耳朵等工具最多 30 秒。自由发挥给全部工具时它也在里面。建议从自由发挥里拿掉，或者给它单独放宽。</li>
+        <li><span class="pill fix">要修</span><b>日志缺口</b>（见上一节）：技能打开不在链路上、工具返回内容没记、调用上没写说话人、没用上的预装没记录。不补的话审核页看不全。</li>
+        <li><span class="pill fix">要查</span><b>今天早上声纹一直没认出主人</b>（09:22–09:33 每句都是「不确定」或「不认识」）。所以「亲口算本人」现在不生效；身体动作能做，只是因为 M12 正好认出了你的脸，脸不在画面里就会被身体门挡。</li>
+        <li><span class="pill fix">要查</span><b>模型把内部事件格式当回答。</b>09:32「放点好玩的台词」它回的是「[事件] 主人又出现了…」，被标记门拦下，所以什么都没说。</li>
+        <li><span class="pill fix">小事</span><b>「刚才听到的话」「刚才的声音」两个工具不在任何技能里</b>，只有自由发挥能用。建议放进「回忆往事」。</li>
+      </ol>
+    </div>
+    <div>
+      <h3>要你定的</h3>
+      <ol>
+        <li><span class="pill you">你定</span><b>推送。</b>41 个提交还在本机（最新 <code>9471ac8</code>）。含孩子名字的那份标注已经从提交里拿掉，但旧记录还留在本机 git 的引用日志里，清掉需要你自己运行 <code>git reflog expire --expire=now --all &amp;&amp; git gc --prune=now</code>。</li>
+        <li><span class="pill you">你定</span><b>深入研究每个任务 ¥2 的上限。</b>一次快查实测约 ¥1.5，一般和深入可能做到一半停。要不要提到 ¥5。</li>
+        <li><span class="pill you">你定</span><b>点头摇头的幅度和速度</b>（现在 ±8°、慢），看了实物再说。</li>
+        <li><span class="pill you">以后</span><b>学人脸</b>（你说再说，<code>face_learn_propose</code> 没接入）；<b>通知渠道</b>（先不做，现在「帮忙盯着」只能当面说）。</li>
+        <li><span class="pill you">只提一次</span><b>耳朵本机接口</b>和 mind 用同一个令牌，要更严可以单独给一个。</li>
+      </ol>
+    </div>
+    <div>
+      <h3>要观察的</h3>
+      <ol>
+        <li><span class="pill watch">看一天</span><b>花费。</b>自动档每次装技能都会把技能全文放进说明，比只给目录多花 token。今天凌晨统计时只花了 ¥0.08，跑满一天再看「今天花了多少」。</li>
+        <li><span class="pill watch">看一天</span><b>预装白装的比例。</b>分类器在闲聊里有 14% 会说要工具，这时技能先装上但用不到；工具门会挡住真正的调用，但装技能本身要多带 token。</li>
+        <li><span class="pill watch">流程</span><b>每晚重训只学校正过的标注。</b>新来的句子都只是草稿，不会自动变准。审核页的标记要流回标注，这件事要定一个固定的节奏。</li>
+        <li><span class="pill watch">确认</span><b>「没人就暂停」</b>应该在今天 09:00 自动恢复了；10:00 hello 会提醒你看汇总。</li>
+        <li><span class="pill watch">不动</span><b>对话模式</b>照你说的没加工具，先只做 Docking。</li>
+      </ol>
+    </div>
+  </div>
+</div></section>
+</main>
+
+<footer><div class="wrap">技能文件在 <code>config/skills/</code>（目录 <code>skills.json</code>，全文 <code>skills/&lt;id&gt;.md</code>）。改完跑耳朵的部署，再在服务器上跑 <code>skills-tools/eval.py auto</code> 验收。</div></footer>
+</body>
+</html>
