@@ -74,6 +74,21 @@ int main()
         s.on_stage(Stage::Listen, 11 * kS);
         assert(v.tick(true, s, false, 11 * kS) == kListen);
     }
+    // Tool (0.5.16): all amber while a skill / tool runs, up to 90 s; speaking wins; a new stage ends it.
+    {
+        Stage st;
+        assert(stage_from("tool", st) && st == Stage::Tool && !std::strcmp(stage_id(st), "tool"));
+        StageState s; DotsView v;
+        s.on_stage(Stage::Tool, 1 * kS);
+        Dots d = v.tick(true, s, false, 2 * kS);
+        assert(d.visible && d.tool && !d.aside && !d.grey && d.lit == -1);
+        assert(v.tick(true, s, false, 1 * kS + kToolUs - 1).tool);
+        assert(v.tick(true, s, false, 1 * kS + kToolUs) == kIdle);
+        s.on_stage(Stage::Tool, 200 * kS);
+        assert(v.tick(true, s, true, 200 * kS + 1) == kSpeak);
+        s.on_stage(Stage::Think, 201 * kS);
+        assert(!v.tick(true, s, false, 201 * kS + 1).tool);
+    }
     // Aside (0.5.04, smart_turn: not for hello): all blue for 1.5 s, then idle; speaking wins over it; a new stage ends it.
     {
         Stage st;

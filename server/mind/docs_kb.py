@@ -254,54 +254,74 @@ def _resolve_project(db, name):
     return False
 
 
-def search_tool(db, embed_fn, clock_ms=None):
-    """The doc_search tool: fn(args) -> Paid({query, project, hits[...], how}, cost) (or a plain dict when only the
-    exact-word search ran)."""
+def find(db, q, proj=None, limit=4, embed_fn=None, now_ms=None):
+    """-> (chunk docs best first, how [按意思 / 按字面…], embed info or None). The search behind doc_search and
+    doc_answer: the query's vector against the doc vectors (skipped without an embedder or at the daily cap) plus the
+    exact-word search, merged; an entry asked for by its id first."""
     from . import pause, semantic
-    from .tools import Paid, ToolError
+    vec_ids, info, how = [], None, []
+    if embed_fn is not None and not pause.budget_stop(db, now_ms):
+        try:
+            cands, info = semantic.search(db, q, ["doc"], limit * 3, embed_fn, pool=4 if proj else 2)
+            vec_ids = [c["sid"] for c in cands if not proj or (c.get("ref") or {}).get("project") == proj]
+            how.append("按意思")
+        except semantic.EmbedError:
+            pass
+    kw_ids = keyword_hits(db, q, proj)
+    if kw_ids:
+        how.append("按字面：" + "、".join(words(q)[:6]) if words(q) else "按字面")
+    # an entry asked for by its id (HW-035, kb-...-002) comes first, whatever the vectors say
+    pinned = [r["_id"] for w in words(q) for r in db[COLL].find({**({"project": proj} if proj else {}), "cid": w}, {"_id": 1})]
+    out = []
+    for _id in list(dict.fromkeys(pinned + merge(vec_ids, kw_ids))):
+        c = db[COLL].find_one({"_id": _id}, {"hash": 0})
+        if c:
+            out.append(c)
+        if len(out) >= limit:
+            break
+    return out, how, info
+
+
+def hit_row(c, snippet=SNIPPET):
+    text = c.get("text") or ""
+    return {"project": c.get("project_title"), "id": c.get("cid"), "title": c.get("title"), "status": c.get("status"),
+            "source": (c.get("source") or c.get("doc") or "")[:120], **({"branch": c["branch"]} if c.get("branch") else {}),
+            "text": text[:snippet] + ("…" if len(text) > snippet else "")}
+
+
+def check_args(db, args):
+    """-> (query, project key or None). Raises ToolError for an empty query, an unknown project or an empty library."""
+    from .tools import ToolError
+    q = (args.get("query") or args.get("question") or "").strip()
+    if not q:
+        raise ToolError("bad_args", "要说查什么（query）")
+    proj = _resolve_project(db, args.get("project"))
+    if proj is False:
+        raise ToolError("bad_args", "没有这个项目，可选：" + "、".join(t for _, t in projects(db)))
+    if not db[COLL].find_one({}, {"_id": 1}):
+        raise ToolError("not_available", "资料库还是空的，资料还没导入")
+    return q, proj
+
+
+def project_label(db, proj):
+    return next((t for k, t in projects(db) if k == proj), None) if proj else "全部"
+
+
+def search_tool(db, embed_fn, clock_ms=None):
+    """The doc_search tool: fn(args) -> {query, project, hits[...], how}. Not a Paid: the query's call.embed row
+    already carries its cost (a second cost on the tool row would count it twice in the ledger)."""
     now_ms = clock_ms or (lambda: int(time.time() * 1000))
 
     def doc_search(args):
-        q = (args.get("query") or "").strip()
-        if not q:
-            raise ToolError("bad_args", "要说查什么（query）")
+        q, proj = check_args(db, args)
         limit = max(1, min(int(args.get("limit") or 4), 6))
-        proj = _resolve_project(db, args.get("project"))
-        if proj is False:
-            raise ToolError("bad_args", "没有这个项目，可选：" + "、".join(t for _, t in projects(db)))
-        if not db[COLL].find_one({}, {"_id": 1}):
-            raise ToolError("not_available", "资料库还是空的，资料还没导入")
-        vec_ids, info, how = [], None, []
-        if embed_fn is not None and not pause.budget_stop(db, now_ms()):
-            try:
-                cands, info = semantic.search(db, q, ["doc"], limit * 3, embed_fn, pool=4 if proj else 2)
-                vec_ids = [c["sid"] for c in cands if not proj or (c.get("ref") or {}).get("project") == proj]
-                how.append("按意思")
-            except semantic.EmbedError:
-                pass
-        kw_ids = keyword_hits(db, q, proj)
-        # an entry asked for by its id (HW-035, kb-...-002) comes first, whatever the vectors say
-        pinned = [r["_id"] for w in words(q) for r in db[COLL].find({**({"project": proj} if proj else {}), "cid": w}, {"_id": 1})]
-        if kw_ids:
-            how.append("按字面：" + "、".join(words(q)[:6]) if words(q) else "按字面")
-        hits = []
-        for _id in list(dict.fromkeys(pinned + merge(vec_ids, kw_ids))):
-            c = db[COLL].find_one({"_id": _id}, {"_id": 0, "hash": 0})
-            if not c:
-                continue
-            text = c.get("text") or ""
-            hits.append({"project": c.get("project_title"), "id": c.get("cid"), "title": c.get("title"),
-                         "status": c.get("status"), "source": (c.get("source") or c.get("doc") or "")[:120],
-                         **({"branch": c["branch"]} if c.get("branch") else {}),
-                         "text": text[:SNIPPET] + ("…" if len(text) > SNIPPET else "")})
-            if len(hits) >= limit:
-                break
-        data = {"query": q, "project": next((t for k, t in projects(db) if k == proj), None) if proj else "全部",
-                "how": "、".join(how) or "没找到", "hits": hits,
+        chunks, how, _ = find(db, q, proj, limit, embed_fn, now_ms())
+        hits = [hit_row(c) for c in chunks]
+        data = {"query": q, "project": project_label(db, proj), "how": "、".join(how) or "没找到", "hits": hits,
                 "say": "答案只用这些片段里有的；说出处（项目和条目号）；状态是推测 / 未解决 / 没实板验证的要说明；片段里没有就说资料里没写"}
         if not hits:
             data["note"] = "资料里没找到，换个说法或说出型号 / 条目号再查"
-        return Paid(data, semantic.cost(info)) if info else data
+        return data
     return doc_search
 
 

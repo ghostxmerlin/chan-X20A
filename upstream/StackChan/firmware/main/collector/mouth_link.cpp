@@ -471,7 +471,9 @@ Applied mode_apply(const char* source, modes::rules::Input input, const modes::r
     {
         std::lock_guard<std::mutex> lock(mode_mutex);
         if (!modes_session) { std::snprintf(a.out.toast, sizeof a.out.toast, "NO MODES"); a.out.code = modes::rules::Code::UnknownInput; return a; }
-        a = modes_session->apply(esp_timer_get_time(), source, input, value, speaking);
+        const int64_t now = esp_timer_get_time();
+        // 0.5.16: a running skill / tool counts as speaking (a tap stops it); the ear learns it from the report
+        a = modes_session->apply(now, source, input, value, speaking || modes_session->tool_busy(now));
         mode_publish_locked();
     }
     // 0.5.15 (owner 2026-11-19): crowd's tap / double tap while hello speaks stops her here at once, as the ASR wake

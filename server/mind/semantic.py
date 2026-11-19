@@ -421,7 +421,7 @@ def search_tool(db, embed_fn, settings_fn, names_of, clock_ms=None):
         data = {"query": q, "kinds": [KIND_ZH[k] for k in kinds], "scanned": info.get("scanned", 0), "hits": hits}
         if not info.get("scanned"):
             data["note"] = "向量表是空的（还没回填），先用关键词查"
-        return Paid(data, cost(info))
+        return data              # not Paid: the call.embed row already carries the cost (2026-11-19: no double count)
     return semantic_search
 
 

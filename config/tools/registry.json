@@ -611,6 +611,45 @@
    }
   },
   {
+   "name": "doc_answer",
+   "title": "资料问答",
+   "group": "recall",
+   "level": "R",
+   "runs_on": "mind",
+   "status": "live",
+   "description": "回答主人工作上的技术问题：先在项目资料里查（指纹模组、Tab5/X10A、AIdea 手机），再用推理模型把查到的几段合起来推理出答案，带出处和要提醒的地方。要几秒到二十几秒。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "question": {
+      "type": "string",
+      "description": "主人的问题，原话或整理成一句完整的问题；有型号、引脚、条目号要写进去",
+      "maxLength": 120
+     },
+     "project": {
+      "type": "string",
+      "description": "只在一个项目里找（不写 = 全部）：指纹模组 / Tab5 / AIdea",
+      "maxLength": 20
+     }
+    },
+    "required": [
+     "question"
+    ]
+   },
+   "returns": "question, project, answer（口语 2–5 句）, confidence 高/中/低, caveats, missing, sources[{project, id, title, status, branch?}], rounds, searched[], model, say；资料里没有时 answer 为空、note",
+   "source": "server/mind/docs_qa.py：docs_kb.find（向量 + 字面）→ aihubmix Responses API gpt-6.2-sol（reasoning medium）推理，片段不够时再查一次；POST /tool/call",
+   "latency": "~5–25 s（一次向量化 + 一到两次推理）",
+   "cost": "每次约 $0.01–0.05（sol 按 token 计，run log call.docs_qa）；算进每天的上限",
+   "needs": [
+    "aihubmix API_KEY"
+   ],
+   "notes": "只问资料里的事；闲聊和生活上的事不要用。答案里的条目号、数字照说。",
+   "example": {
+    "question": "ICN7332 和 ICN7352 的录入次数有什么不同？",
+    "project": "指纹模组"
+   }
+  },
+  {
    "name": "doc_search",
    "title": "查资料",
    "group": "recall",

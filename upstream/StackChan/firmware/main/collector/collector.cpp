@@ -1980,7 +1980,7 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                         screen_show_word(m12words::kQwenBusy, static_cast<uint32_t>(now / 1000));
                     aside_seen = cd->state.aside_at_us; busy_seen = cd->state.busy_at_us;
                     const auto dots = cd->view.tick(cd->in_chat, cd->state, cd->in_chat && mouth::speaking(), now);
-                    screen_update_chat_dots(dots.visible, dots.lit, dots.grey, cd->color, dots.aside);
+                    screen_update_chat_dots(dots.visible, dots.lit, dots.grey, cd->color, dots.aside, dots.tool);
                 }
                 // 0.5.00 视觉爆发 indicator (burst_indicator.h): the ear's latest burst word, polled lock free; the
                 // tracker (PSRAM, made once) runs the countdown and the safety timeout, the top row draws it.

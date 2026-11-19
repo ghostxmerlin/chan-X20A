@@ -100,12 +100,14 @@ constexpr uint32_t kToastMs = 2000;
 constexpr int kBadgePadHor = 4, kBadgePadVer = 1, kRowX = 6, kRowGap = 6;
 static_assert(top::kRowH == 17 + 2 * kBadgePadVer, "top row = badge height (collector_mono_15 line height + padding)");
 constexpr uint32_t kDotDim = 0x5A5A5A, kDotGrey = 0x8C8C8C, kDotAside = 0x3D7BFF;   // aside: 0.5.04 smart_turn
+constexpr uint32_t kDotTool = 0xFFB020;                                              // 0.5.16: a tool is running
 constexpr uint32_t kTopDim = 0x4A4A4A, kLens = 0x20B8C8, kOffline = 0xA03030, kHot = 0xFFBF40, kSeen = 0x79FF97;
 constexpr uint32_t kNameInk = 0xFFBF40, kBolt = 0xFFD84A, kBatOk = 0x79FF97, kBatMid = 0xFFBF40, kBatLow = 0xFF3838;
 constexpr uint32_t kBurst = 0xFF5AD8, kBurstInk = 0xFFFFFF;   // 0.5.00 burst group: eye + time bar, look count
 struct TopState {
     bool stage = false, grey = false;    // stage blocks shown (chat / crowd); grey = the skip flash
     bool aside = false;                  // 0.5.04: blue flash, the realtime model judged "not for hello"
+    bool tool = false;                   // 0.5.16: all amber, a skill / tool is running
     int8_t lit = -1;                     // -1 none, 0 / 1 / 2 listen / think / speak
     uint32_t color = 0;                  // the mode's colour
     top::Vision vision;
@@ -600,8 +602,8 @@ void top_row_draw(lv_event_t* event)
     // Stage blocks: unlit = grey outline, lit = filled in the mode's colour, skip = all filled grey.
     if (l.blocks >= 0)
         for (int i = 0; i < 3; ++i) {
-            const bool lit = st.grey || st.aside || i == st.lit;
-            const uint32_t c = st.grey ? kDotGrey : st.aside ? kDotAside : lit ? st.color : kDotDim;
+            const bool lit = st.grey || st.aside || st.tool || i == st.lit;
+            const uint32_t c = st.grey ? kDotGrey : st.aside ? kDotAside : st.tool ? kDotTool : lit ? st.color : kDotDim;
             draw_rect(layer, row, l.blocks + i * (top::kBlockW + top::kBlockGap), 0, top::kBlockW, H, c, 0, lit, 2);
         }
     // M12 lens: red ring offline, grey off (standby), amber too hot, cyan with a pupil while detecting.
@@ -1607,7 +1609,7 @@ void screen_hide_toast()
     lv_obj_add_flag(mode_toast, LV_OBJ_FLAG_HIDDEN);
     toast_shown = false;
 }
-void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color, bool aside)
+void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color, bool aside, bool tool)
 {
     // 0.4.98: the blocks are drawn by the top row (top_row_draw); a change only invalidates it.
     if (!top_row) return;
@@ -1617,8 +1619,8 @@ void screen_update_chat_dots(bool visible, int lit, bool grey, uint32_t color, b
         return;
     }
     const int8_t l = static_cast<int8_t>(lit >= 0 && lit <= 2 ? lit : -1);
-    if (st.stage && l == st.lit && grey == st.grey && aside == st.aside && color == st.color) return;
-    st.stage = true; st.lit = l; st.grey = grey; st.aside = aside; st.color = color;
+    if (st.stage && l == st.lit && grey == st.grey && aside == st.aside && tool == st.tool && color == st.color) return;
+    st.stage = true; st.lit = l; st.grey = grey; st.aside = aside; st.tool = tool; st.color = color;
     top_dirty();
 }
 const char* screen_top_name() { return top_state ? top_state->name : ""; }

@@ -246,6 +246,11 @@ public:
     bool online() const { return online_; }
 
     // 0.4.98: how long crowd's tap report may wait for the look (0 = not held; the robot sets 0.8 s).
+    // 0.5.16: the ear is running a skill / tool (stage tool, within kToolUs): the touch rules count hello as speaking.
+    bool tool_busy(int64_t now_us) const
+    {
+        return dots_mode(state_.mode) && chat_.stage == chat::Stage::Tool && now_us - chat_.at_us < chat::kToolUs;
+    }
     void set_look_hold(int64_t us) { look_hold_us_ = us > 0 ? us : 0; }
     // The look for `token` is done: its report may go now. false when it already went (time, a later input, link).
     bool release_look(uint32_t token)

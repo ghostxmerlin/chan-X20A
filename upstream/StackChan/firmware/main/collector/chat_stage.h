@@ -20,9 +20,13 @@ namespace collector::chat {
 // StageState lives in the mode session (PSRAM, under the mode lock) and is written by the /mouth task; the screen
 // task copies it and runs DotsView, so only the screen task touches LVGL.
 
-enum class Stage : uint8_t { Idle, Listen, Think, Skip, Aside, Busy };
+// tool (0.5.16, owner 2026-11-19 "调用技能或工具时…机器上应该有ui…等同于在说话"): the ear is running one of hello's
+// skills / tools = all three amber for up to kToolUs (until the next stage or speech); while it lasts the touch rules
+// count hello as speaking (a tap stops it).
+enum class Stage : uint8_t { Idle, Listen, Think, Skip, Aside, Busy, Tool };
 constexpr int64_t kListenUs = 20LL * 1000000, kThinkUs = 8LL * 1000000, kSkipUs = 600LL * 1000;
 constexpr int64_t kAsideUs = 1500LL * 1000;
+constexpr int64_t kToolUs = 90LL * 1000000;
 constexpr int64_t kStartTrustUs = 1000000;     // a recorded tts.start this close before the tick's edge is this speech's
 constexpr size_t kMessageMax = 200;            // a chat_stage message is at most 200 B
 
@@ -35,11 +39,12 @@ inline bool stage_from(const char* s, Stage& out)
     if (!std::strcmp(s, "skip")) { out = Stage::Skip; return true; }
     if (!std::strcmp(s, "aside")) { out = Stage::Aside; return true; }
     if (!std::strcmp(s, "busy")) { out = Stage::Busy; return true; }
+    if (!std::strcmp(s, "tool")) { out = Stage::Tool; return true; }
     return false;
 }
 inline const char* stage_id(Stage s)
 {
-    static constexpr const char* kIds[] = {"idle", "listen", "think", "skip", "aside", "busy"};
+    static constexpr const char* kIds[] = {"idle", "listen", "think", "skip", "aside", "busy", "tool"};
     return kIds[static_cast<size_t>(s)];
 }
 
@@ -73,7 +78,8 @@ struct Dots {
     int8_t lit = -1;
     bool grey = false;
     bool aside = false;
-    bool operator==(const Dots& o) const { return visible == o.visible && lit == o.lit && grey == o.grey && aside == o.aside; }
+    bool tool = false;      // 0.5.16: all three amber, a skill / tool is running
+    bool operator==(const Dots& o) const { return visible == o.visible && lit == o.lit && grey == o.grey && aside == o.aside && tool == o.tool; }
     bool operator!=(const Dots& o) const { return !(*this == o); }
 };
 
@@ -100,6 +106,7 @@ public:
         if (now_us < cur_.skip_until_us) { d.grey = true; return d; }
         if (speaking) { d.lit = 2; return d; }
         if (now_us < cur_.aside_until_us) { d.aside = true; return d; }
+        if (cur_.stage == Stage::Tool && now_us - cur_.at_us < kToolUs) { d.tool = true; return d; }
         if (cur_.stage == Stage::Listen && now_us - cur_.at_us < kListenUs) d.lit = 0;
         else if (cur_.stage == Stage::Think && now_us - cur_.at_us < kThinkUs) d.lit = 1;
         return d;

@@ -2290,3 +2290,72 @@ class TouchTest(HubBase):
         self.assertTrue(self.hub.quiet_on())
         self.assertFalse(self.hub.in_called())
         self.assertEqual(self.words[-1][0], "安静中")
+
+
+class ToolBusyTest(HubBase):
+    """Owner 2026-11-19: while a tool runs hello is busy as if speaking (amber dots, a word, no new speech up); a call or
+    a tap cancels it and its result is dropped."""
+    async def start(self, release):
+        import threading
+        self.words = []
+        self.hub.screen_word = lambda text, hold: self.words.append(text)
+
+        def call(method, path, body=None, timeout=5):
+            if path == "/tools":
+                return 200, {"tools": [{"type": "function", "function": {"name": "doc_answer", "description": "资料",
+                                                                         "parameters": {"type": "object", "properties": {}}}}]}
+            if path == "/tool/call":
+                release.wait(5)
+                return 200, {"ok": True, "data": {"answer": "x"}, "error": None}
+            return 200, json.loads(json.dumps(CTX))
+        self.hub.call = call
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch = sw
+        ws = await self.open_ready()
+        self.hub.called("text")                                   # past the tool gate
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.function_call_arguments.done", "response_id": "r1", "call_id": "c1",
+                 "name": "doc_answer", "arguments": '{"question": "ICN7332 录几次"}'})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed"}})
+        await settle(30)
+        return ws
+
+    def outputs(self, ws):
+        return [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
+
+    async def test_busy_while_the_tool_runs_then_answered(self):
+        import threading
+        release = threading.Event()
+        ws = await self.start(release)
+        self.assertEqual(self.hub._tool_wait["name"], "doc_answer")
+        self.assertTrue(self.hub.busy())
+        self.assertIn("查资料中", self.words)
+        release.set()
+        await settle(30)
+        self.assertIsNone(self.hub._tool_wait)
+        self.assertEqual(json.loads(self.outputs(ws)[0]["item"]["output"])["data"], {"answer": "x"})
+        self.assertEqual(ws.sent[-1]["type"], "response.create")
+
+    async def test_a_call_cancels_the_running_tool(self):
+        import threading
+        release = threading.Event()
+        ws = await self.start(release)
+        self.hub.called("asr")                                    # "hello" while it runs
+        self.assertEqual(self.hub.stats["tool_interrupted"], 1)
+        release.set()
+        await settle(30)
+        out = self.outputs(ws)
+        self.assertEqual(json.loads(out[-1]["item"]["output"])["error"]["code"], "cancelled")
+        self.assertNotEqual(ws.sent[-1]["type"], "response.create")
+        self.assertEqual(self.hub.stats["tool_dropped"], 1)
+
+    async def test_a_tap_while_the_tool_runs_is_a_stop(self):
+        import threading
+        release = threading.Event()
+        await self.start(release)
+        self.hub.touched()                                        # older firmware: no stop_speech on the report
+        self.assertEqual(self.hub.stats["touch_stop"], 1)
+        self.assertEqual(self.hub.stats["tool_interrupted"], 1)
+        release.set()
+        await settle(30)

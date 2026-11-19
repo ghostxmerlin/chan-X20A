@@ -186,20 +186,19 @@ class ToolTest(unittest.TestCase):
 
     def test_hits_and_how_to_open(self):
         out = self.t["semantic_search"]({"query": "上次说的那个板子问题", "limit": 3})
-        self.assertIsInstance(out, Paid)
-        self.assertEqual((out.cost["cur"], out.cost["est"]), ("CNY", True))
-        d = out.data
+        self.assertIsInstance(out, dict)          # not Paid (2026-11-19): the call.embed row carries the cost
+        d = out
         self.assertEqual(len(d["hits"]), 3)
         top = d["hits"][0]
         self.assertEqual((top["kind"], top["kind_title"], top["id"], top["title"], top["when"]),
                          ("notes", "纪要", "c1", "板子识别不了", "11-17 14:00"))
         self.assertEqual(top["open"], {"tool": "notes_search", "args": {"from": "2026-11-17 14:00", "to": "2026-11-17 14:21"}})
-        seg = self.t["semantic_search"]({"query": "调板子", "kinds": ["segment"], "limit": 1}).data["hits"][0]
+        seg = self.t["semantic_search"]({"query": "调板子", "kinds": ["segment"], "limit": 1})["hits"][0]
         self.assertEqual((seg["title"], seg["when"], seg["until"], seg["open"]["tool"]),
                          ("主人在写代码调板子", "11-18 09:00", "09:30", "review_period"))
-        mem = self.t["semantic_search"]({"query": "买美式咖啡", "kinds": ["memory"]}).data["hits"][0]
+        mem = self.t["semantic_search"]({"query": "买美式咖啡", "kinds": ["memory"]})["hits"][0]
         self.assertEqual((mem["people"], mem["only_for_owner"], mem["open"]["tool"]), (["owner", "小王"], False, "memory_search"))
-        know = self.t["semantic_search"]({"query": "咖啡店", "kinds": ["knowledge"]}).data["hits"][0]
+        know = self.t["semantic_search"]({"query": "咖啡店", "kinds": ["knowledge"]})["hits"][0]
         self.assertEqual((know["title"], know["aliases"], know["open"]["tool"]), ("园区咖啡店", ["楼下咖啡"], "knowledge_search"))
 
     def test_memory_off_means_no_memory_hits(self):
@@ -209,11 +208,11 @@ class ToolTest(unittest.TestCase):
         s["memory"] = {**(s.get("memory") or {}), "apply": False}
         t = tool_impls.mind_tools(switches=lambda: {}, store=Store(self.db), clock_ms=lambda: NOW, embed=self.embed,
                                   settings_fn=lambda: s)
-        self.assertEqual(t["semantic_search"]({"query": "买美式咖啡", "kinds": ["memory"]}).data["hits"], [])
+        self.assertEqual(t["semantic_search"]({"query": "买美式咖啡", "kinds": ["memory"]})["hits"], [])
 
     def test_gone_source_is_dropped(self):
         self.db["conversations"].update_one({"cid": "c1"}, {"$set": {"title": "", "notes": ""}})   # before the next sync
-        d = self.t["semantic_search"]({"query": "板子识别不了", "kinds": ["notes"]}).data
+        d = self.t["semantic_search"]({"query": "板子识别不了", "kinds": ["notes"]})
         self.assertNotIn("c1", [h["id"] for h in d["hits"]])
 
     def test_not_available_budget_and_empty(self):
@@ -222,7 +221,7 @@ class ToolTest(unittest.TestCase):
             t["semantic_search"]({"query": "x"})
         self.assertEqual(e.exception.code, "not_available")
         empty = tool_impls.mind_tools(switches=lambda: {}, store=Store(FakeDB()), clock_ms=lambda: NOW, embed=self.embed)
-        self.assertIn("note", empty["semantic_search"]({"query": "x"}).data)
+        self.assertIn("note", empty["semantic_search"]({"query": "x"}))
         budget_pause(self.db)
         with self.assertRaises(ToolError) as e:
             self.t["semantic_search"]({"query": "x"})
@@ -234,7 +233,7 @@ class ToolTest(unittest.TestCase):
         env = tools.call("semantic_search", {"query": "板子", "kinds": ["notes"], "limit": 2})
         self.assertTrue(env["ok"], env)
         self.assertEqual(env["data"]["kinds"], ["纪要"])
-        self.assertEqual(env["cost"]["cur"], "CNY")
+        self.assertIsNone(env["cost"])                     # the call.embed row carries it (no double count)
         self.assertEqual(rows[-1][0], "call.tool.semantic_search")
         bad = tools.call("semantic_search", {"query": "x", "kinds": ["person_note"]})
         self.assertEqual(bad["error"]["code"], "bad_args")

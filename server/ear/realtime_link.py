@@ -617,7 +617,15 @@ TOOL_SKIP = frozenset(("say", "stop_speaking", "search_verify", "set_voice",
 TOOL_DEPTH = 3                                         # tool calls in a row for one sentence
 TOOL_TIMEOUT_S = 30.0
 # owner 2026-11-19 "单独放宽": 查证 (two searches + a judge) takes ~38 s
-SLOW_TOOL_TIMEOUT_S = {"search_verify": 75.0}
+SLOW_TOOL_TIMEOUT_S = {"search_verify": 75.0, "doc_answer": 75.0}
+# owner 2026-11-19 "调用技能或工具时…机器上应该有ui…不再响应新的自然语言输入，等同于在说话，可以被触摸、asr hello 等打断":
+# while a tool runs the robot's dots go amber (stage tool, collector-0.5.16; its touch rules count it as speaking) and a
+# word under the eyes says what hello is doing; no new speech goes up (as while she speaks) unless she is called / tapped,
+# which cancels the tool: its result is dropped (the call gets a cancelled output, no reply).
+TOOL_WORD = {"doc_answer": "查资料中", "doc_search": "查资料中", "web_search": "上网查", "search_verify": "核实中",
+             "live_data": "查行情", "deep_research": "交给研究", "look_now": "在看", "memory_search": "在回忆",
+             "semantic_search": "在回忆", "speech_search": "在回忆", "notes_search": "翻纪要", "review_period": "在回顾"}
+TOOL_WORD_GROUP = {"search": "在查", "recall": "在回忆", "daily": "在记", "look": "在看"}
 TOOL_OUTPUT_CHARS = 3000
 
 
@@ -1054,6 +1062,8 @@ class RealtimeHub:
         self.persona = None                            # set_voice: the persona that goes with the voice (None = PERSONA)
         self.screen_word = None                        # fn(text, hold_s): a word under the eyes (robot command line)
         self._touch_word = False                       # 在听 is under the eyes (touched)
+        self._tool_wait = None                         # {trace, name, since}: a tool is running (see TOOL_WORD)
+        self._tool_cancelled = set()                   # traces whose running tool was interrupted
         self.voice_key = None
         self._tool_specs = []                          # this session's tools (realtime format)
         self.tools_mode_fn = lambda: "all"             # 千问用工具: "all" (every live tool) / "skills" (open_skill first)
@@ -1105,7 +1115,8 @@ class RealtimeHub:
         return bool((st and not st["reported"]) or self._resp is not None or (link is not None and link.tts_active))
 
     def busy(self):
-        return self._sounding or self._was_speaking or self.output_busy() or self.clock() < self._quiet_until
+        return self._sounding or self._was_speaking or self.output_busy() or self._tool_wait is not None or \
+            self.clock() < self._quiet_until
 
     def hour_used(self, now):
         while self._spans and now - self._spans[0][1] > 3600:
@@ -1134,7 +1145,8 @@ class RealtimeHub:
         self._was_speaking = speaking and not sounding
         called = now < self._called_until
         tail = sounding and self._robot_tail(now)      # only the robot's silent hold + tail after our reply
-        if (sounding and not tail) or (self.output_busy() and not called) or now < self._quiet_until:
+        if (sounding and not tail) or ((self.output_busy() or self._tool_wait is not None) and not called) or \
+                now < self._quiet_until:
             self._preroll.clear()
             self._preroll_bytes, self._send_until = 0, 0.0
             return
@@ -1232,8 +1244,15 @@ class RealtimeHub:
                                 "reason": "语音模块的口令词是给机器人的直接指令，Docking 不回答"})
 
     def _interrupt(self, now):
-        """Stop hello's own reply (generating or playing). -> True if something was stopped."""
+        """Stop hello's own reply (generating or playing), and a running tool. -> True if something was stopped."""
         stopped = False
+        w = self._tool_wait
+        if w is not None and w["trace"] not in self._tool_cancelled:
+            self._tool_cancelled.add(w["trace"])
+            self.stats["tool_interrupted"] += 1
+            stopped = True
+            ear_log.emit("trigger.touch", trace=w["trace"], by="interrupt", sum=f"打断了正在用的工具：{w['name']}",
+                         ref={"session": self.session_no}, extra={"action": "tool_cancel", "tool": w["name"]})
         if self._resp is not None:
             self._dropped.add(self._resp)
             self._send_soon({"type": "response.cancel"})
@@ -1309,6 +1328,7 @@ class RealtimeHub:
             return False
         now = self.clock()
         trace = trace or ear_log.new_trace()
+        stop = stop or self._tool_wait is not None      # a tool running counts as speaking (older firmware: no stop)
         self.stats["touch_stop" if stop else "touch_listen"] += 1
         if stop:
             stopped = self._interrupt(now)
@@ -2111,6 +2131,12 @@ class RealtimeHub:
                 self._chain_calls.popitem(last=False)
             wait_s = SLOW_TOOL_TIMEOUT_S.get(fc["name"], TOOL_TIMEOUT_S)
             loop = asyncio.get_running_loop()
+            shown = fc["name"] not in quick
+            self._tool_wait = {"trace": trace, "name": fc["name"], "since": self.clock()}
+            if shown:
+                self._stage("tool")
+                self._word(TOOL_WORD.get(fc["name"]) or TOOL_WORD_GROUP.get(FILLER_GROUP.get(fc["name"], "search"), "在查"),
+                           int(wait_s))
             try:
                 status, body = await asyncio.wait_for(loop.run_in_executor(
                     self._tool_pool, self.call, "POST", "/tool/call",
@@ -2121,6 +2147,10 @@ class RealtimeHub:
                     {"ok": False, "error": {"code": "failed", "message": f"工具服务回了 {status}"}}
             except Exception as e:                     # noqa: BLE001 - mind slow / down
                 env = {"ok": False, "error": {"code": "timeout", "message": f"工具没回应（{type(e).__name__}）"}}
+            finally:
+                self._tool_wait = None
+                if shown:
+                    self._word("", 0)
         ms = int((self.clock() - t0) * 1000)
         out = {"ok": env.get("ok"), "data": env.get("data"), "error": env.get("error")}
         text = json.dumps(out, ensure_ascii=False)
@@ -2137,6 +2167,15 @@ class RealtimeHub:
                             "known": self.known_person(), "owner": self.owner_in_person()})
         if self._ws is None or not self._ready.is_set():
             return
+        if trace in self._tool_cancelled:             # called / tapped meanwhile: the answer is not wanted any more
+            self._tool_cancelled.discard(trace)
+            self.stats["tool_dropped"] += 1
+            self._send_soon({"type": "conversation.item.create", "item": {
+                "type": "function_call_output", "call_id": fc["call_id"],
+                "output": json.dumps({"ok": False, "error": {"code": "cancelled", "message":
+                    "主人打断了，这个结果不用了：不要再提它，等主人接着说。"}}, ensure_ascii=False)}})
+            return
+        self._stage("think")
         self._next_kind, self._next_trace, self._next_prompt, self._next_depth = "tool_answer", trace, None, depth
         self._send_soon({"type": "conversation.item.create", "item": {"type": "function_call_output",
                                                                       "call_id": fc["call_id"], "output": text}})

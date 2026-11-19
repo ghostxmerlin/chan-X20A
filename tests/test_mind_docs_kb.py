@@ -131,28 +131,29 @@ class ImportSearchTest(unittest.TestCase):
         self.assertIn(semantic.TEXT_MAX, (2000,))
         ss = semantic.search_tool(self.db, self.embed, lambda: {"tz": "Asia/Shanghai"}, lambda ids: [])
         out = ss({"query": "ICN7332 录入次数"})
-        self.assertFalse(any(h["kind"] == "doc" for h in out.data["hits"]))
+        self.assertFalse(any(h["kind"] == "doc" for h in out["hits"]))
 
     def test_doc_search_finds_by_meaning_and_by_exact_word(self):
         self.imp()
         semantic.sync(self.db, embed_fn=self.embed)
         tool = docs_kb.search_tool(self.db, self.embed, lambda: 1000)
         out = tool({"query": "ICN7332 录入几次"})
-        self.assertIsInstance(out, Paid)
-        self.assertEqual(out.data["hits"][0]["id"], "kb-1")
-        self.assertIn("按字面", out.data["how"])
-        self.assertEqual(out.data["hits"][0]["branch"], "trial/7.7")
+        self.assertIsInstance(out, dict)                  # not Paid: the call.embed row carries the cost
+        self.assertEqual(out["hits"][0]["id"], "kb-1")
+        self.assertIn("按意思", out["how"])
+        self.assertIn("按字面", out["how"])
+        self.assertEqual(out["hits"][0]["branch"], "trial/7.7")
         out = tool({"query": "GPIO17", "project": "AIdea"})
-        self.assertEqual(out.data["project"], "AIdea 手机")
-        self.assertTrue(all(h["project"] == "AIdea 手机" for h in out.data["hits"]))
-        self.assertIn("GPIO17", out.data["hits"][0]["text"])
-        self.assertLessEqual(len(json.dumps(out.data, ensure_ascii=False)), 3000 + 1500)
+        self.assertEqual(out["project"], "AIdea 手机")
+        self.assertTrue(all(h["project"] == "AIdea 手机" for h in out["hits"]))
+        self.assertIn("GPIO17", out["hits"][0]["text"])
+        self.assertLessEqual(len(json.dumps(out, ensure_ascii=False)), 3000 + 1500)
 
     def test_an_entry_id_comes_first(self):
         self.imp()
         semantic.sync(self.db, embed_fn=self.embed)
         out = docs_kb.search_tool(self.db, self.embed, lambda: 1000)({"query": "HW-002 讲了什么"})
-        self.assertEqual(out.data["hits"][0]["id"], "HW-002")
+        self.assertEqual(out["hits"][0]["id"], "HW-002")
 
     def test_a_heading_in_a_code_block_is_not_a_section(self):
         ch = docs_kb.chunks_from_headings("# T\n\n## 格式\n\n```\n### [HW-001] 例子\n```\n\n## 下一节\n\n正文正文正文正文\n", "r.md")
@@ -180,3 +181,58 @@ class ImportSearchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnswerTest(unittest.TestCase):
+    """docs_qa.py (2026-11-19): search, then sol reasons over the excerpts; one follow-up search when it is unsure."""
+    def setUp(self):
+        from mind import docs_qa
+        self.qa = docs_qa
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        pack(self.tmp.name)
+        self.db = FakeDB()
+        self.embed = FakeEmbed()
+        docs_kb.import_root(self.db, self.tmp.name, now_ms=1000)
+        semantic.sync(self.db, embed_fn=self.embed)
+        self.bodies, self.replies = [], []
+
+    def send(self, env, body, timeout):
+        self.bodies.append(body)
+        text = self.replies.pop(0) if self.replies else '{"answer": "x", "used": [1], "confidence": "高"}'
+        return ({"output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
+                 "usage": {"input_tokens": 1000, "output_tokens": 200}}, 1200, None)
+
+    def tool(self, env={"api_key": "k", "base_url": "u"}):
+        return self.qa.answer_tool(self.db, env, self.embed, lambda: 1000, send=self.send)
+
+    def test_answer_from_the_excerpts(self):
+        self.replies = ['好的```json\n{"answer": "ICN7332 录 12 次，ICN7352 录 8 次（kb-1）。", "used": [1], "confidence": "高",'
+                        ' "caveats": "没实板验证", "missing": "", "followup": ""}\n```']
+        d = self.tool()({"question": "ICN7332 和 ICN7352 录入次数有什么不同？"})
+        self.assertIn("12 次", d["answer"])
+        self.assertEqual(d["sources"][0]["id"], "kb-1")
+        self.assertEqual((d["confidence"], d["caveats"], d["rounds"], d["model"]), ("高", "没实板验证", 1, "gpt-6.2-sol"))
+        b = self.bodies[0]
+        self.assertEqual((b["model"], b["reasoning"]), ("gpt-6.2-sol", {"effort": "medium"}))
+        self.assertIn("[1] 指纹模组 · kb-1", b["input"])
+        self.assertIn("问题：ICN7332", b["input"])
+
+    def test_one_follow_up_search_when_unsure(self):
+        self.replies = ['{"answer": "不确定", "used": [], "confidence": "低", "followup": "GPIO17 中断"}',
+                        '{"answer": "GPIO17 是中断。", "used": [1], "confidence": "中", "followup": "再查"}']
+        from unittest import mock
+        with mock.patch.object(self.qa, "K", 2):                      # a small first find: the follow-up adds new chunks
+            d = self.tool()({"question": "那个脚是干嘛的"})
+        self.assertEqual((d["rounds"], d["searched"], d["answer"]), (2, ["那个脚是干嘛的", "GPIO17 中断"], "GPIO17 是中断。"))
+        self.assertIn("GPIO17", self.bodies[1]["input"])
+        self.assertEqual(len(self.bodies), 2)                           # never a third
+
+    def test_refusals(self):
+        with self.assertRaises(ToolError):
+            self.tool(env=None)({"question": "x"})
+        self.replies = ["不是 JSON"]
+        with self.assertRaises(ToolError) as e:
+            self.tool()({"question": "ICN7332"})
+        self.assertEqual(e.exception.code, "failed")
+        self.assertEqual(self.qa.parse('{"answer": 3}'), None)

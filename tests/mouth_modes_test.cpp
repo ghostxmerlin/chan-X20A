@@ -557,6 +557,25 @@ void digit_one()
 
 // 0.4.98 held crowd's tap report for the M12 look; 0.5.15 (owner 2026-11-19: tap = listen / stop) never holds it,
 // even with a hold set: the ear's must-answer window must open at once.
+// 0.5.16: the ear's stage tool (a skill / tool running) makes the touch rules count hello as speaking, in crowd only,
+// for at most kToolUs; the next stage ends it.
+void tool_stage()
+{
+    Robot r;
+    r.feed(kHello);
+    r.drain();
+    r.digit(5, "asr", 0);                                                   // crowd
+    r.drain();
+    JsonDocument doc;
+    const std::string tool = R"({"type":"chat_stage","stage":"tool","at_ms":1})";
+    deserializeJson(doc, tool);
+    assert(r.s.on_chat_stage(doc.as<JsonObjectConst>(), tool.size(), 1 * kS));
+    assert(r.s.tool_busy(2 * kS) && !r.s.tool_busy(1 * kS + collector::chat::kToolUs));
+    const std::string think = R"({"type":"chat_stage","stage":"think","at_ms":2})";
+    deserializeJson(doc, think);
+    assert(r.s.on_chat_stage(doc.as<JsonObjectConst>(), think.size(), 3 * kS) && !r.s.tool_busy(3 * kS));
+}
+
 void look_hold()
 {
     Robot r;
@@ -575,6 +594,7 @@ int main()
     crowd_tap();
     digit_one();
     look_hold();
+    tool_stage();
     chat_stages();
     text_frames();
     boot_and_first_link();
