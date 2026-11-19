@@ -352,7 +352,7 @@ def main(argv=None):
     if not uri:
         raise SystemExit("MONGO_URI missing")
     from pymongo import MongoClient
-    db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
+    db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)[os.environ.get("SOUL_DB") or "hello"]
     if a.cmd == "import":
         db[COLL].create_index([("project", 1)])
         print(json.dumps(import_root(db, a.root), ensure_ascii=False, indent=1))

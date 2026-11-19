@@ -345,7 +345,7 @@ def main():
     env = {"base_url": hub.get("BASE_URL", "https://aihubmix.com/v1"), "api_key": hub["API_KEY"]} if hub.get("API_KEY") else None
     if not uri:
         raise SystemExit("MONGO_URI missing in the hubmix env file")
-    db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
+    db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)[os.environ.get("SOUL_DB") or "hello"]
     print(f"mind: {selfvoice.load(a.clip_texts)} hello voice clips from {a.clip_texts}", flush=True)
     records, store = Records(db), Store(db)
     runlog.watch(db, store)

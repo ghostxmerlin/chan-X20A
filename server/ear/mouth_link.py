@@ -79,6 +79,7 @@ that dies anyway is logged before run() ends.
 import asyncio
 import collections
 import concurrent.futures
+import os
 import json
 import time
 import traceback
@@ -94,11 +95,11 @@ except ImportError:                                 # tests without websockets o
         pass
     InvalidHandshake = InvalidURI = ConnectionClosed
 
-UPSTREAM = "ws://127.0.0.1:52751/mouth"
+UPSTREAM = os.environ.get("SOUL_TTS_MOUTH_URL") or "ws://127.0.0.1:52751/mouth"  # 2026-11-19 night: a second stack (the Mac stand-in) has its own
 EAR_HELLO = json.dumps({"type": "hello", "codec": "opus", "frame_ms": 60, "sample_rate": 24000})
 HELLO_TIMEOUT_S = 10
 REPLACED = 4000                                     # soul-tts: "replaced by new connection"
-MIND = "http://127.0.0.1:52740"
+MIND = os.environ.get("SOUL_MIND_URL") or "http://127.0.0.1:52740"
 REPORT_FIELDS = ("seq", "mode", "dir", "host", "return_to", "by", "input", "effects")
 OWNER_BY = ("asr", "touch", "select", "quick")         # a report from one of these with an input = an owner's input
 STATE_FIELDS = ("mode", "dir", "host", "return_to")           # hello's mode state in a report (run log robot.state)

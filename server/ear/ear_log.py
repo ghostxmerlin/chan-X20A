@@ -37,8 +37,8 @@ try:
 except ImportError:
     prices = None
 
-SPOOL_DIR = "~/soul-spike/log-spool"
-CODE_VERSION_FILE = "~/soul-spike/CODE_VERSION"      # written by the deploy (plan Task 8)
+SPOOL_DIR = os.environ.get("SOUL_LOG_SPOOL") or "~/soul-spike/log-spool"   # the Mac stand-in's stack: its own (2026-11-19)
+CODE_VERSION_FILE = os.environ.get("SOUL_CODE_VERSION_FILE") or "~/soul-spike/CODE_VERSION"      # written by the deploy (plan Task 8)
 STOP_GRACE_S = 10.0                                  # SIGTERM: clean shutdown at most this long, then exit anyway
 SVC = "ear"
 

@@ -4,6 +4,7 @@ B1 wires the three tools that already had an interface: switches_status, mode_st
 what a model needs, in short keys with Chinese titles, and never a key, token or internal address.
 """
 import time
+import os
 from datetime import datetime, timedelta, timezone
 
 import re
@@ -615,7 +616,7 @@ EAR_TOOLS = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "s
              # the robot's tools over the ear's /mouth command line (collector-0.5.10); face_learn_propose is C level
              "express_eyes", "show_word", "play_clip", "turn_head", "face_front", "turn_around", "tracking", "nod",
              "shake_head", "set_volume", "face_learn_propose", "robot_status")
-EAR_ASK_URL = "http://127.0.0.1:52743/ask"
+EAR_ASK_URL = os.environ.get("SOUL_EAR_ASK_URL") or "http://127.0.0.1:52743/ask"  # 2026-11-19 night: a second stack (the Mac stand-in) has its own
 
 
 def ear_asker(token, url=EAR_ASK_URL, timeout=32):

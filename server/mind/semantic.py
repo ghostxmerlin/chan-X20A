@@ -477,7 +477,7 @@ def main(argv=None):
         raise SystemExit("MONGO_URI missing (environment or --hubmix-env)")
     key = os.environ.get("DASHSCOPE_API_KEY") or hub.get("DASHSCOPE_API_KEY")
     from pymongo import MongoClient
-    db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
+    db = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)[os.environ.get("SOUL_DB") or "hello"]
     kinds = [k for k in getattr(a, "kinds", ",".join(ALL_KINDS)).split(",") if k]
     if a.cmd in ("status",) or (a.cmd == "backfill" and a.dry_run):
         r = sync(db, kinds, budget_cny=getattr(a, "budget", 0.0), dry_run=True)

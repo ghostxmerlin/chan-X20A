@@ -11,12 +11,13 @@ DualKey (no joystick light) and mind only stores mode / click signals, they swit
 """
 import asyncio
 import json
+import os
 import re
 import urllib.error
 import urllib.request
 
 IDLE_TIMEOUT = 60
-MIND_URL = "http://127.0.0.1:52740/signal"
+MIND_URL = (os.environ.get("SOUL_MIND_URL") or "http://127.0.0.1:52740") + "/signal"  # 2026-11-19 night: a second stack (the Mac stand-in) has its own
 
 
 def mind_poster(token, url=MIND_URL, timeout=5):

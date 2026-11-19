@@ -246,7 +246,7 @@ def main():
     runlog.start('memory',hub,args)              # run/audit log (svc.start / beat / stop); never stops the start
     if not hub.get('MONGO_URI'):
         raise SystemExit('MONGO_URI missing')
-    db=MongoClient(hub['MONGO_URI'],serverSelectionTimeoutMS=5000,connectTimeoutMS=5000)['hello']
+    db=MongoClient(hub['MONGO_URI'],serverSelectionTimeoutMS=5000,connectTimeoutMS=5000)[os.environ.get('SOUL_DB') or 'hello']
     env={'base_url':hub.get('BASE_URL','https://aihubmix.com/v1'),'api_key':hub['API_KEY']} if hub.get('API_KEY') else None
     store=Store(db); runlog.watch(db,store); store.ensure_indexes(); MemoryStore(db).ensure_indexes()
     db['mind_memory_jobs'].create_index([('kind',1),('lane',1),('scope_id',1),('window_ms',-1)])

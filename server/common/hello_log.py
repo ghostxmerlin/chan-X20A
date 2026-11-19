@@ -51,7 +51,7 @@ from collections import OrderedDict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-DB_NAME = "hello"
+DB_NAME = os.environ.get("SOUL_DB") or "hello"  # 2026-11-19 night: a second stack (the Mac stand-in) runs on its own database
 QUEUE_MAX = 20000
 BATCH_MAX = 500
 BATCH_WAIT_S = 0.5

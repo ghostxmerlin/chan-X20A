@@ -102,7 +102,7 @@ def main():
     if not key or not env.get("MONGO_URI"):
         raise SystemExit("API_KEY or MONGO_URI missing in the hubmix env file")
     from pymongo import MongoClient
-    db = MongoClient(env["MONGO_URI"], serverSelectionTimeoutMS=5000)["hello"]
+    db = MongoClient(env["MONGO_URI"], serverSelectionTimeoutMS=5000)[os.environ.get("SOUL_DB") or "hello"]
     docs = list(db.mind_packages.find({"lane": "live", "package.speech.0": {"$exists": True}}, {"_id": 0})
                 .sort("minute", -1).limit(a.minutes))
     image = base64.b64encode(open(a.image, "rb").read()).decode() if a.image else None

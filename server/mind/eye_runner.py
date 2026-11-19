@@ -72,7 +72,7 @@ def main():
         raise SystemExit("MONGO_URI missing in the hubmix env file")
     # eye calls DashScope directly since 2026-11-15 (eye.EYE_BASE_URL, qwen3.8-flash); the key is DASHSCOPE_API_KEY
     env = {"base_url": eye.EYE_BASE_URL, "api_key": hub["DASHSCOPE_API_KEY"]} if hub.get("DASHSCOPE_API_KEY") else None
-    db = MongoClient(hub["MONGO_URI"], serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
+    db = MongoClient(hub["MONGO_URI"], serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)[os.environ.get("SOUL_DB") or "hello"]
     store = Store(db)
     runlog.watch(db, store)
     db["eye_minutes"].create_index([("minute", 1), ("version", 1)], unique=True)

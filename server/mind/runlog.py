@@ -30,8 +30,8 @@ except ImportError:                              # repository layout: server/com
     except ImportError:
         hello_log = None
 
-SPOOL_DIR = "~/soul-spike/log-spool"
-CODE_VERSION_FILE = "~/soul-mind/CODE_VERSION"      # written by the deploy (plan Task 8)
+SPOOL_DIR = os.environ.get("SOUL_LOG_SPOOL") or "~/soul-spike/log-spool"   # the Mac stand-in's stack: its own (2026-11-19)
+CODE_VERSION_FILE = os.environ.get("SOUL_CODE_VERSION_FILE") or "~/soul-mind/CODE_VERSION"      # written by the deploy (plan Task 8)
 NAMES = {"tingwu": "听悟", "eye": "识别", "notes": "纪要", "realtime": "Docking", "mind": "情景", "mouth": "嘴",
          "memory_extract": "记忆整理", "say_prefetch": "提前写", "say_auto": "连续说"}
 

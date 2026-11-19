@@ -22,11 +22,12 @@ Connection: MONGO_URI from the hubmix env file on the server; nothing secret in 
 import logging
 import queue
 import threading
+import os
 import time
 
 import ear_log
 
-DB_NAME = "hello"
+DB_NAME = os.environ.get("SOUL_DB") or "hello"  # 2026-11-19 night: a second stack (the Mac stand-in) runs on its own database
 # vision m12_ev (collector-0.5.02, m12d 0.2.0 events): the event's own fields, stored as sent (vision_link.py)
 M12_EV_FIELDS = ("ev", "n", "side", "dur", "d", "lum", "on", "area", "amt", "cd", "pan", "hot", "faces", "persons",
                  "faces_seen", "persons_seen")

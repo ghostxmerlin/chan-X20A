@@ -141,7 +141,7 @@ def main():
     if not hub.get("MONGO_URI"):
         raise SystemExit("MONGO_URI missing in the hubmix env file")
     env = {"base_url": hub.get("BASE_URL", "https://aihubmix.com/v1"), "api_key": hub["API_KEY"]} if hub.get("API_KEY") else None
-    db = MongoClient(hub["MONGO_URI"], serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)["hello"]
+    db = MongoClient(hub["MONGO_URI"], serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)[os.environ.get("SOUL_DB") or "hello"]
     db["conversations"].create_index([("cid", 1)], unique=True)
     db["conversations"].create_index([("start_ms", 1)])
     db["conversation_versions"].create_index([("cid", 1), ("version", 1)])
