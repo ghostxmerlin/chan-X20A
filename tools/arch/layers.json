@@ -77,7 +77,7 @@
   "mind/selfvoice.py": 3,
   "mind/say_moment.py": 3,
   "mind/say_prompts.py": 3,
-  "mind/speech_settings.py": 3,
+  "mind/speech_settings.py": 5,
   "mind/strong.py": 3,
   "mind/tool_time.py": 3,
   "mind/library.py": 4,
@@ -109,7 +109,8 @@
   "ear/rt_rules.py": 3,
   "ear/ear_hearing.py": 1,
   "ear/rt_cards.py": 2,
-  "ear/realtime_replay_turns.py": "tool"
+  "ear/realtime_replay_turns.py": "tool",
+  "mind/tool_errors.py": 5
  },
  "zh": {
   "ear/ear_server.py": "耳朵的入口：参数、装配、连线分发（听觉流水线在 ear_hearing）",
@@ -166,18 +167,15 @@
   "ear/rt_gate.py": "Docking 的回答闸门和补救（播不播、嗯门、重复门、补救）",
   "ear/rt_rules.py": "Docking 回答闸门的判定（纯函数）：口令 / 调试 / 安静 / 少插话、等照片、等搜索",
   "ear/ear_hearing.py": "听的流水线：本地识别、声纹、声音标签、降噪、录音、听悟、一条听觉连线（从 ear_server 原样搬出）",
-  "ear/rt_cards.py": "每句话一张卡片：当时的证据、后来的结局、影子分，写 gate.addressed（先看见，Fable 第 0 步）"
+  "ear/rt_cards.py": "每句话一张卡片：当时的证据、后来的结局、影子分，写 gate.addressed（先看见，Fable 第 0 步）",
+  "mind/tool_errors.py": "工具的错误和计费结果类型（从 tools.py 搬出）",
+  "mind/speech_settings.py": "说话相关设置的默认值和校验（不调别的模块：基础层）"
  },
  "allowed": [
   {
    "from": "ear/rt_base.py",
    "to": "ear/mouth_link.py",
    "why": "2026-11-19 现状，夜里第一阶段要清掉（4.2.1 随代码搬到 rt_base）"
-  },
-  {
-   "from": "mind/library.py",
-   "to": "mind/speech_settings.py",
-   "why": "2026-11-19 现状，夜里第一阶段要清掉"
   },
   {
    "from": "mind/model_calls.py",
@@ -200,28 +198,13 @@
    "why": "2026-11-19 现状，夜里第一阶段要清掉"
   },
   {
-   "from": "mind/settings.py",
-   "to": "mind/speech_settings.py",
-   "why": "2026-11-19 现状，夜里第一阶段要清掉"
-  },
-  {
    "from": "mind/settings_store.py",
    "to": "mind/prompts.py",
    "why": "2026-11-19 现状，夜里第一阶段要清掉"
   },
   {
-   "from": "mind/settings_store.py",
-   "to": "mind/speech_settings.py",
-   "why": "2026-11-19 现状，夜里第一阶段要清掉"
-  },
-  {
    "from": "mind/store.py",
    "to": "mind/mode_store.py",
-   "why": "2026-11-19 现状，夜里第一阶段要清掉"
-  },
-  {
-   "from": "mind/tool_time.py",
-   "to": "mind/tools.py",
    "why": "2026-11-19 现状，夜里第一阶段要清掉"
   }
  ]

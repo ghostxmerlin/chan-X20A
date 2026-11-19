@@ -12,7 +12,7 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .tools import ToolError
+from .tool_errors import ToolError
 
 PARTS = {"凌晨": (0, 6), "早上": (6, 9), "早晨": (6, 9), "上午": (6, 12), "中午": (11, 13), "下午": (12, 18),
          "傍晚": (17, 19), "晚上": (18, 24), "夜里": (21, 24), "白天": (6, 18)}

@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 19:11",
- "commit": "c6e4ef5",
+ "generated": "2026-11-19 19:25",
+ "commit": "15e8722",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -1326,8 +1326,8 @@
   "mind/speech_settings.py": {
    "pkg": "mind",
    "lines": 161,
-   "layer": 3,
-   "zh": null,
+   "layer": 5,
+   "zh": "说话相关设置的默认值和校验（不调别的模块：基础层）",
    "doc": "Scene-scoped speech preferences. Private environment/identity values stay in settings.",
    "imports": [],
    "collections": []
@@ -1366,6 +1366,15 @@
     "mind/selfvoice.py",
     "mind/settings.py"
    ],
+   "collections": []
+  },
+  "mind/tool_errors.py": {
+   "pkg": "mind",
+   "lines": 18,
+   "layer": 5,
+   "zh": "工具的错误和计费结果类型（从 tools.py 搬出）",
+   "doc": "The tool framework's error and result types (moved out of tools.py unchanged on 2026-11-19, refactor: tool_time",
+   "imports": [],
    "collections": []
   },
   "mind/tool_impls.py": {
@@ -1407,18 +1416,19 @@
    "zh": null,
    "doc": "Time words for tools (docs/hello-tools.md §4, B2 2026-11-18): what people say -> a [start, end) range in epoch ms.",
    "imports": [
-    "mind/tools.py"
+    "mind/tool_errors.py"
    ],
    "collections": []
   },
   "mind/tools.py": {
    "pkg": "mind",
-   "lines": 167,
+   "lines": 153,
    "layer": 2,
    "zh": "工具框架：参数校验、级别、计费、日志",
    "doc": "hello's tool framework (B1, owner 2026-11-18; rules: docs/hello-tools.md, registry: config/tools/registry.json).",
    "imports": [
-    "mind/runlog.py"
+    "mind/runlog.py",
+    "mind/tool_errors.py"
    ],
    "collections": []
   },
@@ -1509,12 +1519,6 @@
    "to_layer": 1
   },
   {
-   "from": "mind/library.py",
-   "to": "mind/speech_settings.py",
-   "from_layer": 4,
-   "to_layer": 3
-  },
-  {
    "from": "mind/model_calls.py",
    "to": "mind/pause.py",
    "from_layer": 4,
@@ -1539,20 +1543,8 @@
    "to_layer": 2
   },
   {
-   "from": "mind/settings.py",
-   "to": "mind/speech_settings.py",
-   "from_layer": 5,
-   "to_layer": 3
-  },
-  {
    "from": "mind/settings_store.py",
    "to": "mind/prompts.py",
-   "from_layer": 4,
-   "to_layer": 3
-  },
-  {
-   "from": "mind/settings_store.py",
-   "to": "mind/speech_settings.py",
    "from_layer": 4,
    "to_layer": 3
   },
@@ -1560,12 +1552,6 @@
    "from": "mind/store.py",
    "to": "mind/mode_store.py",
    "from_layer": 4,
-   "to_layer": 2
-  },
-  {
-   "from": "mind/tool_time.py",
-   "to": "mind/tools.py",
-   "from_layer": 3,
    "to_layer": 2
   }
  ],
@@ -1576,8 +1562,8 @@
    "lines": 10936
   },
   "mind": {
-   "modules": 57,
-   "lines": 15706
+   "modules": 58,
+   "lines": 15710
   },
   "common": {
    "modules": 3,

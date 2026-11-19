@@ -20,19 +20,11 @@ from pathlib import Path
 
 from .runlog import hello_log
 
-CODES = ("bad_args", "not_available", "switch_off", "paused", "budget", "robot_offline", "timeout", "refused",
-         "failed")
+from .tool_errors import CODES, Paid, ToolError  # noqa: F401  (moved 2026-11-19, re-exported)
 MODEL_CALLERS = ("qwen",)                         # callers that are models (security review 2026-11-18)
 _HERE = Path(__file__).resolve()
 REGISTRY_PATHS = (_HERE.parents[1] / "tools" / "registry.json",                # deployed: ~/soul-mind/tools/
                   _HERE.parents[2] / "config" / "tools" / "registry.json")     # repository: config/tools/
-
-
-class ToolError(Exception):
-    def __init__(self, code, message):
-        super().__init__(message)
-        self.code = code if code in CODES else "failed"
-        self.message = str(message)[:200]
 
 
 def load_registry(path=None):
@@ -150,12 +142,6 @@ class Tools:
         except Exception:                               # noqa: BLE001 - logging never fails a call
             pass
         return env
-
-
-class Paid:
-    """What a paid tool returns: its data and its cost {amount, cur} (the call's run-log row carries the cost)."""
-    def __init__(self, data, cost):
-        self.data, self.cost = data, cost
 
 
 def _short(args):
