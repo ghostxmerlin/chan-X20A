@@ -127,6 +127,8 @@ public final class FaceTracker {
 
     public init(book: FaceBook) { self.book = book }
 
+    public static func iouPublic(_ a: CGRect, _ b: CGRect) -> Double { iou(a, b) }
+
     static func iou(_ a: CGRect, _ b: CGRect) -> Double {
         let i = a.intersection(b)
         guard !i.isNull else { return 0 }

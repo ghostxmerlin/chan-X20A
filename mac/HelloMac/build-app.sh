@@ -1,0 +1,34 @@
+#!/bin/sh
+# Build hello.app (release): mac/HelloMac/build/hello.app, eyes GIFs inside, ad-hoc signed (camera / microphone
+# permission prompts need the usage strings in Info.plist). Run setup.sh once before the first start.
+set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/../.." && pwd)
+cd "$HERE"
+swift build -c release --product HelloMac 2>&1 | grep -v "ld: warning" | tail -2
+APP="$HERE/build/hello.app"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/eyes"
+cp .build/release/HelloMac "$APP/Contents/MacOS/hello"
+for s in v05 v14 v18; do mkdir -p "$APP/Contents/Resources/eyes/$s"; cp "$ROOT/assets/soul-eyes/v2-front/previews/$s/"*.gif "$APP/Contents/Resources/eyes/$s/"; done
+VER=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+ <key>CFBundleExecutable</key><string>hello</string>
+ <key>CFBundleIdentifier</key><string>local.soul.hello-mac</string>
+ <key>CFBundleName</key><string>hello</string>
+ <key>CFBundleDisplayName</key><string>hello</string>
+ <key>CFBundlePackageType</key><string>APPL</string>
+ <key>CFBundleShortVersionString</key><string>0.1.0</string>
+ <key>CFBundleVersion</key><string>$VER</string>
+ <key>LSMinimumSystemVersion</key><string>14.0</string>
+ <key>NSHighResolutionCapable</key><true/>
+ <key>NSMicrophoneUsageDescription</key><string>hello 用麦克风听你说话（送到你自己的服务器上的耳朵）。</string>
+ <key>NSCameraUsageDescription</key><string>hello 用摄像头看人和画面（认人在本机；画面变了才传到你自己的服务器）。</string>
+</dict></plist>
+PLIST
+codesign --force --sign - "$APP" >/dev/null 2>&1 && echo "signed (ad hoc)"
+du -sh "$APP" | cut -f1 | sed 's/^/size: /'
+echo "$APP"
