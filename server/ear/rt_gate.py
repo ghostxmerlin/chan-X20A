@@ -96,7 +96,8 @@ class GateMixin:
                 if rid not in self._dropped:
                     self._out_put(("pcm", rid, pcm))
             return
-        recent = [norm_text(r) for at, _, r in self._recent if now - at <= self.cfg.recent_s]
+        # 必答看门 (Fable step 1): inside a call / tap window the repeat gate does not apply (the owner asked again)
+        recent = [] if self.in_called(now) else [norm_text(r) for at, _, r in self._recent if now - at <= self.cfg.recent_s]
         fresh = bool(self._looks) and self.wall_ms() - self._looks[-1][0] <= FRESH_LOOK_S * 1000
         v = reply_verdict(turn.get("tx"), done, recent,
                           blind=not fresh and turn.get("kind") not in ("look_answer", "search_answer"))
@@ -111,7 +112,7 @@ class GateMixin:
             return
         turn["muted"] = f"muted_{v}"
         self._dropped.add(rid)
-        if v == "quiet" and turn.get("kind") == "speech":
+        if v == "quiet" and turn.get("kind") in ("speech", "tool_refused"):   # 必答看门: a tool-gated 嗯 too
             end = turn.get("speech_end") or now
             texts = [turn["heard"]] if turn.get("heard") else []
             texts += [t for at, t in self._local_texts if end - 3 <= at <= now + 0.5]

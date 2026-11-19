@@ -149,6 +149,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._smart_wanted = None                      # the 智能断句 switch's last value (None: not read yet)
         self._chat_at = None                           # 点屏幕聊天: the tap that opened the chat (None: no chat)
         self._chat_word_at = None                      # when 在听 was last put under the eyes for the chat
+        self._retry_bypass_for = None                  # the call that last reopened inside the retry wait
+        self._called_answered = collections.deque(maxlen=8)   # (at, norm text) answered by the fallback / rescue
         self._called_trace = None                      # the call's run-log trace: the next sentence in the window joins it
         self._order_at = None                          # the last direct order (Unit ASR command word): see ORDER_S
         self._qtask = None                             # the open search task {topic, at, tries, results, answered, ...}
@@ -468,7 +470,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                            else "chat_over" if self.cfg.answer_all and self.in_crowd() and self.link() is not None
                            else "left_crowd" if not self.in_crowd() else "robot_gone")
         elif self.state == "closed":
-            if now >= self._retry_at and not self._need_speech:
+            if (now >= self._retry_at or self.in_called(now)) and not self._need_speech:
                 self._open(now, "crowd")
         elif self.state == "open":
             if self.hour_used(now) >= self.cfg.hour_cap_s and not self.output_busy():
@@ -510,7 +512,11 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
 
     def _open(self, now, why):
         if now < self._retry_at:                       # a failed / refused session: not before retry_s
-            return
+            # 必答看门 (Fable step 1): a call / tap reopens at once, once per call (was: deaf until the wait was over)
+            if not (self.in_called(now) and self._retry_bypass_for != self._called_at):
+                return
+            self._retry_bypass_for = self._called_at
+            self.stats["retry_bypassed"] += 1
         if self.hour_used(now) >= self.cfg.hour_cap_s:
             if not self._cap_logged:
                 log("realtime: hourly cap reached, no new session", flush=True)
@@ -1037,9 +1043,22 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
             return
         rest = call_rest(text)
         if rest is not None:
-            self.called("text", text=text, trace=trace)
-            if rest and not told:                      # the ear's ASR: make sure this sentence gets an answer
+            # 必答看门 (Fable step 1, 2026-11-19): the late text of the sentence hello is already answering must not
+            # cut that answer off: a speech reply created after the last onset the ear saw (the sentence went up and
+            # Qwen answers it), within ANSWERING_S. Talking over hello records no onset: that reply is an older one.
+            t = self._turns.get(self._resp) if self._resp is not None else None
+            on = self._last_speech
+            answering = bool(t) and t.get("kind") == "speech" and on is not None and now - on <= 20 and \
+                (t.get("response_at") or -1e9) >= on and now - t["response_at"] <= ANSWERING_S
+            self.called("text", text=text, trace=trace, stop=not answering)
+            if rest and not told and not answering:    # the ear's ASR: make sure this sentence gets an answer
                 self._called_text = {"text": rest, "at": now, "trace": trace}
+        elif self.in_called(now) and not told and self._called_text is None and len(norm_text(text)) >= 2 \
+                and not (self._resp is not None and (self._turns.get(self._resp) or {}).get("kind") == "speech"):
+            # 必答看门 (Fable step 1): after a call by the ASR module / the keyword ear / a tap, the next sentence gets
+            # the same fallback as one that starts with the name: no answer within CALLED_ANSWER_WAIT_S -> asked from
+            # the ear's text (2026-11-19: 24 of 43 calls with speech, and 5 of 5 taps, went unanswered)
+            self._called_text = {"text": text, "at": now, "trace": trace}
         look, key = is_look_ask(text), self._burst_key(text)
         if (look or key == "burst_start") and self.cfg.turn != "server_vad" and not self.in_called(now):
             # owner 2026-11-18 "决定视觉爆发的前提是过了qwen的拒识闸门": no burst / look wait until the realtime model

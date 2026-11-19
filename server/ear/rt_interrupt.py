@@ -11,7 +11,7 @@ class InterruptMixin:
         """MouthLink: the robot's {"type":"asr_wake","word":"hello",...} (collector-0.5.06; it already stopped its speech)."""
         self.called("asr", interrupted=bool((m or {}).get("interrupted")))
 
-    def called(self, source, text=None, trace=None, interrupted=False):
+    def called(self, source, text=None, trace=None, interrupted=False, stop=True):
         """hello was called (asr / name / text). Opens the window, stops hello's reply, lets the audio up."""
         if not self.armed():
             return
@@ -22,7 +22,7 @@ class InterruptMixin:
         self._called_at, self._called_until = now, now + CALLED_S
         self._called_source = source
         self.stats["called_" + source] += 1
-        stopped = self._interrupt(now) or interrupted
+        stopped = (self._interrupt(now) if stop else False) or interrupted
         self._quiet_until = 0.0
         if self._quiet_mode is not None and self.quiet_on(now) and self._quiet_sticky:
             # a said length (2026-11-19): the call is answered, 安静 goes on afterwards
@@ -102,6 +102,10 @@ class InterruptMixin:
         if not text:
             return
         self._called_text = None
+        key = norm_text(text)
+        if any(key == k and now - at <= CALLED_DEDUP_S for at, k in self._called_answered):
+            return                                     # 必答看门: this sentence was already asked again (no double answer)
+        self._called_answered.append((now, key))
         self._rescue = {"at": now, "texts": [str(text)[:300]], "sent": False, "trace": trace, "called": why}
         ear_log.emit("gate.realtime", trace=trace or ear_log.new_trace(), sum=f"被叫了，照样回答（{why}）{str(text)[:30]}",
                      extra={"verdict": "called_answer", "reason": why, "heard": str(text)[:300]})

@@ -2660,7 +2660,7 @@ class ModeWordTest(HubBase):
 
 
 class MustAnswerPinTest(CalledTest):
-    """PIN, 2026-11-19 night (Fable's audit 4.3, docs/audits/2026-11-19-fable-architecture.md): what happens today after a
+    """must-answer-guard branch: the pins below, GAPs turned into guard tests (Fable step 1). Originally: PIN, 2026-11-19 night (Fable's audit 4.3, docs/audits/2026-11-19-fable-architecture.md): what happens today after a
     call or a tap, written down before the must-answer guard (Fable step 1) changes it. Asserts marked GAP are today's
     missed answers: the guard is meant to turn them around, and its change will show up exactly there."""
     async def silent_sentence(self, ws, text):
@@ -2672,17 +2672,17 @@ class MustAnswerPinTest(CalledTest):
         self.hub.step()
         await settle(20)
 
-    async def test_gap_a_call_then_qwen_silent_gets_no_answer(self):
+    async def test_guard_a_call_then_qwen_silent_is_answered_from_the_text(self):
         ws = await self.open_ready()
         self.hub.called("asr")
         await self.silent_sentence(ws, "今天天气怎么样")
-        self.assertEqual(self.hints(ws), [])          # GAP: no fallback for an ASR / name / tap call
+        self.assertEqual(self.hints(ws), [self.rl.rescue_text("今天天气怎么样")])   # was a GAP before the guard
 
-    async def test_gap_a_tap_then_qwen_silent_gets_no_answer(self):
+    async def test_guard_a_tap_then_qwen_silent_is_answered_from_the_text(self):
         ws = await self.open_ready()
         self.hub.touched()
         await self.silent_sentence(ws, "今天天气怎么样")
-        self.assertEqual(self.hints(ws), [])          # GAP: the tap's must-answer has no fallback either
+        self.assertEqual(self.hints(ws), [self.rl.rescue_text("今天天气怎么样")])   # was a GAP before the guard
 
     async def test_a_call_word_in_the_text_then_qwen_silent_is_answered(self):
         ws = await self.open_ready()
@@ -2716,18 +2716,47 @@ class MustAnswerPinTest(CalledTest):
         ws.push({"type": "response.audio_transcript.done", "transcript": "你好呀😀"})
         ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
         await settle(20)
-        # measured 2026-11-19: this short repeat plays; Fable's repeat-gate misses (23 / 113 follow-ups) are longer
-        # answers repeated word for word within recent_s: reproduce from the run log before calling it a gap
+        # measured 2026-11-19: this short repeat plays; with the guard a called reply never meets the repeat gate
         self.assertEqual(self.recs.turns[-1]["state"], "done")
 
-    async def test_gap_a_call_inside_the_retry_wait_does_not_reopen(self):
+    async def test_guard_a_call_inside_the_retry_wait_reopens_once(self):
         await self.open_ready()
         self.hub.close("upstream")
         self.hub._retry_at = self.hub.clock() + 30     # as after an upstream failure (retry_s)
         self.hub.called("asr")
         self.hub.step()
         await settle(10)
-        self.assertEqual(self.hub.state, "closed")     # GAP: deaf until the retry wait is over
+        self.assertNotEqual(self.hub.state, "closed")  # was a GAP: reopens for the call
+        self.assertEqual(self.hub.stats["retry_bypassed"], 1)
+
+    async def test_guard_the_fallback_and_a_late_ambient_ask_once(self):
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        await self.silent_sentence(ws, "今天天气怎么样")
+        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "今天天气怎么样"})
+        await settle(20)
+        self.assertEqual(len(self.hints(ws)), 1)       # no second answer for the same sentence
+
+    async def test_guard_the_late_text_does_not_cut_off_its_own_answer(self):
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        self.speak(5)                                  # the sentence goes up (an onset the ear saw) ...
+        self.speak(2, speaking=False)
+        await self.playing(ws, "r1")                   # ... and Qwen is answering it already
+        self.hub.local_heard("hello，今天北京天气怎么样")  # the ear's text of that same sentence, late
+        await settle(10)
+        self.assertNotIn("response.cancel", ws.kinds())
+
+    async def test_guard_a_tool_gated_en_is_rescued(self):
+        ws = await self.open_ready()
+        self.hub.called("asr")
+        self.hub.local_heard("帮我看看这个是什么")
+        self.hub._next_kind = "tool_refused"
+        ws.push({"type": "response.created", "response": {"id": "r9"}})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
+        ws.push({"type": "response.done", "response": {"id": "r9", "status": "completed", "usage": {}}})
+        await settle(20)
+        self.assertTrue(any("帮我看看" in h for h in self.hints(ws)))
 
 
 class SentenceCardTest(HubBase):

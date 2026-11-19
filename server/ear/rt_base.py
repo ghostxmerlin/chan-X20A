@@ -271,6 +271,10 @@ CALLED_S = 10.0
 # TOUCH_S of the tap is answered whatever the gates say (it is a call window, only longer); hello says 在听 under the
 # eyes until she starts on it. A tap while she speaks stops her; a double tap is 安静一下 (touch_quiet).
 TOUCH_S = 20.0
+# 必答看门 (Fable's audit step 1, 2026-11-19): a speech reply created this recently answers the sentence whose late text
+# just arrived (it must not be cut off by that text's call word); the fallback / rescue asks a sentence again once.
+ANSWERING_S = 4.0
+CALLED_DEDUP_S = 10.0
 # owner 2026-11-19 "我刚才使劲摇晃了机器人，没有任何反应": being shaken hard (body_sense shaken) is an event hello answers in
 # one line of her own (queued like a greeting: waits for quiet, none in 安静 / 少插话), at most once per SHAKEN_SAY_S.
 SHAKEN_SAY_S = 60.0
