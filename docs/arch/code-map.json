@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 19:08",
- "commit": "5e2ff48",
+ "generated": "2026-11-19 19:11",
+ "commit": "c6e4ef5",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -228,6 +228,18 @@
    "imports": [
     "ear/mouth_link.py",
     "ear/realtime_link.py"
+   ],
+   "collections": []
+  },
+  "ear/realtime_replay_turns.py": {
+   "pkg": "ear",
+   "lines": 143,
+   "layer": "tool",
+   "zh": null,
+   "doc": "Which turn detection gives Qwen a verdict on the most sentences? (Fable's audit step 2 \"弄清没判定\", 2026-11-19:",
+   "imports": [
+    "ear/realtime_link.py",
+    "ear/realtime_offline.py"
    ],
    "collections": []
   },
@@ -1560,8 +1572,8 @@
  "unassigned": [],
  "totals": {
   "ear": {
-   "modules": 36,
-   "lines": 10793
+   "modules": 37,
+   "lines": 10936
   },
   "mind": {
    "modules": 57,

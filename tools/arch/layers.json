@@ -108,7 +108,8 @@
   "ear/rt_gate.py": 2,
   "ear/rt_rules.py": 3,
   "ear/ear_hearing.py": 1,
-  "ear/rt_cards.py": 2
+  "ear/rt_cards.py": 2,
+  "ear/realtime_replay_turns.py": "tool"
  },
  "zh": {
   "ear/ear_server.py": "耳朵的入口：参数、装配、连线分发（听觉流水线在 ear_hearing）",
