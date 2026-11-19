@@ -16,7 +16,8 @@ ChatSearchModel for aihubmix's *-search chat models such as gemini-3-flash-previ
 
 Money (owner 2026-11-18): every model call is priced from its token usage (+ search fee) with prices.AIHUBMIX_*,
 added to the job's cost_cny and logged as one run-log record call.research.<step> with a cost, so it counts into the
-one daily cap (mind/pause.py) like every other paid call. Per job at most research.cap_cny_per_task (default 2 CNY):
+one daily cap (mind/pause.py) like every other paid call. Per job at most research.cap_usd_per_task (default 1 USD,
+owner 2026-11-19; was 2 CNY; an explicit research.cap_cny_per_task still wins), counted in CNY at pause.usd_cny:
 before each call the job checks the daily cap (the budget pause) and what is left of its own cap (keeping a reserve
 for the final answer); a search that no longer fits ends the searching, an answer that no longer fits (or a spent
 cap) ends the job with what was found so far, unsorted. stopped says why: task_cap / daily_cap.
@@ -47,7 +48,7 @@ COLL = "research"
 STATES = ("queued", "running", "done", "failed", "cancelled")
 STATE_ZH = {"queued": "排队中", "running": "正在研究", "done": "做完了", "failed": "没做成", "cancelled": "取消了"}
 STOP_ZH = {"task_cap": "这次研究的钱用到上限了", "daily_cap": "今天的花费到上限了", "final_failed": "最后整理没成功"}
-DEFAULTS = {"model": "gpt-6.2-sol", "cap_cny_per_task": 2.0, "max_jobs": 1}
+DEFAULTS = {"model": "gpt-6.2-sol", "cap_usd_per_task": 1.0, "max_jobs": 1}
 DEPTH = {"quick": {"questions": 2, "rounds": 1, "more": 0},
          "normal": {"questions": 3, "rounds": 2, "more": 2},
          "deep": {"questions": 4, "rounds": 3, "more": 3}}
@@ -437,14 +438,23 @@ class Runner:
 
     # -- settings --
     def config(self):
-        c = {**DEFAULTS, **((self.settings_fn() or {}).get("research") or {})}
+        own = (self.settings_fn() or {}).get("research") or {}
+        c = {**DEFAULTS, **own}
+        rate = self.usd_cny()
         try:
-            cap = float(c["cap_cny_per_task"])
+            usd = float(c["cap_usd_per_task"])
         except (TypeError, ValueError):
-            cap = DEFAULTS["cap_cny_per_task"]
+            usd = DEFAULTS["cap_usd_per_task"]
+        cap = usd * rate
+        if "cap_cny_per_task" in own:                 # an older explicit CNY setting
+            try:
+                cap = float(own["cap_cny_per_task"])
+                usd = cap / rate
+            except (TypeError, ValueError):
+                pass
         jobs = c.get("max_jobs") if isinstance(c.get("max_jobs"), int) else 1
         return {"model": str(c.get("model") or DEFAULTS["model"]), "cap_cny_per_task": max(0.0, cap),
-                "max_jobs": min(2, max(1, jobs))}
+                "cap_usd_per_task": round(max(0.0, usd), 4), "max_jobs": min(2, max(1, jobs))}
 
     def usd_cny(self):
         try:
@@ -602,10 +612,13 @@ def _label(ms):
 
 
 def tools(runner):
+    def usd(cny):                                # owner 2026-11-19: money is quoted in USD
+        return None if not isinstance(cny, (int, float)) else round(cny / runner.usd_cny(), 3)
+
     def deep_research(args):
         job = runner.submit(args["question"], args.get("depth") or "normal", asked_by="tool")
         return {"job_id": job["_id"], "say": "开始研究", "state": job["state"], "ahead": job["ahead"],
-                "cap_cny": job["cap_cny"], "depth": job["depth"]}
+                "cap_usd": usd(job["cap_cny"]), "depth": job["depth"]}
 
     def research_status(args):
         if args.get("id"):
@@ -620,12 +633,12 @@ def tools(runner):
                     "finished_at": _label(d.get("finished_at")), "steps": len(d.get("steps") or []),
                     "last_step": last.get("q") or last.get("kind"),
                     "spoken": ans.get("spoken"), "report": report[:1500], "report_chars": len(report),
-                    "sources": (d.get("sources") or [])[:8], "cost_cny": d.get("cost_cny"), "cap_cny": d.get("cap_cny"),
+                    "sources": (d.get("sources") or [])[:8], "cost_usd": usd(d.get("cost_cny")), "cap_usd": usd(d.get("cap_cny")),
                     "stopped": STOP_ZH.get(d.get("stopped"), d.get("stopped")), "error": d.get("error")}
         rows = runner.recent(5)
         return {"jobs": [{"id": d["_id"], "topic": d["topic"], "state": d["state"],
                           "state_zh": STATE_ZH.get(d["state"], d["state"]), "at": _label(d.get("at")),
-                          "cost_cny": d.get("cost_cny"), "spoken": (d.get("answer") or {}).get("spoken")} for d in rows],
+                          "cost_usd": usd(d.get("cost_cny")), "spoken": (d.get("answer") or {}).get("spoken")} for d in rows],
                 "shown": len(rows), "total": runner.col().count_documents({}),
                 "running": runner.col().count_documents({"state": "running"}),
                 "queued": runner.col().count_documents({"state": "queued"})}

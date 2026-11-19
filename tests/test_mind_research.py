@@ -133,6 +133,15 @@ class JobTest(Base):
         d = r.run_one("r1")
         self.assertEqual([s["kind"] for s in d["steps"]], ["plan", "search", "search", "final"])
 
+    def test_task_cap_is_one_usd_by_default(self):
+        """Owner 2026-11-19: 1 USD a task (was 2 CNY); billing is quoted in USD from now on."""
+        self.settings = {}
+        cfg = self.runner().config()
+        self.assertEqual(cfg["cap_usd_per_task"], 1.0)
+        self.assertAlmostEqual(cfg["cap_cny_per_task"], 1.0 * research.pause.DEFAULTS["usd_cny"])
+        self.settings = {"research": {"cap_usd_per_task": 0.5}}
+        self.assertAlmostEqual(self.runner().config()["cap_cny_per_task"], 0.5 * research.pause.DEFAULTS["usd_cny"])
+
     def test_cap_ends_the_searching_and_keeps_money_for_the_answer(self):
         self.settings = {"research": {"cap_cny_per_task": 1.0}}
         r = self.runner()

@@ -112,7 +112,10 @@ class MindToolsTest(unittest.TestCase):
         days = []
         d = self.impls(ledger=lambda day: (days.append(day), led)[1])["cost_today"]({})
         self.assertEqual(days, ["2026-11-18"])                   # Beijing day of the clock
-        self.assertEqual((d["total"], d["top"][0]["amount"], d["cap_cny"]), ({"CNY": 1.234567, "USD": 0.02}, 1.2346, 20))
+        self.assertEqual(d["total"], {"CNY": 1.234567, "USD": 0.02})
+        self.assertAlmostEqual(d["total_usd"], 1.234567 / 7.2 + 0.02, places=3)   # owner 2026-11-19: quoted in USD
+        self.assertAlmostEqual(d["top"][0]["usd"], 1.234567 / 7.2, places=3)
+        self.assertAlmostEqual(d["cap_usd"], 20 / 7.2, places=2)
         with self.assertRaises(ToolError):
             self.impls()["cost_today"]({})                       # no log query deployed
         with self.assertRaises(ToolError):

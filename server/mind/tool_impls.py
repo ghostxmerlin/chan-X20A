@@ -114,11 +114,20 @@ def mind_tools(*, switches, store, mode_store=None, ledger=None, clock_ms=None, 
         by = sorted(led.get("by", []), key=lambda r: -(r.get("amount") or 0))[:8]
         sw = switches()
         p = sw.get("pause") or {}
-        return {"day": day, "total": led.get("total", {}),
-                "top": [{"svc": r.get("svc"), "model": r.get("model"), "amount": round(r.get("amount") or 0, 4),
-                         "cur": r.get("cur"), "calls": r.get("n")} for r in by],
+        # owner 2026-11-19 "以后我们计费都用usd": the answer is in USD (CNY rows converted at pause.usd_cny)
+        try:
+            rate = float(((settings() or {}).get("pause") or {}).get("usd_cny") or 7.2)
+        except (TypeError, ValueError):
+            rate = 7.2
+        to_usd = lambda amount, cur: (amount or 0) / rate if cur == "CNY" else (amount or 0)   # noqa: E731
+        tot = led.get("total", {}) or {}
+        usd = lambda v: None if not isinstance(v, (int, float)) else round(v / rate, 3)        # noqa: E731
+        return {"day": day, "total_usd": round(sum(to_usd(v, c) for c, v in tot.items()), 3), "total": tot,
+                "top": [{"svc": r.get("svc"), "model": r.get("model"), "usd": round(to_usd(r.get("amount"), r.get("cur")), 4),
+                         "calls": r.get("n")} for r in by],
                 "unknown_calls": led.get("unknown_n", 0),
-                "cap_cny": p.get("cap_cny"), "spent_cny_counted": p.get("spent_cny")}
+                "cap_usd": usd(p.get("cap_cny")), "spent_usd_counted": usd(p.get("spent_cny")),
+                "say": "钱一律用美元说"}
 
     # ---- B2: 回顾 ----
     db = store.db
