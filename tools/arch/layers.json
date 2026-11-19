@@ -100,7 +100,8 @@
   "kws/export_onnx.py": "tool",
   "ear/rt_base.py": 2,
   "ear/rt_manner.py": 2,
-  "ear/rt_events.py": 2
+  "ear/rt_events.py": 2,
+  "ear/rt_interrupt.py": 2
  },
  "zh": {
   "ear/ear_server.py": "耳朵的入口：参数、装配、四条机器人连线分发、本地 ASR 和声纹",
@@ -149,7 +150,8 @@
   "kws/spotter.py": "关键词检测",
   "ear/rt_base.py": "Docking 的模块级部分：常量、文字和说明的小函数、小类（从 realtime_link 原样搬出）",
   "ear/rt_manner.py": "Docking 的说话方式模式：回答长短、安静、少插话、临时角色、调试模式（时长、持久化、屏幕字）",
-  "ear/rt_events.py": "Docking 里 hello 自己开口的事件：打招呼、被晃、调试提醒和结束、say、提示音"
+  "ear/rt_events.py": "Docking 里 hello 自己开口的事件：打招呼、被晃、调试提醒和结束、say、提示音",
+  "ear/rt_interrupt.py": "Docking 的叫名字、口令、触摸、闭嘴和打断（叫到窗口、必答、停、双击安静）"
  },
  "allowed": [
   {
