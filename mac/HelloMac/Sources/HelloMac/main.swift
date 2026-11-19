@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var micPop = NSPopUpButton(), camPop = NSPopUpButton(), stylePop = NSPopUpButton()
     var checks: [String: NSButton] = [:]
     let faceName = NSTextField(string: ""), voiceName = NSTextField(string: "")
+    let thresholdSlider = NSSlider(), thresholdLabel = NSTextField(labelWithString: "")
     var showPreview = false
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let h = try Hello(cfg: cfg)
             hello = h
             h.face = face
+            h.book.threshold = Float(thresholdSlider.doubleValue)
             h.onLog = { [weak self] s in self?.log(s) }
             h.onChange = { [weak self] in self?.refresh() }
             face.onTap = { double in h.tap(double: double) }
@@ -120,6 +122,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         voiceName.widthAnchor.constraint(equalToConstant: 140).isActive = true
         stack.addArrangedSubview(row("录人脸", faceName, NSButton(title: "看摄像头 5 秒", target: self, action: #selector(enrollFace))))
         stack.addArrangedSubview(row("录声纹", voiceName, NSButton(title: "说五句话", target: self, action: #selector(enrollVoice))))
+        thresholdSlider.minValue = 0.6; thresholdSlider.maxValue = 0.98
+        thresholdSlider.doubleValue = UserDefaults.standard.object(forKey: "faceThreshold") as? Double ?? 0.82
+        thresholdSlider.target = self; thresholdSlider.action = #selector(thresholdMoved)
+        thresholdSlider.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        thresholdLabel.stringValue = String(format: "%.2f", thresholdSlider.doubleValue)
+        stack.addArrangedSubview(row("认人门槛", thresholdSlider, thresholdLabel))
         let note = NSTextField(wrappingLabelWithString: "点 hello 的脸 = 单击屏幕（聊天模式下开始一段聊天）；连点两下 = 双击。没有舵机：转头、点头由眼睛动作代替。花钱的开关在观察台。")
         note.textColor = .secondaryLabelColor; note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 350
@@ -186,6 +194,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "pre": showPreview = on; if !on { face.setPreview(nil) }
         default: break
         }
+    }
+
+    @objc func thresholdMoved() {
+        let v = thresholdSlider.doubleValue
+        thresholdLabel.stringValue = String(format: "%.2f", v)
+        hello?.book.threshold = Float(v)
+        UserDefaults.standard.set(v, forKey: "faceThreshold")
     }
 
     @objc func wake() { hello?.wake() }

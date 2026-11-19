@@ -62,11 +62,14 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 
     func stop() {
         if session.isRunning { session.stopRunning() }
-        if running { let ev = tracker.clear(); if !ev.isEmpty { onFaceEvents?(ev) } }
+        if running { clearFaces() }
         running = false
     }
 
     func snap(_ id: Int) { camQueue.async { self.pendingSnap = id } }
+
+    /// faces off: every track lost (on the camera queue, where the tracker lives)
+    func clearFaces() { camQueue.async { let ev = self.tracker.clear(); if !ev.isEmpty { self.onFaceEvents?(ev) } } }
 
     func enroll(name: String) { camQueue.async { self.enrolling = (name, monoUs() + 5_000_000, 0) } }
 

@@ -67,7 +67,10 @@ final class Hello: MouthDelegate {
         }
         camera.onFaceEvents = { [weak self] ev in
             self?.core.async { for (name, f) in ev { self?.vision.event(name, f) } }
-            for (name, f) in ev where name == "face_named" { self?.log("认出：\(f["name"] ?? "")") }
+            for (name, f) in ev where name == "face_named" || name == "face_unknown" {   // sim: to tune the threshold
+                self?.log(name == "face_named" ? "认出：\(f["name"] ?? "")（相似度 \(f["sim"] ?? "")）"
+                                               : "陌生人（最像的相似度 \(f["sim"] ?? "")，门槛 \(self?.book.threshold ?? 0)）")
+            }
         }
         camera.onEnrolled = { [weak self] name, n in self?.log("人脸录入 \(name)：\(n) 张") }
     }
@@ -121,7 +124,7 @@ final class Hello: MouthDelegate {
     func setUpload(_ on: Bool) { uploadOn = on; camera.uploadFrames = on; onChange?() }
     func setFaces(_ on: Bool) {
         facesOn = on; camera.facesOn = on
-        if !on { let ev = camera.tracker.clear(); core.async { for (n, f) in ev { self.vision.event(n, f) } } }
+        if !on { camera.clearFaces() }
         onChange?()
     }
 
