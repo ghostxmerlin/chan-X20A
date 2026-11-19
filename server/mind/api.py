@@ -234,7 +234,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 "today_calls": sum(r["calls"] for r in out if r["day"] == today)}
 
     SWITCHES = ("tingwu", "eye", "notes", "realtime")    # spec 2026-11-11 §3; realtime: 围观 voice session (2026-11-14)
-    TOGGLES = ("realtime_tools", "realtime_smart_turn", "realtime_intent")    # 千问用工具 (L6 2026-11-18): Docking's Qwen may call tools;
+    TOGGLES = ("realtime_tools", "realtime_smart_turn", "realtime_intent", "realtime_answer_all")   # 全答: off by default    # 千问用工具 (L6 2026-11-18): Docking's Qwen may call tools;
     # 智能断句 (owner 2026-11-19 night): Docking's turn detection smart_turn_v2 (on) / server_vad (off)
     # 工具分类器 (owner 2026-11-19 night): the ear's local tool classifier (preload + tool gate) judges / judges nothing
     TOGGLE_DEFAULTS = {"realtime_smart_turn": True, "realtime_intent": True}   # no document yet = the ear's default
@@ -254,6 +254,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             out[name + "_status"] = {"running": st.get("running") or [], "available": st.get("available"), "at": st.get("at"),
                                      **({"turn": st["turn"]} if st.get("turn") else {}),
                                      **({"intent": st["intent"]} if isinstance(st.get("intent"), bool) else {}),
+                                     **({"answer_all": st["answer_all"]} if isinstance(st.get("answer_all"), bool) else {}),
                                      "stale": not isinstance(st.get("at"), int) or now - st["at"] > 90_000}
         out["mouth"] = {"mode": mouth_mode(), "at": (db["switches"].find_one({"_id": "mouth"}) or {}).get("at")}
         for name in TOGGLES:                           # free flags (no status, not paid)

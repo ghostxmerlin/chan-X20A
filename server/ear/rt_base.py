@@ -491,6 +491,15 @@ def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
     return out
 
 
+# 全答: the persona's addressee rule (judge who is talked to, else only 「嗯」) gives way to one line
+ADDRESSEE_RULES = PERSONA_RULES[PERSONA_RULES.index("- 先分清是不是在跟你说话"):PERSONA_RULES.index("- 不要重复自己")]
+ANSWER_ALL_RULE = "- 听到的每句话都当作是在跟你说的，正常回答。不确定的事不要编。\n"
+
+
+def answer_all_persona(persona):
+    return str(persona or "").replace(ADDRESSEE_RULES, ANSWER_ALL_RULE)
+
+
 def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None, role=None, manner=None,
                  persona=None, skills=None, speaker=None, body=None):
     """PERSONA + 【背景】 + 【你的眼睛】 last: the live M12 view and the photo description (moved out of the background,
@@ -890,6 +899,9 @@ class Config:
     silence_ms = 1000
     vad_threshold = 0.6
     turn = "smart_turn_v2"       # owner 2026-11-18: try DashScope's addressee judgement ("server_vad" = before)
+    # 全答 (owner 2026-11-19 night: "开了它就应答所有的话，关了它就只收集"): no addressee judgement anywhere (server_vad,
+    # no 「嗯」 rule in the prompt, no reply / tool gate); 安静 = no session (collect only); a tap opens it again
+    answer_all = False
     guard_s = 0.6
     # owner 2026-11-18 "回答后，再采样很慢": the robot keeps its self flag `sounding` ~2.7 s after it reported our
     # stream done (collector playback.cpp: the speaker holds 1.5 s of silence for a next sentence, mouth_stream.h

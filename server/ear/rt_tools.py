@@ -13,7 +13,7 @@ class ToolsMixin:
         now = self.clock()
         if trace in self._tool_ok_traces:
             return True
-        if not self.intent_on:                         # 工具分类器 off: no judgement here, Qwen's call stands
+        if not self.intent_on or self.cfg.answer_all:  # 工具分类器 off / 全答: no judgement here, Qwen's call stands
             self._tool_ok_traces.append(trace)
             return True
         ok = self.in_called(now) or turn.get("kind") == "tool_answer" and turn.get("tool_depth", 0) > 0 and \

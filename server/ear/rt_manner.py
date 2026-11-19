@@ -326,7 +326,7 @@ class MannerMixin:
             how = mode_span.describe(self._quiet_mode, now, self.wall_ms())
             return ("主人让你先安静（" + how + "）：除非有人叫你的名字或 hello，否则什么都不说；" +
                     ("被叫到时只回答那一句，之后接着安静。" if self._quiet_sticky else "被叫到就恢复正常。"))
-        if self.low_on(now):
+        if self.low_on(now) and not self.cfg.answer_all:  # 全答: 少插话 judges nothing
             how = mode_span.describe(self._low, now, self.wall_ms())
             return f"他们在聊天或在看电视（{how}）：别插话，不主动搭腔；只有叫你、或明确问你的时候才回答，回答也短。"
         return None

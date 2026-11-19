@@ -310,6 +310,75 @@ class TurnSwitchTest(HubBase):
         self.assertEqual(self.recs.status[-1]["turn"], "server_vad")
 
 
+class AnswerAllTest(HubBase):
+    """全答 (owner 2026-11-19 night): every sentence answered, no judgement; 安静 = no session; a tap opens it."""
+    async def test_on_reopens_with_server_vad_and_no_en_rule(self):
+        self.hub.persona = self.rl.build_persona("")
+        ws = await self.open_ready()
+        self.assertIn("先分清是不是在跟你说话", ws.sent[0]["session"]["instructions"])
+        self.assertTrue(self.hub.set_answer_all(True))
+        self.hub.step()
+        await settle(20)
+        s = self.wss[-1].sent[0]["session"]
+        self.assertEqual(s["turn_detection"]["type"], "server_vad")
+        self.assertNotIn("先分清是不是在跟你说话", s["instructions"])
+        self.assertIn("听到的每句话都当作是在跟你说的", s["instructions"])
+        self.assertFalse(self.hub.set_turn(True))      # 智能断句 does nothing while 全答 is on ...
+        self.hub.set_answer_all(False)
+        self.assertEqual(self.hub.cfg.turn, "smart_turn_v2")   # ... and applies when it is off again
+
+    async def bare_en(self):
+        ws = await self.open_ready()
+        self.speak(5)
+        self.speak(2, speaking=False)
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(100)).decode()})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "嗯。"})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
+        await settle(30)
+
+    async def test_every_reply_plays_even_a_bare_en(self):
+        self.hub.set_answer_all(True)
+        await self.bare_en()
+        self.assertEqual(self.hub.stats["muted_quiet"], 0)
+        self.assertTrue(self.link.frames())            # its audio went to the robot
+
+    async def test_control_off_the_same_en_is_muted(self):
+        await self.bare_en()
+        self.assertEqual(self.hub.stats["muted_quiet"], 1)
+
+    async def test_quiet_closes_the_session_and_a_tap_opens_it(self):
+        self.hub.set_answer_all(True)
+        await self.open_ready()
+        self.hub.set_quiet("quiet", minutes=30)
+        self.hub.step()
+        await settle(10)
+        self.assertEqual(self.hub.state, "closed")     # collect only: nothing goes up
+        self.hub.called("asr")                         # a call does not open it (only a tap, for now)
+        self.hub.step()
+        await settle(10)
+        self.assertEqual(self.hub.state, "closed")
+        self.assertTrue(self.hub.quiet_on())
+        self.hub.touched()
+        self.hub.step()
+        await settle(20)
+        self.assertFalse(self.hub.quiet_on())
+        self.assertNotEqual(self.hub.state, "closed")
+
+    async def test_a_tap_with_docking_off_turns_it_on(self):
+        posted = []
+        self.hub.call = lambda method, path, body=None, timeout=5: (posted.append((path, body)), (200, {}))[1]
+        self.hub.set_answer_all(True)
+        self.switch.on = False
+        self.assertTrue(self.hub.touched())
+        await settle(20)
+        self.assertIn(("/switches", {"name": "realtime", "on": True, "by": "touch"}), posted)
+
+    async def test_off_a_tap_with_docking_off_does_nothing(self):
+        self.switch.on = False
+        self.assertFalse(self.hub.touched())
+
+
 class InputTest(HubBase):
     async def test_silence_is_not_sent_speech_is_with_preroll(self):
         ws = await self.open_ready()

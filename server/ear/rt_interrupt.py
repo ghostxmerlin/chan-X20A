@@ -16,6 +16,8 @@ class InterruptMixin:
         if not self.armed():
             return
         now = self.clock()
+        if self.cfg.answer_all and self.quiet_on(now) and source != "touch":
+            return                                     # 全答: in 安静 only a tap opens it (owner 2026-11-19 night)
         merged = self._called_at is not None and now - self._called_at < 2.0
         self._called_at, self._called_until = now, now + CALLED_S
         self._called_source = source
@@ -109,10 +111,14 @@ class InterruptMixin:
         """A tap on the screen in Docking (MouthLink: mode_report crowd / tap; owner 2026-11-19). stop (the robot's
         rules attached stop_speech: she was speaking): stop her reply here too, nothing else. Else a must-answer call:
         the call window for TOUCH_S (wakes 安静, lets the audio up, opens the session) and 在听 under the eyes."""
-        if not self.armed():
-            return False
         now = self.clock()
         trace = trace or ear_log.new_trace()
+        if self.cfg.answer_all and not self.armed():
+            return self._touch_open(trace)             # 全答: a tap with Docking off turns it on
+        if not self.armed():
+            return False
+        if self.cfg.answer_all and self.quiet_on(now) and not stop:
+            self.set_quiet("off", trace=trace, by="touch")   # 全答: a tap ends 安静 (whatever length was said)
         stop = stop or self._tool_wait is not None      # a tool running counts as speaking (older firmware: no stop)
         self.stats["touch_stop" if stop else "touch_listen"] += 1
         if stop:
@@ -157,6 +163,32 @@ class InterruptMixin:
         except Exception as e:                      # noqa: BLE001 - the switch-off below must still happen
             _log_failed("hush", e)
         self.spawn(self._post_hush())
+
+    def _touch_open(self, trace):
+        """全答 + Docking off: a tap = Docking on (mind's switch; the session opens when the ear reads it, <= 5 s).
+        Not while paused (nobody there / today's cap: the pause decides) or without key / voice / Docking mode."""
+        if not (self.key and self.voice and self.in_crowd()) or getattr(self.switch, "paused", False) or self._hush_busy:
+            return False
+        self._hush_busy = True
+        self.stats["touch_open"] += 1
+        ear_log.emit("trigger.touch", trace=trace, by="touch", sum="点屏幕：打开对话（全答）",
+                     ref={"session": self.session_no}, extra={"action": "open"})
+        self._word("在听", int(TOUCH_S))
+        self.spawn(self._post_switch(True, "touch"))
+        return True
+
+    async def _post_switch(self, on, by):
+        loop = asyncio.get_running_loop()
+        try:
+            fut = loop.run_in_executor(self._pool, self.call, "POST", "/switches", {"name": "realtime", "on": on, "by": by},
+                                       self.cfg.context_timeout_s)
+            status, _ = await asyncio.wait_for(fut, self.cfg.context_timeout_s + 0.5)
+        except Exception:                              # noqa: BLE001 - mind slow / down
+            status = None
+        finally:
+            self._hush_busy = False
+        if status != 200:
+            log(f"realtime: tap: switch on failed ({status})", flush=True)
 
     async def _post_hush(self):
         loop = asyncio.get_running_loop()

@@ -145,7 +145,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._called_until = 0.0                       # inside a call window (hello / Dynames): see CALLED_S
         self._called_at = None                         # the last call (merges sources that heard the same call)
         self._called_text = None                       # {text, at, trace}: a called sentence still waiting for an answer
-        self._turn_changed = False                     # 智能断句 switched while a session was open: close it when idle
+        self._turn_changed = False                     # 智能断句 / 全答 switched while a session was open: close it when idle
+        self._smart_wanted = None                      # the 智能断句 switch's last value (None: not read yet)
         self._called_trace = None                      # the call's run-log trace: the next sentence in the window joins it
         self._order_at = None                          # the last direct order (Unit ASR command word): see ORDER_S
         self._qtask = None                             # the open search task {topic, at, tries, results, answered, ...}
@@ -241,7 +242,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         return bool(self.key and self.voice) and self.switch.on and self.in_crowd()
 
     def want(self):
-        return self.armed() and self.link() is not None
+        # 全答: 安静 = collect only, no session (a tap ends it: touched)
+        return self.armed() and self.link() is not None and not (self.cfg.answer_all and self.quiet_on())
 
     def active(self):
         return self.state != "closed"
@@ -421,6 +423,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
             if self.state != "closed":
                 # paused: mind/pause.py (nobody there / today's cap), the switch itself is still on (presence.Gated)
                 self.close("paused" if getattr(self.switch, "paused", False) else "switch_off" if not self.switch.on
+                           else "quiet" if self.cfg.answer_all and self.quiet_on(now) and self.in_crowd()
                            else "left_crowd" if not self.in_crowd() else "robot_gone")
         elif self.state == "closed":
             if now >= self._retry_at and not self._need_speech:
@@ -625,7 +628,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._looks_dirty, self._looks_sent_at = False, self.clock()
         return instructions(self.ctx.get("text"), seen, self._recent_pairs(), look_lines(self._looks, self.wall_ms()),
                             self._scene_line(), self._length_line(), self._role_line(), self._manner_line(),
-                            self.persona, self._skills_block(), self._speaker_text(), self._body_line())
+                            answer_all_persona(self.persona) if self.cfg.answer_all else self.persona,
+                            self._skills_block(), self._speaker_text(), self._body_line())
 
 
     def set_voice(self, key, voice_id, persona, fillers=None, search_fillers=None, trace=None, by="tool"):
@@ -1186,11 +1190,29 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                             "ask_kind": ask_kind(turn.get("heard") or next((h["text"] for h in heard), "")),
                             "length_mode": self._length_mode()})
 
+    def set_answer_all(self, on):
+        """全答 switch (owner 2026-11-19 night): on = answer every sentence, no judgement (server_vad, no 「嗯」 rule, no
+        reply / tool gate; 安静 = no session, a tap opens it). Off = as before (the 智能断句 switch's turn detection).
+        An open session closes once idle and reopens with the new prompt and turn. Returns True when it changed."""
+        on = bool(on)
+        if on == self.cfg.answer_all:
+            return False
+        log(f"realtime: answer all {'on' if on else 'off'} (全答 switch)", flush=True)
+        self.cfg.answer_all = on
+        smart = self._smart_wanted if self._smart_wanted is not None else Config.turn != "server_vad"
+        self.cfg.turn = "server_vad" if on else ("smart_turn_v2" if smart else "server_vad")
+        self._turn_changed = self.state != "closed"
+        self._status_at = -1e9
+        return True
+
     def set_turn(self, smart):
         """智能断句 switch (owner 2026-11-19 night: "做一个开关，控制 smart turn on/off，然后给我们的网页前端用"):
         smart_turn_v2 (DashScope judges whether a sentence is over and meant for hello) or server_vad (a pause ends the
         sentence). The type is set when a session opens, so an open session closes once idle (no reply, no tool) and
         the next one opens with the new setting. Returns True when it changed."""
+        self._smart_wanted = bool(smart)
+        if self.cfg.answer_all:                        # 全答 runs server_vad; the choice applies when it is off again
+            return False
         turn = "smart_turn_v2" if smart else "server_vad"
         if turn == self.cfg.turn:
             return False
@@ -1223,7 +1245,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                 "cost_cny": round(self.stats["cost_micro_cny"] / 1e6, 4), "at": self.wall_ms(),
                 "quiet": self.quiet_on(now), "low": self.low_on(now), "role": self.role_text(now),
                 "debug": {"since_ms": self._debug_since_ms} if self.debug_on(now) else None,
-                "voice_key": self.voice_key, "turn": self.cfg.turn, "intent": self.intent_on})
+                "voice_key": self.voice_key, "turn": self.cfg.turn, "intent": self.intent_on,
+                "answer_all": self.cfg.answer_all})
         except Exception:                              # noqa: BLE001
             pass
 

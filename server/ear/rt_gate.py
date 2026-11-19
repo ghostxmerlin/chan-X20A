@@ -36,9 +36,10 @@ class GateMixin:
             return
         now = self.clock()
         # the decisions are rt_rules' pure functions (refactor 4.2.9); the side effects stay here, in the same order
-        v = rt_rules.mode_mute(turn.get("kind"), None if self._order_at is None else now - self._order_at, ORDER_S,
-                               self.in_called(now), self.debug_on(now), self.quiet_on(now), self.low_on(now),
-                               addressed(turn.get("heard") or ""))
+        aa = self.cfg.answer_all                       # 全答: no order / 安静 / 少插话 mute (调试 stays: its own mode)
+        v = rt_rules.mode_mute(turn.get("kind"), None if aa or self._order_at is None else now - self._order_at, ORDER_S,
+                               self.in_called(now), self.debug_on(now), self.quiet_on(now) and not aa,
+                               self.low_on(now) and not aa, addressed(turn.get("heard") or ""))
         if v == "order":                               # the sentence was a direct order to the robot (see ORDER_S)
             turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
             self._dropped.add(rid)
@@ -88,6 +89,13 @@ class GateMixin:
                 log("realtime: reply muted (wait_search)", flush=True)
                 self._log_gate(rid, turn, v, done)
                 return
+        if aa:                                         # 全答: every reply plays (no 嗯 / repeat / 没听清 / marker / blind gate)
+            turn["gate"], held, turn["held"] = "play", turn["held"], []
+            self._log_gate(rid, turn, "play", done, answer_all=True)
+            for pcm in held:
+                if rid not in self._dropped:
+                    self._out_put(("pcm", rid, pcm))
+            return
         recent = [norm_text(r) for at, _, r in self._recent if now - at <= self.cfg.recent_s]
         fresh = bool(self._looks) and self.wall_ms() - self._looks[-1][0] <= FRESH_LOOK_S * 1000
         v = reply_verdict(turn.get("tx"), done, recent,

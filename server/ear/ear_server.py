@@ -256,8 +256,14 @@ def main():
             await asyncio.to_thread(rt_switch.update)
             await asyncio.to_thread(eye_switch.update)
             await asyncio.to_thread(tools_switch.update)
-            if rt_hub is not None and database is not None:   # 智能断句 (realtime_smart_turn); no document = cfg default
+            if rt_hub is not None and database is not None:   # 全答 (realtime_answer_all); no document = off
                 try:
+                    doc = await asyncio.to_thread(database.read_switch, "realtime_answer_all")
+                except Exception:                      # noqa: BLE001
+                    doc = None
+                if doc and isinstance(doc.get("on"), bool):
+                    rt_hub.set_answer_all(doc["on"])
+                try:                                   # 智能断句 (realtime_smart_turn); no document = cfg default
                     doc = await asyncio.to_thread(database.read_switch, "realtime_smart_turn")
                 except Exception:                      # noqa: BLE001 - a failed read keeps the current setting
                     doc = None

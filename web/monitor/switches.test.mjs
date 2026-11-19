@@ -233,3 +233,15 @@ test('工具分类器: on by default, toggles realtime_intent', ()=>{
  v=sw.switchView(robot(),true,{enabled:false},{...on,realtime_intent:{on:false}});
  assert.match(v.intent.detail,/不判断/);assert.match(v.intent.detail,/还没换过来/);
 });
+
+test('全答: off by default; on says the other two do nothing', ()=>{
+ const now=Date.now();
+ const st={realtime:{on:true},realtime_status:{running:[],available:true,at:now,stale:false,turn:'server_vad',answer_all:true},
+  realtime_smart_turn:{on:true},realtime_intent:{on:true}};
+ let v=sw.switchView(robot(),true,{enabled:false},{...st,realtime_answer_all:{on:false}});
+ assert.equal(v.all.on,false);assert.match(v.all.detail,/按现在的判断/);
+ assert.deepEqual(sw.toggleRequest('all',null,{realtime_answer_all:{on:false}}).body,{name:'realtime_answer_all',on:true});
+ v=sw.switchView(robot(),true,{enabled:false},{...st,realtime_answer_all:{on:true}});
+ assert.match(v.all.detail,/点屏幕打开/);assert.match(v.turn.detail,/全答中不起作用/);assert.match(v.intent.detail,/全答中不起作用/);
+ assert.doesNotMatch(v.turn.detail,/正在换/);
+});
