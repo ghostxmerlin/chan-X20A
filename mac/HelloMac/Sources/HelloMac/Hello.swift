@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import IOKit.ps
 import HelloCore
 
 /// hello on the Mac: the three robot links to the Mac's own ear stack, the mic, the speaker, the camera, the face.
@@ -286,7 +287,9 @@ final class Hello: MouthDelegate {
             guard (1...voices.count).contains(id), playClip(id, why: "放台词") else { return (false, "no_clip", [:]) }
             return (true, nil, ["clip_id": id, "emotion": voices.tags[id] ?? ""])
         case "status":
+            let (battery, charging) = Self.battery()
             return (true, nil, ["fw": id.firmware, "up_s": Int(Date().timeIntervalSince(started)), "mode": mouth.modes.state.mode.id,
+                                "battery": battery.map { $0 as Any } ?? NSNull(), "charging": charging,
                                 "online": true, "volume": Int(out.volume * 100), "speaking": mouth.speaking,
                                 "camera": cameraOn, "m12": facesOn ? "detecting" : "standby", "motor": "none"])
         default: return (false, "unknown_verb", [:])
@@ -306,6 +309,20 @@ final class Hello: MouthDelegate {
             if value == 0 { self.setHearing(false); self.setCamera(false) }
             if value == 9 { self.setHearing(true); self.setCamera(true) }
         }
+    }
+
+    /// The Mac's battery (IOKit power sources): percent or nil (a desktop), charging / on AC.
+    static func battery() -> (Int?, Bool) {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] else { return (nil, true) }
+        for ps in list {
+            guard let d = IOPSGetPowerSourceDescription(info, ps)?.takeUnretainedValue() as? [String: Any],
+                  d[kIOPSTypeKey] as? String == kIOPSInternalBatteryType else { continue }
+            let cur = d[kIOPSCurrentCapacityKey] as? Int ?? 0, max = d[kIOPSMaxCapacityKey] as? Int ?? 100
+            let ac = d[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue
+            return (max > 0 ? cur * 100 / max : nil, ac)
+        }
+        return (nil, true)
     }
 
     func statusLine() -> String {

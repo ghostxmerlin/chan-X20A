@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         face.eyesDir = Self.eyesDir()
+        if let s = UserDefaults.standard.string(forKey: "eyeStyle") { face.style = s }
         face.showIdle()
         faceWin = NSWindow(contentRect: NSRect(x: 120, y: 200, width: 640, height: 520),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -62,7 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 guard let self, let h = self.hello else { return }
                 self.face.setStatus(h.statusLine())
-                self.face.setMode(h.mouth.modes.label, colour: h.mouth.modes.colour)
+                let state = h.core.sync { h.mouth.modes.state }
+                self.face.setMode(ModeRules.label(state), colour: ModeRules.def(state.mode).color)
+                let eye = ModeRules.def(state.mode).eye
+                if !self.stylePinned, ["v05", "v14", "v18"].contains(eye), self.face.style != eye { self.face.style = eye }
             }
         } catch {
             log("没有配置：先在仓库里运行 mac/HelloMac/setup.sh（\(error.localizedDescription)）")
@@ -101,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(row("麦克风", micPop))
         stack.addArrangedSubview(row("摄像头", camPop))
         for s in ["v14", "v05", "v18"] { stylePop.addItem(withTitle: s) }
+        if let s = UserDefaults.standard.string(forKey: "eyeStyle") { stylePop.selectItem(withTitle: s) }
         stylePop.target = self; stylePop.action = #selector(stylePicked)
         stack.addArrangedSubview(row("眼睛", stylePop))
         let boxes = NSStackView(); boxes.orientation = .horizontal; boxes.spacing = 10
@@ -183,7 +188,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if h.cameraOn { h.setCamera(true) }
     }
 
-    @objc func stylePicked() { face.style = stylePop.titleOfSelectedItem ?? "v14" }
+    /// the owner's pick wins; until then the eyes follow the mode, as the robot's (crowd v14, chat v05, companion v18)
+    var stylePinned = UserDefaults.standard.string(forKey: "eyeStyle") != nil
+    @objc func stylePicked() {
+        face.style = stylePop.titleOfSelectedItem ?? "v14"
+        stylePinned = true
+        UserDefaults.standard.set(face.style, forKey: "eyeStyle")
+    }
 
     @objc func toggled(_ b: NSButton) {
         guard let h = hello else { return }
