@@ -227,6 +227,16 @@ test("faces: found, named once, lost after 1.5 s; the book keeps 20 per name") {
     check(book.people["owner"]?.count == 20, "20 per name")
 }
 
+test("camera upload stays at the robot's size (<= 8 KB), quality stepping down") {
+    let sizes: [Double: Int] = [0.5: 21000, 0.38: 14000, 0.28: 9100, 0.2: 7400, 0.14: 6000, 0.1: 5000]
+    let r = JpegBudget.pick { q in Data(count: sizes[q]!) }!
+    check(r.0.count == 7400 && r.1 == 0.2, "first quality under 8 KB: \(r.1)")
+    let quiet = JpegBudget.pick { q in Data(count: q == 0.5 ? 5600 : 99999) }!
+    check(quiet.1 == 0.5, "a quiet picture keeps 0.5")
+    let huge = JpegBudget.pick { _ in Data(count: 50000) }!
+    check(huge.0.count == 50000, "nothing fits: the smallest still goes")
+}
+
 var failedTests: [String] = []
 for (name, body) in tests {
     let before = failures

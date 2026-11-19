@@ -104,7 +104,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         let s = 320 / image.extent.width
         let small = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
         guard let cg = ci.createCGImage(small, from: CGRect(x: 0, y: 0, width: 320, height: 240)) else { return nil }
-        return NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [.compressionFactor: 0.6])
+        let rep = NSBitmapImageRep(cgImage: cg)
+        // owner: "视觉要压缩": the robot's size (≤ 8 KB, JpegBudget), quality stepping down for a busy picture
+        return JpegBudget.pick { q in rep.representation(using: .jpeg, properties: [.compressionFactor: q]) }?.0
     }
 
     private func faces(_ px: CVPixelBuffer, w: Int, h: Int, now: UInt64) {

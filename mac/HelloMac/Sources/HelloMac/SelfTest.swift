@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 import HelloCore
@@ -64,6 +65,21 @@ enum AppSelfTest {
             q.sync { out.finish(stream: 9) }
             q.sync {}
             check(last == "done", "a late tts.end still gives done")
+        }
+        // a busy 320x240 picture (noise: the worst case for JPEG) comes out at the robot's size
+        do {
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 240, bitsPerSample: 8, samplesPerPixel: 3,
+                                       hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            var seed: UInt32 = 7
+            for y in 0..<240 { for x in 0..<320 {
+                seed = seed &* 1664525 &+ 1013904223
+                let n = CGFloat(seed >> 24) / 255
+                rep.setColor(NSColor(calibratedRed: CGFloat(x) / 320 * 0.6 + n * 0.4, green: CGFloat(y) / 240 * 0.6 + n * 0.3,
+                                     blue: 0.3 + n * 0.3, alpha: 1), atX: x, y: y)
+            } }
+            let q6 = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.6])!.count
+            let r = JpegBudget.pick { q in rep.representation(using: .jpeg, properties: [.compressionFactor: q]) }!
+            check(r.0.count <= 12000, "busy frame: \(q6) B at 0.6 -> \(r.0.count) B at \(r.1)")
         }
         print("app self-test: \(fails == 0 ? "passed" : "\(fails) failed")")
         return fails == 0 ? 0 : 1

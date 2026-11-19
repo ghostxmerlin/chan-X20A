@@ -68,6 +68,24 @@ public final class VisionLogic: LinkLogic {
     }
 }
 
+/// Upload size like the robot's body camera (owner 2026-11-19: "视觉要压缩"): its 320x240 JPEGs are ~5.7 KB (median of
+/// 2000, max 8 KB). The Mac camera is sharper, so the quality steps down until the frame fits maxBytes.
+public enum JpegBudget {
+    public static let maxBytes = 8000
+    public static let qualities: [Double] = [0.5, 0.38, 0.28, 0.2, 0.14, 0.1]
+
+    /// encode(quality) -> bytes; -> the first that fits (else the smallest), with its quality
+    public static func pick(maxBytes: Int = maxBytes, _ encode: (Double) -> Data?) -> (Data, Double)? {
+        var best: (Data, Double)? = nil
+        for q in qualities {
+            guard let d = encode(q) else { continue }
+            if d.count <= maxBytes { return (d, q) }
+            if best == nil || d.count < best!.0.count { best = (d, q) }
+        }
+        return best
+    }
+}
+
 /// The body camera's change rule (FW/frame_change.h): a 16x12 luma signature; a frame goes when >= 6 cells moved by
 /// >= 30 after removing the overall brightness change, at most one per second, plus the first after a connect.
 public struct FrameChange {
