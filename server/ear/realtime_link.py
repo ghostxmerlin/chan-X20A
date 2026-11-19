@@ -1381,6 +1381,11 @@ class RealtimeHub:
         self.set_quiet("quiet", trace=trace or ear_log.new_trace(), by="touch")
         return True
 
+    def robot_back(self):
+        """The robot (re)connected its /mouth link (a boot / sync report): put the mode's word back under its eyes."""
+        if self.debug_on() or self.quiet_on() or self.low_on() or self.role_text():
+            self._show_mode_word()
+
     def _word(self, text, hold_s):
         if self.screen_word is None:
             return
@@ -1949,8 +1954,10 @@ class RealtimeHub:
         if self.screen_word is None:
             return
         now = self.clock()
+        # owner 2026-11-19 "处于什么特殊模式的，stackchan上要有提示": the most important one (collector-0.5.17 draws all)
         word, until = ("调试中", self._debug) if self.debug_on(now) else ("安静中", self._quiet_mode) if self.quiet_on(now) \
-            else ("少插话", self._low) if self.low_on(now) else ("", None)
+            else ("少插话", self._low) if self.low_on(now) else ("角色中", self._role[1]) if self.role_text(now) \
+            else ("", None)
         self._mode_word_at = now if word else None
         try:
             self.screen_word(word, 3600 if until == mode_span.OPEN else int(until - now) if until else 0)
@@ -1973,6 +1980,7 @@ class RealtimeHub:
         self._refresh_instructions("role", trace)
         self._write_status(now)
         self._persist_modes(now)
+        self._show_mode_word()
         return end
 
     def _low_from(self, text, now, trace):

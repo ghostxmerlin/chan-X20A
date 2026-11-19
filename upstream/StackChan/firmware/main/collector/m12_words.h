@@ -127,10 +127,14 @@ constexpr const char* kQwenBusy = "等你说完";
 // 0.5.10 robot command line (robot_cmd.h "word"): the words mind may put under the eyes. Any text whose characters
 // are all in kGlyphs is shown; these are the ones the font was made for (hello's quiet modes, research done, reminders).
 constexpr const char* kCmdWords[] = {"安静中", "少插话", "查好了", "提醒", "收到", "好的", "我在听", "想想", "等等",
-                                     "晚安", "早安", "谢谢", "加油", "对不起", "没关系", "记住了", "学会了", "在呢"};
+                                     "晚安", "早安", "谢谢", "加油", "对不起", "没关系", "记住了", "学会了", "在呢",
+                                     // 0.5.17 (owner 2026-11-19 "处于什么特殊模式的，stackchan上要有提示"): every mode and
+                                     // what a running tool does (realtime_link.TOOL_WORD) must be drawable
+                                     "调试中", "角色中", "在听", "查资料中", "上网查", "核实中", "查行情", "交给研究", "在看",
+                                     "在回忆", "翻纪要", "在回顾", "在查", "在记"};
 // Every character any word uses: the glyph set of collector_words_20 (scripts/generate-words-font.sh, which reads
 // this one line: keep it a single string literal).
-constexpr const char* kGlyphs = "你好嗨在呢嗯好呀吧不要吗？怎么啦看见黑的找到哇来欢迎拜太近别走亮了是跟我说等完安静中少插话查提醒收听想晚早谢加油对起没关系记住学会";
+constexpr const char* kGlyphs = "你好嗨在呢嗯好呀吧不要吗？怎么啦看见黑的找到哇来欢迎拜太近别走亮了是跟我说等完安静中少插话查提醒收听想晚早谢加油对起没关系记住学会调试角色资料上网核实行情交给研究回忆翻纪顾";
 
 class Picker {
 public:

@@ -2486,3 +2486,29 @@ class DebugModeTest(HubBase):
         self.assertTrue(self.hub.debug_on())
         self.assertEqual(self.hub.set_debug(False, by="tool"), None)
         self.assertIsNone(self.hub._greet)                                      # the model answers a tool exit itself
+
+
+class ModeWordTest(HubBase):
+    """Owner 2026-11-19 "处于什么特殊模式的，stackchan上要有提示": one word for the most important mode, every word drawable
+    by the robot's font (collector-0.5.17), put back when the robot reconnects."""
+    async def test_words_priority_and_font(self):
+        import re
+        words = []
+        self.hub.screen_word = lambda text, hold: words.append((text, hold))
+        await self.open_ready()
+        self.hub.set_role("当个老师")
+        self.assertEqual(words[-1][0], "角色中")
+        self.hub.set_quiet("low")
+        self.assertEqual(words[-1][0], "少插话")
+        self.hub.set_quiet("quiet", until="exit")
+        self.assertEqual(words[-1], ("安静中", 3600))
+        self.hub.set_debug(True)
+        self.assertEqual(words[-1][0], "调试中")
+        n = len(words)
+        self.hub.robot_back()
+        self.assertEqual(words[n:], [("调试中", 3600)])
+        h = (Path(__file__).resolve().parents[1] / "upstream/StackChan/firmware/main/collector/m12_words.h")
+        if h.exists():
+            glyphs = re.search(r'kGlyphs = "([^"]*)"', h.read_text(encoding="utf-8")).group(1)
+            shown = {"调试中", "安静中", "少插话", "角色中", "在听", *self.rl.TOOL_WORD.values(), *self.rl.TOOL_WORD_GROUP.values()}
+            self.assertEqual([w for w in shown if any(c not in glyphs for c in w)], [])

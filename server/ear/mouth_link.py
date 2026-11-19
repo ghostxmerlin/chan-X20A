@@ -845,6 +845,11 @@ class MouthLink:
                     self.presence.owner(f"{m.get('by')}:{inp}")
                 except Exception:                       # noqa: BLE001
                     _trace(f"mouth m{self.conn} presence")
+            if self.realtime is not None and (inp in ("boot", "report") or inp is None) and hasattr(self.realtime, "robot_back"):
+                try:                                    # the robot is back: its mode word under the eyes again (2026-11-19)
+                    self.realtime.robot_back()
+                except Exception:                       # noqa: BLE001
+                    _trace(f"mouth m{self.conn} robot_back")
             if self.realtime is not None and m.get("mode") == "crowd" and m.get("input") in ("tap", "double_tap"):
                 # owner 2026-11-19 (collector-0.5.15): tap = stop while speaking (the rules attached stop_speech), else
                 # a must-answer call; double tap = 安静一下. (Older firmware: a tap here was look-and-greet.)
