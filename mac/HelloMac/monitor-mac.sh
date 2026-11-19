@@ -15,5 +15,7 @@ $SSH -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -L "127.0.0.1:$LOC
 TUN=$!
 trap 'kill $TUN 2>/dev/null || true' EXIT INT TERM
 for i in $(seq 40); do nc -z 127.0.0.1 $LOCAL 2>/dev/null && break; sleep 0.25; done
+# the robot pane: hello.app's loopback face (DeckServer, 127.0.0.1:18891, deck.token); offline while the app is closed
 SOUL_MIND_LOCAL="http://127.0.0.1:$LOCAL" SOUL_MIND_LOCAL_TOKEN="$(cat "$TOKEN_FILE")" SOUL_MONITOR_PORT=8788 \
+  SOUL_DEMO_ROBOT="http://127.0.0.1:18891" SOUL_DEMO_ROBOT_TOKEN="$(cat "$HOME/Library/Application Support/HelloMac/deck.token")" \
   node "$ROOT/web/monitor/server.mjs"

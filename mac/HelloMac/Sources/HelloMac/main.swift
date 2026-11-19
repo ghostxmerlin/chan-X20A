@@ -6,6 +6,7 @@ import HelloCore
 // Mac window. Its own server stack (soul-spike-mac via ssh -L, tools/mac/deploy_stack.sh), its own copy of the data.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var hello: Hello?
+    var deck: DeckServer?
     var faceWin: NSWindow!
     var panelWin: NSWindow!
     let face = FaceView(frame: NSRect(x: 0, y: 0, width: 640, height: 520))
@@ -32,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let h = try Hello(cfg: cfg)
             hello = h
             h.face = face
+            deck = DeckServer(hello: h)          // the Mac deck's robot pane (monitor-mac.sh); nil without deck.token
             h.book.threshold = Float(thresholdSlider.doubleValue)
             h.onLog = { [weak self] s in self?.log(s) }
             h.onChange = { [weak self] in self?.refresh() }
@@ -67,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ n: Notification) { hello?.stop() }
+    func applicationWillTerminate(_ n: Notification) { deck?.stop(); hello?.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
 
     static func eyesDir() -> URL? {
