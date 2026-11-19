@@ -11,7 +11,7 @@ test('every module the page imports is served by the monitor', ()=>{
 });
 test('every local script, stylesheet and page a page links to is served by the monitor', ()=>{
  const server=readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
- for(const f of ['index.html','mind.html','db.html','log.html','skills.html','tools.html','day.html']){
+ for(const f of ['index.html','mind.html','db.html','log.html','skills.html','tools.html','day.html','layers.html','code.html']){
   const src=readFileSync(new URL('./public/'+f,import.meta.url),'utf8');
   for(const [,p] of src.matchAll(/(?:src|href)="(\/[\w.-]+\.(?:js|css|html))"/g))assert.ok(server.includes(`['${p}',`),`${f} links ${p} but server.mjs does not serve it`);
  }

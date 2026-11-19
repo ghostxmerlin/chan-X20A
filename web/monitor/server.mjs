@@ -41,7 +41,10 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/crowd-plan.html', ['crowd-plan.html', 'text/html; charset=utf-8']], ['/crowd-plan.css', ['crowd-plan.css', 'text/css; charset=utf-8']], ['/crowd-plan.js', ['crowd-plan.js', 'text/javascript; charset=utf-8']],
     ['/tools.html', ['tools.html', 'text/html; charset=utf-8']], ['/tools-ui.js', ['tools-ui.js', 'text/javascript; charset=utf-8']],
     ['/skills.html', ['skills.html', 'text/html; charset=utf-8']], ['/skills-ui.js', ['skills-ui.js', 'text/javascript; charset=utf-8']], ['/skills.css', ['skills.css', 'text/css; charset=utf-8']],
-    ['/day.html', ['day.html', 'text/html; charset=utf-8']], ['/day-ui.js', ['day-ui.js', 'text/javascript; charset=utf-8']], ['/day.css', ['day.css', 'text/css; charset=utf-8']]]);
+    ['/day.html', ['day.html', 'text/html; charset=utf-8']], ['/day-ui.js', ['day-ui.js', 'text/javascript; charset=utf-8']], ['/day.css', ['day.css', 'text/css; charset=utf-8']],
+    // 2026-11-19: the refactor plan and the code map (docs/arch/code-map.json from tools/arch/code_map.py)
+    ['/layers.html', ['layers.html', 'text/html; charset=utf-8']], ['/layers.css', ['layers.css', 'text/css; charset=utf-8']],
+    ['/code.html', ['code.html', 'text/html; charset=utf-8']], ['/code-ui.js', ['code-ui.js', 'text/javascript; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -120,6 +123,11 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     if (url.pathname === '/api/day') {               // 2026-11-19: the day's plan, docs/day/<date>.json (newest without ?date)
       try { res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(readDay(path.join(root, 'docs/day'), url.searchParams.get('date')))); }
       catch { respond(404, '没有这一天的计划'); }
+      return;
+    }
+    if (url.pathname === '/api/code') {              // 2026-11-19: the server's code map (python3 tools/arch/code_map.py)
+      try { res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(fs.readFileSync(path.join(root, 'docs/arch/code-map.json'))); }
+      catch { respond(503, '还没有代码地图（python3 tools/arch/code_map.py）'); }
       return;
     }
     if (url.pathname === '/api/skills') {            // 2026-11-19: the Docking skills, config/skills/skills.json + skills/<id>.md

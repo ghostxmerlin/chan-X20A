@@ -1,0 +1,1433 @@
+{
+ "generated": "2026-11-19 17:27",
+ "commit": "63492ff",
+ "layer_names": {
+  "1": "接口层",
+  "2": "编排层",
+  "3": "规则层",
+  "4": "适配层",
+  "5": "基础层",
+  "tool": "脚本工具"
+ },
+ "modules": {
+  "ear/ask_api.py": {
+   "pkg": "ear",
+   "lines": 470,
+   "layer": 1,
+   "zh": "给 mind 用的本地接口：让 hello 说话、屏幕字、动作、安静 / 调试",
+   "doc": "The ear's local request API for mind's tools (L1, 2026-11-18; docs/hello-tools.md §6).",
+   "imports": [
+    "ear/ear_log.py",
+    "ear/mouth_link.py",
+    "ear/realtime_link.py"
+   ],
+   "collections": []
+  },
+  "ear/body_sense.py": {
+   "pkg": "ear",
+   "lines": 164,
+   "layer": 2,
+   "zh": "身体感觉：收机器人的姿态 / 距离摘要和事件，存库、给模型一行",
+   "doc": "Body sense from the robot (collector-0.5.12, owner 2026-11-19 \"姿态、加速度、距离…汇总到服务器\"), on the /vision link.",
+   "imports": [
+    "ear/ear_log.py"
+   ],
+   "collections": []
+  },
+  "ear/ear_log.py": {
+   "pkg": "ear",
+   "lines": 335,
+   "layer": 5,
+   "zh": "耳朵的运行日志",
+   "doc": "The ear's side of the hello run/audit log (2026-11-16; writer: server/common/hello_log.py, format: docs/hello-log.md).",
+   "imports": [
+    "common/hello_log.py",
+    "common/prices.py"
+   ],
+   "collections": []
+  },
+  "ear/ear_server.py": {
+   "pkg": "ear",
+   "lines": 1392,
+   "layer": 1,
+   "zh": "耳朵的入口：参数、装配、四条机器人连线分发、本地 ASR 和声纹",
+   "doc": "soul ear server (grew out of spike v2): the robot's \"ear\" as a WebSocket service.",
+   "imports": [
+    "ear/ask_api.py",
+    "ear/body_sense.py",
+    "ear/ear_log.py",
+    "ear/hearing_protocol.py",
+    "ear/hello_db.py",
+    "ear/intent.py",
+    "ear/kws_link.py",
+    "ear/mouth_link.py",
+    "ear/mouth_mode.py",
+    "ear/presence.py",
+    "ear/realtime_link.py",
+    "ear/recorder.py",
+    "ear/signal_link.py",
+    "ear/sound_kinds.py",
+    "ear/tingwu.py",
+    "ear/tingwu_switch.py",
+    "ear/vision_burst.py",
+    "ear/vision_link.py",
+    "ear/web_search.py"
+   ],
+   "collections": []
+  },
+  "ear/hearing_protocol.py": {
+   "pkg": "ear",
+   "lines": 150,
+   "layer": 1,
+   "zh": null,
+   "doc": "Bounded wire validation and transactional speaker enrollment (no model dependency).",
+   "imports": [],
+   "collections": []
+  },
+  "ear/hello_db.py": {
+   "pkg": "ear",
+   "lines": 230,
+   "layer": 4,
+   "zh": "耳朵写数据库（排队写）",
+   "doc": "MongoDB database \"hello\" for everything the ear hears (2026-11-10).",
+   "imports": [
+    "ear/ear_log.py"
+   ],
+   "collections": []
+  },
+  "ear/hello_db_import.py": {
+   "pkg": "ear",
+   "lines": 83,
+   "layer": "tool",
+   "zh": null,
+   "doc": "Import the ear's existing recordings into MongoDB \"hello\" (2026-11-10). Safe to re-run.",
+   "imports": [
+    "ear/hello_db.py",
+    "ear/tingwu.py"
+   ],
+   "collections": []
+  },
+  "ear/intent.py": {
+   "pkg": "ear",
+   "lines": 181,
+   "layer": 3,
+   "zh": "分类器：一句话要不要工具、预装哪类技能",
+   "doc": "Which tools a sentence needs before the model answers (owner 2026-11-18: 先找技能，再找工具；渐进; a very fast",
+   "imports": [],
+   "collections": []
+  },
+  "ear/kws_link.py": {
+   "pkg": "ear",
+   "lines": 142,
+   "layer": 4,
+   "zh": null,
+   "doc": "Ear -> keyword ear (server/kws/kws_server.py, 127.0.0.1): the robot's raw mic goes to the local keyword",
+   "imports": [],
+   "collections": []
+  },
+  "ear/mic_client.py": {
+   "pkg": "ear",
+   "lines": 442,
+   "layer": "tool",
+   "zh": null,
+   "doc": "Mac test client for the soul ear: stream the Mac mic (or a WAV) to the ear server, keep a local",
+   "imports": [],
+   "collections": []
+  },
+  "ear/mode_span.py": {
+   "pkg": "ear",
+   "lines": 89,
+   "layer": 3,
+   "zh": "从一句话里认出模式持续多久",
+   "doc": "How long a mode lasts, from what the owner said (owner 2026-11-19: \"安静一下之类的模式，或者即将要做的调试模式，都要持续一",
+   "imports": [],
+   "collections": []
+  },
+  "ear/mouth_link.py": {
+   "pkg": "ear",
+   "lines": 922,
+   "layer": 1,
+   "zh": "机器人的「嘴」连线：放声音、模式报告转给 mind、机器人命令行",
+   "doc": "/mouth link (2026-11-11, ear terminates it since 2026-11-14): the robot's speaker downlink.",
+   "imports": [
+    "ear/ear_log.py"
+   ],
+   "collections": []
+  },
+  "ear/mouth_mode.py": {
+   "pkg": "ear",
+   "lines": 33,
+   "layer": 3,
+   "zh": null,
+   "doc": "嘴 mode (2026-11-11): who speaks for hello.",
+   "imports": [],
+   "collections": []
+  },
+  "ear/presence.py": {
+   "pkg": "ear",
+   "lines": 167,
+   "layer": 2,
+   "zh": "在场判断：脸、认识的声音、主人操作",
+   "doc": "Who is there, as the ear sees it, and the pause it obeys (2026-11-17; mind/pause.py owns the pause).",
+   "imports": [],
+   "collections": []
+  },
+  "ear/realtime_link.py": {
+   "pkg": "ear",
+   "lines": 3641,
+   "layer": 2,
+   "zh": "Docking 会话的全部：千问协议、回答闸门、模式、技能和工具、招呼和事件、触摸、说明拼装",
+   "doc": "围观模式 realtime voice session (spike, 2026-11-14): hello talks with the people around her through DashScope's",
+   "imports": [
+    "ear/ear_log.py",
+    "ear/intent.py",
+    "ear/mode_span.py",
+    "ear/mouth_link.py",
+    "ear/vision_burst.py",
+    "ear/web_search.py"
+   ],
+   "collections": []
+  },
+  "ear/realtime_offline.py": {
+   "pkg": "ear",
+   "lines": 243,
+   "layer": "tool",
+   "zh": null,
+   "doc": "Offline check of the 围观 realtime session (spike 2026-11-14): the ear's own RealtimeHub, a fake robot, a real",
+   "imports": [
+    "ear/mouth_link.py",
+    "ear/realtime_link.py"
+   ],
+   "collections": []
+  },
+  "ear/recorder.py": {
+   "pkg": "ear",
+   "lines": 233,
+   "layer": 4,
+   "zh": null,
+   "doc": "Keep everything the ear receives, for later review. Nothing here ever deletes.",
+   "imports": [],
+   "collections": []
+  },
+  "ear/signal_link.py": {
+   "pkg": "ear",
+   "lines": 102,
+   "layer": 1,
+   "zh": null,
+   "doc": "Owner-signal uplink from the DualKey (2026-11-13): ws://<ear>/signal, same token as hearing.",
+   "imports": [],
+   "collections": []
+  },
+  "ear/smoke_client.py": {
+   "pkg": "ear",
+   "lines": 82,
+   "layer": "tool",
+   "zh": null,
+   "doc": "Readiness check with silence, Opus framing and cancelled enrollment; no identity saved.",
+   "imports": [],
+   "collections": []
+  },
+  "ear/sound_kinds.py": {
+   "pkg": "ear",
+   "lines": 131,
+   "layer": 3,
+   "zh": null,
+   "doc": "Merge the 527 AudioSet labels CED outputs into ~30 acoustic kinds.",
+   "imports": [],
+   "collections": []
+  },
+  "ear/tingwu.py": {
+   "pkg": "ear",
+   "lines": 208,
+   "layer": 4,
+   "zh": "听悟客户端",
+   "doc": "听悟 (DashScope tingwu-meeting) realtime transcription of one ear connection (2026-11-10).",
+   "imports": [],
+   "collections": []
+  },
+  "ear/tingwu_switch.py": {
+   "pkg": "ear",
+   "lines": 45,
+   "layer": 4,
+   "zh": null,
+   "doc": "听悟 tier switch for the ear (spec docs/superpowers/specs/2026-11-11-senses-split-design.md §3).",
+   "imports": [],
+   "collections": []
+  },
+  "ear/vision_burst.py": {
+   "pkg": "ear",
+   "lines": 602,
+   "layer": 2,
+   "zh": "视觉爆发和即时画面：拍照、识图",
+   "doc": "视觉爆发 vision burst (2026-11-15): while hello is in crowd, \"注意看\" makes the ear look photo by photo for BURST_S",
+   "imports": [
+    "ear/ear_log.py"
+   ],
+   "collections": []
+  },
+  "ear/vision_link.py": {
+   "pkg": "ear",
+   "lines": 315,
+   "layer": 1,
+   "zh": "机器人的「看」连线：M12 事件、照片、身体感觉",
+   "doc": "Vision uplink from the robot (2026-11-10): ws://<ear>/vision, same token as hearing.",
+   "imports": [
+    "ear/ear_log.py"
+   ],
+   "collections": []
+  },
+  "ear/web_search.py": {
+   "pkg": "ear",
+   "lines": 96,
+   "layer": 4,
+   "zh": "联网搜索客户端",
+   "doc": "联网搜索 for 围观 (owner 2026-11-16): \"让其搜索新闻，效果不好\" — the realtime model decided by itself whether to search",
+   "imports": [
+    "ear/ear_log.py"
+   ],
+   "collections": []
+  },
+  "mind/__init__.py": {
+   "pkg": "mind",
+   "lines": 1,
+   "layer": "tool",
+   "zh": null,
+   "doc": "",
+   "imports": [],
+   "collections": []
+  },
+  "mind/api.py": {
+   "pkg": "mind",
+   "lines": 1161,
+   "layer": 1,
+   "zh": "mind 的 http 路由 + 工具装配 + 一部分状态",
+   "doc": "HTTP API of mind on the server's loopback only (the Mac reaches it over ssh). Every call needs",
+   "imports": [
+    "common/hello_log_query.py",
+    "mind/attention.py",
+    "mind/daily.py",
+    "mind/debug_mode.py",
+    "mind/docs_qa.py",
+    "mind/fusion.py",
+    "mind/library.py",
+    "mind/llm.py",
+    "mind/memory.py",
+    "mind/memory_extract.py",
+    "mind/model_calls.py",
+    "mind/modes.py",
+    "mind/owner_signals.py",
+    "mind/pause.py",
+    "mind/place.py",
+    "mind/prompts.py",
+    "mind/proposals.py",
+    "mind/realtime.py",
+    "mind/runlog.py",
+    "mind/segments.py",
+    "mind/settings.py",
+    "mind/settings_store.py",
+    "mind/speak.py",
+    "mind/speech_settings.py",
+    "mind/store.py",
+    "mind/tool_impls.py",
+    "mind/tools.py"
+   ],
+   "collections": [
+    "conversations",
+    "eye_minutes",
+    "frames",
+    "mind_labels",
+    "mind_memory_jobs",
+    "mind_runs",
+    "mode_log",
+    "say_rounds",
+    "speech",
+    "switches",
+    "utterances",
+    "vision",
+    "vision_looks"
+   ]
+  },
+  "mind/attention.py": {
+   "pkg": "mind",
+   "lines": 94,
+   "layer": 2,
+   "zh": null,
+   "doc": "Choose one grounded topic; deterministic guards keep stale summaries below fresh speech.",
+   "imports": [
+    "mind/model_calls.py"
+   ],
+   "collections": []
+  },
+  "mind/billing.py": {
+   "pkg": "mind",
+   "lines": 264,
+   "layer": 2,
+   "zh": null,
+   "doc": "hello's billing switch and the presets 0 / 9, server half.",
+   "imports": [
+    "mind/mode_table.py",
+    "mind/modes.py",
+    "mind/runlog.py"
+   ],
+   "collections": [
+    "mode_log"
+   ]
+  },
+  "mind/chat.py": {
+   "pkg": "mind",
+   "lines": 927,
+   "layer": 2,
+   "zh": "对话模式",
+   "doc": "Chat v0 (plan docs/superpowers/plans/2026-11-14-chat-v0.md): hello answers what people say to her in `chat` mode.",
+   "imports": [
+    "mind/eye.py",
+    "mind/library.py",
+    "mind/llm.py",
+    "mind/notes.py",
+    "mind/pause.py",
+    "mind/place.py",
+    "mind/recall.py",
+    "mind/runlog.py",
+    "mind/selfvoice.py",
+    "mind/settings.py",
+    "mind/speak.py",
+    "mind/speech_settings.py",
+    "mind/store.py"
+   ],
+   "collections": [
+    "chat_turns",
+    "conversations",
+    "switches",
+    "utterances"
+   ]
+  },
+  "mind/daily.py": {
+   "pkg": "mind",
+   "lines": 319,
+   "layer": 2,
+   "zh": "日常：提醒、日程、盯着",
+   "doc": "日常 (L4, 2026-11-18): reminders, a simple schedule, and watches (\"帮忙盯着\"), spoken by hello.",
+   "imports": [
+    "mind/runlog.py",
+    "mind/tool_time.py",
+    "mind/tools.py"
+   ],
+   "collections": [
+    "people_cards",
+    "reminders",
+    "sounds",
+    "switches",
+    "vision",
+    "watches"
+   ]
+  },
+  "mind/debug_mode.py": {
+   "pkg": "mind",
+   "lines": 255,
+   "layer": 2,
+   "zh": "调试记录和提醒",
+   "doc": "调试模式, mind's half (owner 2026-11-19, task 3 \"帮我调试\": hello collects what it hears, reminds me of problems, I",
+   "imports": [
+    "mind/docs_kb.py",
+    "mind/model_calls.py",
+    "mind/pause.py",
+    "mind/runlog.py",
+    "mind/selfvoice.py",
+    "mind/tools.py"
+   ],
+   "collections": [
+    "speech",
+    "switches"
+   ]
+  },
+  "mind/docs_kb.py": {
+   "pkg": "mind",
+   "lines": 373,
+   "layer": 2,
+   "zh": "资料库：导入切块、按意思 + 按字面找",
+   "doc": "资料库 (owner 2026-11-19 \"知识库…Tab5 里的数据，模组、传感器、指纹算法、USB\"): the owner's project material, by folder.",
+   "imports": [
+    "mind/pause.py",
+    "mind/runlog.py",
+    "mind/semantic.py",
+    "mind/settings.py",
+    "mind/tools.py"
+   ],
+   "collections": []
+  },
+  "mind/docs_qa.py": {
+   "pkg": "mind",
+   "lines": 147,
+   "layer": 2,
+   "zh": "资料问答：查到后交给 sol 推理",
+   "doc": "资料问答 (owner 2026-11-19 \"基于知识库的回答，不能只是搜索和输出，还要进行再推理，且推理模型应该用 gpt-sol\"):",
+   "imports": [
+    "mind/docs_kb.py",
+    "mind/pause.py",
+    "mind/research.py",
+    "mind/runlog.py",
+    "mind/tools.py"
+   ],
+   "collections": []
+  },
+  "mind/eye.py": {
+   "pkg": "mind",
+   "lines": 256,
+   "layer": 2,
+   "zh": "每分钟看画面",
+   "doc": "eye (plan 2026-11-11-eye, Task 1): one claude-haiku call per minute on that minute's body-camera",
+   "imports": [
+    "mind/llm.py",
+    "mind/pause.py",
+    "mind/place.py",
+    "mind/runlog.py",
+    "mind/settings.py",
+    "mind/speech_settings.py"
+   ],
+   "collections": [
+    "eye_minutes",
+    "eye_state",
+    "frames",
+    "vision",
+    "vision_looks"
+   ]
+  },
+  "mind/eye_runner.py": {
+   "pkg": "mind",
+   "lines": 104,
+   "layer": 2,
+   "zh": null,
+   "doc": "soul-eye: runs eye.run_minute for each minute while hello.switches.eye is on (plan 2026-11-11-eye).",
+   "imports": [
+    "mind/eye.py",
+    "mind/pause.py",
+    "mind/runlog.py",
+    "mind/settings.py",
+    "mind/settings_store.py",
+    "mind/speech_settings.py",
+    "mind/store.py"
+   ],
+   "collections": [
+    "eye_minutes",
+    "eye_state",
+    "switches"
+   ]
+  },
+  "mind/fusion.py": {
+   "pkg": "mind",
+   "lines": 181,
+   "layer": 2,
+   "zh": "每分钟情景判断",
+   "doc": "Per-minute fusion (spec 3.3, 3.6, 4.5): gate, model call with one retry, run log, validation,",
+   "imports": [
+    "mind/llm.py",
+    "mind/pause.py",
+    "mind/prompts.py",
+    "mind/runlog.py",
+    "mind/speech_settings.py",
+    "mind/validate.py"
+   ],
+   "collections": []
+  },
+  "mind/library.py": {
+   "pkg": "mind",
+   "lines": 873,
+   "layer": 4,
+   "zh": "记忆库（人、知识、记忆条目）的读写",
+   "doc": "The library: people cards, people notes, memories and knowledge, plus voice labels (backend phase 1).",
+   "imports": [
+    "mind/speech_settings.py"
+   ],
+   "collections": [
+    "chat_turns",
+    "conversations",
+    "eye_minutes",
+    "memory_items",
+    "memory_recall",
+    "mind_memories",
+    "mind_scenes",
+    "mind_segments",
+    "owner_signals",
+    "people_cards",
+    "speech",
+    "voice_labels"
+   ]
+  },
+  "mind/llm.py": {
+   "pkg": "mind",
+   "lines": 78,
+   "layer": 4,
+   "zh": "aihubmix 模型客户端",
+   "doc": "aihubmix (OpenAI-compatible) chat call and list-price cost, shared by fusion, segments and probe.",
+   "imports": [
+    "mind/runlog.py"
+   ],
+   "collections": []
+  },
+  "mind/memory.py": {
+   "pkg": "mind",
+   "lines": 276,
+   "layer": 4,
+   "zh": null,
+   "doc": "Evidence-backed, immutable memory revisions; derived from independent observation windows.",
+   "imports": [
+    "mind/settings.py"
+   ],
+   "collections": [
+    "mind_memories",
+    "mind_memory_evidence",
+    "mind_memory_jobs"
+   ]
+  },
+  "mind/memory_extract.py": {
+   "pkg": "mind",
+   "lines": 897,
+   "layer": 2,
+   "zh": "从谈话里提取记忆",
+   "doc": "Long-term memory phase A: episodic memories extracted from one local day of hello's history (memory_items).",
+   "imports": [
+    "mind/library.py",
+    "mind/model_calls.py",
+    "mind/place.py",
+    "mind/runlog.py",
+    "mind/selfvoice.py",
+    "mind/settings.py",
+    "mind/settings_store.py",
+    "mind/speech_settings.py",
+    "mind/store.py"
+   ],
+   "collections": [
+    "chat_turns",
+    "conversations",
+    "library_jobs",
+    "memory_recall",
+    "mind_runs",
+    "mind_segments",
+    "owner_signals",
+    "say_rounds",
+    "speech",
+    "switches",
+    "utterances"
+   ]
+  },
+  "mind/memory_worker.py": {
+   "pkg": "mind",
+   "lines": 282,
+   "layer": 2,
+   "zh": null,
+   "doc": "Independent, restartable ten-minute learning worker. It consumes existing observations only.",
+   "imports": [
+    "mind/library.py",
+    "mind/memory.py",
+    "mind/memory_extract.py",
+    "mind/model_calls.py",
+    "mind/pause.py",
+    "mind/records.py",
+    "mind/runlog.py",
+    "mind/selfvoice.py",
+    "mind/settings.py",
+    "mind/settings_store.py",
+    "mind/speech_context.py",
+    "mind/speech_settings.py",
+    "mind/store.py"
+   ],
+   "collections": [
+    "mind_memory_jobs",
+    "mind_packages"
+   ]
+  },
+  "mind/mode_store.py": {
+   "pkg": "mind",
+   "lines": 491,
+   "layer": 2,
+   "zh": "机器人模式的镜像和报告处理",
+   "doc": "hello's modes: the store around the pure state machine (plan task A2; spec 2026-11-14-hello-modes-design-v2).",
+   "imports": [
+    "mind/mode_table.py",
+    "mind/modes.py",
+    "mind/runlog.py"
+   ],
+   "collections": [
+    "mode",
+    "mode_log"
+   ]
+  },
+  "mind/mode_table.py": {
+   "pkg": "mind",
+   "lines": 190,
+   "layer": 3,
+   "zh": "机器人模式表",
+   "doc": "hello's modes: the one definition (spec docs/superpowers/specs/2026-11-14-hello-modes-design-v2.md §3.1, §3.2).",
+   "imports": [],
+   "collections": []
+  },
+  "mind/model_calls.py": {
+   "pkg": "mind",
+   "lines": 51,
+   "layer": 4,
+   "zh": "带花费检查的模型调用",
+   "doc": "Bounded, accounted JSON calls shared by speech and memory learning.",
+   "imports": [
+    "mind/llm.py",
+    "mind/pause.py",
+    "mind/runlog.py",
+    "mind/settings.py"
+   ],
+   "collections": []
+  },
+  "mind/modes.py": {
+   "pkg": "mind",
+   "lines": 226,
+   "layer": 3,
+   "zh": "机器人模式规则（和固件对齐）",
+   "doc": "hello's modes: the pure state machine (spec docs/superpowers/specs/2026-11-14-hello-modes-design-v2.md §3.4-§3.8, §5).",
+   "imports": [
+    "mind/mode_table.py"
+   ],
+   "collections": []
+  },
+  "mind/notes.py": {
+   "pkg": "mind",
+   "lines": 263,
+   "layer": 2,
+   "zh": "谈话纪要",
+   "doc": "Conversation notes (spec docs/superpowers/specs/2026-11-11-conversation-notes-design.md).",
+   "imports": [
+    "mind/llm.py",
+    "mind/package.py",
+    "mind/pause.py",
+    "mind/place.py",
+    "mind/prompts.py",
+    "mind/runlog.py",
+    "mind/selfvoice.py",
+    "mind/settings.py",
+    "mind/speech_settings.py"
+   ],
+   "collections": [
+    "conversation_versions",
+    "conversations",
+    "notes_state"
+   ]
+  },
+  "mind/notes_runner.py": {
+   "pkg": "mind",
+   "lines": 177,
+   "layer": 2,
+   "zh": null,
+   "doc": "soul-notes: conversation notes, ten seconds after each minute (plan 2026-11-11-conversation-notes).",
+   "imports": [
+    "mind/notes.py",
+    "mind/pause.py",
+    "mind/records.py",
+    "mind/runlog.py",
+    "mind/selfvoice.py",
+    "mind/settings.py",
+    "mind/settings_store.py",
+    "mind/speech_settings.py",
+    "mind/store.py"
+   ],
+   "collections": [
+    "conversation_versions",
+    "conversations",
+    "notes_state",
+    "switches"
+   ]
+  },
+  "mind/owner_signals.py": {
+   "pkg": "mind",
+   "lines": 164,
+   "layer": 2,
+   "zh": null,
+   "doc": "Owner signals (spec section 10-11): ratings and \"this round is no good\", kept forever, append-only.",
+   "imports": [],
+   "collections": [
+    "owner_signals",
+    "say_rounds",
+    "utterances"
+   ]
+  },
+  "mind/package.py": {
+   "pkg": "mind",
+   "lines": 253,
+   "layer": 3,
+   "zh": null,
+   "doc": "S1: one minute of raw records → a minute package (no model involved).",
+   "imports": [
+    "mind/selfvoice.py"
+   ],
+   "collections": []
+  },
+  "mind/pause.py": {
+   "pkg": "mind",
+   "lines": 337,
+   "layer": 2,
+   "zh": "暂停和每天花费上限",
+   "doc": "hello's pause (2026-11-17): no unattended spending, and one daily cap over everything paid.",
+   "imports": [
+    "mind/runlog.py"
+   ],
+   "collections": [
+    "switches"
+   ]
+  },
+  "mind/place.py": {
+   "pkg": "mind",
+   "lines": 278,
+   "layer": 2,
+   "zh": null,
+   "doc": "Where hello is now (owner 2026-11-15: \"地点要搞对，删除所有可能钉死的地方，hello可以主动询问或我们自然语言输入。",
+   "imports": [
+    "mind/settings.py"
+   ],
+   "collections": [
+    "eye_minutes",
+    "mind_labels",
+    "place"
+   ]
+  },
+  "mind/probe.py": {
+   "pkg": "mind",
+   "lines": 140,
+   "layer": "tool",
+   "zh": null,
+   "doc": "aihubmix capability probe for mind (phase 0, run by hand; costs a few cents).",
+   "imports": [
+    "mind/llm.py",
+    "mind/settings.py"
+   ],
+   "collections": []
+  },
+  "mind/prompts.py": {
+   "pkg": "mind",
+   "lines": 212,
+   "layer": 3,
+   "zh": null,
+   "doc": "Perception prompts for the per-minute fusion call: versioned system text, input rendering and the",
+   "imports": [
+    "mind/place.py",
+    "mind/settings.py"
+   ],
+   "collections": []
+  },
+  "mind/proposals.py": {
+   "pkg": "mind",
+   "lines": 74,
+   "layer": 2,
+   "zh": null,
+   "doc": "Proposals (L3, 2026-11-18; docs/hello-tools.md §2): a C-level tool asked by anyone but the owner in person does not",
+   "imports": [
+    "mind/runlog.py"
+   ],
+   "collections": [
+    "proposals"
+   ]
+  },
+  "mind/realtime.py": {
+   "pkg": "mind",
+   "lines": 224,
+   "layer": 2,
+   "zh": null,
+   "doc": "围观模式 realtime spike (2026-11-14): the context block the ear's realtime voice session gets (GET /realtime/context).",
+   "imports": [
+    "mind/chat.py",
+    "mind/eye.py",
+    "mind/library.py",
+    "mind/notes.py",
+    "mind/place.py",
+    "mind/recall.py",
+    "mind/settings.py",
+    "mind/speech_settings.py"
+   ],
+   "collections": [
+    "conversations",
+    "eye_minutes",
+    "mind_scenes",
+    "vision"
+   ]
+  },
+  "mind/recall.py": {
+   "pkg": "mind",
+   "lines": 181,
+   "layer": 2,
+   "zh": null,
+   "doc": "One recall pool for chat, the talk show and realtime (long-term memory phase A, assessment §3.5).",
+   "imports": [
+    "mind/library.py",
+    "mind/memory.py",
+    "mind/speech_settings.py"
+   ],
+   "collections": [
+    "memory_recall",
+    "memory_uses"
+   ]
+  },
+  "mind/records.py": {
+   "pkg": "mind",
+   "lines": 77,
+   "layer": 4,
+   "zh": null,
+   "doc": "Raw records for a time window, read-only, with the wall time each record is filed under.",
+   "imports": [],
+   "collections": [
+    "conversation_versions",
+    "conversations",
+    "eye_minutes",
+    "sessions",
+    "vision"
+   ]
+  },
+  "mind/research.py": {
+   "pkg": "mind",
+   "lines": 647,
+   "layer": 2,
+   "zh": "深入研究（sol + 联网搜索）",
+   "doc": "深入研究 (deep research, 2026-11-18): hello's background research jobs (tools deep_research / research_status,",
+   "imports": [
+    "common/prices.py",
+    "mind/pause.py",
+    "mind/runlog.py",
+    "mind/tools.py"
+   ],
+   "collections": []
+  },
+  "mind/runlog.py": {
+   "pkg": "mind",
+   "lines": 196,
+   "layer": 5,
+   "zh": "mind 的运行日志",
+   "doc": "mind's side of the hello run/audit log (2026-11-16; writer: server/common/hello_log.py, record format: docs/hello-log.md).",
+   "imports": [
+    "common/hello_log.py"
+   ],
+   "collections": [
+    "switches"
+   ]
+  },
+  "mind/runner.py": {
+   "pkg": "mind",
+   "lines": 495,
+   "layer": 1,
+   "zh": "mind 的入口：起各个后台任务、每分钟情景循环",
+   "doc": "mind runner: every minute, build the minute package and strong elements for the minute that",
+   "imports": [
+    "common/hello_log_query.py",
+    "mind/api.py",
+    "mind/billing.py",
+    "mind/chat.py",
+    "mind/daily.py",
+    "mind/debug_mode.py",
+    "mind/fusion.py",
+    "mind/mode_store.py",
+    "mind/package.py",
+    "mind/pause.py",
+    "mind/records.py",
+    "mind/research.py",
+    "mind/runlog.py",
+    "mind/say_auto.py",
+    "mind/say_prefetch.py",
+    "mind/say_round.py",
+    "mind/segments.py",
+    "mind/selfvoice.py",
+    "mind/semantic.py",
+    "mind/settings.py",
+    "mind/settings_store.py",
+    "mind/speak.py",
+    "mind/speech_context.py",
+    "mind/speech_settings.py",
+    "mind/store.py",
+    "mind/strong.py",
+    "mind/tool_impls.py"
+   ],
+   "collections": [
+    "switches"
+   ]
+  },
+  "mind/say_auto.py": {
+   "pkg": "mind",
+   "lines": 87,
+   "layer": 2,
+   "zh": null,
+   "doc": "连续说 (owner 2026-11-14): \"以一定的合适频率（2-3分钟）一次，如果提前写有高得分选项，则自动播放\".",
+   "imports": [
+    "mind/runlog.py"
+   ],
+   "collections": []
+  },
+  "mind/say_moment.py": {
+   "pkg": "mind",
+   "lines": 31,
+   "layer": 3,
+   "zh": null,
+   "doc": "Same moment (spec section 6): rounds and marks inside one moment count once.",
+   "imports": [
+    "mind/speech_context.py"
+   ],
+   "collections": []
+  },
+  "mind/say_prefetch.py": {
+   "pkg": "mind",
+   "lines": 148,
+   "layer": 2,
+   "zh": null,
+   "doc": "Pre-write talk-show rounds while people are talking (spec section 6A, user 2026-11-13).",
+   "imports": [
+    "mind/runlog.py",
+    "mind/say_moment.py"
+   ],
+   "collections": [
+    "mind_runs"
+   ]
+  },
+  "mind/say_prompts.py": {
+   "pkg": "mind",
+   "lines": 119,
+   "layer": 3,
+   "zh": null,
+   "doc": "Prompts for the one-button talk show (spec docs/superpowers/specs/2026-11-13-unified-say-button-design.md).",
+   "imports": [
+    "mind/scene_speech.py"
+   ],
+   "collections": []
+  },
+  "mind/say_round.py": {
+   "pkg": "mind",
+   "lines": 194,
+   "layer": 2,
+   "zh": null,
+   "doc": "One talk-show round (spec sections 6-9, 11): five lines written in parallel, one Shanghainese",
+   "imports": [
+    "mind/model_calls.py",
+    "mind/recall.py",
+    "mind/runlog.py",
+    "mind/say_moment.py",
+    "mind/say_prompts.py",
+    "mind/speech_context.py",
+    "mind/speech_settings.py"
+   ],
+   "collections": [
+    "mind_runs",
+    "say_rounds"
+   ]
+  },
+  "mind/scene_speech.py": {
+   "pkg": "mind",
+   "lines": 161,
+   "layer": 2,
+   "zh": null,
+   "doc": "The b31dc07 scene + live-input path, with weighting in the same single prompt.",
+   "imports": [
+    "mind/attention.py",
+    "mind/model_calls.py",
+    "mind/place.py",
+    "mind/speech_context.py"
+   ],
+   "collections": []
+  },
+  "mind/segments.py": {
+   "pkg": "mind",
+   "lines": 118,
+   "layer": 2,
+   "zh": null,
+   "doc": "Scene segments (spec 6.2): cut by rules from the owner state, summarized by the model.",
+   "imports": [
+    "mind/fusion.py",
+    "mind/llm.py",
+    "mind/pause.py",
+    "mind/runlog.py",
+    "mind/settings.py"
+   ],
+   "collections": []
+  },
+  "mind/selfvoice.py": {
+   "pkg": "mind",
+   "lines": 87,
+   "layer": 3,
+   "zh": null,
+   "doc": "Is this sentence hello's own voice? (2026-11-11)",
+   "imports": [],
+   "collections": [
+    "utterances"
+   ]
+  },
+  "mind/semantic.py": {
+   "pkg": "mind",
+   "lines": 506,
+   "layer": 2,
+   "zh": "按意思找：向量同步和检索",
+   "doc": "按意思找 (semantic search / RAG; owner design 2026-11-18, tool semantic_search in config/tools/registry.json).",
+   "imports": [
+    "mind/library.py",
+    "mind/pause.py",
+    "mind/runlog.py",
+    "mind/settings.py",
+    "mind/tool_time.py",
+    "mind/tools.py"
+   ],
+   "collections": [
+    "conversations",
+    "doc_chunks",
+    "memory_recall",
+    "mind_segments"
+   ]
+  },
+  "mind/settings.py": {
+   "pkg": "mind",
+   "lines": 130,
+   "layer": 5,
+   "zh": "设置的默认值和读取",
+   "doc": "mind settings and time helpers.",
+   "imports": [
+    "mind/speech_settings.py"
+   ],
+   "collections": []
+  },
+  "mind/settings_store.py": {
+   "pkg": "mind",
+   "lines": 175,
+   "layer": 4,
+   "zh": null,
+   "doc": "Versioned settings in hello.mind_settings. Every save is a new version; the newest is in force.",
+   "imports": [
+    "mind/prompts.py",
+    "mind/settings.py",
+    "mind/speech_settings.py"
+   ],
+   "collections": [
+    "mind_settings"
+   ]
+  },
+  "mind/speak.py": {
+   "pkg": "mind",
+   "lines": 640,
+   "layer": 2,
+   "zh": "让 hello 说话（TTS）",
+   "doc": "hello speaks (spec docs/superpowers/specs/2026-11-11-speak-design.md).",
+   "imports": [
+    "mind/attention.py",
+    "mind/llm.py",
+    "mind/model_calls.py",
+    "mind/notes.py",
+    "mind/pause.py",
+    "mind/place.py",
+    "mind/records.py",
+    "mind/runlog.py",
+    "mind/say_moment.py",
+    "mind/say_prompts.py",
+    "mind/say_round.py",
+    "mind/scene_speech.py",
+    "mind/selfvoice.py",
+    "mind/settings.py",
+    "mind/speech_context.py",
+    "mind/speech_settings.py",
+    "mind/store.py"
+   ],
+   "collections": [
+    "conversations",
+    "eye_minutes",
+    "say_rounds",
+    "utterances"
+   ]
+  },
+  "mind/speech_context.py": {
+   "pkg": "mind",
+   "lines": 224,
+   "layer": 2,
+   "zh": null,
+   "doc": "Fresh, scoped evidence for speech. Preserve ASR alternatives instead of doubling votes.",
+   "imports": [
+    "mind/memory.py",
+    "mind/package.py",
+    "mind/place.py",
+    "mind/recall.py",
+    "mind/records.py",
+    "mind/selfvoice.py",
+    "mind/settings.py",
+    "mind/speech_settings.py"
+   ],
+   "collections": [
+    "conversation_versions",
+    "conversations",
+    "eye_minutes",
+    "mind_settings",
+    "utterances"
+   ]
+  },
+  "mind/speech_generation.py": {
+   "pkg": "mind",
+   "lines": 78,
+   "layer": 2,
+   "zh": null,
+   "doc": "Write short spoken lines from one selected topic; never cut off a punchline to fit.",
+   "imports": [
+    "mind/model_calls.py",
+    "mind/speech_context.py",
+    "mind/speech_settings.py"
+   ],
+   "collections": []
+  },
+  "mind/speech_settings.py": {
+   "pkg": "mind",
+   "lines": 161,
+   "layer": 3,
+   "zh": null,
+   "doc": "Scene-scoped speech preferences. Private environment/identity values stay in settings.",
+   "imports": [],
+   "collections": []
+  },
+  "mind/store.py": {
+   "pkg": "mind",
+   "lines": 197,
+   "layer": 4,
+   "zh": null,
+   "doc": "mind tables in the hello database: mind_packages (versioned minute packages) and mind_state.",
+   "imports": [
+    "mind/library.py",
+    "mind/mode_store.py"
+   ],
+   "collections": [
+    "conversations",
+    "mind_labels",
+    "mind_packages",
+    "mind_runs",
+    "mind_scenes",
+    "mind_segments",
+    "mind_settings",
+    "mind_state",
+    "owner_signals",
+    "say_rounds"
+   ]
+  },
+  "mind/strong.py": {
+   "pkg": "mind",
+   "lines": 196,
+   "layer": 3,
+   "zh": null,
+   "doc": "S2: sensor coverage, strong elements and the owner state, by rules only.",
+   "imports": [
+    "mind/package.py",
+    "mind/selfvoice.py",
+    "mind/settings.py"
+   ],
+   "collections": []
+  },
+  "mind/tool_impls.py": {
+   "pkg": "mind",
+   "lines": 812,
+   "layer": 2,
+   "zh": "十几个领域的工具实现挤在一起",
+   "doc": "mind's tool implementations (B1, 2026-11-18; framework: tools.py, rules: docs/hello-tools.md).",
+   "imports": [
+    "mind/docs_kb.py",
+    "mind/library.py",
+    "mind/mode_table.py",
+    "mind/recall.py",
+    "mind/research.py",
+    "mind/segments.py",
+    "mind/selfvoice.py",
+    "mind/semantic.py",
+    "mind/settings.py",
+    "mind/store.py",
+    "mind/tool_time.py",
+    "mind/tools.py"
+   ],
+   "collections": [
+    "chat_turns",
+    "conversations",
+    "eye_minutes",
+    "realtime_turns",
+    "sounds",
+    "speech",
+    "utterances",
+    "vision",
+    "vision_looks"
+   ]
+  },
+  "mind/tool_time.py": {
+   "pkg": "mind",
+   "lines": 221,
+   "layer": 3,
+   "zh": null,
+   "doc": "Time words for tools (docs/hello-tools.md §4, B2 2026-11-18): what people say -> a [start, end) range in epoch ms.",
+   "imports": [
+    "mind/tools.py"
+   ],
+   "collections": []
+  },
+  "mind/tools.py": {
+   "pkg": "mind",
+   "lines": 167,
+   "layer": 2,
+   "zh": "工具框架：参数校验、级别、计费、日志",
+   "doc": "hello's tool framework (B1, owner 2026-11-18; rules: docs/hello-tools.md, registry: config/tools/registry.json).",
+   "imports": [
+    "mind/runlog.py"
+   ],
+   "collections": []
+  },
+  "mind/validate.py": {
+   "pkg": "mind",
+   "lines": 90,
+   "layer": 3,
+   "zh": null,
+   "doc": "Deterministic checks on a model scene (spec 5.4) and merging its entry operations onto the previous",
+   "imports": [
+    "mind/prompts.py"
+   ],
+   "collections": []
+  },
+  "common/hello_log.py": {
+   "pkg": "common",
+   "lines": 1110,
+   "layer": 5,
+   "zh": "运行日志（所有进程共用）",
+   "doc": "hello run/audit log writer (2026-11-16), shared by ear, mind, eye, notes, memory and tts.",
+   "imports": [],
+   "collections": []
+  },
+  "common/hello_log_query.py": {
+   "pkg": "common",
+   "lines": 253,
+   "layer": 4,
+   "zh": "运行日志查询（日志页、花费）",
+   "doc": "Read side of hello's run/audit log: flow records (log_YYYYMM) and bodies (logbody_YYYYMM).",
+   "imports": [],
+   "collections": []
+  },
+  "common/prices.py": {
+   "pkg": "common",
+   "lines": 54,
+   "layer": 5,
+   "zh": "价格表",
+   "doc": "List prices of hello's paid DashScope (阿里云百炼) services that are not billed per model token in our code",
+   "imports": [],
+   "collections": []
+  },
+  "kws/export_onnx.py": {
+   "pkg": "kws",
+   "lines": 50,
+   "layer": "tool",
+   "zh": null,
+   "doc": "Export chinese-hubert-base cut to its first LAYER layers as ONNX (input: float32 [1, samples] 16 kHz,",
+   "imports": [],
+   "collections": []
+  },
+  "kws/kws_server.py": {
+   "pkg": "kws",
+   "lines": 159,
+   "layer": 1,
+   "zh": "关键词耳朵服务（Dynames）",
+   "doc": "Keyword ear service (关键词耳朵): a local process on the server that scores each speech segment the ear hands",
+   "imports": [
+    "kws/spotter.py"
+   ],
+   "collections": []
+  },
+  "kws/kws_tool.py": {
+   "pkg": "kws",
+   "lines": 253,
+   "layer": "tool",
+   "zh": null,
+   "doc": "Keyword ear, offline tool (runs on the server, next to the recordings).",
+   "imports": [
+    "kws/spotter.py"
+   ],
+   "collections": []
+  },
+  "kws/spotter.py": {
+   "pkg": "kws",
+   "lines": 251,
+   "layer": 3,
+   "zh": "关键词检测",
+   "doc": "Keyword ear core: finds keywords in a speech segment by comparing its sound with recorded samples of each",
+   "imports": [],
+   "collections": []
+  }
+ },
+ "violations": [
+  {
+   "from": "ear/realtime_link.py",
+   "to": "ear/mouth_link.py",
+   "from_layer": 2,
+   "to_layer": 1
+  },
+  {
+   "from": "mind/library.py",
+   "to": "mind/speech_settings.py",
+   "from_layer": 4,
+   "to_layer": 3
+  },
+  {
+   "from": "mind/model_calls.py",
+   "to": "mind/pause.py",
+   "from_layer": 4,
+   "to_layer": 2
+  },
+  {
+   "from": "mind/prompts.py",
+   "to": "mind/place.py",
+   "from_layer": 3,
+   "to_layer": 2
+  },
+  {
+   "from": "mind/say_moment.py",
+   "to": "mind/speech_context.py",
+   "from_layer": 3,
+   "to_layer": 2
+  },
+  {
+   "from": "mind/say_prompts.py",
+   "to": "mind/scene_speech.py",
+   "from_layer": 3,
+   "to_layer": 2
+  },
+  {
+   "from": "mind/settings.py",
+   "to": "mind/speech_settings.py",
+   "from_layer": 5,
+   "to_layer": 3
+  },
+  {
+   "from": "mind/settings_store.py",
+   "to": "mind/prompts.py",
+   "from_layer": 4,
+   "to_layer": 3
+  },
+  {
+   "from": "mind/settings_store.py",
+   "to": "mind/speech_settings.py",
+   "from_layer": 4,
+   "to_layer": 3
+  },
+  {
+   "from": "mind/store.py",
+   "to": "mind/mode_store.py",
+   "from_layer": 4,
+   "to_layer": 2
+  },
+  {
+   "from": "mind/tool_time.py",
+   "to": "mind/tools.py",
+   "from_layer": 3,
+   "to_layer": 2
+  }
+ ],
+ "unassigned": [],
+ "totals": {
+  "ear": {
+   "modules": 25,
+   "lines": 10498
+  },
+  "mind": {
+   "modules": 57,
+   "lines": 15706
+  },
+  "common": {
+   "modules": 3,
+   "lines": 1417
+  },
+  "kws": {
+   "modules": 4,
+   "lines": 713
+  }
+ }
+}

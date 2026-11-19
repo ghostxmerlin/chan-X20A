@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>重构方案</title>
+  <link rel="stylesheet" href="/layers.css">
+</head>
+<body>
+<header><div class="wrap">
+  <div class="top-row">
+    <h1>服务器分层重构 · 方案</h1>
+    <span class="links"><a href="/code.html">代码结构</a><a href="/day.html">今天</a><a href="/skills.html">技能</a><a href="/">← 观察台</a></span>
+  </div>
+  <p class="goal">夜里长跑做第一阶段：<b>只整理结构，不改任何行为</b>。每一步都跑全部测试、对快照，一步不过就退回。执行用的完整步骤在仓库 <code>docs/plans/2026-11-19-server-layers.md</code>。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>要你定的三件事</h2>
+<div class="box you"><ol>
+  <li><b>部署</b>：夜里全部通过后自动部署（部署完跑冒烟检查，不对自动退回旧代码），还是只留在分支上，早上你看过我再部署？<span class="rec">我建议：早上你看过再部署。夜里没人看着，出问题要等到早上才发现。</span></li>
+  <li><b>范围</b>：下面「夜里做 / 不做」可以吗？</li>
+  <li><b>花钱的验收</b>：要不要用录音离线回放（真连千问，几美分）再验证一遍 Docking 行为没变？<span class="rec">我建议：要，上限 $1。</span></li>
+</ol></div>
+
+<p class="goal"><a href="/code.html">看每个文件的结构 →</a>（89 个文件，每个多少行、在哪一层、调了谁；现在有 11 处「往上调」）</p>
+
+<h2>现在：谁调谁</h2>
+<figure>
+<div class="svgbox"><svg viewBox="0 0 900 430" role="img" aria-label="现在的进程和调用关系：机器人连耳朵，耳朵和 mind 互相调用，所有进程共用 Mongo">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker></defs>
+  <rect x="20" y="30" width="150" height="80" rx="8" class="node robot"/>
+  <text x="95" y="62" class="t">机器人</text><text x="95" y="84" class="s">固件 0.5.18</text>
+  <rect x="250" y="20" width="250" height="190" rx="8" class="node hot"/>
+  <text x="375" y="46" class="t">耳朵 soul-spike</text>
+  <text x="375" y="68" class="s">10.5k 行 · 4 条机器人连线</text>
+  <text x="375" y="88" class="s">本地 ASR + 声纹 · 听悟</text>
+  <text x="375" y="108" class="s">Docking 全部对话逻辑</text>
+  <text x="375" y="128" class="w">realtime_link.py 3640 行</text>
+  <text x="375" y="148" class="s">视觉爆发 · 在场 · 身体感觉</text>
+  <text x="375" y="168" class="s">ask 接口 52743</text>
+  <rect x="590" y="20" width="270" height="190" rx="8" class="node"/>
+  <text x="725" y="46" class="t">mind（4 个进程同一份代码）</text>
+  <text x="725" y="68" class="s">15.6k 行 · http 52740</text>
+  <text x="725" y="88" class="s">工具框架 + 大部分工具</text>
+  <text x="725" y="108" class="s">开关 · 模式 · 设置 · 花费上限</text>
+  <text x="725" y="128" class="s">情景 · 纪要 · 记忆 · 画面</text>
+  <text x="725" y="148" class="s">研究 · 资料问答 · 调试记录 · 日常</text>
+  <text x="725" y="168" class="w">api.py 1160 · tool_impls.py 811</text>
+  <rect x="250" y="290" width="610" height="70" rx="8" class="node db"/>
+  <text x="555" y="318" class="t">Mongo hello：数据库，也是进程之间的「公告板」</text>
+  <text x="555" y="342" class="s">switches 里的 rt_modes_status · presence_status · pause · *_status — 谁写谁读、字段什么意思，没有约定</text>
+  <rect x="20" y="290" width="150" height="70" rx="8" class="node ext"/>
+  <text x="95" y="318" class="t">外部模型</text><text x="95" y="340" class="s">DashScope · aihubmix</text>
+  <rect x="20" y="170" width="150" height="70" rx="8" class="node"/>
+  <text x="95" y="198" class="t">soul-tts · kws</text><text x="95" y="220" class="s">说话 · 关键词耳朵</text>
+  <line x1="170" y1="70" x2="248" y2="70" class="ar" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <text x="209" y="62" class="l">4 条 ws</text>
+  <line x1="500" y1="80" x2="588" y2="80" class="ar" marker-end="url(#ah)"/>
+  <text x="544" y="72" class="l">上下文 · 工具</text>
+  <line x1="588" y1="150" x2="502" y2="150" class="ar" marker-end="url(#ah)"/>
+  <text x="544" y="142" class="l">说话 · 屏幕 · 动作</text>
+  <line x1="375" y1="210" x2="375" y2="288" class="ar dash" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <line x1="725" y1="210" x2="725" y2="288" class="ar dash" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <line x1="250" y1="190" x2="172" y2="205" class="ar" marker-end="url(#ah)"/>
+  <line x1="250" y1="200" x2="172" y2="310" class="ar" marker-end="url(#ah)"/>
+  <text x="450" y="400" class="l">实线：http / ws 调用　虚线：读写同一个数据库</text>
+</svg></div>
+<figcaption>问题集中在三个地方：耳朵的一个大文件、mind 的两个大文件、没有约定的「公告板」。</figcaption>
+</figure>
+
+<h2>今天踩到的坑（都是结构问题）</h2>
+<div class="box"><ul>
+  <li><b>一个文件管十几件事</b>：今天的触摸、工具运行算说话、被晃说一句、模式时长、调试模式，全落在 realtime_link.py 里，互相牵连。它的测试只能在服务器上跑。</li>
+  <li><b>跨进程的数据没有约定</b>：调试记录把一个字段读错了，第一次真调试 42 句全没记上。</li>
+  <li><b>一个工具要在三处登记</b>：注册表、mind 的实现、耳朵的名字表，漏一处就悄悄不能用。</li>
+  <li><b>屏幕字三处各写一份</b>：「调试中」写了半天，机器人字库里没有这几个字，从来没显示。</li>
+  <li><b>「模式」一词两用</b>：机器人自己的模式（Docking / IDLE / 字幕）和耳朵里的安静、角色、调试，名字一样，机制不同。</li>
+</ul></div>
+
+<h2>目标：五层，只能往下调</h2>
+<figure>
+<div class="svgbox"><svg viewBox="0 0 900 360" role="img" aria-label="目标分层：接口层、编排层、规则层、适配层、基础层，只能往下调用；右边是三条约定">
+  <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker></defs>
+  <rect x="20" y="20" width="640" height="56" rx="6" class="band b1"/><text x="40" y="44" class="bt">1 接口层</text><text x="40" y="64" class="bs">线上格式 ⇄ 函数调用：机器人 4 条连线 · mind http 路由 · 耳朵 ask 接口</text>
+  <rect x="20" y="86" width="640" height="56" rx="6" class="band b2"/><text x="40" y="110" class="bt">2 编排层</text><text x="40" y="130" class="bs">一件事怎么串：Docking 会话 · 技能和工具执行 · 安静/角色/调试 · 日常 · 研究 · 调试记录</text>
+  <rect x="20" y="152" width="640" height="56" rx="6" class="band b3"/><text x="40" y="176" class="bt">3 规则层（纯函数，电脑上就能测）</text><text x="40" y="196" class="bs">回答闸门 · 时长解析 · 身体感觉 · 说明拼装 · 记忆打分 · 资料切块 · 模式规则表</text>
+  <rect x="20" y="218" width="640" height="56" rx="6" class="band b4"/><text x="40" y="242" class="bt">4 适配层</text><text x="40" y="262" class="bs">数据库仓库（每组集合一个，写明字段）· 千问实时 · aihubmix / DashScope · TTS · 机器人命令</text>
+  <rect x="20" y="284" width="640" height="56" rx="6" class="band b5"/><text x="40" y="308" class="bt">5 基础层</text><text x="40" y="328" class="bs">配置 · 运行日志 · 价格和钱 · 时钟 · http 小工具</text>
+  <line x1="680" y1="30" x2="680" y2="330" class="ar" marker-end="url(#ah2)"/><text x="692" y="180" class="l v">只能往下调</text>
+  <rect x="720" y="20" width="160" height="320" rx="6" class="node contract"/>
+  <text x="800" y="46" class="t">三条约定</text>
+  <text x="800" y="80" class="s">数据约定</text><text x="800" y="98" class="xs">每个集合谁写谁读</text><text x="800" y="114" class="xs">字段什么意思</text>
+  <text x="800" y="150" class="s">工具约定</text><text x="800" y="168" class="xs">注册表是唯一清单</text><text x="800" y="184" class="xs">三处对齐有测试</text>
+  <text x="800" y="220" class="s">屏幕字约定</text><text x="800" y="238" class="xs">一张字表</text><text x="800" y="254" class="xs">测试对照字库</text>
+  <text x="800" y="296" class="xs">另有检查脚本：</text><text x="800" y="312" class="xs">往上调就报错</text>
+</svg></div>
+<figcaption>同一层两个服务之间，只走接口层的约定（http、ws、登记过的数据库文档）。</figcaption>
+</figure>
+
+<h2>夜里做 / 不做</h2>
+<div class="cols">
+  <div class="box"><h3>做（不改行为）</h3><ol>
+    <li><b>基线和快照</b>：所有测试跑一遍记下数字；给关键输出拍快照，包括说明文本、会话的工具列表、mind 的工具表、回答闸门对 20 个固定回合的判定。之后每一步都要一字不差。</li>
+    <li><b>约定和守护</b>：集合约定文档、层次检查脚本、工具三处对齐的测试。</li>
+    <li><b>拆 realtime_link.py</b>：拆成一个包，分 7 小步，每步一个提交；原来的名字照样能用。</li>
+    <li><b>拆 ear_server.py</b>：装配和连线处理分开。</li>
+    <li><b>拆 mind 的 api.py 和 tool_impls.py</b>：按功能分文件。</li>
+    <li><b>公告板文档</b>：每个共用文档一对读写函数，写明字段。</li>
+    <li><b>清掉确认没用的代码</b>，屏幕字表收拢到一处。</li>
+    <li><b>写早上看的汇总</b>，更新看板。</li>
+  </ol></div>
+  <div class="box"><h3>不做（以后要你点头）</h3><ul>
+    <li>不改对外协议：机器人线上格式、http 接口、数据库字段。</li>
+    <li>不改固件，不改模型、提示词、门槛。</li>
+    <li>不把 mind 拆成子包（要改部署方式，放第二阶段）。</li>
+    <li>不改服务器重启会丢的临时单元（运维问题，单独做）。</li>
+    <li>不重写功能；发现 bug 只记录，不顺手修。</li>
+  </ul></div>
+</div>
+
+<h2>夜里的规矩</h2>
+<div class="box"><ul>
+  <li>只在分支 <code>refactor/layers-2026-11-19</code> 上提交，不 force push。</li>
+  <li>不刷机、不碰机器人、不改开关和设置、不动数据库里的数据（快照只读）。</li>
+  <li>一步不过：退回上一步、记下原因、跳过；连续三步不过就停下，写清楚卡在哪。</li>
+  <li>早上你看到：<code>docs/longrun-2026-11-19.md</code> 汇总（每步测试数字、快照结果、跳过了什么），看板第 6 件更新。</li>
+</ul></div>
+
+</main>
+<footer class="wrap"><p class="muted">2026-11-19 下班前定稿。这页只是给你看的；执行以仓库里的步骤为准。</p></footer>
+</body>
+</html>

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>代码结构</title>
+  <link rel="stylesheet" href="/layers.css">
+  <script type="module" src="/code-ui.js"></script>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="top-row">
+    <h1>服务器代码结构</h1>
+    <span class="links"><a href="/layers.html">重构方案</a><a href="/day.html">今天</a><a href="/">← 观察台</a></span>
+  </div>
+  <p class="goal">每个文件：多少行、属于哪一层、干什么、调了谁。颜色是目标分层；红色的调用是「往上调」，夜里要清掉的。数据由 <code>tools/arch/code_map.py</code> 从代码里扫出来，重构每一步之后重扫。</p>
+  <p class="muted" id="meta"></p>
+</div></header>
+<main class="wrap" id="code"><p class="muted">读取中…</p></main>
+<footer class="wrap"><p class="muted">点一行看它调用的模块和读写的数据库集合。</p></footer>
+</body>
+</html>

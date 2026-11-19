@@ -1,0 +1,96 @@
+/* 重构方案 (2026-11-19): one column like day.css; two inline SVG diagrams themed through classes (the monitor's CSP
+   drops inline style attributes). */
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --fg: #1b2230; --muted: #5d6676; --line: #dde1e8; --soft: #eceff4;
+  --accent: #2f5bd3; --you: #b4540a; --you-bg: #fdf0e3; --warn: #b42318;
+  --b1: #e8eefc; --b2: #e5f4ea; --b3: #fbf3d9; --b4: #f3e8fb; --b5: #eceff4;
+  --robot: #0f8b8d; --db: #a87508; --ext: #8a3ec7;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --surface: #1a1f28; --fg: #e4e8ef; --muted: #9aa3b2; --line: #2c3340; --soft: #222834;
+    --accent: #7f9ef5; --you: #f0a35e; --you-bg: #3a2a1a; --warn: #f2817a;
+    --b1: #1f2a44; --b2: #17301f; --b3: #33290f; --b4: #2c1f3a; --b5: #232832;
+    --robot: #3cc4c6; --db: #e2b542; --ext: #c08af0;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.65 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+a { color: var(--accent); }
+code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--soft); padding: 1px 4px; border-radius: 3px; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+header { padding: 24px 0 8px; }
+.top-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+h1 { font-size: 24px; margin: 0; }
+h2 { font-size: 18px; margin: 30px 0 10px; }
+h3 { font-size: 15px; margin: 0 0 8px; }
+p { margin: 0; }
+.goal { margin-top: 8px; max-width: 75ch; }
+.links a { margin-left: 12px; font-size: 14px; }
+.muted { color: var(--muted); font-size: 13px; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.box.you { border-color: var(--you); }
+.box ol, .box ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.rec { display: block; color: var(--you); font-size: 14px; margin-top: 2px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+.svgbox { overflow-x: auto; }
+.svgbox svg { display: block; width: 100%; min-width: 720px; height: auto; color: var(--fg); }
+figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+svg .node { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; }
+svg .node.hot { stroke: var(--warn); stroke-width: 2; }
+svg .node.robot { stroke: var(--robot); stroke-width: 2; }
+svg .node.db { stroke: var(--db); stroke-width: 2; }
+svg .node.ext { stroke: var(--ext); stroke-width: 1.6; }
+svg .node.contract { stroke: var(--accent); stroke-width: 1.6; }
+svg .t { font-size: 14px; font-weight: 700; fill: currentColor; text-anchor: middle; }
+svg .s { font-size: 12px; fill: var(--muted); text-anchor: middle; }
+svg .xs { font-size: 11px; fill: var(--muted); text-anchor: middle; }
+svg .w { font-size: 12px; fill: var(--warn); font-weight: 700; text-anchor: middle; }
+svg .l { font-size: 11px; fill: var(--muted); text-anchor: middle; }
+svg .l.v { text-anchor: start; }
+svg .ar { stroke: currentColor; stroke-width: 1.3; fill: none; }
+svg .ar.dash { stroke-dasharray: 4 3; }
+svg .head { fill: currentColor; }
+svg .band { stroke: var(--line); }
+svg .b1 { fill: var(--b1); } svg .b2 { fill: var(--b2); } svg .b3 { fill: var(--b3); } svg .b4 { fill: var(--b4); } svg .b5 { fill: var(--b5); }
+svg .bt { font-size: 14px; font-weight: 700; fill: currentColor; }
+svg .bs { font-size: 12px; fill: var(--muted); }
+footer { padding: 32px 0; }
+
+/* 代码结构 page (code.html) */
+.stats { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: 4px 0 12px; font-variant-numeric: tabular-nums; }
+.stats div { display: flex; flex-direction: column; }
+.stats b { font-size: 20px; }
+.stats span { color: var(--muted); font-size: 13px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.legend i.sw, h3.lh i.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.L1 { background: #2f5bd3; } .L2 { background: #1e7a46; } .L3 { background: #b88a12; } .L4 { background: #8a3ec7; }
+.L5 { background: #5d6676; } .Ltool { background: #b9c0cc; }
+h3.lh { font-size: 14px; margin: 14px 0 6px; color: var(--muted); }
+h3.lh:first-child { margin-top: 0; }
+.mods { display: flex; flex-direction: column; gap: 2px; }
+details.mod { border-radius: 6px; padding: 3px 6px; }
+details.mod[open] { background: var(--soft); }
+details.mod.big summary .fn { font-weight: 700; }
+details.mod.big { outline: 1.5px solid var(--warn); outline-offset: -1px; }
+details.mod summary { cursor: pointer; display: grid; grid-template-columns: 190px 160px 46px 1fr auto; gap: 10px; align-items: center;
+  list-style: none; font-size: 14px; }
+details.mod summary::-webkit-details-marker { display: none; }
+.fn { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar { height: 8px; background: var(--soft); border-radius: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; }
+.w1 { width: 10%; } .w2 { width: 20%; } .w3 { width: 30%; } .w4 { width: 40%; } .w5 { width: 50%; }
+.w6 { width: 60%; } .w7 { width: 70%; } .w8 { width: 80%; } .w9 { width: 90%; } .w10 { width: 100%; }
+.n { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+.what { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badup { color: var(--warn); font-size: 12px; white-space: nowrap; }
+.sub { font-size: 13px; color: var(--muted); padding: 6px 0 2px 4px; line-height: 1.9; }
+code.up { background: var(--you-bg); color: var(--warn); }
+.bigmark { border: 1.5px solid var(--warn); border-radius: 3px; padding: 0 4px; font-weight: 600; }
+@media (max-width: 640px) {
+  details.mod summary { grid-template-columns: 1fr 70px 40px; }
+  .what, .badup { grid-column: 1 / -1; white-space: normal; }
+}
