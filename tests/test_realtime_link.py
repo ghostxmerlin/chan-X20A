@@ -2380,3 +2380,65 @@ class ShakenSayTest(HubBase):
         self.hub.step()
         await settle(10)
         self.assertFalse(any(m["type"] == "response.create" for m in ws.sent[n:]))   # 安静: not said
+
+
+class ModeSpanTest(HubBase):
+    """Owner 2026-11-19: how long a mode lasts is said (30 分钟 / 直到我说退出 / 直到我叫你); a said length is sticky
+    (a call is answered, the mode goes on); modes are kept for an ear restart."""
+    def test_parse(self):
+        import mode_span as ms
+        self.assertEqual([ms.parse(t) for t in ("安静30分钟", "安静半个小时", "安静一个半小时", "两个钟头", "一刻钟",
+                                                 "安静一会儿")], [1800.0, 1800.0, 5400.0, 7200.0, 900.0, None])
+        self.assertEqual([ms.parse(t) for t in ("直到我说退出", "等我通知", "一直安静", "直到我叫你", "等我叫你再说")],
+                         [ms.OPEN, ms.OPEN, ms.OPEN, ms.CALLED, ms.CALLED])
+        self.assertEqual([ms.ended("退出安静模式"), ms.ended("取消吧"), ms.ended("取消吧", loose=True),
+                          ms.ended("取消订单", loose=True), ms.ended("可以说话了")], [True, False, True, False, True])
+
+    async def test_said_length_is_sticky_and_said_exit_ends(self):
+        ws = await self.open_ready()
+        now = self.hub.clock()
+        self.hub.local_heard("你先安静三十分钟")
+        self.assertTrue(self.hub.quiet_on(now + 29 * 60))
+        self.assertFalse(self.hub.quiet_on(now + 31 * 60))
+        self.hub.called("asr")
+        self.assertTrue(self.hub.quiet_on())                                # sticky: the call is answered, quiet stays
+        self.assertTrue(self.hub.in_called())
+        self.hub.local_heard("hello，退出安静模式")
+        self.assertFalse(self.hub.quiet_on())
+
+    async def test_open_ended_and_default(self):
+        await self.open_ready()
+        self.hub.local_heard("你先安静，直到我说退出")
+        self.assertTrue(self.hub.quiet_on(self.hub.clock() + 10 * 3600))
+        self.assertIn("直到主人说退出", self.hub._manner_line())
+        self.hub.set_quiet("off")
+        self.hub.local_heard("你先安静一会儿")                              # nothing said: until called (as before)
+        self.hub.called("asr")
+        self.assertFalse(self.hub.quiet_on())
+
+    async def test_tool_until_exit_and_role_minutes(self):
+        await self.open_ready()
+        self.assertEqual(self.hub.set_quiet("low", until="exit"), self.rl.mode_span.OPEN)
+        end = self.hub.set_role("当个老师", minutes=45)
+        self.assertAlmostEqual(end - self.hub.clock(), 45 * 60, delta=1)
+
+    async def test_modes_survive_a_restart(self):
+        rows = {}
+
+        class Db:
+            def switch_status(self, name, fields):
+                rows[name] = fields
+
+            def __getattr__(self, n):
+                return lambda *a, **k: None
+        self.hub.db = Db()
+        await self.open_ready()
+        self.hub.set_quiet("quiet", until="exit")
+        self.hub.set_role("当个老师", minutes=60)
+        doc = rows["rt_modes"]
+        self.assertTrue(doc["quiet"]["open"] and doc["quiet"]["sticky"])
+        self.hub._quiet_mode = self.hub._role = None
+        self.assertEqual(self.hub.restore_modes(doc), ["quiet", "role"])
+        self.assertTrue(self.hub.quiet_on() and self.hub._quiet_sticky)
+        self.assertEqual(self.hub.role_text(), "当个老师")
+        self.assertEqual(self.hub.restore_modes({"low": {"until_ms": 1, "open": False}}), [])      # long over

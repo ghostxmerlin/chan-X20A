@@ -197,14 +197,21 @@ class Asks:
     async def set_quiet(self, args):
         level = args.get("level") or "quiet"
         hub = self._hub()
-        until = hub.set_quiet(level, args.get("minutes"), trace=args.get("_trace"))
-        return {"level": level, "minutes": round((until - hub.clock()) / 60) if until else None,
-                "ends": "被叫 hello / Dynames 就结束" if level == "quiet" else "说「可以说话了」或到时间" if level == "low" else None}
+        until = hub.set_quiet(level, args.get("minutes"), trace=args.get("_trace"), until=args.get("until"))
+        open_ = until == float("inf")
+        sticky = level == "quiet" and getattr(hub, "_quiet_sticky", False)
+        return {"level": level, "minutes": None if until is None or open_ else round((until - hub.clock()) / 60),
+                "open": open_,
+                "ends": ("直到主人说退出" if open_ else "到时间或主人说退出（被叫时只答那一句）" if sticky
+                         else "被叫 hello / Dynames 就结束") if level == "quiet"
+                else ("直到主人说退出" if open_ else "说「可以说话了」或到时间") if level == "low" else None}
 
     async def set_role(self, args):
         hub = self._hub()
-        until = hub.set_role(args.get("role") or None, args.get("minutes"), trace=args.get("_trace"))
-        return {"role": args.get("role") or None, "minutes": round((until - hub.clock()) / 60) if until else None}
+        until = hub.set_role(args.get("role") or None, args.get("minutes"), trace=args.get("_trace"), until=args.get("until"))
+        open_ = until == float("inf")
+        return {"role": args.get("role") or None, "open": open_,
+                "minutes": None if until is None or open_ else round((until - hub.clock()) / 60)}
 
     async def set_voice(self, args):
         hub = self._hub()

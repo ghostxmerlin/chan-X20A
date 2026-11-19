@@ -25,8 +25,8 @@ class FakeHub:
     def stop_speaking(self): return True
     def faces_now(self): return [{"who": "主人", "known": True, "gender": None, "age": None}]
     def scene_now(self): return self.scene
-    def set_quiet(self, level, minutes=None, trace=None): return None if level == "off" else 100.0 + (minutes or 240) * 60
-    def set_role(self, role, minutes=None, trace=None): return 100.0 + 7200 if role else None
+    def set_quiet(self, level, minutes=None, trace=None, until=None): return None if level == "off" else float("inf") if until == "exit" else 100.0 + (minutes or 240) * 60
+    def set_role(self, role, minutes=None, trace=None, until=None): return 100.0 + 7200 if role else None
     def set_length(self, mode, trace=None): return None if mode == "normal" else 700.0
 
 
@@ -82,6 +82,8 @@ class AskApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["data"]["answer"], "搜到：比特币价格")
         _, out = await self.post({"name": "set_quiet", "args": {"level": "low", "minutes": 30}})
         self.assertEqual(out["data"]["minutes"], 30)
+        _, out = await self.post({"name": "set_quiet", "args": {"level": "quiet", "until": "exit"}})   # 2026-11-19
+        self.assertEqual((out["data"]["open"], out["data"]["minutes"], out["data"]["ends"]), (True, None, "直到主人说退出"))
 
     async def test_look_now_waits_for_the_next_look_or_falls_back(self):
         task = asyncio.create_task(self.post({"name": "look_now", "args": {}}))

@@ -89,6 +89,7 @@ import time
 import traceback
 
 import ear_log
+import mode_span
 import web_search
 from mouth_link import RT_STREAM_BASE
 
@@ -369,6 +370,10 @@ LENGTH_S = 600.0
 # low: "我们在聊天 / 我在看电视": no greetings, answer only a call or a sentence clearly for hello; LOW_S or 可以说话了.
 # role: "hello，当个大姐姐，陪陪老人" (inside a call window, or the set_role tool): a temporary extra on the persona,
 # ROLE_S or 恢复 / 做回你自己.
+# 2026-11-19 (owner "可以预约一段时间，比如 30 分钟，也可以是直到我通知你退出"): how long is said (mode_span.py) in the
+# sentence or passed to the tool (minutes / until exit|called); these are the defaults when nothing is said. A mode with
+# a said length (a duration or until exit) is "sticky": a call is answered but does not end it. Modes are kept in
+# hello.switches {_id: rt_modes_status} and restored when the ear starts (restore_modes).
 QUIET_MAX_S = 4 * 3600.0
 LOW_S = 1800.0
 ROLE_S = 2 * 3600.0
@@ -1069,6 +1074,8 @@ class RealtimeHub:
         self._touch_word = False                       # 在听 is under the eyes (touched)
         self._tool_wait = None                         # {trace, name, since}: a tool is running (see TOOL_WORD)
         self._last_shaken_say = None                   # SHAKEN_SAY_S
+        self._quiet_sticky = False                     # 安静 with a said length: a call does not end it
+        self._mode_word_at = None                      # when the mode word went under the eyes (refreshed)
         self._tool_cancelled = set()                   # traces whose running tool was interrupted
         self.voice_key = None
         self._tool_specs = []                          # this session's tools (realtime format)
@@ -1207,11 +1214,17 @@ class RealtimeHub:
         self.stats["called_" + source] += 1
         stopped = self._interrupt(now) or interrupted
         self._quiet_until = 0.0
-        if self._quiet_mode is not None:               # a call wakes hello from 安静
+        if self._quiet_mode is not None and self.quiet_on(now) and self._quiet_sticky:
+            # a said length (2026-11-19): the call is answered, 安静 goes on afterwards
+            ear_log.emit("trigger.quiet", trace=trace or ear_log.new_trace(), by=source,
+                         sum=f"安静中被叫：只答这一句（{mode_span.describe(self._quiet_mode, now, self.wall_ms())}）",
+                         extra={"mode": "quiet", "why": "called_sticky"})
+        elif self._quiet_mode is not None:             # a call wakes hello from 安静
             self._quiet_mode = None
             ear_log.emit("trigger.quiet", trace=trace or ear_log.new_trace(), by=source, sum="安静结束：被叫醒",
                          extra={"mode": "off", "why": "called"})
             self._write_status(now)
+            self._persist_modes(now)
             self._show_mode_word()
         self._send_until = max(self._send_until, now + CALLED_S)
         if not merged:
@@ -1485,6 +1498,8 @@ class RealtimeHub:
                 self._try_look_answer(now)
                 self._try_search_answer(now)
                 self._deliver_greet(now)
+        if self._mode_word_at is not None and now - self._mode_word_at > 1800:
+            self._show_mode_word()                     # a long / open-ended mode: the robot's word holds an hour at most
         if self._greet is not None and now - self._greet["at"] > self.cfg.greet_max_age_s:
             log("realtime: owner greeting dropped (too old)", flush=True)
             self._greet = None
@@ -1745,27 +1760,98 @@ class RealtimeHub:
         if self._ws is not None and self._ready.is_set():
             self._send_instructions(why, trace)
 
-    def set_quiet(self, level="quiet", minutes=None, trace=None, by="tool", heard=None):
-        """level quiet / low / off. -> until (clock) or None."""
+    @staticmethod
+    def _span(minutes=None, until=None, span=None):
+        """The tool's minutes / until (exit | called), or a span from mode_span.parse -> seconds / OPEN / CALLED / None."""
+        if until == "exit":
+            return mode_span.OPEN
+        if until == "called":
+            return mode_span.CALLED
+        if span is not None:
+            return span
+        return float(minutes) * 60 if minutes else None
+
+    @staticmethod
+    def _span_end(now, span, default_s):
+        """-> (until clock or OPEN, sticky). Nothing said / until called: the default, not sticky."""
+        if span is None or span == mode_span.CALLED:
+            return now + default_s, False
+        if span == mode_span.OPEN:
+            return mode_span.OPEN, True
+        return now + min(float(span), mode_span.MAX_S), True
+
+    def set_quiet(self, level="quiet", minutes=None, trace=None, by="tool", heard=None, until=None, span=None):
+        """level quiet / low / off; how long: minutes, until exit / called (the tool) or span (mode_span.parse, said).
+        -> until (clock, mode_span.OPEN) or None."""
         now = self.clock()
+        span = self._span(minutes, until, span)
         if level == "off":
             self._quiet_mode = self._low = None
-            until = None
+            self._quiet_sticky = False
+            end = None
         elif level == "quiet":
-            self._quiet_mode = until = now + min(minutes * 60 if minutes else QUIET_MAX_S, QUIET_MAX_S)
+            end, self._quiet_sticky = self._span_end(now, span, QUIET_MAX_S)
+            self._quiet_mode = end
             self._interrupt(now)
         else:
-            self._low = until = now + min(minutes * 60 if minutes else LOW_S, QUIET_MAX_S)
-        zh = {"quiet": "安静（直到被叫）", "low": "少插话", "off": "恢复正常接话"}[level]
+            end, _ = self._span_end(now, span, LOW_S)
+            self._low = end
+        how = mode_span.describe(end, now, self.wall_ms()) if end is not None else ""
+        zh = {"quiet": "安静" + ("（直到被叫）" if level == "quiet" and not self._quiet_sticky else ""), "low": "少插话",
+              "off": "恢复正常接话"}[level]
         ear_log.emit("trigger.quiet", trace=trace or ear_log.new_trace(), by=by,
-                     sum=f"{zh}" + (f"（{str(heard)[:30]}）" if heard else "") +
-                         (f" {int((until - now) // 60)} 分钟" if until else ""),
+                     sum=f"{zh}" + (f"（{str(heard)[:30]}）" if heard else "") + (f" {how}" if how else ""),
                      ref={"session": self.session_no}, extra={"mode": level, "minutes": minutes,
+                                                              "open": end == mode_span.OPEN, "sticky": self._quiet_sticky,
                                                               **({"heard": str(heard)[:200]} if heard else {})})
         self._refresh_instructions("quiet", trace)
         self._write_status(now)
+        self._persist_modes(now)
         self._show_mode_word()
-        return until
+        return end
+
+    def _persist_modes(self, now):
+        """安静 / 少插话 / 临时角色 into hello.switches {_id: rt_modes_status} (wall ms; null = open-ended)."""
+        if self.db is None:
+            return
+        wall = self.wall_ms()
+        ms = lambda u: None if u == mode_span.OPEN else int(wall + (u - now) * 1000)   # noqa: E731
+        doc = {"quiet": {"until_ms": ms(self._quiet_mode), "open": self._quiet_mode == mode_span.OPEN,
+                         "sticky": self._quiet_sticky} if self.quiet_on(now) else None,
+               "low": {"until_ms": ms(self._low), "open": self._low == mode_span.OPEN} if self.low_on(now) else None,
+               "role": {"text": self._role[0], "until_ms": ms(self._role[1]), "open": self._role[1] == mode_span.OPEN}
+               if self.role_text(now) else None, "at": wall}
+        try:
+            self.db.switch_status("rt_modes", doc)
+        except Exception:                              # noqa: BLE001 - kept in memory anyway
+            pass
+
+    def restore_modes(self, doc):
+        """The modes of the last run (rt_modes_status), those still running. -> the names restored."""
+        if not isinstance(doc, dict):
+            return []
+        now, wall, out = self.clock(), self.wall_ms(), []
+
+        def end(m):
+            if not isinstance(m, dict):
+                return None
+            if m.get("open"):
+                return mode_span.OPEN
+            u = m.get("until_ms")
+            return now + (u - wall) / 1000 if isinstance(u, (int, float)) and u > wall else None
+        q, lo, r = end(doc.get("quiet")), end(doc.get("low")), end(doc.get("role"))
+        if q is not None:
+            self._quiet_mode, self._quiet_sticky = q, bool((doc.get("quiet") or {}).get("sticky"))
+            out.append("quiet")
+        if lo is not None:
+            self._low = lo
+            out.append("low")
+        if r is not None and (doc.get("role") or {}).get("text"):
+            self._role = (str(doc["role"]["text"])[:120], r)
+            out.append("role")
+        if out:
+            self._mode_word_at = now - 1800           # step() puts the word under the eyes once the loop runs
+        return out
 
     def _show_mode_word(self):
         """安静中 / 少插话 stay under the eyes while the mode lasts (owner: short words, not states; these two are what
@@ -1775,32 +1861,39 @@ class RealtimeHub:
         now = self.clock()
         word, until = ("安静中", self._quiet_mode) if self.quiet_on(now) else ("少插话", self._low) if self.low_on(now) \
             else ("", None)
+        self._mode_word_at = now if word else None
         try:
-            self.screen_word(word, int(until - now) if until else 0)
+            self.screen_word(word, 3600 if until == mode_span.OPEN else int(until - now) if until else 0)
         except Exception:                              # noqa: BLE001 - the screen is a courtesy
             pass
 
-    def set_role(self, text, minutes=None, trace=None, by="tool"):
+    def set_role(self, text, minutes=None, trace=None, by="tool", until=None, span=None):
         now = self.clock()
         if not text:
             self._role = None
-            until = None
+            end = None
         else:
-            self._role = (str(text)[:120], now + min(minutes * 60 if minutes else ROLE_S, ROLE_S * 2))
-            until = self._role[1]
+            end, _ = self._span_end(now, self._span(minutes, until, span), ROLE_S)
+            self._role = (str(text)[:120], end)
+        how = mode_span.describe(end, now, self.wall_ms()) if end is not None else ""
         ear_log.emit("trigger.role", trace=trace or ear_log.new_trace(), by=by,
-                     sum=f"临时角色：{str(text)[:40]}" if text else "临时角色结束",
-                     ref={"session": self.session_no}, extra={"role": str(text or "")[:120], "minutes": minutes})
+                     sum=(f"临时角色：{str(text)[:40]}" + (f" {how}" if how else "")) if text else "临时角色结束",
+                     ref={"session": self.session_no}, extra={"role": str(text or "")[:120], "minutes": minutes,
+                                                              "open": end == mode_span.OPEN})
         self._refresh_instructions("role", trace)
         self._write_status(now)
-        return until
+        self._persist_modes(now)
+        return end
 
     def _low_from(self, text, now, trace):
         t = norm_text(text)
-        if self.low_on(now) and LOW_END_RE.search(t):
-            self.set_quiet("off", trace=trace, by="heard", heard=text)
-        elif LOW_RE.search(t) and not (self.low_on(now) and now - (self._low - LOW_S) < 60):
-            self.set_quiet("low", trace=trace, by="heard", heard=text)
+        to_me = self.in_called(now) or call_rest(text) is not None
+        if (self.low_on(now) or self.quiet_on(now)) and (LOW_END_RE.search(t) or mode_span.ended(text, loose=to_me)):
+            self.set_quiet("off", trace=trace, by="heard", heard=text)       # 可以说话了 / 退出安静模式 / (to hello) 结束吧
+        elif LOW_RE.search(t):
+            span = mode_span.parse(text)
+            if not self.low_on(now) or span is not None:
+                self.set_quiet("low", trace=trace, by="heard", heard=text, span=span)
 
     def _role_from(self, text, now, trace):
         """Only a sentence said to hello (inside a call window, or starting with the call word)."""
@@ -1808,25 +1901,30 @@ class RealtimeHub:
         if not (self.in_called(now) or rest):
             return
         t = (rest or text).strip()
-        if self.role_text(now) and ROLE_END_RE.search(norm_text(t)):
+        if self.role_text(now) and (ROLE_END_RE.search(norm_text(t)) or ("角色" in t and mode_span.ended(t))):
             self.set_role(None, trace=trace, by="heard")
             return
         m = ROLE_RE.search(t)
         if m and m.start() <= 4:                        # "当个大姐姐…" at the start, not "他想当个医生"
-            self.set_role(t[m.start():], trace=trace, by="heard")
+            self.set_role(t[m.start():], trace=trace, by="heard", span=mode_span.parse(t))
 
     def _role_line(self):
         r = self.role_text()
         if not r:
             return None
+        how = mode_span.describe(self._role[1], self.clock(), self.wall_ms())
         return (f"主人刚让你：{r}。在不改变你是谁、不违背你的底线的前提下，按这个角色说话（称呼、语气、关心的事都跟着变），"
-                f"直到主人说恢复。")
+                f"{how}，或者主人说恢复为止。")
 
     def _manner_line(self):
-        if self.quiet_on():
-            return "主人让你先安静：除非有人叫你的名字或 hello，否则什么都不说。"
-        if self.low_on():
-            return "他们在聊天或在看电视：别插话，不主动搭腔；只有叫你、或明确问你的时候才回答，回答也短。"
+        now = self.clock()
+        if self.quiet_on(now):
+            how = mode_span.describe(self._quiet_mode, now, self.wall_ms())
+            return ("主人让你先安静（" + how + "）：除非有人叫你的名字或 hello，否则什么都不说；" +
+                    ("被叫到时只回答那一句，之后接着安静。" if self._quiet_sticky else "被叫到就恢复正常。"))
+        if self.low_on(now):
+            how = mode_span.describe(self._low, now, self.wall_ms())
+            return f"他们在聊天或在看电视（{how}）：别插话，不主动搭腔；只有叫你、或明确问你的时候才回答，回答也短。"
         return None
 
     # ---- 千问用工具 (L6) ----
@@ -3054,8 +3152,9 @@ class RealtimeHub:
             self._told(text)
         if QUIET_RE.search(norm_text(text)) and not HUSH_ANY.search(norm_text(text)):
             # owner 2026-11-18 "设定静默（临时-直到唤醒）": 安静一会儿 = quiet until called (闭嘴 still = Docking off)
-            if not self.quiet_on(now):
-                self.set_quiet("quiet", trace=trace, by="heard", heard=text)
+            span = mode_span.parse(text)               # 2026-11-19: 安静 30 分钟 / 直到我说退出 / 直到我叫你
+            if not self.quiet_on(now) or span is not None:
+                self.set_quiet("quiet", trace=trace, by="heard", heard=text, span=span)
         elif is_hush(text):
             self._hush(text, trace)
 

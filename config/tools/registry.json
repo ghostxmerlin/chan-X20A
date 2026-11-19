@@ -1939,7 +1939,7 @@
    "level": "A",
    "runs_on": "ear",
    "status": "live",
-   "description": "让 hello 临时安静（直到被叫 hello / Dynames）或少插话（大家在聊天、在看电视）。主人说「你先别说话」「我们在聊天」时用；恢复用 off。",
+   "description": "让 hello 安静（默认直到被叫）或少插话。主人说了多久填 minutes，说「直到我说退出」填 until=exit（这时被叫只答一句、不结束）；恢复用 off。",
    "parameters": {
     "type": "object",
     "properties": {
@@ -1955,8 +1955,16 @@
      "minutes": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 240,
-      "description": "可空：quiet 默认到被叫（最多 4 小时），low 默认 30 分钟"
+      "maximum": 1440,
+      "description": "主人说了多久就填（30 分钟 = 30，1.5 小时 = 90）；没说就不填：quiet 默认到被叫，low 默认 30 分钟"
+     },
+     "until": {
+      "type": "string",
+      "enum": [
+       "exit",
+       "called"
+      ],
+      "description": "exit = 主人说「直到我说退出 / 等我通知」：一直保持到主人说退出；called = 「直到我叫你」：被叫就结束（quiet 的默认）"
      }
     }
    },
@@ -1988,7 +1996,15 @@
      "minutes": {
       "type": "integer",
       "minimum": 5,
-      "maximum": 240
+      "maximum": 1440,
+      "description": "主人说了多久就填；没说就不填（默认 2 小时）"
+     },
+     "until": {
+      "type": "string",
+      "enum": [
+       "exit"
+      ],
+      "description": "exit = 主人说「直到我说退出」：一直演到主人说恢复 / 退出"
      }
     }
    },

@@ -1242,6 +1242,13 @@ def main():
                     pass
             asyncio.get_running_loop().create_task(send())
         rt_hub.screen_word = _mode_word
+        if database is not None:                   # 安静 / 少插话 / 角色 of the last run, still running (2026-11-19)
+            try:
+                kept = rt_hub.restore_modes(database.read_switch("rt_modes_status"))
+                print(f"realtime (Docking): modes restored {kept}" if kept else "realtime (Docking): no modes to restore",
+                      flush=True)
+            except Exception as e:                 # noqa: BLE001 - a restart without them, as before
+                print(f"realtime (Docking): modes not restored ({type(e).__name__})", flush=True)
     asks = ask_api.Asks(hub=rt_hub, burst=burst, presence=presence, robot=robots,
                         searcher=rt_hub.searcher if rt_hub is not None and getattr(rt_hub, "searcher", None) else
                         (web_search.dashscope_search(secrets["DASHSCOPE_API_KEY"]) if secrets.get("DASHSCOPE_API_KEY") else None),
