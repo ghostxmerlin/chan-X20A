@@ -422,6 +422,10 @@ class GateTest(HubBase):
         self.assertEqual([h("别说话了。"), h("请你闭嘴"), h("他们都去上课了，不跟你聊天了，请你闭嘴。"), h("安静点！")],
                          [True, True, True, True])
         self.assertEqual([h("你别说了，我知道他是谁，这个事情就这么定了"), h("说话"), h("")], [False, False, False])
+        # 2026-11-19 13:53: a negated hush turned Docking off
+        self.assertEqual([h("没叫你安静点儿。"), h("我没叫你闭嘴"), h("不是让你别说话"), h("谁让你安静了？"), h("不用安静")],
+                         [False] * 5)
+        self.assertEqual([h("闭嘴吧你"), h("没事，你闭嘴"), h("安静一点")], [True, True, True])
 
     def test_repeated_replies_show_once_with_a_count(self):
         out = self.rl.instructions("", None, [("a", "你好呀！"), ("b", "我在呢"), ("c", "你好呀")])
@@ -2220,8 +2224,8 @@ class BodyLineTest(HubBase):
         text = self.rl.instructions("", body="身体感觉：被拿起来了（3 秒前）", skills="技能")
         eyes = text.index("【你的眼睛】")
         self.assertGreater(text.index("身体感觉：被拿起来了"), eyes)
-        self.assertLess(text.index("身体感觉"), text.index("【此刻打开的技能】"))
-        self.assertNotIn("身体感觉", self.rl.instructions("", body=None))
+        self.assertLess(text.index("身体感觉：被拿起来了"), text.index("【此刻打开的技能】"))
+        self.assertNotIn("\n身体感觉：", self.rl.instructions("", body=None))   # the eyes line, not the rule
 
         class Body:
             def __init__(self, line=None, boom=False):

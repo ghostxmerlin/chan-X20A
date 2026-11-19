@@ -243,6 +243,9 @@ UNCLEAR = re.compile(r"没听见|没听清|听不清|没听懂|听不懂|说啥|
 HUSH_ANY = re.compile(r"闭嘴")
 HUSH_SHORT = re.compile(r"别说话|别说了|不要说话|不要说了|不许说话|安静点|安静一点|别吵")
 HUSH_SHORT_CHARS = 8
+# 2026-11-19 13:53: "没叫你安静点儿" (I did NOT tell you to be quiet) turned Docking off; a hush word right after a
+# negation / question word is not a hush ("没叫你闭嘴", "不是让你别说话", "谁让你安静了", "不用安静")
+HUSH_NOT = re.compile(r"(没(?!事|关系)|不是|不用|不要你|谁|干嘛|为什么)[^，。！？,.!?\s]{0,3}(闭嘴|别说|不要说|不许说|安静|别吵)")
 
 
 def norm_text(text):
@@ -497,7 +500,9 @@ def task_give_up_text(topic, results):
 
 def is_hush(text):
     t = norm_text(text)
-    return bool(t) and (bool(HUSH_ANY.search(t)) or (len(t) <= HUSH_SHORT_CHARS and bool(HUSH_SHORT.search(t))))
+    if not t or HUSH_NOT.search(strip_emoji(text or "")):      # on the text with its punctuation: "没事，你闭嘴" hushes
+        return False
+    return bool(HUSH_ANY.search(t)) or (len(t) <= HUSH_SHORT_CHARS and bool(HUSH_SHORT.search(t)))
 
 
 def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
