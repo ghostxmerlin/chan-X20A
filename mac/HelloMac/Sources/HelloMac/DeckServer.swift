@@ -58,15 +58,27 @@ final class DeckServer {
         guard first.count >= 2 else { return nil }
         var h: [String: String] = [:]
         for l in lines { if let i = l.firstIndex(of: ":") { h[l[..<i].lowercased()] = l[l.index(after: i)...].trimmingCharacters(in: .whitespaces) } }
-        let len = Int(h["content-length"] ?? "0") ?? 0
+        guard let len = Int(h["content-length"] ?? "0"), len >= 0, len <= 65536 else {      // answered 400, closed
+            return Request(method: "BAD", path: "", headers: [:], body: Data())
+        }
         let bodyStart = end.upperBound
         guard d.count - bodyStart >= len else { return nil }
         return Request(method: String(first[0]), path: String(first[1].split(separator: "?").first ?? ""), headers: h,
                        body: d.subdata(in: bodyStart..<bodyStart + len))
     }
 
+    /// constant-time comparison (length leaks only)
+    static func same(_ a: String, _ b: String) -> Bool {
+        let x = Array(a.utf8), y = Array(b.utf8)
+        guard x.count == y.count else { return false }
+        var d: UInt8 = 0
+        for i in 0..<x.count { d |= x[i] ^ y[i] }
+        return d == 0
+    }
+
     private func handle(_ r: Request) -> (Int, [String: Any]) {
-        guard let auth = r.headers["authorization"], auth == "Bearer \(token)" else { return (401, ["error": "bad token"]) }
+        if r.method == "BAD" { return (400, ["error": "bad content-length"]) }
+        guard let auth = r.headers["authorization"], Self.same(auth, "Bearer \(token)") else { return (401, ["error": "bad token"]) }
         guard let h = hello else { return (503, ["error": "hello not ready"]) }
         switch (r.method, r.path) {
         case ("GET", "/v1/info"):
