@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 18:34",
- "commit": "0f18579",
+ "generated": "2026-11-19 18:38",
+ "commit": "726e722",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -174,13 +174,14 @@
   },
   "ear/realtime_link.py": {
    "pkg": "ear",
-   "lines": 1361,
+   "lines": 1204,
    "layer": 2,
    "zh": "Docking 会话的全部：千问协议、回答闸门、模式、技能和工具、招呼和事件、触摸、说明拼装",
    "doc": "围观模式 realtime voice session (spike, 2026-11-14): hello talks with the people around her through DashScope's",
    "imports": [
     "ear/rt_base.py",
     "ear/rt_events.py",
+    "ear/rt_gate.py",
     "ear/rt_interrupt.py",
     "ear/rt_looks.py",
     "ear/rt_manner.py",
@@ -230,6 +231,17 @@
    "layer": 2,
    "zh": "Docking 里 hello 自己开口的事件：打招呼、被晃、调试提醒和结束、say、提示音",
    "doc": "Docking hub: hello 自己开口的事件 — 主人出现打招呼、旧的单击打招呼、被晃说一句、调试提醒 / 结束的投递、say 工具、两声提示音（2026-11-19 refactor 4.2.3, moved from realtime_link.py unchange",
+   "imports": [
+    "ear/rt_base.py"
+   ],
+   "collections": []
+  },
+  "ear/rt_gate.py": {
+   "pkg": "ear",
+   "lines": 165,
+   "layer": 2,
+   "zh": "Docking 的回答闸门和补救（播不播、嗯门、重复门、补救）",
+   "doc": "Docking hub: 回答闸门和补救 — 一个回答播不播（口令、安静 / 调试 / 少插话、等照片 / 等搜索、嗯 / 重复 / 没听清 / 标记 / 看不清），被挡的「嗯」怎么补救，【刚才的对话】的来源（2026-11-19 refactor 4.2.8, moved fr",
    "imports": [
     "ear/rt_base.py"
    ],
@@ -1497,8 +1509,8 @@
  "unassigned": [],
  "totals": {
   "ear": {
-   "modules": 32,
-   "lines": 10595
+   "modules": 33,
+   "lines": 10603
   },
   "mind": {
    "modules": 57,
