@@ -263,6 +263,12 @@ def main():
                     doc = None
                 if doc and isinstance(doc.get("on"), bool):
                     rt_hub.set_turn(doc["on"])
+                try:                                   # 工具分类器 (realtime_intent); no document = on
+                    doc = await asyncio.to_thread(database.read_switch, "realtime_intent")
+                except Exception:                      # noqa: BLE001
+                    doc = None
+                if doc and isinstance(doc.get("on"), bool):
+                    rt_hub.set_intent(doc["on"])
             await asyncio.to_thread(pause.update)
             if pause.reasons() != held:
                 held = pause.reasons()

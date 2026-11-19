@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 20:40",
- "commit": "26f05d4",
+ "generated": "2026-11-19 21:31",
+ "commit": "a9dce14",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -75,7 +75,7 @@
   },
   "ear/ear_server.py": {
    "pkg": "ear",
-   "lines": 506,
+   "lines": 512,
    "layer": 1,
    "zh": "耳朵的入口：参数、装配、连线分发（听觉流水线在 ear_hearing）",
    "doc": "soul ear server (grew out of spike v2): the robot's \"ear\" as a WebSocket service.",
@@ -202,7 +202,7 @@
   },
   "ear/realtime_link.py": {
    "pkg": "ear",
-   "lines": 1240,
+   "lines": 1252,
    "layer": 2,
    "zh": "Docking 会话的全部：千问协议、回答闸门、模式、技能和工具、招呼和事件、触摸、说明拼装",
    "doc": "围观模式 realtime voice session (spike, 2026-11-14): hello talks with the people around her through DashScope's",
@@ -357,7 +357,7 @@
   },
   "ear/rt_tools.py": {
    "pkg": "ear",
-   "lines": 218,
+   "lines": 221,
    "layer": 2,
    "zh": "Docking 的工具执行：工具门、跑工具（算在说话、可打断）、垫话",
    "doc": "Docking hub: 工具执行 — 工具门、跑工具（工具运行时算在说话、可被打断）、垫话（2026-11-19 refactor 4.2.6, moved from realtime_link.py unchanged).",
@@ -456,7 +456,7 @@
   },
   "mind/api.py": {
    "pkg": "mind",
-   "lines": 1165,
+   "lines": 1167,
    "layer": 1,
    "zh": "mind 的 http 路由 + 工具装配 + 一部分状态",
    "doc": "HTTP API of mind on the server's loopback only (the Mac reaches it over ssh). Every call needs",
@@ -1559,11 +1559,11 @@
  "totals": {
   "ear": {
    "modules": 37,
-   "lines": 10973
+   "lines": 10994
   },
   "mind": {
    "modules": 58,
-   "lines": 15714
+   "lines": 15716
   },
   "common": {
    "modules": 3,

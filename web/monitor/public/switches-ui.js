@@ -60,6 +60,13 @@ export function switchView(robot,fresh,mind,switches=null){
  const turn={known:tKnown,on:tOn,can:tKnown,
   detail:!tKnown?'开关未连接':(tOn?'千问判断说完没、是不是跟它说（慢约 1 秒）':'按停顿断句（快，有话就接）')+
    (tUsing&&tUsing!==tWant?' · 耳朵正在换（等这轮说完）':'')};
+ // 工具分类器 (owner 2026-11-19 night): the ear's local classifier preloads skills and gates Qwen's tool calls; off =
+ // it judges nothing (Qwen's own call stands)
+ const isw=switches?.realtime_intent,iKnown=!!isw&&typeof isw.on==='boolean',iOn=iKnown&&isw.on===true;
+ const iUsing=rKnown&&!rs.stale&&typeof rs.intent==='boolean'?rs.intent:null;
+ const intent={known:iKnown,on:iOn,can:iKnown,
+  detail:!iKnown?'开关未连接':(iOn?'判断要不要工具、先装技能；像闲聊的工具调用会被挡':'不判断：千问想调工具就调')+
+   (iUsing!==null&&iUsing!==iOn?' · 耳朵还没换过来':'')};
  let cost;
  if(!hearingKnown||!mindKnown)cost='花费状态未知';
  else{
@@ -75,7 +82,7 @@ export function switchView(robot,fresh,mind,switches=null){
    nOn&&nAvail!==false&&nRunning===null&&'纪要状态未知'].filter(Boolean).join('；');
   cost=paying.length?'正在花钱：'+paying.join(' + ')+(unknown?'；'+unknown:''):unknown||'现在不花钱';
  }
- return {hearing,vision,mind:m,notes,meet,turn,cost};
+ return {hearing,vision,mind:m,notes,meet,turn,intent,cost};
 }
 
 // The pause (2026-11-17, server/mind/pause.py): mind pauses the paid items when nobody has been there for
@@ -156,14 +163,15 @@ export function toggleRequest(which,robot,mindOrFresh){
  if(which==='mind')return {kind:'mind',body:{enabled:!(mindOrFresh?.enabled)}};
  if(which==='notes')return {kind:'switch',body:{name:'notes',on:!(mindOrFresh?.notes?.on===true)}};
  if(which==='meet')return {kind:'switch',body:{name:'realtime',on:!(mindOrFresh?.realtime?.on===true)}};
+ if(which==='intent')return {kind:'switch',body:{name:'realtime_intent',on:!(mindOrFresh?.realtime_intent?.on!==false)}};
  if(which==='turn')return {kind:'switch',body:{name:'realtime_smart_turn',on:!(mindOrFresh?.realtime_smart_turn?.on!==false)}};
  const v=switchView(robot,mindOrFresh,null);
  if(which==='hearing')return {kind:'control',body:{action:'hearing_listen',enabled:!v.hearing.on,boot:robot?.boot}};
  return {kind:'control',body:{action:'m12',enabled:!v.vision.on,boot:robot?.boot}};
 }
 
-const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'Docking',turn:'智能断句'};
-const TOGGLES=['mind','notes','meet','turn'];
+const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'Docking',turn:'智能断句',intent:'工具分类器'};
+const TOGGLES=['mind','notes','meet','turn','intent'];
 const LEVELS=[['off','关'],['local','本地'],['tingwu','听悟']];
 const VLEVELS=[['off','关'],['upload','上传'],['recognize','识别']];
 const MLEVELS=[['off','关'],['clips','录音'],['tts','TTS']];
@@ -192,6 +200,7 @@ export class SwitchBar{
   doc.getElementById('sw-notes').addEventListener('click',()=>this.toggle('notes'));
   doc.getElementById('sw-meet').addEventListener('click',()=>this.toggle('meet'));
   doc.getElementById('sw-turn').addEventListener('click',()=>this.toggle('turn'));
+  doc.getElementById('sw-intent').addEventListener('click',()=>this.toggle('intent'));
   this.pollMind();setInterval(()=>this.pollMind(),5000);
   if(pollRobot){this.pollRobot();setInterval(()=>this.pollRobot(),2000);}
  }
@@ -207,7 +216,7 @@ export class SwitchBar{
  render(robot,fresh){this.robot=robot;this.fresh=fresh;this.paint();}
  async toggle(which){
   if(this.pending)return;
-  const req=toggleRequest(which,this.robot,which==='mind'?this.mind:which==='notes'||which==='meet'||which==='turn'?this.switches:this.fresh);
+  const req=toggleRequest(which,this.robot,which==='mind'?this.mind:which==='notes'||which==='meet'||which==='turn'||which==='intent'?this.switches:this.fresh);
   this.pending=which;this.msg='';this.paint();
   try{
    if(req.kind==='mind'){const r=await postJson('/api/mind/switch',req.body);this.mind={...(this.mind||{}),enabled:r.enabled};}

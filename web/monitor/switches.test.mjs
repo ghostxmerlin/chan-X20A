@@ -223,3 +223,13 @@ test('智能断句: on by default, toggles realtime_smart_turn, says when the ea
  assert.deepEqual(sw.toggleRequest('turn',null,off).body.on,true);
  assert.equal(sw.switchView(robot(),true,{enabled:false},null).turn.known,false);
 });
+
+test('工具分类器: on by default, toggles realtime_intent', ()=>{
+ const now=Date.now();
+ const on={realtime_intent:{on:true},realtime:{on:true},realtime_status:{running:[],available:true,at:now,stale:false,intent:true}};
+ let v=sw.switchView(robot(),true,{enabled:false},on);
+ assert.equal(v.intent.on,true);assert.match(v.intent.detail,/会被挡/);
+ assert.deepEqual(sw.toggleRequest('intent',null,on),{kind:'switch',body:{name:'realtime_intent',on:false}});
+ v=sw.switchView(robot(),true,{enabled:false},{...on,realtime_intent:{on:false}});
+ assert.match(v.intent.detail,/不判断/);assert.match(v.intent.detail,/还没换过来/);
+});

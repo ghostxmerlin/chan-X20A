@@ -213,6 +213,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._called_source = None                     # the last call's source (asr / name / text / touch)
         self._speaker_sent = None
         self.intent = None                             # intent.Auto (自动档): decides before the model answers
+        self.intent_on = True                          # 工具分类器 switch (realtime_intent): off = it judges nothing
         self._preloaded = {}                           # auto: skill id -> preloaded at (clock), not used yet
         self._next_depth = 0
         self._tool_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="rt-tool")
@@ -1199,6 +1200,17 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._status_at = -1e9                         # the page sees the new value at the next step
         return True
 
+    def set_intent(self, on):
+        """工具分类器 switch (owner 2026-11-19 night: "如果关掉就不用它做任何判断"): off = no skill preload, and the tool
+        gate does not use the rules or the head (Qwen's own tool call decides). Returns True when it changed."""
+        on = bool(on)
+        if on == self.intent_on:
+            return False
+        log(f"realtime: tool classifier {'on' if on else 'off'} (工具分类器 switch)", flush=True)
+        self.intent_on = on
+        self._status_at = -1e9
+        return True
+
     def _write_status(self, now):
         self._status_at = now
         if self.db is None:
@@ -1211,7 +1223,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                 "cost_cny": round(self.stats["cost_micro_cny"] / 1e6, 4), "at": self.wall_ms(),
                 "quiet": self.quiet_on(now), "low": self.low_on(now), "role": self.role_text(now),
                 "debug": {"since_ms": self._debug_since_ms} if self.debug_on(now) else None,
-                "voice_key": self.voice_key, "turn": self.cfg.turn})
+                "voice_key": self.voice_key, "turn": self.cfg.turn, "intent": self.intent_on})
         except Exception:                              # noqa: BLE001
             pass
 

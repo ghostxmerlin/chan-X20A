@@ -924,6 +924,15 @@ class ToolGateTest(HubBase):
         self.assertIn("/tool/call", self.calls)
 
 
+    async def test_classifier_off_judges_nothing(self):
+        ws = await self.open_ready()
+        self.assertTrue(self.hub.set_intent(False))    # 工具分类器 off (owner 2026-11-19 night)
+        self.fc(ws, "r1", "你今天开心吗")                                                # chit-chat: no longer refused
+        await settle(30)
+        self.assertIn("/tool/call", self.calls)
+        self.assertIsNone(self.hub._preload("明天北京天气怎么样", self.hub.clock()))     # no preload either
+
+
 class OwnerAndBodyTest(HubBase):
     """Owner 2026-11-18: 亲口算本人 (owner's voice -> owner: true); the body only for people hello knows."""
     async def test_owner_flag_and_body_gate(self):

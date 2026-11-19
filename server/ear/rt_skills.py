@@ -108,7 +108,7 @@ class SkillsMixin:
 
     def _preload(self, text, now, trace=None):
         """自动档: the ear's own ASR text, before the model answers -> the skill(s) it likely needs, loaded now."""
-        if self.intent is None or self._tools_mode != "auto" or not self._skills or not self.tools_on() or \
+        if self.intent is None or not self.intent_on or self._tools_mode != "auto" or not self._skills or not self.tools_on() or \
                 self._ws is None or not self._ready.is_set():
             return None
         try:

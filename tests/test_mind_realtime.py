@@ -166,6 +166,7 @@ class EndpointTest(Base):
             sw = json.load(r)
         self.assertEqual(sw['realtime'], {'on': False, 'at': None})          # default off
         self.assertTrue(sw['realtime_smart_turn']['on'])                     # 智能断句: no document = on (the ear's default)
+        self.assertTrue(sw['realtime_intent']['on'])                         # 工具分类器: likewise
         req = urllib.request.Request(f'http://127.0.0.1:{server.server_address[1]}/switches', method='POST',
                                      data=json.dumps({'name': 'realtime_smart_turn', 'on': False}).encode(),
                                      headers={'Authorization': 'Bearer k', 'Content-Type': 'application/json'})
