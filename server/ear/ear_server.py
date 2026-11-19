@@ -258,11 +258,11 @@ def main():
             await asyncio.to_thread(tools_switch.update)
             if rt_hub is not None and database is not None:   # 全答 (realtime_answer_all); no document = off
                 try:
-                    doc = await asyncio.to_thread(database.read_switch, "realtime_answer_all")
-                except Exception:                      # noqa: BLE001
-                    doc = None
-                if doc and isinstance(doc.get("on"), bool):
-                    rt_hub.set_answer_all(doc["on"])
+                    doc, read_ok = await asyncio.to_thread(database.read_switch, "realtime_answer_all"), True
+                except Exception:                      # noqa: BLE001 - a failed read keeps the current setting
+                    doc, read_ok = None, False
+                if read_ok:                            # no document = on (owner 2026-11-19 night: 暂时退回全手动)
+                    rt_hub.set_answer_all(doc["on"] if doc and isinstance(doc.get("on"), bool) else True)
                 try:                                   # 智能断句 (realtime_smart_turn); no document = cfg default
                     doc = await asyncio.to_thread(database.read_switch, "realtime_smart_turn")
                 except Exception:                      # noqa: BLE001 - a failed read keeps the current setting

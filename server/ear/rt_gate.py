@@ -36,9 +36,9 @@ class GateMixin:
             return
         now = self.clock()
         # the decisions are rt_rules' pure functions (refactor 4.2.9); the side effects stay here, in the same order
-        aa = self.cfg.answer_all                       # 全答: no order / 安静 / 少插话 mute (调试 stays: its own mode)
+        aa = self.cfg.answer_all                       # 点屏幕聊天: no order / 调试 / 安静 / 少插话 mute (the chat = a tap)
         v = rt_rules.mode_mute(turn.get("kind"), None if aa or self._order_at is None else now - self._order_at, ORDER_S,
-                               self.in_called(now), self.debug_on(now), self.quiet_on(now) and not aa,
+                               self.in_called(now), self.debug_on(now) and not aa, self.quiet_on(now) and not aa,
                                self.low_on(now) and not aa, addressed(turn.get("heard") or ""))
         if v == "order":                               # the sentence was a direct order to the robot (see ORDER_S)
             turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"

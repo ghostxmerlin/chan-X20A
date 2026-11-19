@@ -21,6 +21,8 @@ class EventsMixin:
             self._queue_greet(now)
 
     def _queue_greet(self, now):
+        if self.cfg.answer_all:                        # 点屏幕聊天: no greeting of its own (owner: 全手动)
+            return
         if self._last_greet is not None and now - self._last_greet < self.cfg.greet_gap_s:
             self.stats["greet_too_soon"] += 1
             return
@@ -50,7 +52,7 @@ class EventsMixin:
 
     def body_event(self, ev, fields=None):
         """A body-sense event (body_sense.py). shaken: hello says one line about it (see SHAKEN_SAY_S). -> True if queued."""
-        if ev != "shaken" or not self.armed():
+        if ev != "shaken" or not self.armed() or self.cfg.answer_all:   # 点屏幕聊天: no line of its own
             return False
         now = self.clock()
         if self._last_shaken_say is not None and now - self._last_shaken_say < SHAKEN_SAY_S:

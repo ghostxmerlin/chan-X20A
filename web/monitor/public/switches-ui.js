@@ -55,13 +55,15 @@ export function switchView(robot,fresh,mind,switches=null){
    rRunning===true?'正在对话（约 $0.0004/轮）':rRunning===null?'状态未知':'待命：Docking 模式有人说话就开口'};
  // 智能断句 (owner 2026-11-19 night): Docking's turn detection, smart_turn_v2 (on) or server_vad (off); rs.turn = what
  // the ear actually runs (it switches when the open session is idle)
- // 全答 (owner 2026-11-19 night): on = every sentence answered, no judgement; 安静 / Docking 关 = collect only, a tap opens
+ // 点屏幕聊天 / 全手动 (owner 2026-11-19 night): on = collect only until a tap starts a chat (everything answered, no
+ // judgement; 30 s without talk or a double tap ends it); off = the automatic judgement as before
  const asw=switches?.realtime_answer_all,aKnown=!!asw&&typeof asw.on==='boolean',aOn=aKnown&&asw.on===true;
  const aUsing=rKnown&&!rs.stale&&typeof rs.answer_all==='boolean'?rs.answer_all:null;
  const all={known:aKnown,on:aOn,can:aKnown,
-  detail:!aKnown?'开关未连接':(aOn?'听到什么答什么，不做判断；安静 / Docking 关 = 只收集，点屏幕打开':'按现在的判断（智能断句、提示词、回答门、工具门）')+
+  detail:!aKnown?'开关未连接':(aOn?(rKnown&&!rs.stale&&rs.chat===true?'正在聊：什么都答；30 秒没人说话或双击结束':
+   '平时只收集；点屏幕开始聊（什么都答），30 秒没人说话或双击就结束'):'自动判断（智能断句、提示词、回答门、工具门）')+
    (aUsing!==null&&aUsing!==aOn?' · 耳朵正在换（等这轮说完）':'')};
- const overridden=aOn?' · 全答中不起作用':'';
+ const overridden=aOn?' · 点屏幕聊天时不起作用':'';
  const tsw=switches?.realtime_smart_turn,tKnown=!!tsw&&typeof tsw.on==='boolean',tOn=tKnown&&tsw.on===true;
  const tWant=tOn?'smart_turn_v2':'server_vad',tUsing=rKnown&&!rs.stale?rs.turn:null;
  const turn={known:tKnown,on:tOn,can:tKnown,
@@ -170,7 +172,7 @@ export function toggleRequest(which,robot,mindOrFresh){
  if(which==='mind')return {kind:'mind',body:{enabled:!(mindOrFresh?.enabled)}};
  if(which==='notes')return {kind:'switch',body:{name:'notes',on:!(mindOrFresh?.notes?.on===true)}};
  if(which==='meet')return {kind:'switch',body:{name:'realtime',on:!(mindOrFresh?.realtime?.on===true)}};
- if(which==='all')return {kind:'switch',body:{name:'realtime_answer_all',on:!(mindOrFresh?.realtime_answer_all?.on===true)}};
+ if(which==='all')return {kind:'switch',body:{name:'realtime_answer_all',on:!(mindOrFresh?.realtime_answer_all?.on!==false)}};
  if(which==='intent')return {kind:'switch',body:{name:'realtime_intent',on:!(mindOrFresh?.realtime_intent?.on!==false)}};
  if(which==='turn')return {kind:'switch',body:{name:'realtime_smart_turn',on:!(mindOrFresh?.realtime_smart_turn?.on!==false)}};
  const v=switchView(robot,mindOrFresh,null);
@@ -178,7 +180,7 @@ export function toggleRequest(which,robot,mindOrFresh){
  return {kind:'control',body:{action:'m12',enabled:!v.vision.on,boot:robot?.boot}};
 }
 
-const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'Docking',all:'全答',turn:'智能断句',intent:'工具分类器'};
+const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'Docking',all:'点屏幕聊天',turn:'智能断句',intent:'工具分类器'};
 const TOGGLES=['mind','notes','meet','all','turn','intent'];
 const LEVELS=[['off','关'],['local','本地'],['tingwu','听悟']];
 const VLEVELS=[['off','关'],['upload','上传'],['recognize','识别']];

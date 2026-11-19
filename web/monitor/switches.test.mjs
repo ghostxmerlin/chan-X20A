@@ -234,14 +234,15 @@ test('工具分类器: on by default, toggles realtime_intent', ()=>{
  assert.match(v.intent.detail,/不判断/);assert.match(v.intent.detail,/还没换过来/);
 });
 
-test('全答: off by default; on says the other two do nothing', ()=>{
+test('点屏幕聊天: on by default; says when a chat runs; the other two do nothing while it is on', ()=>{
  const now=Date.now();
- const st={realtime:{on:true},realtime_status:{running:[],available:true,at:now,stale:false,turn:'server_vad',answer_all:true},
+ const st={realtime:{on:true},realtime_status:{running:[],available:true,at:now,stale:false,turn:'server_vad',answer_all:true,chat:false},
   realtime_smart_turn:{on:true},realtime_intent:{on:true}};
  let v=sw.switchView(robot(),true,{enabled:false},{...st,realtime_answer_all:{on:false}});
- assert.equal(v.all.on,false);assert.match(v.all.detail,/按现在的判断/);
- assert.deepEqual(sw.toggleRequest('all',null,{realtime_answer_all:{on:false}}).body,{name:'realtime_answer_all',on:true});
+ assert.equal(v.all.on,false);assert.match(v.all.detail,/自动判断/);
+ assert.deepEqual(sw.toggleRequest('all',null,{realtime_answer_all:{on:true}}).body,{name:'realtime_answer_all',on:false});
  v=sw.switchView(robot(),true,{enabled:false},{...st,realtime_answer_all:{on:true}});
- assert.match(v.all.detail,/点屏幕打开/);assert.match(v.turn.detail,/全答中不起作用/);assert.match(v.intent.detail,/全答中不起作用/);
- assert.doesNotMatch(v.turn.detail,/正在换/);
+ assert.match(v.all.detail,/平时只收集/);assert.match(v.turn.detail,/点屏幕聊天时不起作用/);assert.match(v.intent.detail,/点屏幕聊天时不起作用/);
+ v=sw.switchView(robot(),true,{enabled:false},{...st,realtime_answer_all:{on:true},realtime_status:{...st.realtime_status,chat:true}});
+ assert.match(v.all.detail,/正在聊/);
 });

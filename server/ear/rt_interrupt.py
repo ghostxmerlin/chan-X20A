@@ -16,8 +16,8 @@ class InterruptMixin:
         if not self.armed():
             return
         now = self.clock()
-        if self.cfg.answer_all and self.quiet_on(now) and source != "touch":
-            return                                     # 全答: in 安静 only a tap opens it (owner 2026-11-19 night)
+        if self.cfg.answer_all and source != "touch" and not self.chat_on(now):
+            return                                     # 点屏幕聊天: only a tap opens a chat (the name: later)
         merged = self._called_at is not None and now - self._called_at < 2.0
         self._called_at, self._called_until = now, now + CALLED_S
         self._called_source = source
@@ -114,11 +114,16 @@ class InterruptMixin:
         now = self.clock()
         trace = trace or ear_log.new_trace()
         if self.cfg.answer_all and not self.armed():
-            return self._touch_open(trace)             # 全答: a tap with Docking off turns it on
+            ok = self._touch_open(trace)               # 点屏幕聊天: a tap with Docking off turns it on and starts a chat
+            if ok:
+                self.start_chat(trace, "docking_off")
+            return ok
         if not self.armed():
             return False
-        if self.cfg.answer_all and self.quiet_on(now) and not stop:
-            self.set_quiet("off", trace=trace, by="touch")   # 全答: a tap ends 安静 (whatever length was said)
+        if self.cfg.answer_all and not stop:
+            if self.quiet_on(now):
+                self.set_quiet("off", trace=trace, by="touch")
+            self.start_chat(trace)
         stop = stop or self._tool_wait is not None      # a tool running counts as speaking (older firmware: no stop)
         self.stats["touch_stop" if stop else "touch_listen"] += 1
         if stop:
@@ -139,6 +144,11 @@ class InterruptMixin:
         """A double tap on the screen in Docking (owner 2026-11-19): 安静一下 (stops a reply; a call or a tap ends it)."""
         if not self.armed():
             return False
+        if self.cfg.answer_all:                        # 点屏幕聊天: a double tap ends the chat (stops a reply)
+            self._interrupt(self.clock())
+            self._called_until, self._called_text = 0.0, None
+            self.end_chat("double_tap", trace)
+            return True
         self.stats["touch_quiet"] += 1
         self._touch_word = False
         self._called_until, self._called_text = 0.0, None

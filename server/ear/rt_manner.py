@@ -114,7 +114,7 @@ class MannerMixin:
                 ear_log.emit("trigger.debug", trace=trace, by=by, sum="调试模式结束", ref={"session": self.session_no},
                              extra={"on": False, "since_ms": self._debug_since_ms,
                                     **({"heard": str(heard)[:200]} if heard else {})})
-                if by != "tool" and self._greet is None:
+                if by != "tool" and self._greet is None and not (self.cfg.answer_all and not self.chat_on(now)):
                     self._greet = {"at": now, "kind": "debug_end", "pick": None,
                                    "text": "[事件] 调试模式结束了：用一句话问主人要不要把这次调试总结一下（只问，不要自己总结）。"}
         self._refresh_instructions("debug", trace)
@@ -128,6 +128,8 @@ class MannerMixin:
         now = self.clock()
         if not self.debug_on(now):
             return "not_debug"
+        if self.cfg.answer_all and not self.chat_on(now):
+            return "not_in_chat"                       # 点屏幕聊天: hello says nothing of its own outside a chat
         if self._last_debug_alert is not None and now - self._last_debug_alert < DEBUG_ALERT_S:
             return "too_soon"
         if self._greet is not None:
@@ -175,6 +177,10 @@ class MannerMixin:
         """level quiet / low / off; how long: minutes, until exit / called (the tool) or span (mode_span.parse, said).
         -> until (clock, mode_span.OPEN) or None."""
         now = self.clock()
+        if self.cfg.answer_all and level == "quiet":   # 点屏幕聊天: 安静 = the chat ends (no quiet mode to wake from)
+            self._interrupt(now)
+            self.end_chat("quiet", trace)
+            return None
         span = self._span(minutes, until, span)
         if level == "off":
             self._quiet_mode = self._low = None

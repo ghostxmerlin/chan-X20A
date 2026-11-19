@@ -493,6 +493,8 @@ def look_lines(looks, now_ms, keep=LOOKS_KEEP, window_s=LOOKS_S):
 
 # 全答: the persona's addressee rule (judge who is talked to, else only 「嗯」) gives way to one line
 ADDRESSEE_RULES = PERSONA_RULES[PERSONA_RULES.index("- 先分清是不是在跟你说话"):PERSONA_RULES.index("- 不要重复自己")]
+CHAT_IDLE_S = 30.0          # 点屏幕聊天: the chat ends this long after the last speech / hello's last reply / the tap
+CHAT_MAX_S = 600.0          # ... and this long after the tap at most (a TV keeps the ear's VAD going): tap again
 ANSWER_ALL_RULE = "- 听到的每句话都当作是在跟你说的，正常回答。不确定的事不要编。\n"
 
 
@@ -899,8 +901,10 @@ class Config:
     silence_ms = 1000
     vad_threshold = 0.6
     turn = "smart_turn_v2"       # owner 2026-11-18: try DashScope's addressee judgement ("server_vad" = before)
-    # 全答 (owner 2026-11-19 night: "开了它就应答所有的话，关了它就只收集"): no addressee judgement anywhere (server_vad,
-    # no 「嗯」 rule in the prompt, no reply / tool gate); 安静 = no session (collect only); a tap opens it again
+    # 点屏幕聊天 / 全手动 (owner 2026-11-19 night: "开了它就应答所有的话，关了它就只收集"; "调试模式，你看看之类的…也是要在
+    # 我点击屏幕…以后才能启动"; "暂时退回全手动"): no session and no word of its own unless a tap opened a chat; in the
+    # chat every sentence is answered, no judgement (server_vad, no 「嗯」 rule, no reply / tool gate). Live default: on
+    # (ear_server, mind's switch); False here keeps the automatic behaviour for the tests written before it.
     answer_all = False
     guard_s = 0.6
     # owner 2026-11-18 "回答后，再采样很慢": the robot keeps its self flag `sounding` ~2.7 s after it reported our

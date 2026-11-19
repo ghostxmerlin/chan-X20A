@@ -147,6 +147,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._called_text = None                       # {text, at, trace}: a called sentence still waiting for an answer
         self._turn_changed = False                     # 智能断句 / 全答 switched while a session was open: close it when idle
         self._smart_wanted = None                      # the 智能断句 switch's last value (None: not read yet)
+        self._chat_at = None                           # 点屏幕聊天: the tap that opened the chat (None: no chat)
+        self._chat_word_at = None                      # when 在听 was last put under the eyes for the chat
         self._called_trace = None                      # the call's run-log trace: the next sentence in the window joins it
         self._order_at = None                          # the last direct order (Unit ASR command word): see ORDER_S
         self._qtask = None                             # the open search task {topic, at, tries, results, answered, ...}
@@ -242,8 +244,42 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         return bool(self.key and self.voice) and self.switch.on and self.in_crowd()
 
     def want(self):
-        # 全答: 安静 = collect only, no session (a tap ends it: touched)
-        return self.armed() and self.link() is not None and not (self.cfg.answer_all and self.quiet_on())
+        # 点屏幕聊天: no session outside a chat a tap opened (collect only)
+        return self.armed() and self.link() is not None and not (self.cfg.answer_all and not self.chat_on())
+
+    def chat_on(self, now=None):
+        """点屏幕聊天: a tap opened a chat; it lasts while someone talks or hello speaks / runs a tool, CHAT_IDLE_S after
+        the last of these, CHAT_MAX_S after the tap at most."""
+        if self._chat_at is None:
+            return False
+        now = self.clock() if now is None else now
+        if now - self._chat_at >= CHAT_MAX_S:
+            return False
+        if self._was_speaking or self.output_busy() or self._tool_wait is not None:
+            return True
+        last = max(self._chat_at, self._last_speech if self._last_speech is not None else -1e9,
+                   self._done_at if self._done_at is not None else -1e9)
+        return now - last < CHAT_IDLE_S
+
+    def start_chat(self, trace=None, why="tap"):
+        now = self.clock()
+        fresh = not self.chat_on(now)
+        self._chat_at = now
+        if fresh:
+            ear_log.emit("trigger.touch", trace=trace or ear_log.new_trace(), by="touch", sum="点屏幕：开始聊天",
+                         ref={"session": self.session_no}, extra={"action": "chat_start", "why": why})
+        self._greet = None                             # nothing queued from before the tap is said now
+        self._chat_word_at = None
+
+    def end_chat(self, why, trace=None):
+        if self._chat_at is None:
+            return
+        self._chat_at = None
+        ear_log.emit("trigger.touch", trace=trace or ear_log.new_trace(), by="touch" if why == "double_tap" else "auto",
+                     sum={"idle": "聊天结束：30 秒没人说话", "max": "聊天结束：十分钟到了，再点一下接着聊",
+                          "double_tap": "聊天结束：双击", "quiet": "聊天结束：说了安静"}.get(why, f"聊天结束：{why}"),
+                     ref={"session": self.session_no}, extra={"action": "chat_end", "why": why})
+        self._word("", 0)
 
     def active(self):
         return self.state != "closed"
@@ -411,6 +447,12 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         p = self._pending_vision or self._pending_search
         if p is not None and now - p["at"] > VISION_GATE_S:
             self._release_vision(now, None)            # no verdict came (no session, model silent): no burst
+        if self._chat_at is not None and not self.chat_on(now):
+            self.end_chat("max" if now - self._chat_at >= CHAT_MAX_S else "idle")
+        elif self._chat_at is not None and self.screen_word is not None and \
+                (self._chat_word_at is None or now - self._chat_word_at >= 10):
+            self._chat_word_at = now
+            self._word("在听", int(CHAT_IDLE_S))       # the robot shows the chat while it lasts (owner: 屏幕给出指示)
         if self._turn_changed and self.state == "open" and self._resp is None and not self.output_busy() \
                 and self._tool_wait is None and not self._sounding:
             self._turn_changed = False
@@ -423,7 +465,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
             if self.state != "closed":
                 # paused: mind/pause.py (nobody there / today's cap), the switch itself is still on (presence.Gated)
                 self.close("paused" if getattr(self.switch, "paused", False) else "switch_off" if not self.switch.on
-                           else "quiet" if self.cfg.answer_all and self.quiet_on(now) and self.in_crowd()
+                           else "chat_over" if self.cfg.answer_all and self.in_crowd() and self.link() is not None
                            else "left_crowd" if not self.in_crowd() else "robot_gone")
         elif self.state == "closed":
             if now >= self._retry_at and not self._need_speech:
@@ -1246,7 +1288,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
                 "quiet": self.quiet_on(now), "low": self.low_on(now), "role": self.role_text(now),
                 "debug": {"since_ms": self._debug_since_ms} if self.debug_on(now) else None,
                 "voice_key": self.voice_key, "turn": self.cfg.turn, "intent": self.intent_on,
-                "answer_all": self.cfg.answer_all})
+                "answer_all": self.cfg.answer_all, "chat": self.chat_on(now)})
         except Exception:                              # noqa: BLE001
             pass
 

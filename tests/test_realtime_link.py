@@ -311,24 +311,37 @@ class TurnSwitchTest(HubBase):
 
 
 class AnswerAllTest(HubBase):
-    """全答 (owner 2026-11-19 night): every sentence answered, no judgement; 安静 = no session; a tap opens it."""
-    async def test_on_reopens_with_server_vad_and_no_en_rule(self):
-        self.hub.persona = self.rl.build_persona("")
-        ws = await self.open_ready()
-        self.assertIn("先分清是不是在跟你说话", ws.sent[0]["session"]["instructions"])
-        self.assertTrue(self.hub.set_answer_all(True))
+    """点屏幕聊天 / 全手动 (owner 2026-11-19 night): collect only until a tap starts a chat; in it every sentence is
+    answered, no judgement; it ends 30 s after the last talk, on a double tap or 安静; nothing of its own outside it."""
+    async def chat(self):
+        self.hub.set_answer_all(True)
         self.hub.step()
-        await settle(20)
-        s = self.wss[-1].sent[0]["session"]
+        await settle(10)
+        self.assertEqual(self.wss, [])                 # no session before the tap
+        self.hub.touched()
+        return await self.open_ready()
+
+    async def test_no_session_without_a_tap_not_even_for_speech(self):
+        self.hub.set_answer_all(True)
+        self.speak(10)
+        self.speak(3, speaking=False)
+        self.hub.called("asr")                         # a call does not open it (only a tap, for now)
+        self.hub.step()
+        await settle(10)
+        self.assertEqual((self.wss, self.hub.state), ([], "closed"))
+
+    async def test_the_chat_opens_with_server_vad_and_no_en_rule(self):
+        self.hub.persona = self.rl.build_persona("")
+        ws = await self.chat()
+        s = ws.sent[0]["session"]
         self.assertEqual(s["turn_detection"]["type"], "server_vad")
         self.assertNotIn("先分清是不是在跟你说话", s["instructions"])
         self.assertIn("听到的每句话都当作是在跟你说的", s["instructions"])
-        self.assertFalse(self.hub.set_turn(True))      # 智能断句 does nothing while 全答 is on ...
+        self.assertFalse(self.hub.set_turn(True))      # 智能断句 does nothing in this mode ...
         self.hub.set_answer_all(False)
         self.assertEqual(self.hub.cfg.turn, "smart_turn_v2")   # ... and applies when it is off again
 
-    async def bare_en(self):
-        ws = await self.open_ready()
+    async def bare_en(self, ws):
         self.speak(5)
         self.speak(2, speaking=False)
         ws.push({"type": "response.created", "response": {"id": "r1"}})
@@ -337,35 +350,58 @@ class AnswerAllTest(HubBase):
         ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
         await settle(30)
 
-    async def test_every_reply_plays_even_a_bare_en(self):
-        self.hub.set_answer_all(True)
-        await self.bare_en()
-        self.assertEqual(self.hub.stats["muted_quiet"], 0)
+    async def test_in_the_chat_every_reply_plays_even_a_bare_en(self):
+        ws = await self.chat()
+        self.hub.set_debug(True)                       # 调试 does not mute a chat either
+        await self.bare_en(ws)
+        self.assertEqual(self.hub.stats["muted_quiet"] + self.hub.stats["muted_debug_mode"], 0)
         self.assertTrue(self.link.frames())            # its audio went to the robot
 
-    async def test_control_off_the_same_en_is_muted(self):
-        await self.bare_en()
+    async def test_control_automatic_the_same_en_is_muted(self):
+        ws = await self.open_ready()
+        await self.bare_en(ws)
         self.assertEqual(self.hub.stats["muted_quiet"], 1)
 
-    async def test_quiet_closes_the_session_and_a_tap_opens_it(self):
-        self.hub.set_answer_all(True)
-        await self.open_ready()
-        self.hub.set_quiet("quiet", minutes=30)
+    async def test_the_chat_ends_30_s_after_the_last_talk(self):
+        await self.chat()
+        self.t[0] += 20
+        self.speak(3)                                  # still talking: the chat goes on
+        self.speak(2, speaking=False)
+        self.t[0] += 25
         self.hub.step()
         await settle(10)
-        self.assertEqual(self.hub.state, "closed")     # collect only: nothing goes up
-        self.hub.called("asr")                         # a call does not open it (only a tap, for now)
+        self.assertTrue(self.hub.chat_on())
+        self.t[0] += 10
+        self.hub.step()
+        await settle(10)
+        self.assertFalse(self.hub.chat_on())
+        self.assertEqual(self.hub.state, "closed")     # back to collect only
+
+    async def test_a_double_tap_or_quiet_ends_it(self):
+        await self.chat()
+        self.hub.touch_quiet()
         self.hub.step()
         await settle(10)
         self.assertEqual(self.hub.state, "closed")
-        self.assertTrue(self.hub.quiet_on())
+        self.assertFalse(self.hub.quiet_on())          # no quiet mode to wake from: a tap starts the next chat
         self.hub.touched()
         self.hub.step()
         await settle(20)
-        self.assertFalse(self.hub.quiet_on())
         self.assertNotEqual(self.hub.state, "closed")
+        self.hub.set_quiet("quiet", minutes=30)
+        self.hub.step()
+        await settle(10)
+        self.assertEqual(self.hub.state, "closed")
 
-    async def test_a_tap_with_docking_off_turns_it_on(self):
+    async def test_nothing_of_its_own_outside_a_chat(self):
+        self.hub.set_answer_all(True)
+        self.hub.set_debug(True)
+        self.assertEqual(self.hub.debug_alert("看一下电压"), "not_in_chat")
+        self.assertFalse(self.hub.body_event("shaken"))
+        self.hub._queue_greet(self.hub.clock())
+        self.assertIsNone(self.hub._greet)
+
+    async def test_a_tap_with_docking_off_turns_it_on_and_starts_a_chat(self):
         posted = []
         self.hub.call = lambda method, path, body=None, timeout=5: (posted.append((path, body)), (200, {}))[1]
         self.hub.set_answer_all(True)
@@ -373,8 +409,9 @@ class AnswerAllTest(HubBase):
         self.assertTrue(self.hub.touched())
         await settle(20)
         self.assertIn(("/switches", {"name": "realtime", "on": True, "by": "touch"}), posted)
+        self.assertTrue(self.hub.chat_on())
 
-    async def test_off_a_tap_with_docking_off_does_nothing(self):
+    async def test_automatic_a_tap_with_docking_off_does_nothing(self):
         self.switch.on = False
         self.assertFalse(self.hub.touched())
 
