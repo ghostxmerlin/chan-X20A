@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 18:05",
- "commit": "adfcae6",
+ "generated": "2026-11-19 18:09",
+ "commit": "4faf2f3",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -174,13 +174,14 @@
   },
   "ear/realtime_link.py": {
    "pkg": "ear",
-   "lines": 2422,
+   "lines": 2280,
    "layer": 2,
    "zh": "Docking 会话的全部：千问协议、回答闸门、模式、技能和工具、招呼和事件、触摸、说明拼装",
    "doc": "围观模式 realtime voice session (spike, 2026-11-14): hello talks with the people around her through DashScope's",
    "imports": [
     "ear/intent.py",
     "ear/rt_base.py",
+    "ear/rt_events.py",
     "ear/rt_manner.py",
     "ear/vision_burst.py"
    ],
@@ -218,6 +219,17 @@
     "ear/mode_span.py",
     "ear/mouth_link.py",
     "ear/web_search.py"
+   ],
+   "collections": []
+  },
+  "ear/rt_events.py": {
+   "pkg": "ear",
+   "lines": 154,
+   "layer": 2,
+   "zh": "Docking 里 hello 自己开口的事件：打招呼、被晃、调试提醒和结束、say、提示音",
+   "doc": "Docking hub: hello 自己开口的事件 — 主人出现打招呼、旧的单击打招呼、被晃说一句、调试提醒 / 结束的投递、say 工具、两声提示音（2026-11-19 refactor 4.2.3, moved from realtime_link.py unchange",
+   "imports": [
+    "ear/rt_base.py"
    ],
    "collections": []
   },
@@ -1437,8 +1449,8 @@
  "unassigned": [],
  "totals": {
   "ear": {
-   "modules": 27,
-   "lines": 10543
+   "modules": 28,
+   "lines": 10555
   },
   "mind": {
    "modules": 57,
