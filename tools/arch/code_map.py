@@ -5,7 +5,7 @@ layer imported by a higher-numbered one = calling upwards). Writes docs/arch/cod
 page reads it) and, with --check, exits 1 when a violation is not in the allowed list (layers.json "allowed").
 
     python3 tools/arch/code_map.py            # write docs/arch/code-map.json
-    python3 tools/arch/code_map.py --check    # also fail on a new upward import
+    python3 tools/arch/code_map.py --check    # also fail on a new upward import (--no-write: check only)
 """
 import ast
 import datetime
@@ -80,10 +80,11 @@ def main(argv=None):
            "modules": mods, "violations": bad, "unassigned": sorted(r for r, m in mods.items() if m["layer"] == "?"),
            "totals": {p: {"modules": sum(1 for m in mods.values() if m["pkg"] == p),
                           "lines": sum(m["lines"] for m in mods.values() if m["pkg"] == p)} for p in PKGS}}
-    os.makedirs(os.path.join(ROOT, "docs", "arch"), exist_ok=True)
-    with open(os.path.join(ROOT, "docs", "arch", "code-map.json"), "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=1)
-        f.write("\n")
+    if "--no-write" not in argv:                 # the test only checks
+        os.makedirs(os.path.join(ROOT, "docs", "arch"), exist_ok=True)
+        with open(os.path.join(ROOT, "docs", "arch", "code-map.json"), "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=1)
+            f.write("\n")
     print(f"{len(mods)} modules, {len(bad)} upward imports, {len(out['unassigned'])} unassigned")
     if "--check" in argv:
         allowed = {(a["from"], a["to"]) for a in layers.get("allowed", [])}
