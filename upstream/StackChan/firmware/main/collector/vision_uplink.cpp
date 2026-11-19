@@ -118,7 +118,7 @@ bool send_body(hearing::HearingSocket& socket, bool& sent_any)
         msg["dev_g"] = r2(s.dev_max_g); msg["gyro"] = std::round(s.gyro_max_dps); msg["moved"] = r2(s.moved);
     }
     msg["still"] = s.still; msg["held"] = s.held; msg["self"] = s.self_moving;
-    if (s.prox >= 0) { msg["prox"] = s.prox; msg["prox_base"] = s.prox_base; msg["near"] = s.near; }
+    if (s.prox >= 0) { msg["prox"] = s.prox; msg["prox_base"] = s.prox_base; msg["prox_max"] = s.prox_max; msg["near"] = s.near; }
     if (s.lux >= 0) msg["lux"] = r2(s.lux);
     if (s.mag) {
         auto m = msg["mag"].to<ArduinoJson::JsonArray>();

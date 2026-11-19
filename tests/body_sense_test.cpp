@@ -69,18 +69,21 @@ int main()
         for (int i = 0; i < n; ++i) shakes += ev[i] == Ev::shaken;
         assert(shakes == 1);
     }
-    {   // near / far around the baseline
+    {   // near / far around the baseline (the robot's numbers, 2026-11-19: still 0..4, noise to 7, a hand 10..74)
         Sense s; int64_t t = 0;
-        for (int i = 0; i < 20; ++i) s.proximity(40 + i % 3, t += 100000);
-        s.proximity(400, t += 100000);
-        assert(s.pending() == 0);                                     // one reading is not enough
-        s.proximity(420, t += 100000);
-        Event e; assert(s.take_event(e) && e.ev == Ev::near && e.prox == 420);
-        for (int i = 0; i < 4; ++i) s.proximity(60, t += 100000);
+        for (int i = 0; i < 20; ++i) s.proximity(i % 5, t += 100000);
+        for (int i = 0; i < 10; ++i) s.proximity(7, t += 100000);     // the head's own shadow: noise, no event
         assert(s.pending() == 0);
-        s.proximity(60, t += 100000);
+        for (int i = 0; i < 20; ++i) s.proximity(i % 3, t += 100000);
+        s.proximity(14, t += 100000);
+        assert(s.pending() == 0);                                     // one reading is not enough
+        s.proximity(18, t += 100000);
+        Event e; assert(s.take_event(e) && e.ev == Ev::near && e.prox == 18);
+        for (int i = 0; i < 4; ++i) s.proximity(3, t += 100000);
+        assert(s.pending() == 0);
+        s.proximity(3, t += 100000);
         assert(s.take_event(e) && e.ev == Ev::far);
-        for (int i = 0; i < 100; ++i) s.proximity(200, t += 100000);   // a slowly brighter background: baseline creeps
+        for (int i = 0; i < 100; ++i) s.proximity(i, t += 100000);    // a slowly brighter background: baseline creeps
         assert(s.pending() == 0);
     }
     {   // the summary: once a second, gravity angles, still, the latest optical readings
@@ -88,18 +91,18 @@ int main()
         Summary m;
         assert(!s.take_summary(t, m));                                // starts the window
         for (int64_t end = t + 2000000; t < end; t += kStep) s.imu(0, kG * 0.5f, kG * 0.866f, 0, 0, 0, t, false);
-        s.proximity(55, t); s.light(123.5f);
+        s.proximity(70, t - 500000); s.proximity(55, t); s.light(123.5f);
         const float ut[3] = {10, -20, 30}; s.magnetic(ut);
         assert(s.take_summary(t, m));
         assert(m.seq == 1 && m.imu && m.samples == 100 && m.still && !m.held && !m.self_moving);
         assert(std::fabs(m.roll_deg - 30) < 0.5f && std::fabs(m.pitch_deg) < 0.5f && std::fabs(m.acc_g - 1) < 0.01f);
-        assert(m.prox == 55 && m.lux == 123.5f && m.mag && m.mag_ut[1] == -20);
+        assert(m.prox == 55 && m.prox_max == 70 && m.lux == 123.5f && m.mag && m.mag_ut[1] == -20);
         assert(!s.take_summary(t + 500000, m));
         assert(s.take_summary(t + 1000000, m) && m.seq == 2 && !m.imu && m.samples == 0);
     }
     {   // the queue keeps the newest kEvQueue events
         Sense s; int64_t t = 0;
-        for (int i = 0; i < 6; ++i) { s.proximity(0, t += 100000); s.proximity(500, t += 100000); s.proximity(500, t += 100000);
+        for (int i = 0; i < 6; ++i) { s.proximity(0, t += 100000); s.proximity(50, t += 100000); s.proximity(50, t += 100000);
             for (int k = 0; k < 5; ++k) s.proximity(0, t += 100000); }
         assert(s.pending() == kEvQueue && s.dropped() == 4);
     }

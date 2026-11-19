@@ -18,7 +18,7 @@
 //              held = true. Somebody lifted / carried / pushed the robot.
 //   put_down   held, and no moving sample for kPutDownUs; held = false. Carries how long it was held.
 //   shaken     kShakeHits strong samples (|a|-1g > kShakeG or |gyro| > kShakeDps) within kShakeWinUs; kShakeCoolUs apart.
-//   near / far proximity above baseline + kNearOver for kNearReads reads / back under baseline + kFarOver for kFarReads
+//   near / far proximity at least baseline + kNearOver for kNearReads reads / at most baseline + kFarOver for kFarReads
 //              reads. baseline: the slow minimum of far readings (it creeps up kBaseCreep per read, drops at once).
 #include <algorithm>
 #include <cmath>
@@ -35,7 +35,9 @@ constexpr int64_t kPutDownUs = 2500000;
 constexpr float kShakeG = 0.7f, kShakeDps = 250.0f;
 constexpr int kShakeHits = 6;
 constexpr int64_t kShakeWinUs = 1000000, kShakeCoolUs = 3000000;
-constexpr int kNearOver = 250, kFarOver = 120, kNearReads = 2, kFarReads = 5;
+// 0.5.13 (measured 2026-11-19 13:57 on the robot: still 0..4, up to 7 while the head turns; a hand 2-3 cm in front of
+// the camera 10..18, covering it 74; the LTR553 LED runs at 20 mA x 4 pulses): was 250 / 120
+constexpr int kNearOver = 10, kFarOver = 4, kNearReads = 2, kFarReads = 5;
 constexpr int kBaseCreep = 1;
 constexpr int kEvQueue = 8;
 
@@ -68,7 +70,7 @@ struct Summary {
     uint16_t samples = 0;      // IMU samples in the window (self-moving ones included)
     float pitch_deg = 0, roll_deg = 0, acc_g = 0, dev_max_g = 0, gyro_max_dps = 0, moved = 0;
     bool imu = false, still = false, held = false, self_moving = false;
-    int prox = -1, prox_base = -1;
+    int prox = -1, prox_base = -1, prox_max = -1;   // prox_max: the largest reading in the window (0.5.13)
     bool near = false;
     float lux = -1;
     bool mag = false;
@@ -126,6 +128,7 @@ public:
     {
         if (raw < 0) return;
         prox_ = raw;
+        prox_max_ = std::max(prox_max_, raw);
         if (base_ < 0) base_ = raw;
         if (!near_) {
             base_ = raw < base_ ? raw : std::min(raw, base_ + kBaseCreep);
@@ -157,9 +160,9 @@ public:
         s.dev_max_g = dev_max_; s.gyro_max_dps = gyro_max_; s.moved = n_ ? static_cast<float>(moved_n_) / n_ : 0;
         s.still = !self_ && (last_move_ ? now_us - last_move_ >= kStillUs : n_ > 0);
         s.held = held_; s.self_moving = self_;
-        s.prox = prox_; s.prox_base = base_; s.near = near_; s.lux = lux_;
+        s.prox = prox_; s.prox_base = base_; s.prox_max = prox_max_; s.near = near_; s.lux = lux_;
         s.mag = mag_; std::copy(mag_ut_, mag_ut_ + 3, s.mag_ut);
-        win_us_ = now_us; n_ = moved_n_ = 0; sx_ = sy_ = sz_ = sa_ = 0; dev_max_ = gyro_max_ = 0; self_ = false;
+        win_us_ = now_us; n_ = moved_n_ = 0; sx_ = sy_ = sz_ = sa_ = 0; dev_max_ = gyro_max_ = 0; self_ = false; prox_max_ = prox_;
         if (!held_) peak_g_ = peak_dps_ = 0;
         return true;
     }
@@ -188,7 +191,7 @@ private:
     uint32_t hit_i_ = 0, n_ = 0, moved_n_ = 0, sum_seq_ = 0, ev_seq_ = 0, dropped_ = 0;
     float sx_ = 0, sy_ = 0, sz_ = 0, sa_ = 0, dev_max_ = 0, gyro_max_ = 0, peak_g_ = 0, peak_dps_ = 0;
     bool self_ = false, held_ = false, near_ = false, mag_ = false;
-    int prox_ = -1, base_ = -1, near_n_ = 0, far_n_ = 0;
+    int prox_ = -1, prox_max_ = -1, base_ = -1, near_n_ = 0, far_n_ = 0;
     float lux_ = -1, mag_ut_[3]{};
     Event q_[kEvQueue]{};
     int q_head_ = 0, q_n_ = 0;

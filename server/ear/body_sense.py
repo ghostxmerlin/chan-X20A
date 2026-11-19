@@ -8,7 +8,7 @@ The robot's own sensors, which used to reach only the Mac monitor:
        acc_g: mean |a| in g; dev_g / gyro: the strongest |a|-1g / |gyro| (dps) of the window; moved: share of samples
        that moved; still: nothing moved for 1.5 s; held: picked up and not yet put down; self: the robot's own servos
        moved in the window (those samples count neither way); prox: the LTR553 count (0..2047, bigger = nearer) and
-       its slow baseline; lux; mag: the BMM150 field (uT). Fields missing when the sensor had nothing.
+       its slow baseline, prox_max the window's largest (0.5.13); lux; mag: the BMM150 field (uT). Fields missing when the sensor had nothing.
   {"type":"body_ev","ev":"picked_up|put_down|shaken|near|far","seq":N,"t_us":...,"now_us":...,
    "held_ms"?, "prox"?, "peak_g"?, "peak_dps"?}     one event
 Stored in hello.body (Mongo): every event (kind "ev") and a summary every STORE_EVERY_S or when held / near / still
@@ -21,7 +21,7 @@ import ear_log
 
 EV_ZH = {"picked_up": "被拿起来了", "put_down": "被放下了", "shaken": "被晃了几下", "near": "有东西靠得很近",
          "far": "靠近的东西走开了"}
-SUM_FIELDS = ("n", "pitch", "roll", "acc_g", "dev_g", "gyro", "moved", "prox", "prox_base", "lux")
+SUM_FIELDS = ("n", "pitch", "roll", "acc_g", "dev_g", "gyro", "moved", "prox", "prox_base", "prox_max", "lux")
 FLAGS = ("still", "held", "self", "near")
 EV_FIELDS = ("held_ms", "prox", "peak_g", "peak_dps")
 STORE_EVERY_S = 10
