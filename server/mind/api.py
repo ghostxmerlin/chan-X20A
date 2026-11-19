@@ -32,6 +32,7 @@ GET  /mode /mode/seq; POST /mode/report (ear: hello's own mode change) /mode/rob
 import base64
 import copy
 import hmac
+import gzip
 import json
 import os
 import re
@@ -66,6 +67,8 @@ VERDICTS = ("right", "wrong", "unsure")
 FIELDS = ("owner", "people", "activity", "topic", "summary", "other")
 UTTERANCE_FIELDS = ('uid','at','role','text','state','tts_cost_cny','timings_s','pipeline','scope_id','server_ms')
 
+
+GZIP_MIN = 2048                     # replies at least this big go gzip when the caller accepts it (2026-11-19)
 
 def compact_utterance(row):
     return {k: row[k] for k in UTTERANCE_FIELDS if k in row}
@@ -1067,6 +1070,10 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             body = json.dumps(payload, ensure_ascii=False, default=str).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            # 2026-11-19: the 日志 page timed out over the hotspot (200 log rows = 120 KB, ~4 s); gzip ~5x smaller
+            if len(body) >= GZIP_MIN and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+                body = gzip.compress(body, 5)
+                self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

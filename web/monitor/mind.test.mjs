@@ -380,3 +380,23 @@ test('memory phase A paths pass the proxy and the local server; lane replay is a
  for(const p of ['/db/memory/review','/db/extract/switch','/db/extract/run'])
   assert.equal((await fetch(url+'/api/mind'+p,{method:'POST',headers:{'Content-Type':'application/json',Origin:url},body:'{}'})).status,200,p);
 });
+
+test('socketRequest asks for gzip and hands back plain text (2026-11-19: 日志 page over the hotspot)', async () => {
+  const { socketRequest } = await import('./mind.mjs');
+  const zlib = (await import('node:zlib')).default;
+  const http = (await import('node:http')).default;
+  const big = JSON.stringify({ rows: Array.from({ length: 300 }, (_, i) => ({ i, text: '日志行' + i })) });
+  let asked = null;
+  const srv = http.createServer((req, res) => {
+    asked = req.headers['accept-encoding'];
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' });
+    res.end(zlib.gzipSync(big));
+  });
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  try {
+    const r = await socketRequest({ host: '127.0.0.1', port: srv.address().port }, '/log', {});
+    assert.equal(asked, 'gzip');
+    assert.equal(r.status, 200);
+    assert.equal(r.body, big);
+  } finally { srv.close(); }
+});

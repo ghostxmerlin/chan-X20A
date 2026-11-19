@@ -442,7 +442,7 @@ export const PAGE_LIMIT=1000;                    // hello_log_query.MAX_LIMIT; c
 const PREV_BACK_MS=7*86400000-60000;             // /log answers at most 7 days
 const BODY_CACHE=60;
 const AUTO_MIN=30,AUTO_PAGES=5;                // a picked category reads up to 5 more pages to show 30
-export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind'+p,{cache:'no-store',signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.json();},now=Date.now,
+export function mountLog(doc,{fetchJson=async p=>{const r=await fetch('/api/mind'+p,{cache:'no-store',signal:AbortSignal.timeout(30000)});if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.json();},now=Date.now,
  every=(f,ms)=>setInterval(f,ms),stopEvery=t=>clearInterval(t)}={}){
  const $=id=>doc.getElementById(id);
  const byId=new Map(),bodies=new Map();

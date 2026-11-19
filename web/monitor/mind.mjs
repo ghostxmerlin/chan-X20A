@@ -8,6 +8,7 @@ import {spawn} from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import {fileURLToPath} from 'node:url';
 const PATHS=new Set(['/tools','/proposals','/looks','/looks/frame','/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item','/db/changes','/db/sources','/db/extract','/mode','/mode/seq','/chat/turns','/chat/state','/log','/log/body','/log/chain','/log/ledger','/log/gaps','/log/last']);
 const POST_PATHS=new Set(['/tool/call','/proposal/decide','/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try','/say/round','/say/play','/signal','/say/prefetch','/say/auto','/db/person','/db/person/note','/db/memory','/db/knowledge','/db/memory/review','/db/extract/switch','/db/extract/run','/mode','/preset']);   // not /mode/input, /mode/robot: ear only
@@ -28,11 +29,13 @@ function prepareSocketDir(socketPath){
 // target: the Unix socket path (live), or {host, port} on loopback (local demo).
 export function socketRequest(target,pathAndQuery,headers,{method='GET',body=null,timeout=8000}={}){
  return new Promise((resolve,reject)=>{
-  const h=body==null?headers:{...headers,'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)};
+  // 2026-11-19: mind gzips big replies (the 日志 page timed out over the hotspot); unpacked here, the page gets plain JSON
+  const h={...(body==null?headers:{...headers,'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)}),'Accept-Encoding':'gzip'};
   const where=typeof target==='string'?{socketPath:target}:{host:target.host,port:target.port};
   const req=http.request({...where,path:pathAndQuery,method,headers:h,timeout},res=>{
-   let body='';res.setEncoding('utf8');res.on('data',c=>{body+=c;if(body.length>4e6)req.destroy(new Error('too large'));});
-   res.on('end',()=>resolve({status:res.statusCode,body}));
+   const src=res.headers['content-encoding']==='gzip'?res.pipe(zlib.createGunzip()):res;
+   let body='';src.setEncoding('utf8');src.on('data',c=>{body+=c;if(body.length>4e6)req.destroy(new Error('too large'));});
+   src.on('end',()=>resolve({status:res.statusCode,body}));src.on('error',reject);
   });
   req.on('timeout',()=>req.destroy(new Error('timeout')));req.on('error',reject);req.end(body??undefined);
  });

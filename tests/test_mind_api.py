@@ -59,6 +59,25 @@ class ApiTest(unittest.TestCase):
             with e:
                 return Reply(e.code, e.read())
 
+    def test_large_replies_gzip_when_asked(self):
+        """2026-11-19: the 日志 page timed out over the hotspot (120 KB of log rows ~4 s); gzip cuts it ~5x."""
+        import gzip
+        seen = []
+        old_min, api.GZIP_MIN = api.GZIP_MIN, 1500
+        self.addCleanup(setattr, api, "GZIP_MIN", old_min)
+        for path in ("/state", "/settings"):
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")
+            req.add_header("Authorization", "Bearer k")
+            req.add_header("Accept-Encoding", "gzip")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                raw, enc = r.read(), r.headers.get("Content-Encoding")
+            body = gzip.decompress(raw) if enc == "gzip" else raw
+            self.assertIsInstance(json.loads(body), (dict, list))
+            seen.append(enc)
+            self.assertEqual(enc, "gzip" if len(body) >= api.GZIP_MIN else None)  # small replies stay plain
+        self.assertIn("gzip", seen)
+        self.assertNotEqual(self.call("/settings").body[:2], b"\x1f\x8b")  # not asked: never compressed
+
     def test_eye_latest_404(self):
         self.assertEqual(self.call("/eye/latest").status, 404)
 
