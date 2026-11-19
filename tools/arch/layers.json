@@ -105,7 +105,8 @@
   "ear/rt_skills.py": 2,
   "ear/rt_tools.py": 2,
   "ear/rt_looks.py": 2,
-  "ear/rt_gate.py": 2
+  "ear/rt_gate.py": 2,
+  "ear/rt_rules.py": 3
  },
  "zh": {
   "ear/ear_server.py": "耳朵的入口：参数、装配、四条机器人连线分发、本地 ASR 和声纹",
@@ -159,7 +160,8 @@
   "ear/rt_skills.py": "Docking 的技能和说话人：工具清单、技能预装 / 打开 / 收起、说话人、认不认识",
   "ear/rt_tools.py": "Docking 的工具执行：工具门、跑工具（算在说话、可打断）、垫话",
   "ear/rt_looks.py": "Docking 的看和搜：人脸、画面、注视、视觉爆发词、身体感觉、联网搜索的等待",
-  "ear/rt_gate.py": "Docking 的回答闸门和补救（播不播、嗯门、重复门、补救）"
+  "ear/rt_gate.py": "Docking 的回答闸门和补救（播不播、嗯门、重复门、补救）",
+  "ear/rt_rules.py": "Docking 回答闸门的判定（纯函数）：口令 / 调试 / 安静 / 少插话、等照片、等搜索"
  },
  "allowed": [
   {

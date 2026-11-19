@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 18:38",
- "commit": "726e722",
+ "generated": "2026-11-19 18:43",
+ "commit": "04881b6",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -238,12 +238,13 @@
   },
   "ear/rt_gate.py": {
    "pkg": "ear",
-   "lines": 165,
+   "lines": 169,
    "layer": 2,
    "zh": "Docking 的回答闸门和补救（播不播、嗯门、重复门、补救）",
    "doc": "Docking hub: 回答闸门和补救 — 一个回答播不播（口令、安静 / 调试 / 少插话、等照片 / 等搜索、嗯 / 重复 / 没听清 / 标记 / 看不清），被挡的「嗯」怎么补救，【刚才的对话】的来源（2026-11-19 refactor 4.2.8, moved fr",
    "imports": [
-    "ear/rt_base.py"
+    "ear/rt_base.py",
+    "ear/rt_rules.py"
    ],
    "collections": []
   },
@@ -279,6 +280,15 @@
    "imports": [
     "ear/rt_base.py"
    ],
+   "collections": []
+  },
+  "ear/rt_rules.py": {
+   "pkg": "ear",
+   "lines": 35,
+   "layer": 3,
+   "zh": "Docking 回答闸门的判定（纯函数）：口令 / 调试 / 安静 / 少插话、等照片、等搜索",
+   "doc": "Docking's reply-gate decisions as pure functions (2026-11-19 refactor 4.2.9, after Fable's audit 4.3: \"把判断写成纯函数",
+   "imports": [],
    "collections": []
   },
   "ear/rt_skills.py": {
@@ -1509,8 +1519,8 @@
  "unassigned": [],
  "totals": {
   "ear": {
-   "modules": 33,
-   "lines": 10603
+   "modules": 34,
+   "lines": 10642
   },
   "mind": {
    "modules": 57,

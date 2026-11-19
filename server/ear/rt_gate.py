@@ -4,6 +4,9 @@ import rt_base as _rt_base  # noqa: E402
 globals().update({_k: _v for _k, _v in vars(_rt_base).items() if not _k.startswith("__")})
 
 
+import rt_rules  # noqa: E402
+
+
 class GateMixin:
 
     def _chain_heard(self, turn):
@@ -32,16 +35,17 @@ class GateMixin:
         if turn.get("gate") is not None:
             return
         now = self.clock()
-        if turn.get("kind") == "speech" and self._order_at is not None and now - self._order_at <= ORDER_S:
-            v = "order"                                # the sentence was a direct order to the robot (see ORDER_S)
+        # the decisions are rt_rules' pure functions (refactor 4.2.9); the side effects stay here, in the same order
+        v = rt_rules.mode_mute(turn.get("kind"), None if self._order_at is None else now - self._order_at, ORDER_S,
+                               self.in_called(now), self.debug_on(now), self.quiet_on(now), self.low_on(now),
+                               addressed(turn.get("heard") or ""))
+        if v == "order":                               # the sentence was a direct order to the robot (see ORDER_S)
             turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
             self._dropped.add(rid)
             self.stats["muted_order"] += 1
             self._log_gate(rid, turn, v, done)
             return
-        if turn.get("kind") == "speech" and not self.in_called(now) and (
-                self.debug_on(now) or self.quiet_on(now) or (self.low_on(now) and not addressed(turn.get("heard") or ""))):
-            v = "debug_mode" if self.debug_on(now) else "quiet_mode" if self.quiet_on(now) else "low_mode"   # 调试 / 安静 / 少插话
+        if v is not None:                              # 调试 / 安静 / 少插话
             turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
             self._dropped.add(rid)
             self.stats[f"muted_{v}"] += 1
@@ -61,7 +65,7 @@ class GateMixin:
             if asked is not None:
                 self._start_look_wait(asked, now, turn.get("trace"))
             w = self._look_wait
-            if w is not None and not w["sent"] and now - w["at"] <= 4:
+            if rt_rules.look_wait_holds(w, now):
                 v = "wait_look"                        # the answer comes from the next fresh look
                 turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
                 self._dropped.add(rid)
@@ -76,7 +80,7 @@ class GateMixin:
                 self._start_search_wait(asked, now, turn.get("trace"))
             w = self._search_wait
             redo = self._redo is not None and self._redo["kind"] == "search_answer"
-            if (w is not None and not w["sent"] and (now - w["at"] <= 4 or not w["done"])) or redo:
+            if rt_rules.search_wait_holds(w, now, redo):
                 v = "wait_search"                      # the answer comes from the ear's own search
                 turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
                 self._dropped.add(rid)
