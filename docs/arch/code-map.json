@@ -1,6 +1,6 @@
 {
- "generated": "2026-11-19 18:43",
- "commit": "04881b6",
+ "generated": "2026-11-19 19:00",
+ "commit": "caca4e5",
  "layer_names": {
   "1": "接口层",
   "2": "编排层",
@@ -34,6 +34,33 @@
    ],
    "collections": []
   },
+  "ear/ear_hearing.py": {
+   "pkg": "ear",
+   "lines": 937,
+   "layer": 1,
+   "zh": "听的流水线：本地识别、声纹、声音标签、降噪、录音、听悟、一条听觉连线（从 ear_server 原样搬出）",
+   "doc": "The hearing pipeline of the ear (moved out of ear_server.py unchanged on 2026-11-19, refactor 4.3): the audio",
+   "imports": [
+    "ear/body_sense.py",
+    "ear/ear_log.py",
+    "ear/hearing_protocol.py",
+    "ear/hello_db.py",
+    "ear/kws_link.py",
+    "ear/mouth_link.py",
+    "ear/mouth_mode.py",
+    "ear/presence.py",
+    "ear/realtime_link.py",
+    "ear/recorder.py",
+    "ear/signal_link.py",
+    "ear/sound_kinds.py",
+    "ear/tingwu.py",
+    "ear/tingwu_switch.py",
+    "ear/vision_burst.py",
+    "ear/vision_link.py",
+    "ear/web_search.py"
+   ],
+   "collections": []
+  },
   "ear/ear_log.py": {
    "pkg": "ear",
    "lines": 335,
@@ -48,13 +75,14 @@
   },
   "ear/ear_server.py": {
    "pkg": "ear",
-   "lines": 1392,
+   "lines": 499,
    "layer": 1,
-   "zh": "耳朵的入口：参数、装配、四条机器人连线分发、本地 ASR 和声纹",
+   "zh": "耳朵的入口：参数、装配、连线分发（听觉流水线在 ear_hearing）",
    "doc": "soul ear server (grew out of spike v2): the robot's \"ear\" as a WebSocket service.",
    "imports": [
     "ear/ask_api.py",
     "ear/body_sense.py",
+    "ear/ear_hearing.py",
     "ear/ear_log.py",
     "ear/hearing_protocol.py",
     "ear/hello_db.py",
@@ -1519,8 +1547,8 @@
  "unassigned": [],
  "totals": {
   "ear": {
-   "modules": 34,
-   "lines": 10642
+   "modules": 35,
+   "lines": 10686
   },
   "mind": {
    "modules": 57,

@@ -106,10 +106,11 @@
   "ear/rt_tools.py": 2,
   "ear/rt_looks.py": 2,
   "ear/rt_gate.py": 2,
-  "ear/rt_rules.py": 3
+  "ear/rt_rules.py": 3,
+  "ear/ear_hearing.py": 1
  },
  "zh": {
-  "ear/ear_server.py": "耳朵的入口：参数、装配、四条机器人连线分发、本地 ASR 和声纹",
+  "ear/ear_server.py": "耳朵的入口：参数、装配、连线分发（听觉流水线在 ear_hearing）",
   "ear/realtime_link.py": "Docking 会话的全部：千问协议、回答闸门、模式、技能和工具、招呼和事件、触摸、说明拼装",
   "ear/mouth_link.py": "机器人的「嘴」连线：放声音、模式报告转给 mind、机器人命令行",
   "ear/vision_link.py": "机器人的「看」连线：M12 事件、照片、身体感觉",
@@ -161,7 +162,8 @@
   "ear/rt_tools.py": "Docking 的工具执行：工具门、跑工具（算在说话、可打断）、垫话",
   "ear/rt_looks.py": "Docking 的看和搜：人脸、画面、注视、视觉爆发词、身体感觉、联网搜索的等待",
   "ear/rt_gate.py": "Docking 的回答闸门和补救（播不播、嗯门、重复门、补救）",
-  "ear/rt_rules.py": "Docking 回答闸门的判定（纯函数）：口令 / 调试 / 安静 / 少插话、等照片、等搜索"
+  "ear/rt_rules.py": "Docking 回答闸门的判定（纯函数）：口令 / 调试 / 安静 / 少插话、等照片、等搜索",
+  "ear/ear_hearing.py": "听的流水线：本地识别、声纹、声音标签、降噪、录音、听悟、一条听觉连线（从 ear_server 原样搬出）"
  },
  "allowed": [
   {

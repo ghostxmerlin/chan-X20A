@@ -1108,10 +1108,16 @@ class PlaceFrameTest(unittest.TestCase):
         self.assertIsNone(json.loads(mouth_link.place_frame({"choices": [], "by": "mind", "current": 5}))["by"])
 
 
+def ear_source():
+    """ear_server.py + ear_hearing.py (the hearing pipeline moved there on 2026-11-19, refactor 4.3)."""
+    d = Path(__file__).resolve().parents[1] / "server" / "ear"
+    return (d / "ear_hearing.py").read_text() + "\n" + (d / "ear_server.py").read_text()
+
+
 class EarHookTest(unittest.TestCase):
     """ear_server's end_speech hands the event to the relay (source check: ear_server needs the models to import)."""
     def test_end_speech_calls_chat_heard_for_robot_sources(self):
-        src = (Path(__file__).resolve().parents[1] / "server" / "ear" / "ear_server.py").read_text()
+        src = ear_source()
         body = src[src.index("    async def end_speech"):src.index("    # ---------- sound ----------")]
         self.assertIn("self.chat.chat_heard(ev, self.session)", body)
         self.assertIn("self.device_profile and text", body)
@@ -1119,7 +1125,7 @@ class EarHookTest(unittest.TestCase):
         self.assertIn("ear.chat = mode_hub", src)
 
     def test_onset_sends_listen_unless_hello_sounds(self):
-        src = (Path(__file__).resolve().parents[1] / "server" / "ear" / "ear_server.py").read_text()
+        src = ear_source()
         body = src[src.index("    def open_utterance"):src.index("    # ---------- speech ----------")]
         self.assertIn("self.chat.chat_listen()", body)
         self.assertIn('self.self_flags.get("sounding")', body)
