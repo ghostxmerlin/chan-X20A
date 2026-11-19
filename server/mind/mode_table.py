@@ -70,10 +70,12 @@ MODES = {
         # stays crowd on the wire and in the database (display-only rename, as with the robot's name Dynames).
         'name': 'Docking', 'kind': 'normal', 'enter': (), 'leave': (), 'dirs': {'left': None},
         'look': {'eye': 'v14', 'pool': 'lively', 'label': 'DOCK', 'color': '30D060'},
-        'touch': {'tap': 'server', 'double': 'server'},          # tap = look (realtime, ear); double = protest (later)
-        # tap = 'look' (owner 2026-11-14, crowd realtime): always ok / LOOK with no effect, even while speaking;
-        # hello reports it (mode_report input tap) and the ear's realtime session takes the look.
-        'inputs': {'tap': 'look', 'double_tap': 'not_implemented'}, 'paid': (),
+        'touch': {'tap': 'server', 'double': 'server'},
+        # owner 2026-11-19 (was tap = look and greet, double tap = preset 1): tap = 'listen': speaking -> stop_speech
+        # (toast STOP), else ok / LISTEN and the ear opens a must-answer window (stronger than being called); double
+        # tap = 'quiet': ok / QUIET (+ stop_speech while speaking) and the ear's 安静一下 starts. Both are reported
+        # (mode_report input tap / double_tap) and the ear's realtime session acts on them.
+        'inputs': {'tap': 'listen', 'double_tap': 'quiet'}, 'paid': (),
     },
     'companion': {
         # Spec §3.2: double tap = 无 here, so touch.double = none and a DualKey double click = no_action (the brief
@@ -95,7 +97,7 @@ _IDS = ('talk', 'chat', 'settings', 'event', 'subtitle', 'crowd', 'companion', '
 _KINDS = ('normal', 'temporary', 'host', 'idle')
 _MODE_INPUTS = ('forward', 'tap', 'double_tap', 'next', 'previous')
 _EFFECTS = ('say_round', 'prefetch_on', 'prefetch_off')
-_CODES = ('not_implemented', 'no_action', 'look')     # look: crowd's tap (ok, toast LOOK, no effect)
+_CODES = ('not_implemented', 'no_action', 'listen', 'quiet')   # crowd's tap / double tap (owner 2026-11-19)
 
 
 def _label_ok(s):
@@ -166,7 +168,7 @@ _ON_HELLO = {4: 'IDLE', 5: '进 Docking', 6: '进陪伴', 7: '进中音英字', 
 PRESETS = {
     0: {'name': '花费全关', 'server': ('billing_off',), 'robot': {}},
     # 1 (owner 2026-11-15 "能让hello在围观模式中闭嘴"): the 围观 realtime switch flips (闭嘴 / 开口); hello sends it for
-    # its ASR 1 and for a double tap in crowd. 0 / 9 still set it with everything else.
+    # its ASR 1 (a double tap in crowd is 安静一下 since 2026-11-19). 0 / 9 still set it with everything else.
     1: {'name': 'Docking 闭嘴/开口', 'server': ('realtime_toggle',), 'robot': {}},
     **{n: {'name': '空', 'server': (), 'robot': {}} for n in (2, 3)},
     **{n: {'name': f'{name}（hello 自己切）', 'server': (), 'robot': {}} for n, name in _ON_HELLO.items()},

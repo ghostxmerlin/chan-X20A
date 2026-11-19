@@ -89,11 +89,15 @@ class TransitionTest(unittest.TestCase):
         for m in ('chat', 'companion'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'not_implemented')
             self.assertEqual(self.go(m, 'tap', speaking=True)[2], ['stop_speech'])
-        # crowd (owner 2026-11-14, crowd realtime): a tap is "look", always: ok, toast LOOK, no effect (not even stop
-        # while speaking); hello reports it and the ear's realtime session takes it.
-        for speaking in (False, True):
-            s, r, e = self.go('crowd', 'tap', speaking=speaking)
-            self.assertEqual((s['mode'], r, e), ('crowd', {'code': 'ok', 'toast': 'LOOK'}, []))
+        # crowd (owner 2026-11-19): a tap stops hello while she speaks, else LISTEN (the ear's must-answer window);
+        # a double tap is 安静一下 (QUIET, stopping a reply too). Both reported, both stay in crowd.
+        self.assertEqual(self.go('crowd', 'tap'), ({'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None},
+                                                   {'code': 'ok', 'toast': 'LISTEN'}, []))
+        s, r, e = self.go('crowd', 'tap', speaking=True)
+        self.assertEqual((s['mode'], r, e), ('crowd', {'code': 'ok', 'toast': 'STOP'}, ['stop_speech']))
+        for speaking, fx in ((False, []), (True, ['stop_speech'])):
+            s, r, e = self.go('crowd', 'double_tap', speaking=speaking)
+            self.assertEqual((s['mode'], r, e), ('crowd', {'code': 'ok', 'toast': 'QUIET'}, fx))
         for m in ('subtitle', 'event', 'settings'):
             self.assertEqual(self.go(m, 'tap')[1]['code'], 'no_action')
         self.assertEqual(self.go('idle', 'tap')[1]['code'], 'no_action')            # DualKey click: no badge flip
@@ -275,8 +279,8 @@ class EdgeCaseTest(unittest.TestCase):
 
     def test_double_taps(self):
         self.assertEqual(self.go('talk', 'double_tap', speaking=True)[2], ['prefetch_on'])
-        for m in ('chat', 'crowd'):
-            self.assertEqual(self.go(m, 'double_tap')[1]['code'], 'not_implemented')
+        self.assertEqual(self.go('chat', 'double_tap')[1]['code'], 'not_implemented')
+        self.assertEqual(self.go('crowd', 'double_tap')[1], {'code': 'ok', 'toast': 'QUIET'})    # 安静一下 (2026-11-19)
         for m in ('companion', 'subtitle', 'settings', 'event'):
             self.assertEqual(self.go(m, 'double_tap', speaking=True)[1]['code'], 'no_action', m)
         self.assertEqual(self.go('idle', 'double_tap')[1]['code'], 'not_implemented')

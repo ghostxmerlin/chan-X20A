@@ -474,6 +474,17 @@ Applied mode_apply(const char* source, modes::rules::Input input, const modes::r
         a = modes_session->apply(esp_timer_get_time(), source, input, value, speaking);
         mode_publish_locked();
     }
+    // 0.5.15 (owner 2026-11-19): crowd's tap / double tap while hello speaks stops her here at once, as the ASR wake
+    // does (the ear also cancels its reply from the report); the rest of a stop_speech stays mind's.
+    if (a.out.state.mode == modes::rules::Mode::Crowd &&
+        (input == modes::rules::Input::Tap || input == modes::rules::Input::DoubleTap)) {
+        bool stop = false;
+        for (size_t i = 0; i < a.out.n_effects; ++i) stop = stop || a.out.effects[i] == modes::rules::Effect::StopSpeech;
+        if (stop) {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (ring && stream.active() && !stream.stopped) stream.stop(stream.id, *ring);
+        }
+    }
     // 0.4.96: hello's own 0 / 9 also switch its own senses, online or not (the hook only queues for the main loop).
     if (a.to_mind && (value.digit == 0 || value.digit == 9))
         if (auto hook = senses_hook.load()) hook(value.digit == 9);

@@ -280,15 +280,11 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
                     chat.leave(now)
             except Exception as ex:           # noqa: BLE001 - logged; the mode change itself happened
                 log(f'mind mode: chat {new["mode"]}: {type(ex).__name__}: {str(ex)[:160]}', flush=True)
-        crowd_tap = new['mode'] == 'crowd' and old['mode'] == 'crowd' and meta.get('input') == 'tap'
+        # crowd's tap / double tap (owner 2026-11-19, collector-0.5.15): a stop_speech on them is a real stop now (the
+        # robot stops its own playback, the ear cancels its reply); mind cancels any soul-tts line waiting too.
         for e in effects:
             try:
-                if e == 'stop_speech' and crowd_tap:
-                    # 围观 spike (owner 2026-11-14): a tap in crowd means "look and greet" (the ear's realtime session
-                    # does that from the same report), never "stop". hello's rules still attach stop_speech to a tap
-                    # while she speaks; the firmware rules / vectors get aligned in a later build.
-                    log('mind mode: crowd tap = greet, stop_speech not run', flush=True)
-                elif e == 'stop_speech':
+                if e == 'stop_speech':
                     speak.cancel_pending(tts)
                 elif e == 'talk_leave':
                     talk_off(now)

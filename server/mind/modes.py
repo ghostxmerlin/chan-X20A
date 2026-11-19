@@ -162,8 +162,10 @@ def transition(state, input, value=None, *, source, speaking=False):
     # 2. what this mode gives the input (tap, double_tap, next, previous, and forward inside talk)
     if input in m['inputs']:
         meaning = m['inputs'][input]
-        if meaning == 'look':
-            return dict(st), result('ok', 'LOOK'), []           # crowd tap (owner 2026-11-14): no effect, never stop
+        if meaning == 'listen':                                 # crowd tap (owner 2026-11-19): stop, else listen
+            return (dict(st), result('ok', 'STOP'), ['stop_speech']) if speaking else (dict(st), result('ok', 'LISTEN'), [])
+        if meaning == 'quiet':                                  # crowd double tap: 安静一下 (stops a reply too)
+            return dict(st), result('ok', 'QUIET'), ['stop_speech'] if speaking else []
         if input == 'tap' and speaking and m['touch']['tap'] == 'server':
             return _done(st, dict(st), ['stop_speech'])        # hello is speaking: a tap stops it (owner 9)
         if isinstance(meaning, str):

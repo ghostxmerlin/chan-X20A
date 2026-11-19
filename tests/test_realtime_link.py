@@ -2067,8 +2067,11 @@ class MouthRoutingTest(unittest.IsolatedAsyncioTestCase):
             def yield_to_tts(self, link):
                 test.order.append(("yield", sorted(link.tts_active)))
 
-            def tap(self):
-                test.order.append(("tap",))
+            def touched(self, stop=False):
+                test.order.append(("touch", stop))
+
+            def touch_quiet(self):
+                test.order.append(("quiet",))
 
             def link_closed(self, link):
                 pass
@@ -2149,7 +2152,9 @@ class MouthRoutingTest(unittest.IsolatedAsyncioTestCase):
         link.modes = Relay()
         await link._mode_message({"type": "mode_report", "seq": 1, "mode": "crowd", "input": "tap", "effects": []})
         await link._mode_message({"type": "mode_report", "seq": 2, "mode": "chat", "input": "tap", "effects": []})
-        self.assertEqual(self.order, [("tap",)])
+        await link._mode_message({"type": "mode_report", "seq": 3, "mode": "crowd", "input": "tap", "effects": ["stop_speech"]})
+        await link._mode_message({"type": "mode_report", "seq": 4, "mode": "crowd", "input": "double_tap", "effects": []})
+        self.assertEqual(self.order, [("touch", False), ("touch", True), ("quiet",)])
 
 
 if __name__ == "__main__":
@@ -2241,3 +2246,47 @@ class BodyLineTest(HubBase):
         self.assertIsNone(self.hub._body_line())
         self.hub.body_changed()
         self.assertTrue(self.hub._looks_dirty or self.hub._ws is None)
+
+
+class TouchTest(HubBase):
+    """Owner 2026-11-19 (collector-0.5.15): in Docking a tap while hello is quiet = a must-answer call (stronger and
+    longer than her name: TOUCH_S, wakes 安静, 在听 under the eyes until she is on it); a tap while she speaks stops
+    her; a double tap = 安静一下."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.words = []
+        self.hub.screen_word = lambda text, hold: self.words.append((text, hold))
+
+    async def test_a_tap_opens_a_long_call_window_and_wakes_quiet(self):
+        await self.open_ready()
+        self.hub.set_quiet("quiet")
+        self.assertTrue(self.hub.touched())
+        now = self.hub.clock()
+        self.assertFalse(self.hub.quiet_on())
+        self.assertTrue(self.hub.in_called(now + self.rl.CALLED_S + 5))            # longer than a call by name
+        self.assertFalse(self.hub.in_called(now + self.rl.TOUCH_S + 0.1))
+        self.assertIn(("在听", int(self.rl.TOUCH_S)), self.words)
+        self.assertEqual(self.hub.stats["called_touch"], 1)
+        self.hub._stage("think")                                                  # she is on it: 在听 goes
+        self.assertEqual(self.words[-1][0], "")
+
+    async def test_a_tap_while_speaking_stops_her_and_closes_the_window(self):
+        ws = await self.open_ready()
+        ws.push({"type": "input_audio_buffer.speech_stopped"})
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(120)).decode()})
+        await settle(20)
+        self.hub.called("asr")
+        self.assertTrue(self.hub.touched(stop=True))
+        await settle(10)
+        self.assertTrue(any(m["type"] == "response.cancel" for m in ws.sent))
+        self.assertFalse(self.hub.in_called())
+        self.assertEqual(self.hub.stats["touch_stop"], 1)
+
+    async def test_a_double_tap_is_quiet(self):
+        await self.open_ready()
+        self.hub.touched()
+        self.assertTrue(self.hub.touch_quiet())
+        self.assertTrue(self.hub.quiet_on())
+        self.assertFalse(self.hub.in_called())
+        self.assertEqual(self.words[-1][0], "安静中")

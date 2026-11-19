@@ -482,8 +482,9 @@ void chat_stages()
     assert(!collector::mouth::dots_mode(Mode::Talk) && !collector::mouth::dots_mode(Mode::Idle));
 }
 
-// 0.4.93.1 (owner 2026-11-14, crowd realtime): a tap in crowd changes nothing and has no effect, but it is reported
-// (input tap, effects []) so the ear's realtime session takes the look; toast LOOK; speaking does not make it a stop.
+// 0.5.15 (owner 2026-11-19): crowd's tap = listen (toast LISTEN, reported with no effect: the ear opens its
+// must-answer window) or, while hello speaks, stop (toast STOP, stop_speech); its double tap = 安静一下 (toast QUIET,
+// stop_speech while speaking), reported too (no longer mind's digit 1). Nothing changes the mode.
 void crowd_tap()
 {
     Robot r;
@@ -493,15 +494,16 @@ void crowd_tap()
     assert(r.in(Input::Digit, "asr", v).changed && r.view().state.mode == Mode::Crowd);
     r.drain();
     Applied a = r.in(Input::Tap, "touch");
-    assert(!a.changed && a.reported && !a.out.n_effects && !std::strcmp(r.view().toast, "LOOK"));
-    a = r.in(Input::Tap, "touch", Value{}, true);                             // while speaking: still a look
-    assert(a.reported && !a.out.n_effects && !std::strcmp(r.view().toast, "LOOK"));
-    assert(r.drain() == report(4, "crowd", "touch", "\"tap\"", "") + report(5, "crowd", "touch", "\"tap\"", ""));
-    // 0.4.98: a double tap in crowd is mind's digit 1 (preset 1: the 围观 realtime toggle), source touch; no report.
+    assert(!a.changed && a.reported && !a.out.n_effects && !a.look && !std::strcmp(r.view().toast, "LISTEN"));
+    a = r.in(Input::Tap, "touch", Value{}, true);                             // while speaking: a stop
+    assert(a.reported && a.out.has(collector::modes::rules::Effect::StopSpeech) && !std::strcmp(r.view().toast, "STOP"));
+    assert(r.drain() == report(4, "crowd", "touch", "\"tap\"", "") + report(5, "crowd", "touch", "\"tap\"", "\"stop_speech\""));
     Applied dt = r.in(Input::DoubleTap, "touch");
-    assert(dt.to_mind && dt.input_seq && !dt.reported && !dt.changed && !std::strcmp(r.view().toast, "PRESET 1"));
-    assert(r.drain() == digit_line(dt.input_seq, 0, 1, "touch"));
-    // Offline the look cannot reach the ear: OFFLINE, no report.
+    assert(!dt.to_mind && dt.reported && !dt.changed && !dt.out.n_effects && !std::strcmp(r.view().toast, "QUIET"));
+    dt = r.in(Input::DoubleTap, "touch", Value{}, true);
+    assert(dt.reported && dt.out.has(collector::modes::rules::Effect::StopSpeech) && !std::strcmp(r.view().toast, "QUIET"));
+    assert(r.drain() == report(6, "crowd", "touch", "\"double_tap\"", "") + report(7, "crowd", "touch", "\"double_tap\"", "\"stop_speech\""));
+    // Offline the tap cannot reach the ear: OFFLINE, no report.
     r.s.link_down();
     assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "OFFLINE"));
 }
@@ -530,7 +532,7 @@ void digit_one()
     o.s.boot(0, Mode::Crowd, 9);
     Applied off = o.digit(1, "asr", 1 * kS);
     assert(off.to_mind && !off.input_seq && !std::strcmp(o.view().toast, "OFFLINE") && o.s.pending_digit() == -1);
-    Applied offd = o.in(Input::DoubleTap, "touch");
+    Applied offd = o.digit(1, "asr", 1 * kS);
     assert(offd.to_mind && !offd.input_seq && !std::strcmp(o.view().toast, "OFFLINE"));
     o.feed(kHello);
     assert(o.drain(0) == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\""));    // no 9, no 1
@@ -542,7 +544,7 @@ void digit_one()
     p.s.boot(0, Mode::Crowd, 9);
     p.feed(kHello);
     assert(p.drain(0) == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(1, 0, 9));
-    p.in(Input::DoubleTap, "touch", Value{}, false, 1 * kS);
+    p.digit(1, "touch", 1 * kS);
     assert(p.s.pending_digit() == -1 && p.drain(1 * kS) == digit_line(2, 0, 1, "touch"));
     assert(p.drain(30 * kS).empty());                                        // no 9 retry
     // an owner's 0 said offline is not a power-on preset: a 1 leaves it owed
@@ -553,9 +555,8 @@ void digit_one()
     assert(z.s.pending_digit() == 0);
 }
 
-// 0.4.98 (owner 2026-11-15, 围观点击要最大程度捕获人脸): crowd's tap report waits (up to the hold) for the M12 look;
-// release_look lets it go at once; the hold running out lets it go too; any later input never waits behind it;
-// digits are never held; the report shape is the same.
+// 0.4.98 held crowd's tap report for the M12 look; 0.5.15 (owner 2026-11-19: tap = listen / stop) never holds it,
+// even with a hold set: the ear's must-answer window must open at once.
 void look_hold()
 {
     Robot r;
@@ -565,40 +566,8 @@ void look_hold()
     r.digit(5, "asr", 0);                                                   // crowd
     assert(r.drain() == report(3, "crowd", "asr", "\"digit\"", "\"stop_speech\",\"talk_leave\""));
     Applied a = r.in(Input::Tap, "touch", Value{}, false, 10 * kS);
-    assert(a.look && a.look_token == 4 && a.reported && r.s.holding_look() && !std::strcmp(r.view().toast, "LOOK"));
-    assert(r.drain(10 * kS + 100000).empty());                              // held
-    assert(!r.s.release_look(3) && r.s.release_look(4) && !r.s.release_look(4));
-    assert(r.drain(10 * kS + 300000) == report(4, "crowd", "touch", "\"tap\"", ""));
-    // the hold runs out: it goes at 0.8 s
-    a = r.in(Input::Tap, "touch", Value{}, false, 20 * kS);
-    assert(a.look && r.drain(20 * kS + 799999).empty());
-    assert(r.drain(20 * kS + 800000) == report(5, "crowd", "touch", "\"tap\"", ""));
-    assert(!r.s.release_look(5));                                           // late answer: nothing
-    // a digit while held is never delayed, and the next word lets the held tap go first, in order
-    a = r.in(Input::Tap, "touch", Value{}, false, 30 * kS);
-    r.digit(9, "asr", 30 * kS);
-    assert(!r.s.holding_look());                                            // the 9 let the look go
-    assert(r.drain(30 * kS) == report(6, "crowd", "touch", "\"tap\"", "") + digit_line(1, 0, 9, "asr"));
-    a = r.in(Input::Tap, "touch", Value{}, false, 40 * kS);
-    Applied w = r.in(Input::Play, "asr", Value{}, false, 40 * kS + 1000);   // crowd -> chat
-    assert(w.changed && r.drain(40 * kS + 1000) == report(7, "crowd", "touch", "\"tap\"", "") + report(8, "chat", "asr", "\"play\"", "\"stop_speech\""));
-    // reports queued before the tap still go while it is held
-    r.digit(5, "asr", 50 * kS);                                             // back to crowd (not drained)
-    a = r.in(Input::Tap, "touch", Value{}, false, 50 * kS);
-    assert(a.look && r.drain(50 * kS) == report(9, "crowd", "asr", "\"digit\"", "\"stop_speech\""));
-    // the link drops: nothing is held (the next link reports the state)
-    r.s.link_down();
-    assert(!r.s.holding_look());
-    // offline taps are not looks; without set_look_hold nothing is held
-    assert(!r.in(Input::Tap, "touch").look);
-    Robot plain;
-    plain.feed(kHello); plain.drain();
-    plain.digit(5); plain.drain();
-    assert(!plain.in(Input::Tap, "touch").look && !plain.drain().empty());
-    JsonDocument t;
-    r.s.json(t.to<JsonObject>(), 0);
-    assert(t["look_hold"]["held"] == 5 && t["look_hold"]["released"] == 1 && t["look_hold"]["timeouts"] == 1);
-    assert(t["look_hold"]["overtaken"] == 2 && t["look_hold"]["ms"] == 800);
+    assert(!a.look && a.reported && !r.s.holding_look());
+    assert(r.drain(10 * kS) == report(4, "crowd", "touch", "\"tap\"", ""));
 }
 
 int main()

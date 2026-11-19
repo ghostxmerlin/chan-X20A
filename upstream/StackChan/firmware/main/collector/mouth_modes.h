@@ -25,8 +25,8 @@ namespace collector::mouth {
 // - Digits 0 and 9 (all paid off / on) are mind's: they go up as {"type":"mode_input",...} (C1 wire) and mind's
 //   {"type":"mode_result"} brings the toast.
 // - 0.4.98 (owner 2026-11-15, 能让hello在围观模式中闭嘴): digit 1 is mind's too (preset 1 = toggle the 围观 realtime
-//   switch), and in crowd a double tap sends digit 1 (source as given, e.g. touch). The shared rules table is
-//   unchanged (there 1 = no_action, crowd double tap = not_implemented): the session routes them before the rules.
+//   switch). The shared rules table is unchanged there (1 = no_action): the session routes it before the rules.
+//   0.5.15: crowd's double tap no longer sends digit 1 (it is 安静一下, owner 2026-11-19).
 //   Digit 1 is a toggle: offline it is not kept for later (toast OFFLINE), and it never runs the robot-half senses
 //   hook (that is 0 / 9 only, mouth_link.cpp). No other input is sent to mind as an input.
 // - 0.4.98 (owner 2026-11-15): crowd's tap (look) is held up to look_hold (set_look_hold, 0.8 s on the robot) so the
@@ -144,8 +144,9 @@ public:
         }
         last_input_us_ = now_us;
         if (hold_seq_) { hold_seq_ = 0; ++look_overtaken_; }   // a held look goes now: no input waits behind it
-        // 0.4.98: digit 1 (preset 1, the 围观 realtime toggle) and crowd's double tap are mind's digit 1.
-        if ((in == Input::Digit && v.digit == kToggleDigit) || (in == Input::DoubleTap && state_.mode == modes::rules::Mode::Crowd)) {
+        // 0.4.98: digit 1 (preset 1, the 围观 realtime toggle) is mind's digit 1 (crowd's double tap was too, until
+        // 0.5.15: it is 安静一下 now, through the rules and reported like the tap).
+        if (in == Input::Digit && v.digit == kToggleDigit) {
             a.to_mind = true;
             // review 2026-11-15: the owner's latest action wins over the power-on preset still owed to mind (a 0 / 9
             // said offline by the owner stays owed: a toggle says nothing about paid senses on / off).
@@ -196,8 +197,7 @@ public:
                 push(report(seq_, source, in, true, a.out.effects, a.out.n_effects), a.out);
                 a.reported = true;
                 // 0.4.98 crowd's tap: held so the greeting gets fresh faces (released by release_look or the clock).
-                const bool look = in == Input::Tap && accepted && !a.changed && !a.out.n_effects &&
-                                  modes::rules::def(state_.mode).tap_in.look;
+                const bool look = false;   // 0.5.15: crowd's tap is listen / stop now, its report never held
                 if (look && look_hold_us_ > 0 && reports_n_ && reports_[reports_n_ - 1].seq == seq_) {
                     hold_seq_ = seq_; hold_until_us_ = now_us + look_hold_us_;
                     a.look = true; a.look_token = seq_;

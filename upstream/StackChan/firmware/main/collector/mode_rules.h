@@ -40,12 +40,16 @@ struct Meaning {
     bool code_only = false;     // true: answer `code`, nothing changes
     Code code = Code::Ok;
     Effect effect = Effect::SayRound;   // when !code_only: one effect (every table entry has exactly one)
-    bool look = false;          // crowd's tap (owner 2026-11-14): ok, toast LOOK, no effect, even while speaking
+    // crowd's touch (owner 2026-11-19, collector-0.5.15; was tap = look and greet): 1 listen = a tap stops hello while
+    // she speaks (STOP), else ok / LISTEN (the ear opens a must-answer window); 2 quiet = a double tap is 安静一下,
+    // ok / QUIET, plus stop_speech while she speaks. mode_table.py codes 'listen' / 'quiet'.
+    uint8_t touch = 0;
 };
 constexpr Meaning kNone{};
-constexpr Meaning code_(Code c) { return Meaning{true, true, c, Effect::SayRound, false}; }
-constexpr Meaning fx(Effect e) { return Meaning{true, false, Code::Ok, e, false}; }
-constexpr Meaning kLook{true, true, Code::Ok, Effect::SayRound, true};
+constexpr Meaning code_(Code c) { return Meaning{true, true, c, Effect::SayRound, 0}; }
+constexpr Meaning fx(Effect e) { return Meaning{true, false, Code::Ok, e, 0}; }
+constexpr Meaning kListen{true, true, Code::Ok, Effect::SayRound, 1};
+constexpr Meaning kQuiet{true, true, Code::Ok, Effect::SayRound, 2};
 
 struct ModeDef {
     const char* label;
@@ -69,7 +73,7 @@ inline constexpr ModeDef kModes[kModeCount] = {
      kNone, code_(Code::NoAction), code_(Code::NoAction), kNone, kNone},
     // crowd, shown as Docking (owner 2026-11-18: renamed from 围观 / MEET, hello's main mode; the id stays crowd)
     {"DOCK", 0x30D060, Eye::V14, Pool::Lively, TouchAct::Server, TouchAct::Server,
-     kNone, kLook, code_(Code::NotImplemented), kNone, kNone},
+     kNone, kListen, kQuiet, kNone, kNone},
     {"PAL", 0xF2E6C8, Eye::V18, Pool::Default, TouchAct::Server, TouchAct::None,
      kNone, code_(Code::NotImplemented), code_(Code::NoAction), kNone, kNone},
     {"IDLE", 0x505050, Eye::PageIdle, Pool::Default, TouchAct::Badge, TouchAct::Server,
@@ -266,8 +270,11 @@ inline Outcome transition(const State& st, Input in, const Value& v, bool speaki
     }
     // 2. what this mode gives the input
     if (const Meaning* mean = meaning(m, in)) {
-        if (mean->look) {                            // crowd tap: look (reported by the session), never a stop
-            Outcome o; o.state = st; o.code = Code::Ok; put_toast(o, "LOOK"); return o;
+        if (mean->touch) {                           // crowd tap / double tap (0.5.15): reported by the session
+            Outcome o; o.state = st; o.code = Code::Ok;
+            if (speaking) add(o, Effect::StopSpeech);
+            put_toast(o, mean->touch == 2 ? "QUIET" : speaking ? "STOP" : "LISTEN");
+            return o;
         }
         if (in == Input::Tap && speaking && m.tap == TouchAct::Server) {
             const Effect fx[] = {Effect::StopSpeech};

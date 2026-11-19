@@ -55,7 +55,7 @@ mind is asked on the relay's own small thread pool (never the default executor, 
 to the robot with send_from_realtime(); the robot's tts.* reports for those ids go to the hub, never to soul-tts.
 tts_active holds the soul-tts streams the robot has not finished (start .. robot done / stopped / error, or soul-tts's
 stop); a soul-tts tts.start first calls realtime.yield_to_tts(link) (realtime yields), so the two never interleave.
-A mode_report with mode crowd and input tap is also handed to realtime.tap() (crowd: a tap = look and greet).
+A mode_report with mode crowd and input tap / double_tap goes to realtime.touched() / touch_quiet() (2026-11-19).
 Place (2026-11-15, spec docs/superpowers/specs/2026-11-15-place-contract.md; ModeRelay(place_poll_s=..)): after each
 /mouth handshake (links with a boot_id) the ear GETs mind /place and sends the robot {"type":"place","current":..,"by":..,
 "choices":[..],"at_ms":..} (UTF-8 strings, <= 1600 B: at most 8 choices of <= 24 B, current <= 48 B); while a robot is
@@ -845,11 +845,17 @@ class MouthLink:
                     self.presence.owner(f"{m.get('by')}:{inp}")
                 except Exception:                       # noqa: BLE001
                     _trace(f"mouth m{self.conn} presence")
-            if self.realtime is not None and m.get("mode") == "crowd" and m.get("input") == "tap":
+            if self.realtime is not None and m.get("mode") == "crowd" and m.get("input") in ("tap", "double_tap"):
+                # owner 2026-11-19 (collector-0.5.15): tap = stop while speaking (the rules attached stop_speech), else
+                # a must-answer call; double tap = 安静一下. (Older firmware: a tap here was look-and-greet.)
                 try:
-                    self.realtime.tap()
-                except Exception:                       # noqa: BLE001 - a greeting never costs /mouth
-                    _trace(f"mouth m{self.conn} realtime tap")
+                    if m["input"] == "double_tap":
+                        self.realtime.touch_quiet()
+                    else:
+                        fx = m.get("effects") if isinstance(m.get("effects"), list) else []
+                        self.realtime.touched(stop="stop_speech" in fx)
+                except Exception:                       # noqa: BLE001 - a touch never costs /mouth
+                    _trace(f"mouth m{self.conn} realtime touch")
             if len(self._reports) >= self.modes.report_queue:
                 old, _ = self._reports.popleft()
                 log(f"mouth m{self.conn}: report queue full, report {old.get('seq')} dropped", flush=True)

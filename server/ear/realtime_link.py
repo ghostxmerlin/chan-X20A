@@ -38,7 +38,8 @@ When the owner (mind's owner.face_names) appears after AWAY_S unseen while in cr
 a "[事件] 主人（<call>）出现在你面前了" user text item + response.create goes in; queued while hello sounds, dropped after
 GREET_MAX_AGE_S, never twice within AWAY_S. The call name comes from mind at run time and is never logged.
 
-Crowd tap (owner 2026-11-14 "围观模式，单击，不要停了，改成检查m12视觉，看有没有认识的人在…"): MouthLink hands a
+Crowd touch since 2026-11-19 (collector-0.5.15): see TOUCH_S, touched() and touch_quiet(); MouthLink no longer calls tap().
+The old crowd tap (owner 2026-11-14 "围观模式，单击，不要停了，改成检查m12视觉，看有没有认识的人在…"): MouthLink handed a
 mode_report {mode: crowd, input: tap} to tap(); mind does not run that report's stop_speech (runner.on_change). tap()
 looks at the M12 faces of the last face_recent_s (FaceView, from the robot's own face_found / face_named / face_attrs
 events: box, name, gender, age_group): a known face (largest first) is greeted by name (the owner as 主人（call）,
@@ -312,9 +313,14 @@ def addressed(text):
 # calls it not for hello (ambient) or the model only says 「嗯」; a called sentence the model never got (said while
 # hello spoke) is answered from the ear's own ASR after CALLED_ANSWER_WAIT_S.
 CALLED_S = 10.0
+# owner 2026-11-19: a tap on the screen in Docking outranks being called and must be answered: the next sentence within
+# TOUCH_S of the tap is answered whatever the gates say (it is a call window, only longer); hello says 在听 under the
+# eyes until she starts on it. A tap while she speaks stops her; a double tap is 安静一下 (touch_quiet).
+TOUCH_S = 20.0
 CALLED_ANSWER_WAIT_S = 2.5
 CALL_RE = re.compile(r"^\W*(hello|hallo|哈喽|哈罗|嗨喽|dynames|dynamis|デュナメス)\W*", re.I)
-CALLED_SOURCES = {"asr": "语音模块听到 hello", "name": "关键词耳朵听到 Dynames", "text": "句子开头叫了 hello / Dynames"}
+CALLED_SOURCES = {"asr": "语音模块听到 hello", "name": "关键词耳朵听到 Dynames", "text": "句子开头叫了 hello / Dynames",
+                  "touch": "主人点了屏幕（必答）"}
 
 
 # Direct orders (owner 2026-11-18): a Unit ASR command word said after the wake word is an order the robot carries out
@@ -1047,6 +1053,7 @@ class RealtimeHub:
         self.tools_switch = None                       # 千问用工具 (realtime_tools): .on; None = off
         self.persona = None                            # set_voice: the persona that goes with the voice (None = PERSONA)
         self.screen_word = None                        # fn(text, hold_s): a word under the eyes (robot command line)
+        self._touch_word = False                       # 在听 is under the eyes (touched)
         self.voice_key = None
         self._tool_specs = []                          # this session's tools (realtime format)
         self.tools_mode_fn = lambda: "all"             # 千问用工具: "all" (every live tool) / "skills" (open_skill first)
@@ -1293,6 +1300,51 @@ class RealtimeHub:
         if self.state == "closed" and self.want():
             self._open(now, "tap")
         return True
+
+    def touched(self, stop=False, trace=None):
+        """A tap on the screen in Docking (MouthLink: mode_report crowd / tap; owner 2026-11-19). stop (the robot's
+        rules attached stop_speech: she was speaking): stop her reply here too, nothing else. Else a must-answer call:
+        the call window for TOUCH_S (wakes 安静, lets the audio up, opens the session) and 在听 under the eyes."""
+        if not self.armed():
+            return False
+        now = self.clock()
+        trace = trace or ear_log.new_trace()
+        self.stats["touch_stop" if stop else "touch_listen"] += 1
+        if stop:
+            stopped = self._interrupt(now)
+            self._called_until, self._called_text = 0.0, None
+            ear_log.emit("trigger.touch", trace=trace, by="touch", sum="点屏幕：停下" + ("" if stopped else "（已经没在说了）"),
+                         ref={"session": self.session_no}, extra={"action": "stop", "stopped": stopped})
+            self._word("", 0)
+            return True
+        self.called("touch", trace=trace)
+        self._called_until = max(self._called_until, now + TOUCH_S)
+        self._send_until = max(self._send_until, now + TOUCH_S)
+        self._touch_word = True
+        self._word("在听", int(TOUCH_S))
+        return True
+
+    def touch_quiet(self, trace=None):
+        """A double tap on the screen in Docking (owner 2026-11-19): 安静一下 (stops a reply; a call or a tap ends it)."""
+        if not self.armed():
+            return False
+        self.stats["touch_quiet"] += 1
+        self._touch_word = False
+        self._called_until, self._called_text = 0.0, None
+        self.set_quiet("quiet", trace=trace or ear_log.new_trace(), by="touch")
+        return True
+
+    def _word(self, text, hold_s):
+        if self.screen_word is None:
+            return
+        if not text:
+            self._touch_word = False
+            self._show_mode_word()                     # back to 安静中 / 少插话, or nothing
+            return
+        try:
+            self.screen_word(text, hold_s)
+        except Exception:                              # noqa: BLE001 - the screen is a courtesy
+            pass
 
     def yield_to_tts(self, link):
         """MouthLink: soul-tts is about to start a stream on `link`. Realtime yields: our stream is dropped (the robot's
@@ -3065,6 +3117,8 @@ class RealtimeHub:
 
     def _stage(self, stage):
         """Crowd's stage dots on the robot (via the mode relay); never costs the session."""
+        if self._touch_word and stage != "listen":     # she is on it (or it was not for her): 在听 goes
+            self._word("", 0)
         try:
             if self.modes is not None and hasattr(self.modes, "crowd_stage"):
                 self.modes.crowd_stage(stage)

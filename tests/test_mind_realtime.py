@@ -189,7 +189,7 @@ class BillingRealtimeTest(unittest.TestCase):
 
 
 class CrowdTapTest(unittest.TestCase):
-    def test_tap_in_crowd_does_not_stop_but_a_tap_elsewhere_does(self):
+    def test_a_tap_with_stop_speech_stops_in_crowd_too(self):     # owner 2026-11-19 (was: crowd tap = greet)
         db, store = FakeDB(), Store(FakeDB())
         ss = SettingsStore(db, '/nonexistent.json')
         stops = []
@@ -207,8 +207,7 @@ class CrowdTapTest(unittest.TestCase):
         rep(1, 'crowd', 'select')
         n = len(stops)
         rep(2, 'crowd', 'tap')                                   # hello was speaking: her rules attach stop_speech
-        self.assertEqual(len(stops), n)
-        self.assertTrue(any('crowd tap = greet' in line for line in logs))
+        self.assertGreater(len(stops), n)
         rep(3, 'chat', 'select')
         n = len(stops)
         rep(4, 'chat', 'tap')
