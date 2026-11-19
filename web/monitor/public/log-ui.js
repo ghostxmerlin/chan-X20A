@@ -62,6 +62,7 @@ export const CATS=[
  {key:'see',glyph:'看',name:'看',hint:'画面、识图、M12 事件'},
  {key:'think',glyph:'想',name:'想',hint:'情景判断、分段'},
  {key:'speak',glyph:'说',name:'说',hint:'Docking、聊天、语音'},
+ {key:'tool',glyph:'技',name:'技能',hint:'分类器、技能、工具调用'},
  {key:'mem',glyph:'记',name:'记',hint:'记忆'},
  {key:'ctl',glyph:'控',name:'控',hint:'开关、模式、预设'},
  {key:'link',glyph:'连',name:'连',hint:'机器人连接、在线'},
@@ -69,6 +70,8 @@ export const CATS=[
 ];
 const CAT_BY_KEY=Object.fromEntries(CATS.map(c=>[c.key,c]));
 const CAT_RULES=[
+ // 2026-11-19 owner: "log 中记录不到 skill 调用的过程" - they fell into 系 (hidden by default)
+ ['tool',/^(trigger\.(intent|skill)|call\.realtime\.tool|call\.tool\.)/],
  ['speak',/^(call\.realtime|call\.tts|call\.chat|call\.say|gate\.|filler\.|trigger\.(greet|hush))/],
  ['hear',/^(heard\.|call\.tingwu|call\.notes)/],
  ['see',/^(call\.eye|call\.look|trigger\.burst|seen\.)/],
@@ -90,11 +93,13 @@ export const KIND_LABELS={
  'call.say.judge':'脱口秀挑台词','call.say.check':'开口前复核',
  'call.memory':'整理记忆','call.memory.extract':'提取记忆','call.memory.backfill':'补录记忆',
  'call.realtime.session':'Docking 会话','call.realtime.context':'更新 Docking 说明','call.realtime.turn':'Docking 回答','call.realtime.search':'联网搜索',
+ 'trigger.intent':'分类器先装技能','trigger.skill':'技能','call.realtime.tool':'千问调工具',
  'call.tts':'合成语音','gate.realtime':'回答放不放','gate.rescue':'救回一句「嗯」','filler.play':'播垫话','trigger.greet':'打招呼','trigger.hush':'被叫闭嘴',
  'switch.set':'切换开关','switch.pause':'暂停付费','switch.resume':'恢复付费','budget.warn':'花费预警','mode.input':'模式输入','mode.change':'换模式','preset.apply':'应用预设','billing.set':'计费开关',
  'link.open':'连上','link.close':'断开','link.upstream':'上游连接','robot.state':'机器人状态',
  'svc.start':'服务启动','svc.stop':'服务停止','svc.beat':'心跳','svc.error':'服务出错',
 };
+const SKILL_ACT={model:'模型打开',auto_open:'自动打开',use_preloaded:'用上预装',unload_unused:'撤掉没用上的预装',close:'收起'};
 const LINKS={mouth:'嘴',signal:'信号',vision:'视觉',hearing:'听觉'};
 const PARTS={mode:'模式',hearing:'听觉',m12:'M12',vision:'视觉'};
 // seen.m12 (m12d 0.2.0 events, 2026-11-17): extra.ev → what it saw
@@ -104,6 +109,9 @@ export function kindTitle(r){
  const base=KIND_LABELS[r.kind]||r.kind;
  if(r.kind==='link.open'||r.kind==='link.close')return `${base}${LINKS[r.extra?.link]?'：'+LINKS[r.extra.link]:r.extra?.link?'：'+r.extra.link:''}`;
  if(r.kind==='link.upstream'&&r.extra?.to)return `${base}：${r.extra.to}`;
+ if(String(r.kind).startsWith('call.tool.'))return `执行工具：${r.extra?.tool||r.kind.slice(10)}`;
+ if(r.kind==='call.realtime.tool'&&r.extra?.tool)return `${base}：${r.extra.tool}`;
+ if(r.kind==='trigger.skill'&&r.extra?.action)return `${base}：${SKILL_ACT[r.extra.action]||r.extra.action}`;
  if(r.kind==='robot.state'&&r.extra?.part)return `${base}：${PARTS[r.extra.part]||r.extra.part}`;
  if(r.kind==='seen.m12'&&r.extra?.ev)return `${base}：${r.extra.ev==='light'&&typeof r.extra.on==='boolean'?(r.extra.on?'开灯':'关灯'):M12_EV[r.extra.ev]||r.extra.ev}`;
  return base;
@@ -115,6 +123,7 @@ export const KIND_GLYPHS={
  'call.fusion':'景','call.segment':'段','call.attention':'注','call.llm':'模',
  'call.chat':'聊','call.say':'拟','call.say.speak':'句','call.say.line':'台','call.say.huyu':'兜','call.say.judge':'评','call.say.check':'核',
  'call.realtime.session':'会','call.realtime.context':'令','call.realtime.turn':'答','call.realtime.search':'搜',
+ 'trigger.intent':'分','trigger.skill':'技','call.realtime.tool':'工',
  'call.tts':'声','gate.realtime':'闸','gate.rescue':'救','filler.play':'垫','trigger.greet':'招','trigger.hush':'静',
  'call.memory':'记','call.memory.extract':'提','call.memory.backfill':'补',
  'switch.set':'开','switch.pause':'暂','switch.resume':'续','budget.warn':'警','mode.input':'输','mode.change':'换','preset.apply':'预','billing.set':'费',

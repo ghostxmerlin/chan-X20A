@@ -577,12 +577,14 @@ TOOL_SKIP = frozenset(("say", "stop_speaking", "search_verify", "set_voice",
                        "db_query"))     # security review 2026-11-18: raw records stay out of a voice anyone can talk to
 TOOL_DEPTH = 3                                         # tool calls in a row for one sentence
 TOOL_TIMEOUT_S = 30.0
+# owner 2026-11-19 "单独放宽": 查证 (two searches + a judge) takes ~38 s
+SLOW_TOOL_TIMEOUT_S = {"search_verify": 75.0}
 TOOL_OUTPUT_CHARS = 3000
 
 
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
 TOOL_ENOUGH = "这句话已经查了好几次了：不要再调用工具，现在就用已经拿到的结果回答（没查到就直说）。"
-SKILL_DEPTH = 5                                        # skills mode: open_skill + its tool calls for one sentence
+SKILL_DEPTH = 5                                        # skills / auto: tool calls for one sentence (open_skill not counted)
 PRELOAD_KEEP_S = 120.0
 MAX_SKILL_TOOLS = 16                                   # tools of open skills at once
 TOOL_GATE_TEXT_S = 8.0
@@ -954,6 +956,8 @@ class RealtimeHub:
         self._turn = None                              # the turn the next response.created belongs to
         self._turns = {}                               # response id -> turn
         self._next_heard = None                        # the sentence a tool chain answers (see _run_tool)
+        self._chain_calls = collections.OrderedDict()  # trace -> real tool calls (not open_skill) for that sentence
+        self._preload_trace = {}                       # skill id -> trace of the sentence that preloaded it
         self._speech_end = None
         self._next_kind = "speech"
         self._inject_id = None                         # the server id of the item that goes with _next_kind
@@ -1726,7 +1730,7 @@ class RealtimeHub:
     def _prune_skills(self, now):
         """Drop skills past their keep (a preloaded one never used: PRELOAD_KEEP_S) -> True when the set changed."""
         keep = float(self._skill_cfg.get("keep_min") or 10) * 60
-        before = set(self._open_skills)
+        before, was_preloaded = set(self._open_skills), dict(self._preloaded)
         own = lambda k: float((self._skills.get(k) or {}).get("keep_min") or 0) * 60 or keep   # noqa: E731
         self._open_skills = {k: at for k, at in self._open_skills.items()
                              if now - at < (PRELOAD_KEEP_S if k in self._preloaded else own(k))}
@@ -1742,6 +1746,13 @@ class RealtimeHub:
             oldest = min(self._open_skills, key=self._open_skills.get)
             del self._open_skills[oldest]
             self._preloaded.pop(oldest, None)
+        for k in before - set(self._open_skills):      # 2026-11-19 owner: the skill process belongs in the log
+            sk = self._skills.get(k) or {}
+            pre = k in was_preloaded
+            ear_log.emit("trigger.skill", trace=self._preload_trace.pop(k, None) if pre else ear_log.new_trace(),
+                         sum=f"{'撤掉没用上的预装' if pre else '收起技能'}：{sk.get('title', k)}",
+                         ref={"session": self.session_no},
+                         extra={"skill": k, "action": "unload_unused" if pre else "close", "open": list(self._open_skills)})
         return set(self._open_skills) != before
 
     def _skill_tool_names(self, keys):
@@ -1764,12 +1775,17 @@ class RealtimeHub:
         self._send_soon({"type": "session.update", "session": {"tools": self._tool_specs, "instructions": instr}})
         self._live_instr = instr
 
-    def _used_skill(self, tool_name, now):
+    def _used_skill(self, tool_name, now, trace=None):
         """A preloaded skill whose tool the model called counts as opened (normal keep)."""
         for k in list(self._preloaded):
             if tool_name in (self._skills.get(k) or {}).get("tools", []):
                 self._preloaded.pop(k, None)
+                self._preload_trace.pop(k, None)
                 self._open_skills[k] = now
+                ear_log.emit("trigger.skill", trace=trace or ear_log.new_trace(),
+                             sum=f"用上预装的技能：{(self._skills.get(k) or {}).get('title', k)}（{tool_name}）",
+                             ref={"session": self.session_no},
+                             extra={"skill": k, "action": "use_preloaded", "tool": tool_name, "open": list(self._open_skills)})
 
     def _preload(self, text, now, trace=None):
         """自动档: the ear's own ASR text, before the model answers -> the skill(s) it likely needs, loaded now."""
@@ -1784,31 +1800,38 @@ class RealtimeHub:
         new = [sid for g in groups for sid, sk in self._skills.items()
                if (sk.get("group") or sid) == g and sid not in self._open_skills]
         self.stats["intent_checked"] += 1
+        trace = trace or ear_log.new_trace()
         if new:
             self.stats["intent_preloaded"] += 1
             for sid in new:
                 self._open_skills[sid], self._preloaded[sid] = now, now
+                self._preload_trace[sid] = trace
             self._prune_skills(now)
             self._push_skill_tools()
-        ear_log.emit("trigger.intent", trace=trace or ear_log.new_trace(),
+        ear_log.emit("trigger.intent", trace=trace,
                      sum=f"自动档：要工具 {d.get('need', 0):.2f}" + (f"，先装 {'、'.join(self._skills[s]['title'] for s in new)}" if new else ""),
                      ref={"session": self.session_no}, extra={"need": d.get("need"), "skills": d.get("skills"),
                                                               "loaded": new, "heard": str(text)[:120]})
         return new
 
-    def _open_skill(self, sid, now):
-        """Open a skill: its tools join the session (session.update), kept keep_min, at most max_open at once."""
+    def _open_skill(self, sid, now, trace=None, via="model"):
+        """Open a skill: its tools join the session (session.update), kept keep_min, at most max_open at once.
+        via: model (open_skill), auto_open (the model called a tool of a skill not open)."""
         sk = self._skills.get(sid)
         if sk is None:
             return {"ok": False, "error": {"code": "bad_args", "message": f"没有 {str(sid)[:20]} 这个技能"}}
+        was = "preloaded" if sid in self._preloaded else "open" if sid in self._open_skills else None
         self._preloaded.pop(sid, None)
+        self._preload_trace.pop(sid, None)
         self._open_skills[sid] = now
         self._prune_skills(now)
         self._push_skill_tools()
         self.stats["skills_opened"] += 1
-        ear_log.emit("trigger.skill", trace=ear_log.new_trace(), sum=f"打开技能：{sk['title']}",
-                     ref={"session": self.session_no}, extra={"skill": sid, "free": "*" in sk.get("tools", []),
-                                                              "open": list(self._open_skills)})
+        ear_log.emit("trigger.skill", trace=trace or ear_log.new_trace(),
+                     sum=f"{'自动打开' if via == 'auto_open' else '打开'}技能：{sk['title']}" + ("（已装着）" if was else ""),
+                     ref={"session": self.session_no},
+                     extra={"skill": sid, "action": via, "was": was, "free": "*" in sk.get("tools", []),
+                            "tools": [n for n in self._skill_tool_names([sid])][:40], "open": list(self._open_skills)})
         mine = [n for n in sk.get("tools", []) if n in self._all_specs]
         return {"ok": True, "data": {"skill": sk["title"], "tools": mine,
                                      "next": "做法已经放进说明的【此刻打开的技能】里，照着做，直接调用这些工具来回答"},
@@ -1842,7 +1865,8 @@ class RealtimeHub:
             names = self.ctx.get("names") or {}
             who = "、".join(dict.fromkeys(f"主人（{owner.get('call') or '主人'}）" if n in (owner.get("face_names") or [])
                                           else (names.get(n) or n) for n in faces))
-            return f"{voice}；人脸识别认出眼前是{who}，多半是认识的人在说"
+            # security review 2026-11-19: who is in view, not who is speaking (only_for_owner stays the voice's call)
+            return f"{voice}；（另外，人脸识别看到眼前有{who}，不代表就是他在说话）"
         return voice
 
     def owner_in_person(self, now=None):
@@ -1930,7 +1954,7 @@ class RealtimeHub:
             # gave up): open that skill (its tools and text join the session), then run the call as usual
             owner_skill = next((k for k, sk in self._skills.items() if fc["name"] in sk.get("tools", [])), None)
             if owner_skill is not None:
-                self._open_skill(owner_skill, self.clock())
+                self._open_skill(owner_skill, self.clock(), trace=trace, via="auto_open")
                 given = True
         if given and fc["name"] in BODY_TOOLS and not self.known_person():
             # owner 2026-11-18: the body moves only for people hello knows (voice or face)
@@ -1960,27 +1984,36 @@ class RealtimeHub:
         if given and fc["name"] not in quick and not self._filler_in_chain(trace):
             self._play_filler(self.search_fillers or self.fillers, "search_filler", trace)   # "我查查哈" meanwhile
         t0 = self.clock()
-        limit = SKILL_DEPTH if self._tools_mode == "skills" else TOOL_DEPTH
+        # owner 2026-11-19 "修": skills and auto allow SKILL_DEPTH real tool calls a sentence (open_skill not counted,
+        # as tools/skills/eval.py measured); before, auto used TOOL_DEPTH 3 with open_skill counted
+        skilled = self._tools_mode in ("skills", "auto") and bool(self._skills)
+        calls = self._chain_calls.get(trace, 0)
+        over = (depth > SKILL_DEPTH * 2 or fc["name"] != "open_skill" and calls >= SKILL_DEPTH) if skilled \
+            else depth > TOOL_DEPTH
         if fc["name"] != "open_skill":
-            self._used_skill(fc["name"], self.clock())
+            self._used_skill(fc["name"], self.clock(), trace)
         if fc["name"] == "open_skill" and self._tools_mode in ("skills", "auto") and self._skills and self.tools_on() and \
                 any(t["name"] == "open_skill" for t in self._tool_specs):
-            env = self._open_skill((args or {}).get("skill") if isinstance(args, dict) else None, self.clock()) \
-                if depth <= limit else {"ok": False, "error": {"code": "refused", "message": TOOL_ENOUGH}}
+            env = self._open_skill((args or {}).get("skill") if isinstance(args, dict) else None, self.clock(), trace) \
+                if not over else {"ok": False, "error": {"code": "refused", "message": TOOL_ENOUGH}}
         elif fc["name"] not in {t["name"] for t in self._tool_specs}:     # only what this session was given
             env = {"ok": False, "error": {"code": "not_available", "message": f"没有给你 {fc['name'][:30]} 这个工具"}}
         elif args is None or not isinstance(args, dict):
             env = {"ok": False, "error": {"code": "bad_args", "message": "参数不是合法的 JSON"}}
-        elif depth > limit:
+        elif over:
             env = {"ok": False, "error": {"code": "refused", "message": TOOL_ENOUGH}}
         else:
+            self._chain_calls[trace] = calls + 1
+            while len(self._chain_calls) > 64:
+                self._chain_calls.popitem(last=False)
+            wait_s = SLOW_TOOL_TIMEOUT_S.get(fc["name"], TOOL_TIMEOUT_S)
             loop = asyncio.get_running_loop()
             try:
                 status, body = await asyncio.wait_for(loop.run_in_executor(
                     self._tool_pool, self.call, "POST", "/tool/call",
                     {"name": fc["name"], "args": args, "trace": trace, "caller": "qwen",
-                     "owner": self.owner_in_person()}, TOOL_TIMEOUT_S),
-                    TOOL_TIMEOUT_S + 1)
+                     "owner": self.owner_in_person()}, wait_s),
+                    wait_s + 1)
                 env = body if status == 200 and isinstance(body, dict) else \
                     {"ok": False, "error": {"code": "failed", "message": f"工具服务回了 {status}"}}
             except Exception as e:                     # noqa: BLE001 - mind slow / down
@@ -1990,9 +2023,15 @@ class RealtimeHub:
         text = json.dumps(out, ensure_ascii=False)
         if len(text) > TOOL_OUTPUT_CHARS:
             text = text[:TOOL_OUTPUT_CHARS] + "…（截断）"
+        band, vname = self._speaker_now(self.clock())
+        # 2026-11-19 owner: review needs what came back and who asked (result summary here, the full text as a body)
         ear_log.emit("call.realtime.tool", trace=trace, ok=bool(env.get("ok")), ms=ms,
                      sum=f"千问用工具：{fc['name']}" + ("" if env.get("ok") else f"（{(env.get('error') or {}).get('message', '')[:30]}）"),
-                     ref={"session": self.session_no}, extra={"tool": fc["name"], "args": args, "depth": depth})
+                     ref={"session": self.session_no}, body={"result": text},
+                     extra={"tool": fc["name"], "args": args, "depth": depth, "calls": self._chain_calls.get(trace, 0),
+                            "mode": self._tools_mode, "open": list(self._open_skills),
+                            "result": text[:300], "speaker": {"band": band, "name": vname},
+                            "known": self.known_person(), "owner": self.owner_in_person()})
         if self._ws is None or not self._ready.is_set():
             return
         self._next_kind, self._next_trace, self._next_prompt, self._next_depth = "tool_answer", trace, None, depth
@@ -2791,7 +2830,8 @@ class RealtimeHub:
                 ru = speaker.get("runner_up") or {}
                 sc, rs = speaker.get("score"), ru.get("score")
                 same = self._owner_voice(name) and self._owner_voice(ru.get("name"))   # both the owner's prints
-                if not isinstance(sc, (int, float)) or isinstance(rs, (int, float)) and sc - rs < UNSURE_LEAD and not same:
+                lead = isinstance(sc, (int, float)) and isinstance(rs, (int, float)) and sc - rs >= UNSURE_LEAD
+                if not (lead or same and isinstance(sc, (int, float))):   # security review 2026-11-19: fail closed
                     name = None
             self._speakers.append((now, band, name))
             said = self._speaker_text(now)

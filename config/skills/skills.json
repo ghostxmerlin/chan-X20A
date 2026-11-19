@@ -32,7 +32,7 @@
    "id": "recall",
    "group": "recall",
    "title": "回忆往事",
-   "when": "问上次、以前聊过什么、某人说过什么、记不记得、hello 自己说过什么",
+   "when": "问上次、以前聊过什么、某人说过什么、记不记得、hello 自己说过什么，或者刚才几分钟谁说了什么、有什么声音",
    "tools": [
     "memory_search",
     "semantic_search",
@@ -40,7 +40,9 @@
     "hello_said",
     "knowledge_search",
     "notes_search",
-    "person_lookup"
+    "person_lookup",
+    "recent_speech",
+    "recent_sounds"
    ],
    "guide": "有明确的人或词先 speech_search / memory_search，只记得大概意思用 semantic_search。回答带上大概时间（哪天、上午下午）和是谁说的；查不到就说「我不记得了」，不要编。标了只对主人讲的，旁边有别人时只说个大概。"
   },

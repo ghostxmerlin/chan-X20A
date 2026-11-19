@@ -87,9 +87,12 @@ test('kinds are grouped by what hello was doing', ()=>{
   'call.fusion':'think','call.segment':'think','call.llm':'think','call.realtime.turn':'speak','call.realtime.context':'speak','call.tts':'speak',
   'call.chat':'speak','call.say.judge':'speak','gate.realtime':'speak','gate.rescue':'speak','filler.play':'speak','trigger.greet':'speak',
   'trigger.hush':'speak','call.memory':'mem','call.memory.extract':'mem','switch.set':'ctl','mode.input':'ctl','preset.apply':'ctl',
-  'billing.set':'ctl','switch.pause':'ctl','budget.warn':'ctl','link.open':'link','robot.state':'link','svc.beat':'sys','svc.error':'sys'};
+  'billing.set':'ctl','switch.pause':'ctl','budget.warn':'ctl','link.open':'link','robot.state':'link','svc.beat':'sys','svc.error':'sys',
+  'trigger.intent':'tool','trigger.skill':'tool','call.realtime.tool':'tool','call.tool.live_data':'tool'};
  for(const [kind,cat] of Object.entries(k))assert.equal(ui.category(kind),cat,kind);
- assert.deepEqual(ui.CATS.map(c=>c.glyph).join(''),'听看想说记控连系');
+ assert.deepEqual(ui.CATS.map(c=>c.glyph).join(''),'听看想说技记控连系');
+ assert.match(ui.rowHtml({_id:'x',at:Date.now(),svc:'mind',kind:'call.tool.live_data',extra:{tool:'live_data'}}),/执行工具：live_data/);
+ assert.match(ui.rowHtml({_id:'x',at:Date.now(),svc:'ear',kind:'trigger.skill',extra:{action:'unload_unused'}}),/技能：撤掉没用上的预装/);
 });
 
 test('timeline: a heading at every new minute; categories counted', ()=>{

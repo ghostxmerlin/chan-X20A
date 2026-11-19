@@ -50,7 +50,7 @@
   </div>
   <figure>
     <div class="svgbox" id="flow-svg"></div>
-    <figcaption>第 ⑥ 步的红框是画图时发现的问题：一句话最多调几次工具，技能档是 5 次，自动档实际是 3 次，而且打开技能也算 1 次。验收脚本按 5 次算，所以 48/49 是在比真机宽的条件下测出来的。见「要关注的事」第 1 条。</figcaption>
+    <figcaption>每一步在日志页的「技」一栏都有记录：分类器先装了什么、模型打开或自动打开了哪个技能、调了什么工具（参数、返回内容、当时谁在说话）、哪些预装没用上被撤掉；点「看整条链路」能按一句话串起来看。</figcaption>
   </figure>
 
   <h3 class="mt">模型手里此刻有什么（自动档）</h3>
@@ -84,14 +84,14 @@
     <thead><tr><th>日志里的类型</th><th>说的是什么</th><th>在不在这句话的链路上</th></tr></thead>
     <tbody>
       <tr><td class="k"><code>trigger.intent</code></td><td>分类器的分数、认出的大类、先装了哪些技能</td><td>在</td></tr>
-      <tr><td class="k"><code>trigger.skill</code></td><td>模型打开了哪个技能</td><td class="gap">不在：每次另起一个新编号，从链路里看不到</td></tr>
-      <tr><td class="k"><code>call.realtime.tool</code></td><td>千问调了什么工具、参数、第几次、成败</td><td>在</td></tr>
-      <tr><td class="k"><code>call.tool.*</code></td><td>mind 执行的结果：成败、耗时、花费</td><td>在，但<span class="gap">工具返回的内容没记</span></td></tr>
+      <tr><td class="k"><code>trigger.skill</code></td><td>模型打开 / 自动打开 / 用上预装 / 撤掉没用上的预装 / 收起</td><td>在（11-19 补上）</td></tr>
+      <tr><td class="k"><code>call.realtime.tool</code></td><td>千问调了什么工具、参数、第几次、成败、返回内容、当时谁在说话、开着哪些技能</td><td>在（返回内容和说话人 11-19 补上）</td></tr>
+      <tr><td class="k"><code>call.tool.*</code></td><td>mind 执行的结果：成败、耗时、花费</td><td>在</td></tr>
       <tr><td class="k"><code>gate.realtime</code></td><td>被工具门、身体门挡回的；回答过没过「嗯」门</td><td>在</td></tr>
       <tr><td class="k"><code>call.realtime.turn</code></td><td>这一轮的回答文字、token、花费</td><td>在</td></tr>
     </tbody>
   </table></div>
-  <p class="lead" style="margin-top:10px">还缺两样：提前装了但没用上的技能没有单独记录（只在耳朵的计数里）；工具调用那条上没写当时是谁在说话。</p>
+  <p class="lead" style="margin-top:10px">这些现在都归在日志页新加的「技」一栏，默认显示（以前落在「系」里，默认被排除）。</p>
 
   <div class="prose mt">
     <h3>建议：观察台加一页「调用审核」</h3>
@@ -128,25 +128,25 @@
     <h3>分工</h3>
     <p>你叫我的时候，我先把一段时间的卡片过一遍，明显的我先标好并注明是我标的，拿不准的留给你。分类器的标注照旧由我校正，不用付费模型。改技能、改分类器之前都先跑验收。</p>
     <h3>先后</h3>
-    <p>先补日志的缺口（技能打开记到这句话的链路上、记下工具返回的摘要和说话人、记下没用上的预装），再做审核页。这些都还没动，等你说做。</p>
+    <p>日志的缺口 11-19 已补。下一步做审核页，等你说做。</p>
   </div>
 </div></section>
 
 <section id="todo"><div class="wrap">
   <div class="sec-head">
     <h2>要关注的事</h2>
-    <p class="lead">2026-11-19 早上整理。前四条是画流程图时对着代码发现的，昨晚的汇总里没有。</p>
+    <p class="lead">2026-11-19 整理，中午更新。</p>
   </div>
   <div class="todo">
     <div>
       <h3>该修的</h3>
       <ol>
-        <li><span class="pill fix">要修</span><b>自动档一句话只能调 3 次工具，不是 5 次。</b>耳朵只在「技能」档用 5 次，自动档用的是旧的 3 次，而且打开技能也算一次。所以「打开技能 → 查 → 再查」之后，第三个工具就被挡。验收脚本按 5 次算，没测出来。改一行，要重新部署耳朵。</li>
-        <li><span class="pill fix">要修</span><b>自由发挥里的「查证」一定会超时。</b><code>search_verify</code> 要 38 秒左右，耳朵等工具最多 30 秒。自由发挥给全部工具时它也在里面。建议从自由发挥里拿掉，或者给它单独放宽。</li>
-        <li><span class="pill fix">要修</span><b>日志缺口</b>（见上一节）：技能打开不在链路上、工具返回内容没记、调用上没写说话人、没用上的预装没记录。不补的话审核页看不全。</li>
+        <li><span class="pill watch">已修 11-19</span><b>次数上限</b>：技能档和自动档都是一句话最多 5 次工具，打开技能不算。</li>
+        <li><span class="pill watch">已修 11-19</span><b>查证超时</b>：<code>search_verify</code> 单独等 75 秒，其他工具照旧 30 秒。</li>
+        <li><span class="pill watch">已修 11-19</span><b>日志缺口</b>：技能的每一步都在链路上，工具返回内容和说话人都记了，日志页新加「技」一栏。</li>
         <li><span class="pill fix">要查</span><b>今天早上声纹一直没认出主人</b>（09:22–09:33 每句都是「不确定」或「不认识」）。所以「亲口算本人」现在不生效；身体动作能做，只是因为 M12 正好认出了你的脸，脸不在画面里就会被身体门挡。</li>
         <li><span class="pill fix">要查</span><b>模型把内部事件格式当回答。</b>09:32「放点好玩的台词」它回的是「[事件] 主人又出现了…」，被标记门拦下，所以什么都没说。</li>
-        <li><span class="pill fix">小事</span><b>「刚才听到的话」「刚才的声音」两个工具不在任何技能里</b>，只有自由发挥能用。建议放进「回忆往事」。</li>
+        <li><span class="pill watch">已修 11-19</span><b>「刚才听到的话」「刚才的声音」</b>放进了「回忆往事」。</li>
       </ol>
     </div>
     <div>

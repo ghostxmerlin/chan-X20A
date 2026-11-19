@@ -985,6 +985,65 @@ class SkillModeTest(HubBase):
         self.assertEqual(self.rl.reply_verdict("[事件] 主人（劳埃德）出现在你面前了，打个招呼", True), "marker")
 
 
+class AutoChainTest(HubBase):
+    """Owner 2026-11-19: auto allows 5 real tool calls a sentence (open_skill not counted); 查证 waits longer; the
+    skill process is in the log on the sentence's trace."""
+    async def test_five_calls_slow_verify_and_skill_log(self):
+        posted, events = [], []
+        self.rl.ear_log.emit, old = (lambda kind, **f: events.append((kind, f))), self.rl.ear_log.emit
+        self.addCleanup(setattr, self.rl.ear_log, "emit", old)
+
+        def call(method, path, body=None, timeout=5):
+            if path == "/tools":
+                return 200, {"tools": [{"type": "function", "function": {"name": n, "description": n, "parameters": {"type": "object", "properties": {}}}}
+                                       for n in ("live_data", "web_search", "search_verify")]}
+            if path == "/tool/call":
+                posted.append((body["name"], timeout))
+                return 200, {"ok": True, "data": {"usd": 1}, "error": None}
+            return 200, json.loads(json.dumps(CTX))
+        self.hub.call = call
+        sw = Switch()
+        sw.on = True
+        self.hub.tools_switch = sw
+        self.hub.tools_mode_fn = lambda: "auto"
+        ws = await self.open_ready()
+        self.hub.local_heard("比特币现在多少钱")
+        calls = [("open_skill", '{"skill": "realtime"}')] + [("live_data", "{}")] * 6
+        for i, (name, a) in enumerate(calls):
+            rid = f"r{i}"
+            ws.push({"type": "response.created", "response": {"id": rid}})
+            ws.push({"type": "response.function_call_arguments.done", "response_id": rid, "call_id": "c" + rid,
+                     "name": name, "arguments": a})
+            ws.push({"type": "response.done", "response": {"id": rid}})
+            await settle(30)
+        self.assertEqual([n for n, _ in posted], ["live_data"] * 5)                   # was 2 (open_skill + 3 cap)
+        out = [m for m in ws.sent if m["type"] == "conversation.item.create" and m["item"]["type"] == "function_call_output"]
+        self.assertEqual(json.loads(out[-1]["item"]["output"])["error"]["code"], "refused")
+        tool_rows = [f for k, f in events if k == "call.realtime.tool"]
+        traces = {f["trace"] for f in tool_rows}
+        skill_rows = [f for k, f in events if k == "trigger.skill"]
+        self.assertTrue(any(f["trace"] in traces and f["extra"]["action"] == "model" for f in skill_rows))
+        self.assertIn("result", tool_rows[0]["extra"])
+        self.assertIn("result", tool_rows[0]["body"])
+        self.assertIn("speaker", tool_rows[0]["extra"])
+        ws.push({"type": "response.created", "response": {"id": "end"}})               # the chain's spoken answer
+        ws.push({"type": "response.done", "response": {"id": "end"}})
+        await settle(30)
+        self.t[0] += 30                                                                  # a new sentence
+        self.hub.local_heard("自由发挥，帮我查一下这条新闻")
+        for i, (name, a) in enumerate([("open_skill", '{"skill": "free"}'), ("search_verify", "{}")]):
+            rid = f"v{i}"
+            ws.push({"type": "response.created", "response": {"id": rid}})
+            ws.push({"type": "response.function_call_arguments.done", "response_id": rid, "call_id": "c" + rid,
+                     "name": name, "arguments": a})
+            ws.push({"type": "response.done", "response": {"id": rid}})
+            await settle(30)
+        self.assertEqual(posted[-1], ("search_verify", self.rl.SLOW_TOOL_TIMEOUT_S["search_verify"]))
+        self.t[0] += 3600                                                                # everything expires
+        self.hub._prune_skills(self.t[0])
+        self.assertTrue(any(f["extra"]["action"] in ("close", "unload_unused") for k, f in events if k == "trigger.skill"))
+
+
 class SpeakerAndPlaceholderTest(HubBase):
     """2026-11-19 09:52: the owner's face in view, the voiceprint only "unsure" -> the speaker line said 不认识的声音,
     the model refused 「转过身去」 itself; 【刚才的对话】 carried [tool_refused], which the model then said as a reply."""
@@ -1023,6 +1082,10 @@ class SpeakerAndPlaceholderTest(HubBase):
         self.t[0] += 10
         self.hub.local_heard("转过身去", speaker={"band": "unsure", "name": "guest", "score": 0.5, "runner_up": None})
         self.assertFalse(self.hub.known_person())                           # someone else's print
+        self.t[0] += 10
+        self.hub.ctx["owner"]["voice_names"] = ["me"]
+        self.hub.local_heard("转过身去", speaker={"band": "unsure", "name": "me", "score": 0.5, "runner_up": None})
+        self.assertFalse(self.hub.known_person())                           # no runner-up: no lead shown (fail closed)
 
     def test_placeholders_never_play_or_enter_recent_talk(self):
         v = self.rl.reply_verdict
