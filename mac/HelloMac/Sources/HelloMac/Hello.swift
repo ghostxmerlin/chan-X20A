@@ -18,6 +18,9 @@ final class Hello: MouthDelegate {
     let camera: Camera
     let book: FaceBook
     private var links: [WSLink] = []
+    let voices = Voices()
+    private var policy = ResponsePolicy()
+    private var quiet = QuietWait()
     private var timer: DispatchSourceTimer?
     private let started = Date()
     weak var face: FaceView?
@@ -92,6 +95,7 @@ final class Hello: MouthDelegate {
         t.setEventHandler { [weak self] in
             guard let self else { return }
             self.mouth.tick()
+            self.respondTick()
             n += 1
             if n % 10 == 0 { self.hearing.watchdog(); self.vision.keepAlive() }
         }
@@ -137,10 +141,57 @@ final class Hello: MouthDelegate {
     func enrollVoice(_ name: String) { core.async { self.hearing.enroll(name: name) }; log("声纹录入 \(name)：请说五句话") }
     func enrollFace(_ name: String) { camera.enroll(name: name); log("人脸录入 \(name)：看着摄像头 5 秒") }
 
+    // ---- the robot's own answer to a sentence (FW/hearing.cpp:185-211), on the core queue ----
+    private func respond(_ e: [String: Any]) {
+        guard hearingOn else { return }
+        let text = e["text"] as? String ?? ""
+        let emotion = e["emotion"] as? String ?? "unknown"
+        guard let idStr = e["id"] as? String, idStr.hasPrefix("s-"), let id = UInt32(idStr.dropFirst(2)) else { return }
+        let end = ((e["pos"] as? [Any])?.last as? NSNumber)?.int64Value
+        let rx = (e["_rx"] as? NSNumber)?.int64Value
+        let dbg = e["debug"] as? [String: Any] ?? [:]
+        let processing = ((dbg["server_ms"] as? NSNumber)?.doubleValue ?? 100000) + ((dbg["tick_wait_ms"] as? NSNumber)?.doubleValue ?? 100000)
+        let age = (rx ?? 0) - (end ?? Int64.max)
+        let valid = end != nil && rx != nil && age >= 0 && age <= 80000 && processing >= 0 && processing <= 5000 &&
+            e["event"] as? String == "speech" && (e["voice"] as? [String: Any])?["acoustic_band"] as? String == "voice" && !text.isEmpty
+        let selfFlag = ((e["self"] as? [String: Any])?["sounding"] as? Bool) ?? true
+        let isSelf = selfFlag || mouth.sounding
+        if quiet.pending { return }                                 // one response at a time
+        let allowed = (e["respond"] as? Bool) ?? true               // 嘴 on TTS / off: the ear says false
+        let clip = allowed && voices.count > 0 ?
+            policy.consider(id: id, emotion: emotion, speech: valid, selfSounding: isSelf, ageMs: valid ? Int(processing) : -1,
+                            now: monoUs(), random: UInt32.random(in: 0...UInt32.max), tags: voices.tags) : 0
+        if clip != 0 { quiet.hold(clip, now: monoUs()) }
+        else if !isSelf && !text.isEmpty, let eye = Respond.eye(for: emotion) { DispatchQueue.main.async { self.face?.play(eye) } }
+    }
+
+    private func respondTick() {
+        guard quiet.pending else { return }
+        let clip = quiet.clip
+        switch quiet.poll(now: monoUs(), speaking: hearing.serverSpeaking || mouth.sounding, lastSpeech: hearing.lastSpeakingUs) {
+        case .play:
+            quiet.clear()
+            playClip(clip, why: "回应")
+        case .expired: log("回应 PLAY-\(String(format: "%03d", clip))：10 秒没安静下来，不说了")
+        case .wait: break
+        }
+    }
+
+    @discardableResult
+    private func playClip(_ id: Int, why: String) -> Bool {
+        guard let pcm = voices.pcm(id), mouth.playLocal(pcm) else { return false }
+        policy.accepted(now: monoUs())
+        let emo = voices.tags[id] ?? ""
+        if let eye = Respond.eye(for: emo) { DispatchQueue.main.async { self.face?.play(eye, seconds: Double(pcm.count) / 24000) } }
+        log("\(why)：PLAY-\(String(format: "%03d", id))（\(emo)）")
+        return true
+    }
+
     // ---- hearing events ----
     private func heard(_ e: [String: Any]) {
         let t = e["type"] as? String ?? ""
         if t == "speech", e["phase"] as? String == "end" {
+            respond(e)
             let text = e["text"] as? String ?? ""
             let sp = (e["speaker"] as? [String: Any])?["name"] as? String ?? ""
             DispatchQueue.main.async { self.lastHeard = text; self.lastSpeaker = sp; self.onChange?() }
@@ -188,7 +239,16 @@ final class Hello: MouthDelegate {
             guard let name = args["name"] as? String, !name.isEmpty else { return (false, "bad_args", [:]) }
             DispatchQueue.main.async { self.enrollFace(name) }
             return (true, nil, ["name": name])
-        case "clip": return (false, "no_clip", [:])
+        case "clip":                                  // the SD voice library (Resources/voices)
+            guard voices.count > 0 else { return (false, "no_clip", [:]) }
+            if mouth.speaking { return (false, "speaking", [:]) }
+            var id = (args["clip_id"] as? Int) ?? 0
+            if id == 0, let emo = args["emotion"] as? String {
+                id = Respond.clip(emotion: emo, random: UInt32.random(in: 0...UInt32.max), tags: voices.tags, last: policy.lastClip)
+            }
+            if id == 0 { id = Int.random(in: 1...voices.count) }
+            guard (1...voices.count).contains(id), playClip(id, why: "放台词") else { return (false, "no_clip", [:]) }
+            return (true, nil, ["clip_id": id, "emotion": voices.tags[id] ?? ""])
         case "status":
             return (true, nil, ["fw": id.firmware, "up_s": Int(Date().timeIntervalSince(started)), "mode": mouth.modes.state.mode.id,
                                 "online": true, "volume": Int(out.volume * 100), "speaking": mouth.speaking,

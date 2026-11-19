@@ -11,6 +11,16 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/eyes"
 cp .build/release/HelloMac "$APP/Contents/MacOS/hello"
 for s in v05 v14 v18; do mkdir -p "$APP/Contents/Resources/eyes/$s"; cp "$ROOT/assets/soul-eyes/v2-front/previews/$s/"*.gif "$APP/Contents/Resources/eyes/$s/"; done
+# hello's own voice lines (the robot's SD library; .private, never in the repo): the main checkout's copy
+MAIN=$(git -C "$ROOT" worktree list --porcelain | sed -n '1s/^worktree //p')
+LIB=""
+for d in "$ROOT/.private/voice-library" "$MAIN/.private/voice-library"; do [ -s "$d/PLAY-001.reference.pcm" ] && { LIB="$d"; break; }; done
+if [ -n "$LIB" ]; then
+  mkdir -p "$APP/Contents/Resources/voices"
+  for f in "$LIB"/PLAY-*.reference.pcm; do b=$(basename "$f" .reference.pcm); cp "$f" "$APP/Contents/Resources/voices/$b.pcm"; done
+  cp "$ROOT/config/voice-emotions.json" "$APP/Contents/Resources/voice-emotions.json"
+  echo "voices: $(ls "$APP/Contents/Resources/voices" | wc -l | tr -d ' ') clips"
+else echo "voices: none (no .private/voice-library): no response clips"; fi
 VER=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

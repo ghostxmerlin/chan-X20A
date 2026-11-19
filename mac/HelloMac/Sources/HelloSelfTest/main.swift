@@ -237,6 +237,43 @@ test("camera upload stays at the robot's size (<= 8 KB), quality stepping down")
     check(huge.0.count == 50000, "nothing fits: the smallest still goes")
 }
 
+test("responses: clip by emotion, one per 10 s, happy every second, quiet wait") {
+    let tags: [Int: String] = [1: "happy", 2: "happy", 3: "sad", 4: "neutral"]
+    check(Respond.clip(emotion: "sad", random: 5, tags: tags, last: 3) == 3, "the only sad clip, even if last")
+    check(Respond.clip(emotion: "happy", random: 0, tags: tags, last: 1) == 2, "avoid the last")
+    check(Respond.clip(emotion: "angry", random: 0, tags: tags, last: 0) == 0, "no clip of that label")
+    check(Respond.eye(for: "fearful") == "scared" && Respond.eye(for: "neutral") == nil, "eyes")
+    var p = ResponsePolicy()
+    check(p.consider(id: 1, emotion: "sad", speech: true, selfSounding: false, ageMs: 300, now: 1_000_000, random: 0, tags: tags) == 3, "sad answers")
+    p.accepted(now: 1_000_000)
+    check(p.consider(id: 2, emotion: "sad", speech: true, selfSounding: false, ageMs: 300, now: 5_000_000, random: 0, tags: tags) == 0, "10 s gap")
+    check(p.consider(id: 2, emotion: "sad", speech: true, selfSounding: false, ageMs: 300, now: 30_000_000, random: 0, tags: tags) == 0, "same id once")
+    check(p.consider(id: 3, emotion: "sad", speech: true, selfSounding: true, ageMs: 300, now: 30_000_000, random: 0, tags: tags) == 0, "not our own voice")
+    check(p.consider(id: 4, emotion: "happy", speech: true, selfSounding: false, ageMs: 300, now: 40_000_000, random: 0, tags: tags) != 0, "first happy")
+    p.accepted(now: 40_000_000)
+    check(p.consider(id: 5, emotion: "happy", speech: true, selfSounding: false, ageMs: 300, now: 60_000_000, random: 0, tags: tags) == 0, "second happy waits")
+    check(p.consider(id: 6, emotion: "happy", speech: true, selfSounding: false, ageMs: 300, now: 70_000_000, random: 0, tags: tags) != 0, "every second happy")
+    var q = QuietWait()
+    q.hold(3, now: 0)
+    check(q.poll(now: 1_000_000, speaking: false, lastSpeech: 0) == .wait, "not yet quiet 1.5 s")
+    check(q.poll(now: 1_600_000, speaking: true, lastSpeech: 1_600_000) == .wait, "someone talks")
+    check(q.poll(now: 3_200_000, speaking: false, lastSpeech: 1_600_000) == .play, "quiet 1.6 s -> play")
+    q.hold(3, now: 0)
+    check(q.poll(now: 10_500_000, speaking: true, lastSpeech: 10_400_000) == .expired, "dropped after 10 s")
+}
+
+test("mouth: a local clip plays as sounding, reports nothing, yields to a server stream") {
+    let clk = FakeClock(), out = ClockSpeechOutput(); out.now = clk.now
+    let m = MouthLogic(id: ident, output: out), tr = RecordingTransport()
+    m.transport = tr; m.now = clk.now
+    check(m.playLocal([Int16](repeating: 1, count: 24000)), "local clip starts")
+    check(m.sounding && m.speaking, "sounding while it plays")
+    check(!m.playLocal([1, 2, 3]), "a second one is refused while speaking")
+    m.received(text: Wire.json(["type": "tts.start", "stream": 5, "codec": "opus", "sample_rate": 24000, "frame_ms": 60]))
+    check(!tr.types().contains(where: { $0.hasPrefix("tts.") }), "nothing reported for the clip: \(tr.types())")
+    check(m.speaking, "the server stream took over")
+}
+
 var failedTests: [String] = []
 for (name, body) in tests {
     let before = failures

@@ -17,6 +17,9 @@ public final class HearingLogic: LinkLogic {
     public private(set) var ticks = 0
     public private(set) var packets = 0
     public private(set) var levelDb: Double? = nil
+    /// the ear's VAD on every tick: someone is talking (the response clip waits for quiet)
+    public private(set) var serverSpeaking = false
+    public private(set) var lastSpeakingUs: UInt64 = 0
     public var now: () -> UInt64 = monoUs
     /// Every event the ear posts on the ticks (speech, sound, enroll, speakers, keyword ...), plus "audio" (the ack).
     public var onEvent: (([String: Any]) -> Void)?
@@ -44,8 +47,10 @@ public final class HearingLogic: LinkLogic {
             lastTickUs = now()
             levelDb = m["level_db"] as? Double
             onTick?(m)
-            for e in (m["events"] as? [[String: Any]]) ?? [] {
+            if let s = m["speaking"] as? Bool { serverSpeaking = s; if s { lastSpeakingUs = now() } }
+            for var e in (m["events"] as? [[String: Any]]) ?? [] {
                 if e["type"] as? String == "audio" { acked = true }
+                e["_rx"] = m["rx"]                    // the tick's received samples: a speech result's age (FW/hearing.cpp)
                 onEvent?(e)
             }
         }

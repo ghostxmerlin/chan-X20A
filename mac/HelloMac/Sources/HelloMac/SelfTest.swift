@@ -48,6 +48,7 @@ enum AppSelfTest {
                 if stopHalf && i == 4 { q.sync { out.stop(stream: 7) } }
                 q.sync {}
             }
+            Thread.sleep(forTimeInterval: 0.3)           // the completion callbacks come on the render thread, a bit later
             q.sync {}
             if stopHalf {
                 check(events.first == "playing" && events.last == "stopped" && played < 600, "stopped half way: \(events) played \(played)")
@@ -62,7 +63,9 @@ enum AppSelfTest {
             out.onEvent = { e in if case .done = e { last = "done" } }
             q.sync { out.begin(stream: 9); for _ in 0..<4 { out.push(stream: 9, pcm: [Int16](repeating: 500, count: 1440)) } }
             for _ in 0..<8 { q.sync { out.renderForTest(frames: 1440) }; q.sync {} }
-            q.sync { out.finish(stream: 9) }
+            Thread.sleep(forTimeInterval: 0.3)       // every completion callback in: the buffers all played ...
+            q.sync {}
+            q.sync { out.finish(stream: 9) }         // ... and only then tts.end
             q.sync {}
             check(last == "done", "a late tts.end still gives done")
         }
@@ -80,6 +83,12 @@ enum AppSelfTest {
             let q6 = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.6])!.count
             let r = JpegBudget.pick { q in rep.representation(using: .jpeg, properties: [.compressionFactor: q]) }!
             check(r.0.count <= 12000, "busy frame: \(q6) B at 0.6 -> \(r.0.count) B at \(r.1)")
+        }
+        // the voice library: 80 clips with an emotion each, 24 kHz PCM
+        do {
+            let v = Voices()
+            let n = v.pcm(1)?.count ?? 0
+            check(v.count == 80 && n > 24000 / 2, "voice library: \(v.count) clips, PLAY-001 \(String(format: "%.1f", Double(n) / 24000)) s")
         }
         print("app self-test: \(fails == 0 ? "passed" : "\(fails) failed")")
         return fails == 0 ? 0 : 1

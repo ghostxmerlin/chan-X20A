@@ -161,7 +161,35 @@ public final class MouthLogic: LinkLogic {
         output.push(stream: p.stream, pcm: pcm)
     }
 
+    // ---- the robot's own clips (SD voice library; FW/hearing.cpp playback_hearing): a local stream, never reported ----
+    public static let localBase: UInt32 = 0xFFFF_0000
+    private var localSeq: UInt32 = 0
+
+    /// Play 24 kHz PCM locally (a response clip, the clip verb). Refused while a stream plays (the robot: speaking).
+    @discardableResult
+    public func playLocal(_ pcm: [Int16]) -> Bool {
+        guard current == nil, !pcm.isEmpty else { return false }
+        localSeq = (localSeq + 1) & 0xFFFF
+        let s = Self.localBase + localSeq
+        current = s
+        output.begin(stream: s)
+        var i = 0
+        while i < pcm.count { let n = min(1440, pcm.count - i); output.push(stream: s, pcm: Array(pcm[i..<i + n])); i += n }
+        output.finish(stream: s)
+        updateSounding()
+        return true
+    }
+
+    private func isLocal(_ s: UInt32) -> Bool { s >= Self.localBase }
+
     private func speechEvent(_ e: SpeechEvent) {
+        switch e {
+        case .playing(let s, _) where isLocal(s): return
+        case .progress(let s, _, _) where isLocal(s): return
+        case .done(let s, _) where isLocal(s): ended(s); return
+        case .stopped(let s, _) where isLocal(s): ended(s); return
+        default: break
+        }
         switch e {
         case .playing(let s, let b):
             transport?.send(text: Wire.json(["type": "tts.playing", "stream": Int(s), "buffered_ms": b]))
