@@ -382,6 +382,11 @@ LOW_RE = re.compile(r"我们(正)?在聊(天|事|呢)?|我们聊我们的|(我|�
 QUIET_RE = re.compile(r"安静(一)?会(儿)?|先安静|你先别(说话|出声|说了)|先别(说话|出声)|安静一下|别出声了")
 LOW_END_RE = re.compile(r"(你)?可以(说话|插话|聊)了|(你)?可以接话了|恢复(正常)?说话")
 ROLE_RE = re.compile(r"(当|做|演|扮演|变成|装成)(一?个|一下)?(?P<who>[^，,。！!？?]{1,10}?)(吧|好吗|好不好)?([，,。！!]|$)(?P<rest>.*)")
+# 调试模式 (owner 2026-11-19, today's task 3 "帮我调试"): hello listens and keeps a debug log (mind/debug_mode.py reads
+# the speech since the start), stays out of the talk (as 安静, a call or a tap is answered), says a reminder when mind
+# finds one (debug_alert), and asks at the end whether to sum up. No length said = until the owner ends it.
+DEBUG_RE = re.compile(r"(进入|开始|开启|打开|切到|切换到)(一下)?调试(模式)?|帮我调试|陪我调试|调试模式(开始|开一下)")
+DEBUG_ALERT_S = 120.0                                # reminders at most this often (mind waits longer; a guard here)
 ROLE_END_RE = re.compile(r"恢复(原样|原来|正常)?$|做回(你)?自己|不用(演|装)了|别(演|装)了|变回(来|原样)")
 CROWD_FACES = 3
 DETAIL_RE = re.compile(r"详细(一点|点|些|说|讲|地)|展开(说|讲)|多说(点|些|一些)|具体(点|说|讲)|说清楚点|讲清楚")
@@ -1075,6 +1080,9 @@ class RealtimeHub:
         self._tool_wait = None                         # {trace, name, since}: a tool is running (see TOOL_WORD)
         self._last_shaken_say = None                   # SHAKEN_SAY_S
         self._quiet_sticky = False                     # 安静 with a said length: a call does not end it
+        self._debug = None                             # 调试模式 until (clock, mode_span.OPEN) or None
+        self._debug_since_ms = None                    # wall ms it started (the debug log's start)
+        self._last_debug_alert = None
         self._mode_word_at = None                      # when the mode word went under the eyes (refreshed)
         self._tool_cancelled = set()                   # traces whose running tool was interrupted
         self.voice_key = None
@@ -1498,6 +1506,13 @@ class RealtimeHub:
                 self._try_look_answer(now)
                 self._try_search_answer(now)
                 self._deliver_greet(now)
+        if self._debug is not None and now >= self._debug:
+            self.set_debug(False, by="timeout")       # the said length ran out
+        elif self.debug_on(now) and "debug" in self._skills and self._ws is not None and self._ready.is_set():
+            if "debug" in self._open_skills:
+                self._open_skills["debug"] = now       # kept open for the whole debug session
+            else:
+                self._open_skill("debug", now, via="auto_open")
         if self._mode_word_at is not None and now - self._mode_word_at > 1800:
             self._show_mode_word()                     # a long / open-ended mode: the robot's word holds an hour at most
         if self._greet is not None and now - self._greet["at"] > self.cfg.greet_max_age_s:
@@ -1760,6 +1775,76 @@ class RealtimeHub:
         if self._ws is not None and self._ready.is_set():
             self._send_instructions(why, trace)
 
+    def debug_on(self, now=None):
+        now = self.clock() if now is None else now
+        return self._debug is not None and now < self._debug
+
+    def set_debug(self, on=True, minutes=None, until=None, span=None, trace=None, by="tool", heard=None):
+        """调试模式 on (no length said = until the owner ends it) / off. Ending it (by a word or the clock, not the tool:
+        the model answers that one itself) queues a question whether to sum up. -> until (clock / OPEN) or None."""
+        now = self.clock()
+        trace = trace or ear_log.new_trace()
+        if on:
+            span = self._span(minutes, until, span)
+            if span is None or span == mode_span.CALLED:
+                span = mode_span.OPEN
+            end, _ = self._span_end(now, span, 0)
+            fresh = not self.debug_on(now)
+            self._debug = end
+            if fresh:
+                self._debug_since_ms = self.wall_ms()
+            how = mode_span.describe(end, now, self.wall_ms())
+            ear_log.emit("trigger.debug", trace=trace, by=by, sum=f"调试模式{'开始' if fresh else '改时间'}（{how}）",
+                         ref={"session": self.session_no},
+                         extra={"on": True, "open": end == mode_span.OPEN, "since_ms": self._debug_since_ms,
+                                **({"heard": str(heard)[:200]} if heard else {})})
+            if "debug" in self._skills and self._ws is not None and self._ready.is_set():
+                self._open_skill("debug", now, trace=trace, via="auto_open")
+        else:
+            was = self.debug_on(now)
+            self._debug = None
+            end = None
+            if was:
+                ear_log.emit("trigger.debug", trace=trace, by=by, sum="调试模式结束", ref={"session": self.session_no},
+                             extra={"on": False, "since_ms": self._debug_since_ms,
+                                    **({"heard": str(heard)[:200]} if heard else {})})
+                if by != "tool" and self._greet is None:
+                    self._greet = {"at": now, "kind": "debug_end", "pick": None,
+                                   "text": "[事件] 调试模式结束了：用一句话问主人要不要把这次调试总结一下（只问，不要自己总结）。"}
+        self._refresh_instructions("debug", trace)
+        self._write_status(now)
+        self._persist_modes(now)
+        self._show_mode_word()
+        return end
+
+    def debug_alert(self, text, trace=None):
+        """mind's debug reminder (debug_mode.py): said in one line when hello is quiet. -> queued or why not."""
+        now = self.clock()
+        if not self.debug_on(now):
+            return "not_debug"
+        if self._last_debug_alert is not None and now - self._last_debug_alert < DEBUG_ALERT_S:
+            return "too_soon"
+        if self._greet is not None:
+            return "busy"
+        self._last_debug_alert = now
+        self._greet = {"at": now, "kind": "debug", "pick": None,
+                       "text": f"[事件] 调试中你发现了一件事，提醒主人一句：{str(text)[:200]}（用一句话自然地说，别念「提醒」这两个字）"}
+        self.stats["debug_alerts"] += 1
+        if self.state == "closed" and self.want():
+            self._open(now, "debug")
+        return "queued"
+
+    def _debug_from(self, text, now, trace):
+        to_me = self.in_called(now) or call_rest(text) is not None
+        if self.debug_on(now):
+            t = re.sub(r"\s+", "", str(text))
+            if ("调试" in t and mode_span.ended(t)) or (to_me and mode_span.ended(t, loose=True) and not self.quiet_on(now)):
+                self.set_debug(False, trace=trace, by="heard", heard=text)
+            elif DEBUG_RE.search(t) and mode_span.parse(t) is not None:
+                self.set_debug(True, span=mode_span.parse(t), trace=trace, by="heard", heard=text)   # a new length
+        elif DEBUG_RE.search(re.sub(r"\s+", "", str(text))):
+            self.set_debug(True, span=mode_span.parse(text), trace=trace, by="heard", heard=text)
+
     @staticmethod
     def _span(minutes=None, until=None, span=None):
         """The tool's minutes / until (exit | called), or a span from mode_span.parse -> seconds / OPEN / CALLED / None."""
@@ -1820,7 +1905,9 @@ class RealtimeHub:
                          "sticky": self._quiet_sticky} if self.quiet_on(now) else None,
                "low": {"until_ms": ms(self._low), "open": self._low == mode_span.OPEN} if self.low_on(now) else None,
                "role": {"text": self._role[0], "until_ms": ms(self._role[1]), "open": self._role[1] == mode_span.OPEN}
-               if self.role_text(now) else None, "at": wall}
+               if self.role_text(now) else None,
+               "debug": {"since_ms": self._debug_since_ms, "until_ms": ms(self._debug), "open": self._debug == mode_span.OPEN}
+               if self.debug_on(now) else None, "at": wall}
         try:
             self.db.switch_status("rt_modes", doc)
         except Exception:                              # noqa: BLE001 - kept in memory anyway
@@ -1839,7 +1926,10 @@ class RealtimeHub:
                 return mode_span.OPEN
             u = m.get("until_ms")
             return now + (u - wall) / 1000 if isinstance(u, (int, float)) and u > wall else None
-        q, lo, r = end(doc.get("quiet")), end(doc.get("low")), end(doc.get("role"))
+        q, lo, r, dbg = end(doc.get("quiet")), end(doc.get("low")), end(doc.get("role")), end(doc.get("debug"))
+        if dbg is not None:
+            self._debug, self._debug_since_ms = dbg, (doc.get("debug") or {}).get("since_ms") or wall
+            out.append("debug")
         if q is not None:
             self._quiet_mode, self._quiet_sticky = q, bool((doc.get("quiet") or {}).get("sticky"))
             out.append("quiet")
@@ -1859,8 +1949,8 @@ class RealtimeHub:
         if self.screen_word is None:
             return
         now = self.clock()
-        word, until = ("安静中", self._quiet_mode) if self.quiet_on(now) else ("少插话", self._low) if self.low_on(now) \
-            else ("", None)
+        word, until = ("调试中", self._debug) if self.debug_on(now) else ("安静中", self._quiet_mode) if self.quiet_on(now) \
+            else ("少插话", self._low) if self.low_on(now) else ("", None)
         self._mode_word_at = now if word else None
         try:
             self.screen_word(word, 3600 if until == mode_span.OPEN else int(until - now) if until else 0)
@@ -1918,6 +2008,11 @@ class RealtimeHub:
 
     def _manner_line(self):
         now = self.clock()
+        if self.debug_on(now):
+            how = mode_span.describe(self._debug, now, self.wall_ms())
+            return (f"主人在调试（调试模式，{how}）：你在旁边安静地听、帮他记，不插话、不搭腔；只有叫你的名字、hello 或点屏幕"
+                    "时才回答。他问调试的事（刚才的值、第几次了、试过什么、你怎么看）先用 debug_log 看记录再答，技术问题可以再用"
+                    " doc_answer 查资料；收到调试提醒的[事件]就照着说一句。")
         if self.quiet_on(now):
             how = mode_span.describe(self._quiet_mode, now, self.wall_ms())
             return ("主人让你先安静（" + how + "）：除非有人叫你的名字或 hello，否则什么都不说；" +
@@ -2947,13 +3042,13 @@ class RealtimeHub:
             self._log_gate(rid, turn, v, done)
             return
         if turn.get("kind") == "speech" and not self.in_called(now) and (
-                self.quiet_on(now) or (self.low_on(now) and not addressed(turn.get("heard") or ""))):
-            v = "quiet_mode" if self.quiet_on(now) else "low_mode"      # 安静 / 少插话 (owner 2026-11-18)
+                self.debug_on(now) or self.quiet_on(now) or (self.low_on(now) and not addressed(turn.get("heard") or ""))):
+            v = "debug_mode" if self.debug_on(now) else "quiet_mode" if self.quiet_on(now) else "low_mode"   # 调试 / 安静 / 少插话
             turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
             self._dropped.add(rid)
             self.stats[f"muted_{v}"] += 1
             if self._pending_vision is not None or self._pending_search is not None:
-                self._release_vision(now, False, "安静中" if v == "quiet_mode" else "少插话中")
+                self._release_vision(now, False, {"quiet_mode": "安静中", "debug_mode": "调试中"}.get(v, "少插话中"))
             self._log_gate(rid, turn, v, done)
             return
         if turn.get("kind") == "speech" and (self._pending_vision is not None or self._pending_search is not None):
@@ -3113,6 +3208,7 @@ class RealtimeHub:
 
     def _heard_text(self, text, now, told=False, trace=None):
         self._length_from(str(text), now, trace)
+        self._debug_from(str(text), now, trace)
         self._low_from(str(text), now, trace)
         self._role_from(str(text), now, trace)
         word = order_word(text)
@@ -3384,7 +3480,9 @@ class RealtimeHub:
         call = owner.get("call")
         if g is None or not self._ready.is_set() or self.busy() or self.clock() < self._quiet_until:
             return
-        if self.quiet_on(now) or self.low_on(now):    # 安静 / 少插话: no greetings (step() drops an old one)
+        if g is not None and g["kind"] in ("debug", "debug_end"):
+            pass                                       # the debug reminder / end question: said in 调试 too
+        elif self.quiet_on(now) or self.low_on(now) or self.debug_on(now):   # no greetings (step() drops an old one)
             return
         if self._seg is not None:                      # the server hears someone speaking: it would refuse (2026-11-18)
             return
@@ -3406,7 +3504,7 @@ class RealtimeHub:
                 text = greet_text(call, "short", word=SHORT_WORDS[pick])
             else:
                 text = greet_text(call, "long", tuple(self._said))
-        elif g["kind"] == "body":
+        elif g["kind"] in ("body", "debug", "debug_end"):
             text = g["text"]
         else:
             text = tap_text(g["pick"], self.ctx.get("names") or {}, owner.get("face_names") or [], call or "主人")
@@ -3417,9 +3515,10 @@ class RealtimeHub:
         if g["kind"] == "owner" and g.get("size", "long") == "long":
             self._last_long = now
         self._next_kind = ("greet" if g.get("size", "long") == "long" else "greet_short") if g["kind"] == "owner" \
-            else "body" if g["kind"] == "body" else "tap"
+            else g["kind"] if g["kind"] in ("body", "debug", "debug_end") else "tap"
         self._next_trace, self._next_prompt = ear_log.new_trace(), text
-        ear_log.emit("trigger.greet", trace=self._next_trace, by={"tap": "tap", "body": "body"}.get(g["kind"], "m12"),
+        ear_log.emit("trigger.greet", trace=self._next_trace,
+                     by={"tap": "tap", "body": "body", "debug": "mind", "debug_end": "debug"}.get(g["kind"], "m12"),
                      sum=f"招呼 {self._next_kind}", ref={"session": self.session_no},
                      extra={"kind": self._next_kind, "pick": (g.get("pick") or {}).get("kind")})
         self.stats["greeted"] += 1
@@ -3504,6 +3603,7 @@ class RealtimeHub:
                 "hour_used_s": int(self.hour_used(now)), "turns": self.stats["turns"],
                 "cost_cny": round(self.stats["cost_micro_cny"] / 1e6, 4), "at": self.wall_ms(),
                 "quiet": self.quiet_on(now), "low": self.low_on(now), "role": self.role_text(now),
+                "debug": {"since_ms": self._debug_since_ms} if self.debug_on(now) else None,
                 "voice_key": self.voice_key})
         except Exception:                              # noqa: BLE001
             pass

@@ -42,7 +42,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from . import fusion, memory_extract, pause, place, prompts, runlog, segments, settings as settings_mod, speak
-from . import docs_qa
+from . import debug_mode, docs_qa
 from .settings_store import MODELS, SettingsConflict
 from . import speech_settings
 from .memory import MemoryStore, MemoryConflict
@@ -299,7 +299,9 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         | tool_impls.live_tools(ear_search=lambda q: ear_ask("web_search", {"query": q}), llm_env=ctx.get("env"),
                                 chat=_llm.chat, tz=current_settings()[0].get("tz") or "Asia/Shanghai")
         | (daily_tools(ctx["daily"]) if ctx.get("daily") else {})
-        | docs_qa.tools(db, llm_env=ctx.get("env"), embed=ctx.get("embed")),     # 资料问答 (2026-11-19)
+        | docs_qa.tools(db, llm_env=ctx.get("env"), embed=ctx.get("embed"))      # 资料问答 (2026-11-19)
+        | debug_mode.tools(db, env=ctx.get("env"), store=store,                 # 调试记录 (2026-11-19)
+                           settings_fn=lambda: current_settings()[0]),
         proposals=proposals, describe=tool_impls.DESCRIBE)
 
     def note_owner(path, body, reply):

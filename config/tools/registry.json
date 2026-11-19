@@ -692,6 +692,54 @@
    }
   },
   {
+   "level": "R",
+   "status": "live",
+   "needs": [],
+   "name": "debug_log",
+   "title": "调试记录",
+   "group": "recall",
+   "runs_on": "mind",
+   "description": "看这次（或上一次）调试的记录：报错、读数、试过什么、结果、第几次了、提醒过什么。调试中主人问刚才的值、第几次、试过什么时用。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string",
+      "maxLength": 40,
+      "description": "只看含这些词的条目（空格分开；不写 = 最近 30 条）"
+     }
+    }
+   },
+   "returns": "topic, since, minutes, on, counts{key: 次数}, notes[{at, kind, key, text, value?, unit?}], alerts[{at, say}], summary, say",
+   "source": "server/mind/debug_mode.py（Mongo debug_sessions）",
+   "latency": "即时",
+   "cost": "无",
+   "notes": "记录每两三分钟更新一次，刚说的话可能还没进来。",
+   "example": {
+    "query": "电流"
+   }
+  },
+  {
+   "level": "R",
+   "status": "live",
+   "needs": [],
+   "name": "debug_summary",
+   "title": "调试总结",
+   "group": "recall",
+   "runs_on": "mind",
+   "description": "把这次调试总结一下（调的是什么、试过什么、结果、还没解决的）。只有主人说要总结时才用。",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   },
+   "returns": "topic, spoken（三四句口语）, tried[], open[], say",
+   "source": "server/mind/debug_mode.py → luna（run_json）",
+   "latency": "~3–8 s",
+   "cost": "约 $0.002",
+   "notes": "结果存在这次调试的记录上。",
+   "example": {}
+  },
+  {
    "name": "switches_status",
    "title": "开关状态",
    "group": "self",
@@ -1977,6 +2025,49 @@
    "example": {
     "level": "low",
     "minutes": 30
+   }
+  },
+  {
+   "level": "A",
+   "status": "live",
+   "needs": [],
+   "name": "set_debug",
+   "title": "调试模式",
+   "group": "settings",
+   "runs_on": "ear",
+   "description": "进入或退出调试模式：hello 在旁边听着记调试记录、不插话，有问题提醒一句，被叫才答。没说时长就一直到主人说退出。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "on": {
+      "type": "boolean",
+      "description": "true 进入，false 退出"
+     },
+     "minutes": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 1440,
+      "description": "主人说了多久就填；没说不填（一直到主人说退出）"
+     },
+     "until": {
+      "type": "string",
+      "enum": [
+       "exit"
+      ],
+      "description": "exit = 直到主人说退出（默认就是这样）"
+     }
+    },
+    "required": [
+     "on"
+    ]
+   },
+   "returns": "on, open, minutes, ends",
+   "source": "server/ear/ask_api.py set_debug → realtime_link.set_debug（记录在 mind/debug_mode.py）",
+   "latency": "即时",
+   "cost": "无（记录用 luna，每两三分钟一次，约每小时 $0.05–0.15）",
+   "notes": "退出时 hello 会问要不要总结；要才用 debug_summary。",
+   "example": {
+    "on": true
    }
   },
   {

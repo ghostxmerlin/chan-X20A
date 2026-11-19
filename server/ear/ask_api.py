@@ -206,6 +206,22 @@ class Asks:
                          else "被叫 hello / Dynames 就结束") if level == "quiet"
                 else ("直到主人说退出" if open_ else "说「可以说话了」或到时间") if level == "low" else None}
 
+    async def set_debug(self, args):
+        """调试模式 on / off (2026-11-19); no length = until the owner ends it."""
+        hub = self._hub()
+        on = args.get("on", True) is not False
+        until = hub.set_debug(on, args.get("minutes"), until=args.get("until"), trace=args.get("_trace"))
+        open_ = until == float("inf")
+        return {"on": on, "open": open_, "minutes": None if until is None or open_ else round((until - hub.clock()) / 60),
+                "ends": ("直到主人说退出" if open_ else "到时间或主人说退出") if on else None}
+
+    async def debug_alert(self, args):
+        """mind's debug reminder (mind/debug_mode.py), said when hello is quiet."""
+        text = str(args.get("text") or "").strip()
+        if not text:
+            raise AskError("bad_args", "要说提醒什么（text）")
+        return {"result": self._hub().debug_alert(text, trace=args.get("_trace"))}
+
     async def set_role(self, args):
         hub = self._hub()
         until = hub.set_role(args.get("role") or None, args.get("minutes"), trace=args.get("_trace"), until=args.get("until"))
@@ -346,6 +362,7 @@ class Asks:
         return {"sent": True}
 
     NAMES = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role",
+             "set_debug", "debug_alert",
              "express_eyes", "show_word", "play_clip", "turn_head", "face_front", "turn_around", "tracking", "nod",
              "shake_head", "set_volume", "face_learn_propose", "robot_status", "set_voice", "test_turn")
 

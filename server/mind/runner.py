@@ -459,6 +459,9 @@ def main():
         semantic.ensure_indexes(db)
         threading.Thread(target=semantic.periodic, args=(db, embed), kwargs={"paused_fn": pause_ctl.paused},
                          daemon=True).start()
+    if env:                                      # 调试模式 (2026-11-19): the ear's mode, mind keeps the log and reminds
+        from . import debug_mode
+        debug_mode.Worker(db, env, store, lambda: settings_store.current()[0], ask=_ask).start()
     threading.Thread(target=api.serve, args=(store, token, "127.0.0.1", a.api_port,
                                              {"env": env, "settings_store": settings_store,
                                                                          "recordings_root": a.recordings, "roles_dir": a.roles,

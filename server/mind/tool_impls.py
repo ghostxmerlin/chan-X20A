@@ -611,6 +611,7 @@ DESCRIBE = {   # one line for the 待确认 list (Tools.describe)
 
 # ---- L1: the ear's tools (server/ear/ask_api.py, 127.0.0.1 only) ----
 EAR_TOOLS = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role",
+             "set_debug",                         # 调试模式 (2026-11-19, the ear owns it)
              # the robot's tools over the ear's /mouth command line (collector-0.5.10); face_learn_propose is C level
              "express_eyes", "show_word", "play_clip", "turn_head", "face_front", "turn_around", "tracking", "nod",
              "shake_head", "set_volume", "face_learn_propose", "robot_status")

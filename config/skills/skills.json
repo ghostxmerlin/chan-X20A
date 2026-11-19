@@ -103,6 +103,19 @@
    "guide": "技术问题用 doc_answer（它会查资料再推理，要等几秒）；只要找某个条目、看原文才用 doc_search。照 answer 说，条目号和数字不改，caveats 有内容要提一句；资料里没有就说资料里没写，不要用常识补。"
   },
   {
+   "id": "debug",
+   "group": "note",
+   "title": "帮我调试",
+   "when": "主人说进入调试模式、帮我调试、陪我调试；调试模式中问刚才的值、第几次了、试过什么、你怎么看、要不要总结、退出调试",
+   "tools": [
+    "set_debug",
+    "debug_log",
+    "debug_summary",
+    "doc_answer"
+   ],
+   "guide": "进入 / 退出用 set_debug（没说时长就不填，一直到主人说退出）。调试中不插话，被叫才答：问记录先 debug_log，技术问题再 doc_answer。退出后问要不要总结，主人说要才用 debug_summary，照 spoken 说。收到调试提醒的[事件]就照着说一句。"
+  },
+  {
    "id": "remind",
    "group": "daily",
    "title": "提醒和日程",

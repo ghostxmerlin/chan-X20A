@@ -2442,3 +2442,47 @@ class ModeSpanTest(HubBase):
         self.assertTrue(self.hub.quiet_on() and self.hub._quiet_sticky)
         self.assertEqual(self.hub.role_text(), "当个老师")
         self.assertEqual(self.hub.restore_modes({"low": {"until_ms": 1, "open": False}}), [])      # long over
+
+
+class DebugModeTest(HubBase):
+    turn = QuietLowRoleTest.turn
+    """Owner 2026-11-19 (task 3): 调试模式 by a word, until the owner ends it unless a length is said; hello stays out of
+    the talk (a call is answered), says mind's reminders, and asks at the end whether to sum up."""
+    async def test_enter_mute_alert_and_end(self):
+        words = []
+        self.hub.screen_word = lambda text, hold: words.append(text)
+        ws = await self.open_ready()
+        self.hub.local_heard("hello，进入调试模式")
+        self.assertTrue(self.hub.debug_on(self.hub.clock() + 8 * 3600))       # no length: until ended
+        self.assertEqual(words[-1], "调试中")
+        self.assertIn("主人在调试", self.hub._manner_line())
+        self.t[0] += self.rl.CALLED_S + 1                                     # "hello，…" was a call: let its window pass
+        self.turn(ws, "r1", "电流一百二十毫安", "电流挺正常的")
+        await settle(10)
+        self.assertEqual(self.hub.stats["muted_debug_mode"], 1)              # not answered: not called
+        self.assertEqual(self.hub.debug_alert("NACK 第三次了"), "queued")
+        self.assertEqual(self.hub.debug_alert("又一件"), "too_soon")                 # DEBUG_ALERT_S
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed"}})
+        await settle(10)
+        self.hub.step()
+        await settle(10)
+        self.assertIn("NACK 第三次了", json.dumps([m for m in ws.sent if m["type"] == "conversation.item.create"][-1],
+                                                ensure_ascii=False))
+        self.hub._greet = None
+        self.hub.local_heard("好了，退出调试模式")
+        self.assertFalse(self.hub.debug_on())
+        self.assertEqual(self.hub._greet["kind"], "debug_end")
+        self.assertIn("要不要把这次调试总结", self.hub._greet["text"])
+
+    async def test_length_and_restore(self):
+        await self.open_ready()
+        self.hub.local_heard("帮我调试一个小时")
+        now = self.hub.clock()
+        self.assertTrue(self.hub.debug_on(now + 59 * 60))
+        self.assertFalse(self.hub.debug_on(now + 61 * 60))
+        since = self.hub._debug_since_ms
+        self.hub._debug = None
+        self.assertEqual(self.hub.restore_modes({"debug": {"since_ms": since, "until_ms": None, "open": True}}), ["debug"])
+        self.assertTrue(self.hub.debug_on())
+        self.assertEqual(self.hub.set_debug(False, by="tool"), None)
+        self.assertIsNone(self.hub._greet)                                      # the model answers a tool exit itself
