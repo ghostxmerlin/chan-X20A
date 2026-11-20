@@ -4,7 +4,10 @@ The pause is its own state, next to the switches and never written into them: on
 the owner left it. mind owns it (it already owns the switches, sees every owner input and reads the run log's
 ledger); the ear only reports what it saw (presence) and obeys the pause in its own paid paths.
 
-Two reasons, either one pauses:
+Three reasons, any one pauses:
+  maintenance  the owner put hello into 维护中 on purpose (the photo library page, 2026-11-20: deleting there is only
+          allowed while this holds). Only the owner lifts it (Controller.set_maintenance); presence, owner inputs
+          and midnight never do. It survives a restart (document field maintenance_since).
   away    M12 saw no face, no known voice (the ear's speaker band "known": owner or family) was heard and there was
           no explicit owner input for settings pause.away_min minutes (default 10). Ordinary speech is NOT presence
           (a TV talks all evening). Back = any M12 face, a known voice, or an explicit owner input (ASR word, DualKey,
@@ -24,7 +27,8 @@ call through model_calls.run_json is refused (BudgetExceeded), consolidation inc
 Documents (Mongo hello.switches):
   {_id: 'presence_status'}  written only by the ear (ear/presence.py): face_at, voice_at, owner_at, owner_what,
                             faces (M12 faces in view now), at.
-  {_id: 'pause'}            written only by mind's Controller: on, why, reasons, since, away_since, budget_until,
+  {_id: 'pause'}            written only by mind's Controller: on, why, reasons (order: maintenance, budget, away),
+                            since, away_since, maintenance_since (epoch ms while 维护中, else None), budget_until,
                             last_presence, presence_by, owner_at, owner_what, budget {...}, override_day,
                             warned_day, away_min, at.
 Run log: switch.pause (paused, or the set of reasons changed while paused), switch.resume (no reason left; extra.why =
@@ -47,7 +51,7 @@ SPEND_EVERY_MS = 30_000          # the ledger is read at most this often (and at
 PRESENCE_FRESH_MS = 150_000      # faces "in view" count only while the ear's report is this fresh (it writes every 60 s)
 WRITE_EVERY_MS = 60_000          # the pause document is rewritten at least this often (spend, at)
 OWNER_SOURCES = ('asr', 'touch', 'select', 'quick')    # hello's reports that are an owner's input (not boot / timeout)
-REASON_ZH = {'away': '没人', 'budget': '超出今天的花费上限'}
+REASON_ZH = {'maintenance': '维护中', 'away': '没人', 'budget': '超出今天的花费上限'}
 
 
 def _log(msg):
@@ -113,11 +117,17 @@ def active(doc, now_ms=None):
     if not isinstance(doc, dict) or doc.get('on') is not True:
         return False
     now = int(time.time() * 1000) if now_ms is None else now_ms
-    return 'away' in (doc.get('reasons') or []) or _budget_active(doc, now)
+    return 'away' in (doc.get('reasons') or []) or 'maintenance' in (doc.get('reasons') or []) or _budget_active(doc, now)
 
 
 def paused(db, now_ms=None):
     return active(read(db), now_ms)
+
+
+def maintenance(db):
+    """Paused because the owner put hello into 维护中."""
+    doc = read(db)
+    return isinstance(doc, dict) and doc.get('on') is True and 'maintenance' in (doc.get('reasons') or [])
 
 
 def away(db, now_ms=None):
@@ -163,7 +173,8 @@ def decide(prev, *, now, cfg, presence, owner_at, owner_what, spend, unknown_n, 
     override = prev.get('override_day') == day
     over = spend is not None and spend >= cfg['cap_cny']
     budget = over and not override
-    reasons = (['budget'] if budget else []) + (['away'] if away else [])
+    since_m = prev.get('maintenance_since') if _is_num(prev.get('maintenance_since')) else None   # only set_maintenance changes it
+    reasons = (['maintenance'] if since_m is not None else []) + (['budget'] if budget else []) + (['away'] if away else [])
     was = list(prev.get('reasons') or []) if prev.get('on') is True else []
     warn = spend is not None and spend >= WARN_RATIO * cfg['cap_cny']
     doc = {'on': bool(reasons), 'why': reasons[0] if reasons else None, 'reasons': reasons,
@@ -173,6 +184,7 @@ def decide(prev, *, now, cfg, presence, owner_at, owner_what, spend, unknown_n, 
                       'unknown_n': unknown_n, 'warn': warn, 'over': over, 'override': override and over},
            'at': now}
     doc['since'] = (prev.get('since') if was else now) if reasons else None
+    doc['maintenance_since'] = since_m
     doc['away_since'] = (prev.get('away_since') if 'away' in was and prev.get('away_since') else now) if away else None
     doc['budget_until'] = next_midnight(now) if budget else None
     events = []
@@ -198,6 +210,8 @@ def decide(prev, *, now, cfg, presence, owner_at, owner_what, spend, unknown_n, 
 
 def _lifted_by(lifted, presence_by, day, prev, cfg):
     """What ended the pause: the presence that came back for away; midnight / nine / cap for budget."""
+    if 'maintenance' in lifted:
+        return 'maintenance'
     if 'away' in lifted:
         return presence_by
     old = prev.get('budget') or {}
@@ -260,6 +274,13 @@ class Controller:
                 if spend is not None and spend >= cfg['cap_cny']:
                     self._doc = {**self._doc, 'override_day': day_of(now)}
             self._tick(now, force_write=True)
+
+    def set_maintenance(self, on, *, now_ms=None):
+        """The owner puts hello into 维护中 (or out of it). Nothing else lifts it. -> the new pause document."""
+        now = self.clock_ms() if now_ms is None else now_ms
+        with self._lock:
+            self._doc = {**self._doc, 'maintenance_since': now if on else None}
+            return dict(self._tick(now, force_write=True))
 
     # ---- the loop ----
     def tick(self, now_ms=None):
@@ -325,7 +346,7 @@ def view(doc, now_ms):
     b = doc.get('budget') or {}
     on = active(doc, now_ms)
     reasons = [r for r in (doc.get('reasons') or []) if on and (r != 'budget' or _budget_active(doc, now_ms))]
-    return {'paused': on, 'why': reasons[0] if reasons else None, 'reasons': reasons, 'since': doc.get('since') if on else None,
+    return {'paused': on, 'maintenance': 'maintenance' in reasons, 'why': reasons[0] if reasons else None, 'reasons': reasons, 'since': doc.get('since') if on else None,
             'away_since': doc.get('away_since') if 'away' in reasons else None,
             'budget_until': doc.get('budget_until') if 'budget' in reasons else None,
             'last_presence': doc.get('last_presence'), 'presence_by': doc.get('presence_by'),

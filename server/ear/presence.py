@@ -134,6 +134,8 @@ class Pause:
             return []
         now = self.clock_ms() if now_ms is None else now_ms
         out = []
+        if "maintenance" in (d.get("reasons") or []):      # the owner's 维护中: presence never lifts it
+            out.append("maintenance")
         until = d.get("budget_until")
         if "budget" in (d.get("reasons") or []) and (not isinstance(until, int) or now < until):
             out.append("budget")

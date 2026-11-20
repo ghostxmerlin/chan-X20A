@@ -212,6 +212,55 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(n[0], 1)
 
 
+class MaintenanceTest(unittest.TestCase):
+    """A third reason (gallery, 2026-11-20): the owner puts hello into 维护中 on purpose; only the owner lifts it."""
+    def setUp(self):
+        self.db = FakeDB()
+        self.now = [T0]
+        self.events = []
+        self.settings = settings.load(None)
+        self.c = self.make()
+
+    def make(self):
+        return pause.Controller(self.db, settings_fn=lambda: self.settings, ledger_fn=lambda day: {'total': {}},
+                                clock_ms=lambda: self.now[0], emit=lambda kind, **f: self.events.append((kind, f)))
+
+    def test_set_maintenance_pauses_and_owner_input_does_not_lift_it(self):
+        doc = self.c.set_maintenance(True)
+        self.assertTrue(self.c.paused())
+        self.assertIn('maintenance', doc['reasons'])
+        self.assertTrue(self.c.view()['maintenance'])
+        self.assertTrue(pause.maintenance(self.db))
+        self.c.note_owner('switch')
+        self.assertIn('maintenance', self.c.doc()['reasons'])
+        self.c.set_maintenance(False)
+        self.assertNotIn('maintenance', self.c.doc()['reasons'])
+        self.assertFalse(self.c.paused())
+        self.assertFalse(self.c.view()['maintenance'])
+        self.assertFalse(pause.maintenance(self.db))
+
+    def test_maintenance_survives_a_restart(self):
+        since = self.c.set_maintenance(True)['maintenance_since']
+        self.c = self.make()
+        self.now[0] += MIN
+        doc = self.c.tick()
+        self.assertIn('maintenance', doc['reasons'])
+        self.assertEqual(doc['maintenance_since'], since)
+
+    def test_maintenance_with_away_lists_both(self):
+        self.c.set_maintenance(True)
+        self.now[0] = T0 + 11 * MIN
+        doc = self.c.tick()
+        self.assertEqual((doc['reasons'], doc['why']), (['maintenance', 'away'], 'maintenance'))
+        self.assertEqual([f['sum'] for k, f in self.events if k == 'switch.pause'][-1], '暂停：维护中、没人')
+
+    def test_module_reader(self):
+        self.assertTrue(pause.active({'on': True, 'reasons': ['maintenance']}))
+        self.assertFalse(pause.maintenance(self.db))
+        self.c.set_maintenance(True)
+        self.assertTrue(pause.maintenance(self.db))
+
+
 class GatesTest(unittest.TestCase):
     """The paused items in mind's own process and the memory worker."""
     def test_fusion_makes_no_call_while_paused(self):

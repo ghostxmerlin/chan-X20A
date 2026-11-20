@@ -115,6 +115,13 @@ class PauseGateTest(unittest.TestCase):
         self.assertEqual(self.pause.reasons(), [])
         self.assertTrue(self.gated.on)
 
+    def test_maintenance_holds_and_presence_does_not_lift_it(self):
+        self.set({"on": True, "reasons": ["maintenance", "away"], "since": 1, "away_since": 1, "maintenance_since": 1})
+        self.p.vision(1, {"event": "face_found", "face": 1})
+        self.p.heard({"speaker": {"band": "known", "name": "me01"}, "self": {"sounding": False}})
+        self.assertEqual(self.pause.reasons(), ["maintenance"])
+        self.assertFalse(self.gated.on)
+
     def test_a_failed_read_keeps_the_last_value(self):
         self.set({"on": True, "reasons": ["budget"], "budget_until": self.clock.t + MIN})
 
