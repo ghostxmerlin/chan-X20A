@@ -192,7 +192,7 @@ final class Hello: MouthDelegate {
 
     func tap(double: Bool) { core.async { let o = self.mouth.touch(double: double); DispatchQueue.main.async { self.face?.showToast(o.toast) } } }
     func digit(_ v: Int) { core.async { self.mouth.sendDigit(v, source: "touch") } }
-    func wake() { core.async { self.mouth.asrWake() } }
+    func wake() { core.async { self.mouth.asrWake(word: "providence") } }   // the robot's name (StickS3, 2026-11-20)
     func enrollVoice(_ name: String) { core.async { self.hearing.enroll(name: name) }; log("声纹录入 \(name)：请说五句话") }
     func enrollFace(_ name: String) { camera.enroll(name: name); log("人脸录入 \(name)：看着摄像头 5 秒") }
 
@@ -244,29 +244,10 @@ final class Hello: MouthDelegate {
         return true
     }
 
-    // ---- the voice module's words (core queue), as FW/asr_unit.cpp:177-191 ----
+    // ---- the voice module's words (core queue), as FW/asr_unit.cpp since 0.5.19: the StickS3's eight ----
     private func asrWord(_ word: String, _ kind: AsrWords.Kind) {
         log("口令：\(word)")
-        switch kind {
-        case .wake:
-            mouth.asrWake(word: word == "hi asr" ? "hi A S R" : word == "hi m five" ? "Hi M Five" : "hello")
-            return
-        default:
-            mouth.asrOrder(word)                  // Docking skips the sentence that carried an order
-        }
-        switch kind {
-        case .mode(let input): let o = mouth.input(input, by: "asr"); DispatchQueue.main.async { self.face?.showToast(o.toast) }
-        case .digit(let d): mouth.sendDigit(d, source: "asr")
-        case .motion(let w):
-            let g = w.contains("left") ? "left" : w.contains("right") ? "right" : w == "up" || w == "down" ? "nod" : "front"
-            DispatchQueue.main.async { self.face?.gesture(g) }
-        case .volume(let how):
-            let v: Float = ["increase": min(1, out.volume + 0.2), "decrease": max(0.1, out.volume - 0.2),
-                            "maximum": 1, "medium": 0.6, "minimum": 0.1][how] ?? out.volume
-            out.volume = v
-            DispatchQueue.main.async { self.face?.showToast("VOL \(Int(v * 100))") }
-        default: break
-        }
+        if kind == .wake { mouth.asrWake(word: "providence") }   // the robot's name: being called; the rest is logged
     }
 
     func setVoiceModule(_ on: Bool) {

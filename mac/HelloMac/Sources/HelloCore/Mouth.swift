@@ -86,7 +86,7 @@ public final class MouthLogic: LinkLogic {
     private var current: UInt32? = nil
     private var lastSpeechEndUs: UInt64 = 0
     private var inputSeq = 0
-    private var wakeCount = 0, orderCount = 0
+    private var wakeCount = 0
     private var progressAt: [UInt32: UInt64] = [:]
     public var now: () -> UInt64 = monoUs
     /// owner choice: the robot sends a power-on 9 (= all paid on) to mind; off by default on the Mac
@@ -271,17 +271,13 @@ public final class MouthLogic: LinkLogic {
         return inputSeq
     }
 
-    /// The voice module's wake word ("hello"): the robot stops its own speech and tells the ear.
-    public func asrWake(word: String = "hello") {
+    /// The voice module heard the robot's name ("providence", the StickS3 since 2026-11-20): the robot stops its own
+    /// speech and tells the ear (which opens a chat).
+    public func asrWake(word: String = "providence") {
         let interrupted = speaking
         output.stopAll()
         wakeCount += 1
         transport?.send(text: Wire.json(["type": "asr_wake", "word": word, "n": wakeCount, "interrupted": interrupted]))
-    }
-
-    public func asrOrder(_ word: String) {
-        orderCount += 1
-        transport?.send(text: Wire.json(["type": "asr_order", "word": word, "n": orderCount]))
     }
 
     public func snapResult(id: Int, ok: Bool, why: String? = nil, seq: Int = 0, bytes: Int = 0, ms: Int = 0) {

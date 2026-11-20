@@ -39,7 +39,8 @@ test("mode rules replay every vector") {
         }
     }
     check(bad == 0, "\(bad) of \(vectors.count) vectors differ")
-    check(vectors.count > 2000, "vectors: \(vectors.count)")
+    check(vectors.count >= 80, "vectors: \(vectors.count)")              // one state since 2026-11-20 (Docking only)
+    check(ModeRules.Mode.allCases.map(\.id) == ["crowd"], "Docking is the only mode")
 }
 
 test("mode table labels and colours match the vectors' table") {
@@ -184,7 +185,7 @@ test("mouth: digits, cmd, stage, power-on 9 until ok") {
     m.sendDigit(0, source: "touch")
     check(dg.digits.contains(0) && tr.texts.last?["value"] as? Int == 0, "0 = local half + mind")
     m.sendDigit(6, source: "touch")
-    check(m.modes.state.mode == .companion, "6 = companion locally")
+    check(m.modes.state.mode == .crowd, "6 does nothing (Docking only since 2026-11-20)")
 }
 
 test("vision: hello, events with seq, frames, ping after 15 s") {
@@ -282,17 +283,17 @@ test("mouth: a local clip plays as sounding, reports nothing, yields to a server
     check(m.speaking, "the server stream took over")
 }
 
-test("voice module words: whole utterance only, kinds as the robot") {
-    check(AsrWords.match("Hello.")?.kind == .wake, "hello = wake")
-    check(AsrWords.match("Hi, A.S.R.")?.kind == .wake, "hi ASR = wake")
-    check(AsrWords.match("Turn left!")?.kind == .motion("turn left"), "turn left = motion")
-    check(AsrWords.match("9")?.kind == .digit(9) && AsrWords.match("nine")?.kind == .digit(9), "9 / nine = digit")
-    check(AsrWords.match("Play")?.kind == .mode(.play), "play = mode input")
-    check(AsrWords.match("increase volume")?.kind == .volume("increase"), "volume")
-    check(AsrWords.match("Okay")?.kind == .other, "ok = other")
-    check(AsrWords.match("hello how are you") == nil, "a word inside a sentence is talk")
-    check(AsrWords.match("你好") == nil, "not a module word")
-    check(AsrWords.words.count == 42, "the module's 42 words")
+test("voice module words: the StickS3's eight, providence calls") {
+    // owner 2026-11-20: the robot's voice module is the StickS3 (ids 0x50-0x5F); the Mac stands in with the same words
+    check(AsrWords.match("Providence.")?.kind == .wake, "providence = the name: being called")
+    for w in ["docking sequence", "O Raiser!", "inevitable", "Say what again?", "Inception", "Expelliarmus", "Expecto patronum."] {
+        check(AsrWords.match(w)?.kind == .heard, "\(w) = heard")
+    }
+    for w in ["hello", "turn left", "nine", "9", "play", "increase volume", "okay"] {
+        check(AsrWords.match(w) == nil, "\(w): the factory words are gone")
+    }
+    check(AsrWords.match("providence how are you") == nil, "a word inside a sentence is talk")
+    check(AsrWords.words.count == 8, "the Stick's 8 words")
 }
 
 test("鹿野: manifest, actions for expressions and stages, look toward the face, gestures") {

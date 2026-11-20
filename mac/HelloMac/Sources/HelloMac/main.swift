@@ -136,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(boxes)
         stack.addArrangedSubview(boxes2)
         let btns = NSStackView(); btns.orientation = .horizontal
-        btns.addArrangedSubview(NSButton(title: "说 hello", target: self, action: #selector(wake)))
+        btns.addArrangedSubview(NSButton(title: "说 Providence", target: self, action: #selector(wake)))
         btns.addArrangedSubview(NSButton(title: "单击", target: self, action: #selector(tap1)))
         btns.addArrangedSubview(NSButton(title: "双击", target: self, action: #selector(tap2)))
         btns.addArrangedSubview(NSButton(title: "全开 9", target: self, action: #selector(nine)))
