@@ -27,9 +27,11 @@ namespace {
 constexpr char kTag[] = "AsrUnit";
 constexpr uart_port_t kUart = UART_NUM_2; // UART0: M12, UART1: servo bus.
 constexpr int kBaud = 115200;
-// The unit's TX is on GPIO8 of the top black port (Port B), confirmed on the dev
-// robot 2026-11-07. GPIO9 (the unit's RX) is never driven: receive only.
-constexpr gpio_num_t kRx = GPIO_NUM_8;
+// The owner's StickS3 voice module (~/exia/stick/docs/voice-protocol.md) on CoreS3 Port C since 2026-11-20 (the owner
+// swapped it with the M12; it was the Unit ASR on Port B G8). White wire G18 = our RX (the Stick's TX), yellow G17 =
+// our TX (the Stick's RX, pulled up there; for its control frames E0-E3, nothing is sent yet).
+constexpr gpio_num_t kRx = GPIO_NUM_18;
+constexpr gpio_num_t kTx = GPIO_NUM_17;
 constexpr size_t kHistory = 16;
 
 struct Event {
@@ -99,7 +101,7 @@ bool install_uart()
     config.source_clk = UART_SCLK_DEFAULT;
     esp_err_t result = uart_driver_install(kUart, 512, 0, 0, nullptr, 0);
     if (result == ESP_OK) result = uart_param_config(kUart, &config);
-    if (result == ESP_OK) result = uart_set_pin(kUart, UART_PIN_NO_CHANGE, kRx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (result == ESP_OK) result = uart_set_pin(kUart, kTx, kRx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (result != ESP_OK) {
         ESP_LOGE(kTag, "UART2 unavailable: %s", esp_err_to_name(result));
         return false;
@@ -114,7 +116,7 @@ void asr_task(void*)
     // on core 1: core 0 must keep free inputs for Wi-Fi's lazily allocated AES interrupt.
     if (!install_uart()) vTaskDelete(nullptr);
     driver_ok = true;
-    ESP_LOGI(kTag, "Unit ASR on Port B: UART2 %d 8N1, RX GPIO%d, TX unused (core %d)", kBaud, kRx, xPortGetCoreID());
+    ESP_LOGI(kTag, "voice module (StickS3) on Port C: UART2 %d 8N1, RX GPIO%d, TX GPIO%d (core %d)", kBaud, kRx, kTx, xPortGetCoreID());
     AsrParser parser;
     std::array<uint8_t, 64> buffer{};
     uint32_t seq = 0;
@@ -260,6 +262,7 @@ void asr_json(ArduinoJson::JsonObject out,uint32_t after)
 {
     out["valid"] = driver_ok.load();
     out["rx_gpio"] = static_cast<int>(kRx);
+    out["tx_gpio"] = static_cast<int>(kTx);
     out["rx_seen"] = rx_seen.load();
     out["frames"] = frames.load();
     out["discarded_bytes"] = discarded.load();
@@ -302,6 +305,7 @@ void asr_info_json(ArduinoJson::JsonObject out)
     out["uart"] = 2;
     out["baud"] = kBaud;
     out["rx_gpio"] = static_cast<int>(kRx);
+    out["tx_gpio"] = static_cast<int>(kTx);
     out["tx"] = "unused";
     out["frame"] = "AA 55 <id> 55 AA; AA 55 <id> <value> 55 AA";
     out["history"] = kHistory;
