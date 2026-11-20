@@ -171,7 +171,16 @@ class DeleteTest(unittest.TestCase):
         self.db.add("mind_runs",
                     {"_id": "r1", "minute": M1, "lane": "live", "step": "fusion"},
                     {"_id": "r1b", "minute": M1, "lane": "rerun", "step": "fusion"},
-                    {"_id": "r2", "minute": M2, "lane": "live", "step": "fusion"})
+                    {"_id": "r2", "minute": M2, "lane": "live", "step": "fusion"},
+                    {"_id": "rs1", "minute": M1 - 600_000, "lane": "live", "step": "segment", "at": M1 + 130_000,
+                     "request": {"m": "主人一直在书桌前写字"}, "parsed": {"title": "下午在书桌前写作业的时间"}},
+                    {"_id": "rs1r", "minute": M1 - 600_000, "lane": "rerun", "step": "segment"},
+                    {"_id": "rs2", "minute": M1 + 300_000, "lane": "live", "step": "segment"},
+                    {"_id": "rn", "minute": M1 + 120_000, "lane": "live", "step": "eye", "at": M1 + 125_000,
+                     "request": {"messages": [{"role": "user", "content": "最近看到：" + LOOK}], "n": 3},
+                     "response": {"x": "无关的回答内容"}},
+                    {"_id": "rf", "minute": M1 + 5 * 3600_000, "lane": "live", "step": "eye",
+                     "at": M1 + 5 * 3600_000, "request": {"c": LOOK}})
         self.db.add("mind_segments",
                     {"_id": "g1", "start": M1 - 600_000, "end": M1 + 120_000, "lane": "live", "version": 1,
                      "summary": {"title": "下午在书桌前写作业的时间", "text": "主人一直在书桌前写字。期间喝了几口茶水休息", "confidence": 0.8}},
@@ -188,9 +197,15 @@ class DeleteTest(unittest.TestCase):
                     {"_id": "mind:1:1", "kind": "call.fusion", "at": M1 + 62_000, "svc": "mind",
                      "ref": {"minute": M1, "lane": "live", "prompt": "v2"}, "body": {"params": sha("e")}},
                     {"_id": "mind:1:2", "kind": "call.segment", "at": M1 + 130_000, "svc": "mind",
-                     "ref": {"minute": M1 + 60_000, "lane": "live"}},
+                     "ref": {"minute": M1 - 600_000, "lane": "live"}},
                     {"_id": "mind:1:3", "kind": "call.segment", "at": M1 + 1300_000, "svc": "mind",
-                     "ref": {"minute": M1 + 1200_000 + 60_000, "lane": "live"}},
+                     "ref": {"minute": M1 + 300_000, "lane": "live"}},
+                    {"_id": "mind:1:4", "kind": "call.segment", "at": M1 - 200_000, "svc": "mind",
+                     "ref": {"minute": M1 - 300_000, "lane": "live"}},
+                    {"_id": "mind:1:5", "kind": "call.segment", "at": M1 + 140_000, "svc": "mind",
+                     "ref": {"minute": M1 - 600_000, "lane": "rerun"}},
+                    {"_id": "ear:1:11", "kind": "call.realtime", "at": M1 + 95_000, "svc": "ear",
+                     "sum": "我看到桌上放着一杯冒着热气的绿茶"},
                     {"_id": "eye:1:3", "kind": "call.eye", "at": M2 + 61_000, "svc": "eye", "sum": "ok",
                      "ref": {"minute": M2}, "body": {"system": sha("a"), "output": sha("f")}},
                     {"_id": "ear:1:9", "kind": "call.realtime", "at": M1 + 90_000, "svc": "ear", "sum": "回答",
@@ -228,7 +243,7 @@ class DeleteTest(unittest.TestCase):
         self.assertEqual({k: out[k] for k in ("frames", "files", "looks", "eye_minutes", "packages", "scenes",
                                                "runs", "log_rows", "from", "to")},
                          {"frames": 2, "files": 2, "looks": 1, "eye_minutes": 2, "packages": 2, "scenes": 2,
-                          "runs": 2, "log_rows": 4, "from": M1 + 5_000, "to": M1 + 20_000})
+                          "runs": 3, "log_rows": 4, "from": M1 + 5_000, "to": M1 + 20_000})
         self.assertEqual(sorted(out["segments"], key=lambda s: s["start"]),
                          [{"start": M1 - 3600_000, "end": M1 + 30_000, "title": "还没结束的一个长段落"},
                           {"start": M1 - 600_000, "end": M1 + 120_000, "title": "下午在书桌前写作业的时间"}])
@@ -244,7 +259,10 @@ class DeleteTest(unittest.TestCase):
                                              "summary": {"title": "现在还在进行的段落", "text": "t"}})
         out = gallery.plan(self.db, ["d"], spool_dir=self.spool)
         self.assertEqual(sorted(s["title"] for s in out["segments"]), ["后来去客厅休息的时间段", "现在还在进行的段落"])
-        self.assertEqual(out["log_rows"], 2)                          # eye:1:3 + the segment call mind:1:3
+        self.db[self.log].insert_one({"_id": "mind:1:6", "kind": "call.segment", "at": M2 + 70_000,
+                                      "ref": {"minute": M2 - 60_000, "lane": "live"}})
+        out = gallery.plan(self.db, ["d"], spool_dir=self.spool)
+        self.assertEqual(out["log_rows"], 3)                          # eye:1:3 + segment calls of g2 and g4
 
     def test_delete_removes_every_copy(self):
         out = self.run_delete()
@@ -253,9 +271,9 @@ class DeleteTest(unittest.TestCase):
         self.assertEqual(self.ids("eye_minutes"), ["e2"])
         self.assertEqual(self.ids("mind_packages"), ["p2"])
         self.assertEqual(self.ids("mind_scenes"), ["s2"])
-        self.assertEqual(self.ids("mind_runs"), ["r2"])
+        self.assertEqual(self.ids("mind_runs"), ["r2", "rf", "rn", "rs1r", "rs2"])
         self.assertEqual(self.ids("mind_segments"), ["g2"])
-        self.assertEqual(self.ids(self.log), ["ear:1:9", "eye:1:3", "mind:1:3"])
+        self.assertEqual(self.ids(self.log), ["ear:1:11", "ear:1:9", "eye:1:3", "mind:1:3", "mind:1:4", "mind:1:5"])
         p = Path(self.root)
         self.assertFalse((p / self.paths["a"]).exists())
         self.assertFalse((p / self.paths["b"]).exists())
@@ -266,12 +284,49 @@ class DeleteTest(unittest.TestCase):
         self.assertEqual({k: out[k] for k in ("frames", "files", "files_skipped", "looks", "eye_minutes", "packages",
                                                "scenes", "segments", "runs", "log_rows")},
                          {"frames": 2, "files": 2, "files_skipped": 0, "looks": 1, "eye_minutes": 2, "packages": 2,
-                          "scenes": 2, "segments": 2, "runs": 2, "log_rows": 4})
+                          "scenes": 2, "segments": 2, "runs": 3, "log_rows": 4})
 
     def test_shared_body_is_kept_unique_body_is_deleted(self):
         out = self.run_delete()
         self.assertEqual(self.ids(self.body), sorted([sha("a"), sha("f"), sha("1")]))
         self.assertEqual(out["bodies"], 4)                             # b, c, d, e
+
+    def test_body_shared_under_another_name_is_kept(self):
+        self.db[self.log].insert_one({"_id": "x:1:1", "kind": "call.other", "at": M2, "body": {"result": sha("c")}})
+        out = self.run_delete()
+        self.assertIn(sha("c"), self.ids(self.body))
+        self.assertEqual(out["bodies"], 3)                             # b, d, e
+
+    def test_many_long_fragments_are_batched_under_the_regex_cap(self):
+        sentences = [f"第{i:03d}句" + "很长的描述文字" * 9 for i in range(300)]
+        self.db["vision_looks"].docs[0]["text"] = "。".join(sentences)
+        self.db[self.body].docs.append({"_id": sha("9"), "text": "上下文：" + "；".join(sentences)})
+        self.db[self.log].insert_one({"_id": "ear:1:12", "kind": "call.realtime", "at": M1 + 99_000,
+                                      "body": {"input": sha("9")}})
+        coll, seen = self.db[self.body], []
+        real = coll.find
+
+        def spy(flt=None, projection=None):
+            if flt and "$regex" in str(flt):
+                seen.append(flt["text"]["$regex"])
+            return real(flt, projection)
+        coll.find = spy
+        self.run_delete()
+        self.assertGreater(len(seen), 1)
+        self.assertTrue(all(len(p.encode()) <= gallery.REGEX_BYTES for p in seen))
+        text = self.db[self.body].find_one({"_id": sha("9")})["text"]
+        self.assertTrue(all(x not in text for x in sentences))
+        self.assertEqual(text.count(gallery.MARK), 300)
+
+    def test_nearby_runs_and_log_sums_are_redacted(self):
+        out = self.run_delete()
+        rn = self.db["mind_runs"].find_one({"_id": "rn"})
+        self.assertEqual(rn["request"]["messages"][0]["content"], f"最近看到：{MARK}。{MARK}。好的")
+        self.assertEqual((rn["request"]["n"], rn["response"]), (3, {"x": "无关的回答内容"}))
+        self.assertEqual(self.db["mind_runs"].find_one({"_id": "rf"})["request"], {"c": LOOK})   # > 3 h away
+        self.assertEqual(out["runs_redacted"], 1)
+        self.assertEqual(self.db[self.log].find_one({"_id": "ear:1:11"})["sum"], f"我看到{MARK}")
+        self.assertEqual(out["sums_redacted"], 1)
 
     def test_fragments_are_redacted_in_other_bodies_and_spool(self):
         size = self.today.stat().st_size

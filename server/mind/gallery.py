@@ -165,6 +165,9 @@ MAX_DELETE = 500
 MARK = "［图库已删除］"
 MIN_FRAGMENT = 8
 REGEX_BATCH = 200
+REGEX_BYTES = 16_000                  # Mongo refuses a $regex pattern over ~32 KB (error 51091)
+RUN_NEAR_MS = 3 * 3600_000            # mind_runs this close to the photos may quote them (eye.recent_looks)
+RUN_FIELDS = ("request", "response", "parsed")
 _BJ = datetime.timezone(datetime.timedelta(hours=8))
 _SPLIT = re.compile(r"[。！？；\n]")
 _SPOOL = re.compile(r"^.+-(\d{8})\.jsonl$")
@@ -212,27 +215,31 @@ def _collect(db, ids):
            "eye_minutes": list(db["eye_minutes"].find({"$or": [{"minute": {"$in": minutes}},
                                                                {"frames.path": {"$in": paths}}]})),
            "mind_segments": []}
-    for c in ("mind_packages", "mind_scenes", "mind_runs"):
+    for c in ("mind_packages", "mind_scenes"):
         hit[c] = list(db[c].find({"minute": {"$in": minutes}}))
+    runs, months = [{"minute": {"$in": minutes}}], []
     if minutes:
         near = db["mind_segments"].find({"start": {"$lt": minutes[-1] + 60000}, "$or": [
             {"end": None}, {"end": {"$exists": False}}, {"end": {"$gt": minutes[0]}}]})
         hit["mind_segments"] = [s for s in near if any(
             s["start"] < m + 60000 and (s.get("end") is None or s["end"] > m) for m in minutes)]
-        segs = [{"ref.minute": {"$gte": s["start"], **({} if s.get("end") is None else {"$lte": s["end"]})}}
-                for s in hit["mind_segments"]]
+        # a segment's summary run and its call.segment row are keyed by the segment's start + lane (segments.py)
+        runs += [{"step": "segment", "lane": s.get("lane"), "minute": s["start"]} for s in hit["mind_segments"]]
         ors = [{"kind": {"$in": ["call.eye", "call.fusion"]}, "ref.minute": {"$in": minutes}}]
         ors += [{"kind": "call.look", "ref.path": {"$in": paths}}] if paths else []
-        ors += [{"kind": "call.segment", **s} for s in segs]
-        starts = [s["start"] for s in hit["mind_segments"]]
-        for month in _months(min(minutes + starts), minutes[-1] + _DAY_MS):
+        ors += [{"kind": "call.segment", "ref.minute": s["start"], "ref.lane": s.get("lane")}
+                for s in hit["mind_segments"]]
+        months = _months(min(minutes + [s["start"] for s in hit["mind_segments"]]), minutes[-1] + _DAY_MS)
+        for month in months:
             found = list(db["log_" + month].find({"$or": ors}))
             if found:
                 hit["log_" + month] = found
+    hit["mind_runs"] = list(db["mind_runs"].find({"$or": runs}))
     fp = hashlib.sha256(json.dumps({c: sorted(str(d.get("_id")) for d in docs) for c, docs in hit.items()},
                                    sort_keys=True).encode()).hexdigest()[:16]
     looks = [d for d in hit["vision_looks"] if d.get("kind", "look") == "look"]
-    return {"hit": hit, "paths": paths, "from": min(ats) if ats else None, "to": max(ats) if ats else None,
+    return {"hit": hit, "paths": paths, "months": months,
+            "from": min(ats) if ats else None, "to": max(ats) if ats else None,
             "fp": fp, "fragments": _fragments(looks, hit["eye_minutes"], hit["mind_scenes"], hit["mind_segments"])}
 
 
@@ -254,39 +261,85 @@ def plan(db, ids, *, spool_dir=None):
 
 
 def _drop_bodies(db, month, rows):
-    """Delete the bodies of these log rows that no other row of the month still references. -> count."""
-    names, shas = set(), set()
-    for r in rows:
-        for name, sha in (r.get("body") or {}).items():
-            if isinstance(sha, str):
-                names.add(name)
-                shas.add(sha)
+    """Delete the bodies of these log rows that no other row of the month still references under any name. -> count."""
+    shas = {v for r in rows for v in (r.get("body") or {}).values() if isinstance(v, str)}
     if not shas:
         return 0
-    others = db["log_" + month].find({"_id": {"$nin": [r["_id"] for r in rows]},
-                                      "$or": [{f"body.{n}": {"$in": sorted(shas)}} for n in sorted(names)]})
-    used = {v for r in others for v in (r.get("body") or {}).values()}
+    others = db["log_" + month].find({"_id": {"$nin": [r["_id"] for r in rows]}, "body": {"$exists": True}},
+                                     {"body": 1})
+    used = {v for r in others if isinstance(r.get("body"), dict) for v in r["body"].values()}
     gone = sorted(shas - used)
     return db["logbody_" + month].delete_many({"_id": {"$in": gone}}).deleted_count if gone else 0
 
 
+def _patterns(frags):
+    """The fragments as regex alternations of at most REGEX_BATCH fragments and REGEX_BYTES UTF-8 bytes each (a
+    single longer fragment gets a pattern of its own)."""
+    out, cur, size = [], [], 0
+    for f in frags:
+        e = re.escape(f)
+        n = len(e.encode()) + 1
+        if cur and (len(cur) >= REGEX_BATCH or size + n > REGEX_BYTES):
+            out.append("|".join(cur))
+            cur, size = [], 0
+        cur.append(e)
+        size += n
+    return out + (["|".join(cur)] if cur else [])
+
+
+def _scrubber(frags):
+    """text -> text with every fragment replaced by MARK (longest first); non-strings are returned as they are."""
+    any_of = re.compile("|".join(re.escape(f) for f in frags)) if frags else None
+
+    def scrub(text):
+        if any_of is None or not isinstance(text, str) or not any_of.search(text):
+            return text
+        for f in frags:
+            text = text.replace(f, MARK)
+        return text
+    return scrub
+
+
+def _redact(coll, field, frags, skip=()):
+    """Replace the fragments in the string field of coll's documents that contain one (Mongo $regex). -> count."""
+    scrub, done = _scrubber(frags), set()
+    for pattern in _patterns(frags):
+        flt = {field: {"$regex": pattern}, **({"_id": {"$nin": list(skip)}} if skip else {})}
+        for d in coll.find(flt, {field: 1}):
+            new = scrub(d.get(field))
+            if new != d.get(field):
+                coll.update_one({"_id": d["_id"]}, {"$set": {field: new}})
+                done.add(d["_id"])
+    return len(done)
+
+
 def _redact_bodies(db, frags, first_month):
     """Replace the fragments in every remaining log body from the photos' first month on. -> bodies changed."""
-    if not frags:
-        return 0
     names = sorted(n for n in db.list_collection_names() if re.fullmatch(r"logbody_\d{6}", n) and n[8:] >= first_month)
-    done = set()
-    for name in names:
-        for i in range(0, len(frags), REGEX_BATCH):
-            pattern = "|".join(re.escape(f) for f in frags[i:i + REGEX_BATCH])
-            for d in db[name].find({"text": {"$regex": pattern}}):
-                text = d["text"]
-                for f in frags:
-                    text = text.replace(f, MARK)
-                if text != d["text"]:
-                    db[name].update_one({"_id": d["_id"]}, {"$set": {"text": text}})
-                    done.add((name, d["_id"]))
-    return len(done)
+    return sum(_redact(db[n], "text", frags) for n in names) if frags else 0
+
+
+def _redact_runs(db, frags, lo, hi, skip):
+    """Replace the fragments inside request / response / parsed of the mind runs within RUN_NEAR_MS of the photos
+    that are not deleted themselves (e.g. a neighbour eye run that quoted the 看一眼 answer). -> runs changed."""
+    if not frags or lo is None:
+        return 0
+    scrub, n = _scrubber(frags), 0
+
+    def walk(v):
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return scrub(v)
+    near = {"$gte": lo - RUN_NEAR_MS, "$lte": hi + RUN_NEAR_MS}
+    for d in db["mind_runs"].find({"_id": {"$nin": list(skip)}, "$or": [{"at": near}, {"minute": near}]},
+                                  {k: 1 for k in RUN_FIELDS}):
+        changed = {k: new for k in RUN_FIELDS if k in d for new in [walk(d[k])] if new != d[k]}
+        if changed:
+            db["mind_runs"].update_one({"_id": d["_id"]}, {"$set": changed})
+            n += 1
+    return n
 
 
 def _redact_spool(spool_dir, frags, lo, hi):
@@ -363,6 +416,9 @@ def delete(db, root, ids, fp, *, spool_dir, emit):
     out = {"bodies": sum(_drop_bodies(db, month, rows) for month, rows in logs.items())}
     first_month = hello_log.month_of(m["from"]) if m["from"] is not None else "000000"
     out["bodies_redacted"] = _redact_bodies(db, m["fragments"], first_month)
+    out["sums_redacted"] = sum(_redact(db["log_" + month], "sum", m["fragments"],
+                                       [r["_id"] for r in logs.get(month, [])]) for month in m["months"])
+    out["runs_redacted"] = _redact_runs(db, m["fragments"], m["from"], m["to"], [d["_id"] for d in h["mind_runs"]])
     out["spool_redacted"] = _redact_spool(spool_dir, m["fragments"], m["from"], m["to"])
     out["log_rows"] = sum(db["log_" + month].delete_many({"_id": {"$in": [r["_id"] for r in rows]}}).deleted_count
                           for month, rows in logs.items())
