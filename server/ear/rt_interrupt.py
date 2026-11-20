@@ -54,23 +54,10 @@ class InterruptMixin:
         self.ordered(str((m or {}).get("word") or "")[:40], "asr")
 
     def ordered(self, word, source, trace=None):
-        """A direct order: not for the voice backend. The call window closes, nothing is answered for that sentence."""
-        if not self.armed():
-            return
-        now = self.clock()
-        merged = self._order_at is not None and now - self._order_at < 2.0
-        self._order_at = now
-        self._called_until, self._called_text, self._called_trace = 0.0, None, None
-        self._pending_vision, self._rescue = None, None
-        self.stats["order_" + source] += 1
-        if self._resp is not None and (self._turns.get(self._resp) or {}).get("kind") == "speech":
-            self._interrupt(now)                       # a reply to the order is already on its way: stop it
-        if not merged:
-            self._stage("skip")
-            ear_log.emit("gate.realtime", trace=trace or self._trace_now() or ear_log.new_trace(),
-                         sum=f"直接口令：{word}（机器人自己执行，不回答）",
-                         extra={"verdict": "order", "word": word, "source": source,
-                                "reason": "语音模块的口令词是给机器人的直接指令，Docking 不回答"})
+        """A factory voice command (the robot's asr_order, or a command word heard after the call word). Owner
+        2026-11-20 (Providence): those commands are off and the robot no longer carries them out, so a sentence with
+        one is an ordinary sentence: the call window stays, the reply is not muted. Counted only."""
+        self.stats["order_ignored_" + source] += 1
 
     def _interrupt(self, now):
         """Stop hello's own reply (generating or playing), and a running tool. -> True if something was stopped."""

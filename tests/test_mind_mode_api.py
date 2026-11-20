@@ -197,14 +197,25 @@ class NotFromHereTest(ModeApiBase):
         self.assertEqual(self.call('/mode', {'input': 'boot'})[0], 400)
 
     def test_robot_inputs_are_digits_and_billing_only(self):
-        base = {'device': 'robot', 'boot': 'b1', 'seq': 1, 'age_ms': 0, 'source': 'asr', 'input': 'forward'}
+        base = {'device': 'robot', 'boot': 'b1', 'seq': 1, 'age_ms': 0, 'source': 'quick', 'input': 'forward'}
         s, r = self.call('/mode/input', base)
         self.assertEqual((s, r['code']), (409, 'on_hello'))
         r = self.call('/mode/input', dict(base, seq=2, input='digit', value=0))[1]
         self.assertEqual((r['result']['code'], r['snapshot']['billing']), ('ok', False))
         r = self.call('/mode/input', dict(base, seq=3, input='digit', value=4))[1]
-        self.assertEqual(r['result']['code'], 'undefined_preset')            # 4-8: hello selects them itself
+        self.assertEqual(r['result']['code'], 'undefined_preset')            # 4-8 are empty since 2026-11-20
         self.assertEqual(self.call('/mode/input', dict(base, source='dualkey', input='digit', value=0))[0], 400)
+
+    def test_asr_digit_9_is_refused(self):
+        # owner 2026-11-20: the factory voice commands are off; an old firmware's spoken nine / zero changes nothing
+        before = self.call('/switches')[1]
+        for seq, value in ((1, 9), (2, 0)):
+            s, r = self.call('/mode/input', {'device': 'robot', 'boot': 'b1', 'seq': seq, 'age_ms': 0, 'source': 'asr',
+                                              'input': 'digit', 'value': value})
+            self.assertEqual((s, r['result']), (200, {'code': 'asr_off', 'toast': 'ASR OFF'}), value)
+        after = self.call('/switches')[1]
+        self.assertEqual({k: v.get('on') for k, v in after.items() if isinstance(v, dict) and 'on' in v},
+                         {k: v.get('on') for k, v in before.items() if isinstance(v, dict) and 'on' in v})
 
     def test_dualkey_signals_do_not_touch_the_mode(self):
         src = {'device': 'dualkey-aa', 'boot': 'x', 'seq': 3}
@@ -326,7 +337,7 @@ class CarriedTest(ModeApiBase):
         self.assertEqual((s, r['failed'], r['billing']['on'], r['result']['toast']), (200, ['notes'], False, 'PRESET 0: 1 FAILED'))
 
     def test_mode_input_needs_boot_and_seq(self):
-        base = {'device': 'robot', 'boot': 'b1', 'seq': 1, 'age_ms': 0, 'source': 'asr', 'input': 'digit', 'value': 0}
+        base = {'device': 'robot', 'boot': 'b1', 'seq': 1, 'age_ms': 0, 'source': 'quick', 'input': 'digit', 'value': 0}
         for drop in ('device', 'boot', 'seq', 'age_ms', 'source', 'input'):
             body = {k: v for k, v in base.items() if k != drop}
             self.assertEqual(self.call('/mode/input', body)[0], 400, drop)
@@ -338,7 +349,7 @@ class CarriedTest(ModeApiBase):
 
     def test_robot_preset_nine_sent_twice_runs_once(self):
         self.call('/switches', {'name': 'billing', 'on': False})
-        body = {'device': 'robot', 'boot': 'b1', 'seq': 7, 'age_ms': 0, 'source': 'asr', 'input': 'digit', 'value': 9}
+        body = {'device': 'robot', 'boot': 'b1', 'seq': 7, 'age_ms': 0, 'source': 'touch', 'input': 'digit', 'value': 9}
         r1 = self.call('/mode/input', body)[1]
         self.assertEqual((r1['result']['code'], self.call('/switches')[1]['tingwu']['on']), ('ok', True))
         self.call('/switches', {'name': 'tingwu', 'on': False})

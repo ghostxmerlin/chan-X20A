@@ -779,31 +779,19 @@ class CalledTest(HubBase):
         self.assertEqual([o("Turn left."), o("Hello. I'm here. Next."), o("Five"), o("左转"), o("turn left please")],
                          ["turn left", "next", "five", None, None])
 
-    async def test_a_direct_order_is_not_answered(self):
-        # owner 2026-11-18: hello + a Unit ASR command word is an order for the robot, not a question for 围观
-        ws = await self.open_ready()
+    async def test_an_asr_order_changes_nothing(self):
+        # owner 2026-11-20: the factory voice commands are off; an old firmware's asr_order neither closes the call
+        # window nor mutes the reply
+        await self.open_ready()
         self.hub.called("asr")
+        until, text = self.hub._called_until, self.hub._called_text
         self.hub.on_order(self.link, {"type": "asr_order", "word": "turn left", "n": 1})
-        self.assertFalse(self.hub.in_called())
-        ws.push({"type": "input_audio_buffer.speech_stopped"})
-        ws.push({"type": "response.created", "response": {"id": "r1"}})
-        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(120)).decode()})
-        ws.push({"type": "response.audio_transcript.done", "transcript": "好的，我向左转啦！"})
-        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
-        await settle(20)
-        self.assertEqual(self.link.sent, [])
-        self.assertEqual(self.recs.turns[-1]["state"], "muted_order")
-        ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "turn left"})
-        await settle(10)
-        self.assertEqual(self.hints(ws), [])                           # no called answer either
-
-    async def test_a_bare_ok_in_talk_is_not_an_order(self):
-        ws = await self.open_ready()
+        self.assertEqual((self.hub._called_until, self.hub._called_text, self.hub._order_at), (until, text, None))
+    async def test_a_spoken_command_word_is_not_an_order(self):
+        await self.open_ready()
+        self.hub.local_heard("hello, turn left.")
         self.hub.local_heard("OK.")
         self.assertIsNone(self.hub._order_at)
-        self.hub.local_heard("hello, OK.")
-        self.assertIsNotNone(self.hub._order_at)
-
     async def test_outside_a_call_ambient_stays_silent(self):
         ws = await self.open_ready()
         ws.push({"type": "conversation.item.ambient_audio_transcription.completed", "transcript": "今天天气怎么样"})

@@ -51,7 +51,7 @@ from .model_calls import BudgetExceeded
 from .store import LANE
 from . import owner_signals
 from .library import Library, LibraryConflict, COLLECTIONS, ID_RE
-from .modes import INPUTS as MODE_INPUTS
+from .modes import INPUTS as MODE_INPUTS, result as mode_result
 from . import tool_impls
 from . import body_roster
 from .tools import Tools, load_registry
@@ -371,6 +371,10 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             raise BadRequest("unknown input")
         if body["input"] not in MIND_INPUTS:
             raise ModeConflict(ON_HELLO, "on_hello")
+        if body["source"] == "asr":
+            # owner 2026-11-20 (Providence): the factory voice commands are off. Firmware older than 0.5.19 still sends
+            # a spoken nine / zero as a digit; it changes nothing (answered, so the robot shows ASR OFF).
+            return {"snapshot": modes().current(), "result": mode_result("asr_off"), "effects": []}
         return modes().apply(body["input"], body.get("value"), source=body["source"], device=body["device"],
                              boot=body["boot"], dev_seq=body["seq"], age_ms=body["age_ms"], sid=None)
 
