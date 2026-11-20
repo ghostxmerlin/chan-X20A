@@ -12,6 +12,8 @@ import json
 import os
 import re
 
+from . import gallery_redact as redact
+from .gallery_redact import MARK, REGEX_BYTES  # noqa: F401 - the page's mark; tests
 from .runlog import hello_log
 
 try:
@@ -162,16 +164,9 @@ def detail(db, root, id):
 # ---------------------------------------------------------------- complete delete (owner-triggered, irreversible)
 
 MAX_DELETE = 500
-MARK = "［图库已删除］"
 MIN_FRAGMENT = 8
-REGEX_BATCH = 200
-REGEX_BYTES = 16_000                  # Mongo refuses a $regex pattern over ~32 KB (error 51091)
-RUN_NEAR_MS = 3 * 3600_000            # mind_runs this close to the photos may quote them (eye.recent_looks)
-RUN_FIELDS = ("request", "response", "parsed")
-_BJ = datetime.timezone(datetime.timedelta(hours=8))
+_BJ, _DAY_MS = redact.BJ, redact.DAY_MS
 _SPLIT = re.compile(r"[。！？；\n]")
-_SPOOL = re.compile(r"^.+-(\d{8})\.jsonl$")
-_DAY_MS = 86400_000
 
 
 class Stale(Exception):
@@ -272,116 +267,6 @@ def _drop_bodies(db, month, rows):
     return db["logbody_" + month].delete_many({"_id": {"$in": gone}}).deleted_count if gone else 0
 
 
-def _patterns(frags):
-    """The fragments as regex alternations of at most REGEX_BATCH fragments and REGEX_BYTES UTF-8 bytes each (a
-    single longer fragment gets a pattern of its own)."""
-    out, cur, size = [], [], 0
-    for f in frags:
-        e = re.escape(f)
-        n = len(e.encode()) + 1
-        if cur and (len(cur) >= REGEX_BATCH or size + n > REGEX_BYTES):
-            out.append("|".join(cur))
-            cur, size = [], 0
-        cur.append(e)
-        size += n
-    return out + (["|".join(cur)] if cur else [])
-
-
-def _scrubber(frags):
-    """text -> text with every fragment replaced by MARK (longest first); non-strings are returned as they are."""
-    any_of = re.compile("|".join(re.escape(f) for f in frags)) if frags else None
-
-    def scrub(text):
-        if any_of is None or not isinstance(text, str) or not any_of.search(text):
-            return text
-        for f in frags:
-            text = text.replace(f, MARK)
-        return text
-    return scrub
-
-
-def _redact(coll, field, frags, skip=()):
-    """Replace the fragments in the string field of coll's documents that contain one (Mongo $regex). -> count."""
-    scrub, done = _scrubber(frags), set()
-    for pattern in _patterns(frags):
-        flt = {field: {"$regex": pattern}, **({"_id": {"$nin": list(skip)}} if skip else {})}
-        for d in coll.find(flt, {field: 1}):
-            new = scrub(d.get(field))
-            if new != d.get(field):
-                coll.update_one({"_id": d["_id"]}, {"$set": {field: new}})
-                done.add(d["_id"])
-    return len(done)
-
-
-def _redact_bodies(db, frags, first_month):
-    """Replace the fragments in every remaining log body from the photos' first month on. -> bodies changed."""
-    names = sorted(n for n in db.list_collection_names() if re.fullmatch(r"logbody_\d{6}", n) and n[8:] >= first_month)
-    return sum(_redact(db[n], "text", frags) for n in names) if frags else 0
-
-
-def _redact_runs(db, frags, lo, hi, skip):
-    """Replace the fragments inside request / response / parsed of the mind runs within RUN_NEAR_MS of the photos
-    that are not deleted themselves (e.g. a neighbour eye run that quoted the 看一眼 answer). -> runs changed."""
-    if not frags or lo is None:
-        return 0
-    scrub, n = _scrubber(frags), 0
-
-    def walk(v):
-        if isinstance(v, dict):
-            return {k: walk(x) for k, x in v.items()}
-        if isinstance(v, list):
-            return [walk(x) for x in v]
-        return scrub(v)
-    near = {"$gte": lo - RUN_NEAR_MS, "$lte": hi + RUN_NEAR_MS}
-    for d in db["mind_runs"].find({"_id": {"$nin": list(skip)}, "$or": [{"at": near}, {"minute": near}]},
-                                  {k: 1 for k in RUN_FIELDS}):
-        changed = {k: new for k in RUN_FIELDS if k in d for new in [walk(d[k])] if new != d[k]}
-        if changed:
-            db["mind_runs"].update_one({"_id": d["_id"]}, {"$set": changed})
-            n += 1
-    return n
-
-
-def _redact_spool(spool_dir, frags, lo, hi):
-    """Overwrite the fragments' bytes with as many '*' in the spool files of the Beijing days [lo, hi + 1 day], in
-    place: the size never changes, so the process appending to today's file and the .offset files are unaffected. A
-    line is only changed when it is still valid JSON afterwards. -> lines changed."""
-    if not spool_dir or not frags or lo is None or not os.path.isdir(spool_dir):
-        return 0
-    day = lambda t: datetime.datetime.fromtimestamp(t / 1000, _BJ).strftime("%Y%m%d")     # noqa: E731
-    first, last = day(lo), day(hi + _DAY_MS)
-    needles = [json.dumps(f, ensure_ascii=False)[1:-1].encode() for f in frags]
-    changed = 0
-    for name in sorted(os.listdir(spool_dir)):
-        hit = _SPOOL.match(name)
-        if not hit or not first <= hit.group(1) <= last:
-            continue
-        with open(os.path.join(spool_dir, name), "r+b") as f:
-            data = f.read()
-            pos = 0
-            while True:
-                end = data.find(b"\n", pos)
-                if end < 0:                                      # a line still being written: left alone
-                    break
-                line = new = data[pos:end]
-                for n in needles:
-                    new = new.replace(n, b"*" * len(n))
-                if new != line and _valid(new):
-                    f.seek(pos)
-                    f.write(new)
-                    changed += 1
-                pos = end + 1
-    return changed
-
-
-def _valid(line):
-    try:
-        json.loads(line)
-        return True
-    except ValueError:
-        return False
-
-
 def _drop_files(root, paths):
     """Delete the photo files whose real path is inside root/frames, then their folders once empty."""
     done = skipped = 0
@@ -415,11 +300,11 @@ def delete(db, root, ids, fp, *, spool_dir, emit):
     h, logs = m["hit"], _logs(m["hit"])
     out = {"bodies": sum(_drop_bodies(db, month, rows) for month, rows in logs.items())}
     first_month = hello_log.month_of(m["from"]) if m["from"] is not None else "000000"
-    out["bodies_redacted"] = _redact_bodies(db, m["fragments"], first_month)
-    out["sums_redacted"] = sum(_redact(db["log_" + month], "sum", m["fragments"],
+    out["bodies_redacted"] = redact.redact_bodies(db, m["fragments"], first_month)
+    out["sums_redacted"] = sum(redact.redact(db["log_" + month], "sum", m["fragments"],
                                        [r["_id"] for r in logs.get(month, [])]) for month in m["months"])
-    out["runs_redacted"] = _redact_runs(db, m["fragments"], m["from"], m["to"], [d["_id"] for d in h["mind_runs"]])
-    out["spool_redacted"] = _redact_spool(spool_dir, m["fragments"], m["from"], m["to"])
+    out["runs_redacted"] = redact.redact_runs(db, m["fragments"], m["from"], m["to"], [d["_id"] for d in h["mind_runs"]])
+    out["spool_redacted"] = redact.redact_spool(spool_dir, m["fragments"], m["from"], m["to"])
     out["log_rows"] = sum(db["log_" + month].delete_many({"_id": {"$in": [r["_id"] for r in rows]}}).deleted_count
                           for month, rows in logs.items())
     for key, c in (("segments", "mind_segments"), ("scenes", "mind_scenes"), ("packages", "mind_packages"),
@@ -432,3 +317,6 @@ def delete(db, root, ids, fp, *, spool_dir, emit):
     emit("gallery.delete", by="page", sum=f"删除 {out['frames']} 张照片{span}",
          extra={**out, "from": m["from"], "to": m["to"]})
     return out
+
+
+_redact_spool = redact.redact_spool              # the reviewer's spool bench calls it by this name
