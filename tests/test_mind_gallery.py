@@ -292,7 +292,8 @@ class DeleteTest(unittest.TestCase):
         self.assertEqual(self.ids("mind_scenes"), ["s2"])
         self.assertEqual(self.ids("mind_runs"), ["r2", "rf", "rn", "rs1r", "rs2"])
         self.assertEqual(self.ids("mind_segments"), ["g2"])
-        self.assertEqual(self.ids(self.log), ["ear:1:11", "ear:1:9", "eye:1:3", "mind:1:3", "mind:1:4", "mind:1:5"])
+        self.assertEqual(self.ids(self.log), ["ear:1:11", "ear:1:9", "eye:1:1", "eye:1:2", "eye:1:3", "mind:1:1",
+                                              "mind:1:2", "mind:1:3", "mind:1:4", "mind:1:5"])    # call.* kept stripped
         p = Path(self.root)
         self.assertFalse((p / self.paths["a"]).exists())
         self.assertFalse((p / self.paths["b"]).exists())
@@ -304,6 +305,65 @@ class DeleteTest(unittest.TestCase):
                                                "scenes", "segments", "runs", "log_rows")},
                          {"frames": 2, "files": 2, "files_skipped": 0, "looks": 1, "eye_minutes": 2, "packages": 2,
                           "scenes": 2, "segments": 2, "runs": 3, "log_rows": 4})
+
+    def test_only_the_eye_and_scene_runs_of_the_minutes_are_deleted(self):
+        """I3: chat / say / notes / model calls of the same minute are not derived from the photo: kept (redacted)."""
+        self.db.add("mind_runs",
+                    {"_id": "re1", "minute": M1, "lane": "live", "step": "eye", "request": {"c": LOOK}},
+                    {"_id": "rc", "minute": M1, "lane": "live", "step": "chat", "at": M1 + 30_000,
+                     "request": {"c": "你看：" + LOOK}},
+                    {"_id": "rsay", "minute": M1, "lane": "live", "step": "say", "at": M1 + 31_000},
+                    {"_id": "rno", "minute": M1, "lane": "live", "step": "notes", "at": M1 + 32_000},
+                    {"_id": "rmc", "minute": M1, "lane": "live", "step": "tool_answer", "at": M1 + 33_000})
+        out = self.run_delete()
+        self.assertEqual(self.ids("mind_runs"), ["r2", "rc", "rf", "rmc", "rn", "rno", "rs1r", "rs2", "rsay"])
+        self.assertEqual(out["runs"], 4)                               # r1, r1b (fusion), re1 (eye), rs1 (segment)
+        self.assertEqual(self.db["mind_runs"].find_one({"_id": "rc"})["request"]["c"], f"你看：{MARK}。{MARK}。好的")
+
+    def test_call_rows_are_kept_stripped_and_still_cost(self):
+        """M3: a deleted photo's call.* rows keep what the daily-cap ledger needs and nothing that describes it."""
+        import hello_log_query
+        from log_fixtures import FakeDB as LogDB
+        cost = {"cur": "CNY", "amount": 0.25}
+        row = self.db[self.log].find_one({"_id": "eye:1:1"})
+        self.db[self.log].replace_one({"_id": "eye:1:1"}, {**row, "run": "1", "seq": 1, "ok": True, "ms": 812,
+                                                          "model": "qwen-vl", "usage": {"in": 9}, "cost": cost,
+                                                          "trace": "t1", "extra": {"q": LOOK}, "key": "k"})
+        out = self.run_delete()
+        self.assertEqual(out["log_rows"], 4)
+        kept = self.db[self.log].find_one({"_id": "eye:1:1"})
+        self.assertEqual(kept, {"_id": "eye:1:1", "kind": "call.look", "at": M1 + 7_000, "svc": "ear", "run": "1",
+                                "seq": 1, "ok": True, "ms": 812, "model": "qwen-vl", "usage": {"in": 9},
+                                "cost": cost})
+        for i in ("eye:1:2", "mind:1:1", "mind:1:2"):
+            self.assertFalse({"ref", "body", "sum"} & set(self.db[self.log].find_one({"_id": i})), i)
+        ldb = LogDB()
+        for d in self.db[self.log].docs:
+            ldb[self.log].docs[d["_id"]] = d
+        self.assertEqual(hello_log_query.ledger(ldb, "2026-11-20")["total"], {"CNY": 0.25})
+        again = gallery.plan(self.db, ["c"], spool_dir=self.spool)       # a stripped row is not found again
+        self.assertEqual(again["log_rows"], 0)
+
+    def test_second_batch_planned_before_the_first_is_not_stale(self):
+        """M1: records gone since the plan (deleted by batch 1) do not make batch 2 stale; a new record does."""
+        fp1 = gallery.plan(self.db, ["a"], spool_dir=self.spool)["fp"]
+        fp2 = gallery.plan(self.db, ["b"], spool_dir=self.spool)["fp"]
+        gallery.delete(self.db, self.root, ["a"], fp1, spool_dir=self.spool, emit=self.emit)
+        out = gallery.delete(self.db, self.root, ["b"], fp2, spool_dir=self.spool, emit=self.emit)
+        self.assertEqual(out["frames"], 1)
+        self.assertEqual(self.ids("frames"), ["c", "d"])
+        fp3 = gallery.plan(self.db, ["c"], spool_dir=self.spool)["fp"]
+        self.db["vision_looks"].insert_one({"_id": "lc", "kind": "look", "at": M1 + 41_000, "path": self.paths["c"],
+                                            "text": "新的一眼"})
+        with self.assertRaises(gallery.Stale):
+            gallery.delete(self.db, self.root, ["c"], fp3, spool_dir=self.spool, emit=self.emit)
+        with self.assertRaises(gallery.Stale):                         # never planned
+            gallery.delete(self.db, self.root, ["d"], "0" * 16, spool_dir=self.spool, emit=self.emit)
+
+    def test_plan_lists_the_distinct_minutes(self):
+        """M2: the page sums minutes over batches without counting a minute twice."""
+        self.assertEqual(gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)["minutes"], [M1])
+        self.assertEqual(gallery.plan(self.db, ["a", "d"], spool_dir=self.spool)["minutes"], [M1, M2])
 
     def test_shared_body_is_kept_unique_body_is_deleted(self):
         out = self.run_delete()

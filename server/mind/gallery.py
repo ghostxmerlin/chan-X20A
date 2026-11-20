@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import re
+import threading
+from collections import OrderedDict
 
 from . import gallery_redact as redact
 from .gallery_redact import MARK, REGEX_BYTES  # noqa: F401 - the page's mark; tests
@@ -176,8 +178,35 @@ _BJ, _DAY_MS = redact.BJ, redact.DAY_MS
 _SPLIT = re.compile(r"[。！？；\n]")
 
 
+RUN_STEPS = ("eye", "fusion")         # mind_runs written from a minute's photos (eye.py, fusion.py); chat / say /
+                                      # notes / model calls of the same minute are not (review I3)
+# call.* rows of deleted photos stay with only these fields: the daily cap (hello_log_query.ledger) still counts
+# their cost (review M3); ref / body / sum / extra / trace / key and anything else go
+LOG_KEEP = ("_id", "kind", "at", "svc", "run", "seq", "ok", "ms", "model", "usage", "cost")
+PLANS_KEEP = 64                       # plans remembered for delete's fp check (a restart forgets them: re-plan)
+_plans, _plans_lock = OrderedDict(), threading.Lock()
+
+
 class Stale(Exception):
     """The delete plan changed since the page showed it (new data came in): show the new plan first."""
+
+
+def _remember(fp, keys):
+    with _plans_lock:
+        _plans[fp] = keys
+        _plans.move_to_end(fp)
+        while len(_plans) > PLANS_KEEP:
+            _plans.popitem(last=False)
+
+
+def _still_planned(fp, m):
+    """True when every record of the current plan was in the plan the page showed (fp). Records gone since then
+    (an earlier batch deleted a shared minute or segment) are fine; a record that was not shown is not (review M1)."""
+    if fp == m["fp"]:
+        return True
+    with _plans_lock:
+        planned = _plans.get(fp)
+    return planned is not None and m["keys"] <= planned
 
 
 def _check_ids(ids):
@@ -219,7 +248,7 @@ def _collect(db, ids):
            "mind_segments": []}
     for c in ("mind_packages", "mind_scenes"):
         hit[c] = list(db[c].find({"minute": {"$in": minutes}}))
-    runs, months = [{"minute": {"$in": minutes}}], []
+    runs, months = [{"minute": {"$in": minutes}, "step": {"$in": list(RUN_STEPS)}}], []
     if minutes:
         near = db["mind_segments"].find({"start": {"$lt": minutes[-1] + 60000}, "$or": [
             {"end": None}, {"end": {"$exists": False}}, {"end": {"$gt": minutes[0]}}]})
@@ -239,8 +268,12 @@ def _collect(db, ids):
     hit["mind_runs"] = list(db["mind_runs"].find({"$or": runs}))
     fp = hashlib.sha256(json.dumps({c: sorted(str(d.get("_id")) for d in docs) for c, docs in hit.items()},
                                    sort_keys=True).encode()).hexdigest()[:16]
+    keys = frozenset(f"{c}:{d.get('_id')}" for c, docs in hit.items() for d in docs)
     looks = hit["vision_looks"]               # every row read from these photos: look, the live eye's scene, ...
-    return {"hit": hit, "paths": paths, "months": months,
+    described = {d.get("minute") for d in hit["eye_minutes"] if d.get("result")} | \
+        {d.get("minute") for d in hit["mind_scenes"]}
+    return {"hit": hit, "paths": paths, "months": months, "keys": keys,
+            "minutes": sorted(x for x in described if isinstance(x, (int, float))),
             "from": min(ats) if ats else None, "to": max(ats) if ats else None,
             "fp": fp, "fragments": _fragments(looks, hit["eye_minutes"], hit["mind_scenes"], hit["mind_segments"])}
 
@@ -254,7 +287,8 @@ def plan(db, ids, *, spool_dir=None):
     spool is only rewritten by delete."""
     m = _collect(db, _check_ids(ids))
     h = m["hit"]
-    return {"fp": m["fp"], "frames": len(h["frames"]), "files": len(m["paths"]), "looks": len(h["vision_looks"]),
+    _remember(m["fp"], m["keys"])
+    return {"fp": m["fp"], "minutes": m["minutes"], "frames": len(h["frames"]), "files": len(m["paths"]), "looks": len(h["vision_looks"]),
             "eye_minutes": len(h["eye_minutes"]), "packages": len(h["mind_packages"]), "scenes": len(h["mind_scenes"]),
             "segments": [{"start": s.get("start"), "end": s.get("end"), "title": (s.get("summary") or {}).get("title")}
                          for s in h["mind_segments"]],
@@ -272,6 +306,18 @@ def _drop_bodies(db, month, rows):
     used = {v for r in others if isinstance(r.get("body"), dict) for v in r["body"].values()}
     gone = sorted(shas - used)
     return db["logbody_" + month].delete_many({"_id": {"$in": gone}}).deleted_count if gone else 0
+
+
+def _drop_log_rows(db, month, rows):
+    """call.* rows are kept with LOG_KEEP only (their cost stays in the ledger); any other row is deleted. -> rows."""
+    n = 0
+    for r in rows:
+        if str(r.get("kind") or "").startswith("call."):
+            db["log_" + month].replace_one({"_id": r["_id"]}, {k: r[k] for k in LOG_KEEP if k in r})
+            n += 1
+        else:
+            n += db["log_" + month].delete_many({"_id": r["_id"]}).deleted_count
+    return n
 
 
 def _drop_files(root, paths):
@@ -302,7 +348,7 @@ def delete(db, root, ids, fp, *, spool_dir, emit):
     """Delete the photos and everything written from them, if the plan is still the one the page showed (fp), else
     Stale. Texts first, then records, files last. -> what was actually deleted where."""
     m = _collect(db, _check_ids(ids))
-    if m["fp"] != fp:
+    if not _still_planned(fp, m):
         raise Stale("the delete plan changed")
     h, logs = m["hit"], _logs(m["hit"])
     out = {"bodies": sum(_drop_bodies(db, month, rows) for month, rows in logs.items())}
@@ -312,8 +358,7 @@ def delete(db, root, ids, fp, *, spool_dir, emit):
                                        [r["_id"] for r in logs.get(month, [])]) for month in m["months"])
     out["runs_redacted"] = redact.redact_runs(db, m["fragments"], m["from"], m["to"], [d["_id"] for d in h["mind_runs"]])
     out["spool_redacted"] = redact.redact_spool(spool_dir, m["fragments"], m["from"], m["to"])
-    out["log_rows"] = sum(db["log_" + month].delete_many({"_id": {"$in": [r["_id"] for r in rows]}}).deleted_count
-                          for month, rows in logs.items())
+    out["log_rows"] = sum(_drop_log_rows(db, month, rows) for month, rows in logs.items())
     for key, c in (("segments", "mind_segments"), ("scenes", "mind_scenes"), ("packages", "mind_packages"),
                    ("runs", "mind_runs"), ("eye_minutes", "eye_minutes"), ("looks", "vision_looks"),
                    ("frames", "frames")):

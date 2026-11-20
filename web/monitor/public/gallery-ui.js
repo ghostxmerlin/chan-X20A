@@ -31,10 +31,12 @@ export function batches(ids,size=BATCH){
  for(let i=0;i<ids.length;i+=size)out.push(ids.slice(i,i+size));
  return out;
 }
-// The plans of every batch -> one confirmation text. A minute with a 分钟描述 and its 情景 counts once.
+// The plans of every batch -> one confirmation text. A minute with a 分钟描述 and its 情景 counts once, also when two
+// batches share it (plan.minutes = the distinct minutes; an older mind without it: the larger count per batch).
 export function planSummary(plans){
  const sum=k=>plans.reduce((n,p)=>n+(p[k]||0),0);
- const minutes=plans.reduce((n,p)=>n+Math.max(p.eye_minutes||0,p.scenes||0),0);
+ const minutes=plans.every(p=>Array.isArray(p.minutes))?new Set(plans.flatMap(p=>p.minutes)).size
+  :plans.reduce((n,p)=>n+Math.max(p.eye_minutes||0,p.scenes||0),0);
  const seen=new Map();
  for(const p of plans)for(const s of p.segments||[])seen.set(`${s.start}-${s.end}`,s.title||'未命名');
  const parts=[`${sum('frames')} 张照片`];

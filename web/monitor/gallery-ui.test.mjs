@@ -36,6 +36,12 @@ test('planSummary: counts over batches, segment titles once', ()=>{
  assert.equal(ui.planSummary([{frames:1,looks:0,eye_minutes:0,scenes:0,segments:[]}]),'将删除 1 张照片，删除后无法恢复。');
 });
 
+test('planSummary: minutes shared by two batches count once (plan.minutes)', ()=>{
+ const p1={frames:3,looks:0,eye_minutes:2,scenes:2,minutes:[60000,120000],segments:[]};
+ const p2={frames:2,looks:0,eye_minutes:1,scenes:2,minutes:[120000,180000],segments:[]};
+ assert.equal(ui.planSummary([p1,p2]),'将删除 5 张照片、3 分钟的分钟描述和情景，删除后无法恢复。');
+});
+
 test('maintenanceHtml: three states', ()=>{
  assert.match(ui.maintenanceHtml({on:false,robot_connected:true,can_delete:false,why_not:'还没开始维护'}),/未在维护/);
  const busy=ui.maintenanceHtml({on:true,robot_connected:true,can_delete:false,why_not:'机器人还连着，请先关机'});
