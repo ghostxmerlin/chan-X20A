@@ -25,7 +25,7 @@ constexpr char kTag[] = "AsrUnit";
 constexpr uart_port_t kUart = UART_NUM_2; // UART0: M12, UART1: servo bus.
 constexpr int kBaud = 115200;
 // The owner's StickS3 voice module (~/exia/stick/docs/voice-protocol.md) on CoreS3 Port C since 2026-11-20 (the owner
-// swapped it with the M12; it was the Unit ASR on Port B G8). White wire G18 = our RX (the Stick's TX), yellow G17 =
+// moved the M12 off Port C; it was the Unit ASR on Port B G8). White wire G18 = our RX (the Stick's TX), yellow G17 =
 // our TX (the Stick's RX, pulled up there; for its control frames E0-E3, nothing is sent yet).
 constexpr gpio_num_t kRx = GPIO_NUM_18;
 constexpr gpio_num_t kTx = GPIO_NUM_17;
@@ -257,7 +257,7 @@ void asr_json(ArduinoJson::JsonObject out,uint32_t after)
 void asr_info_json(ArduinoJson::JsonObject out)
 {
     out["device"] = "StickS3 voice module (Unit ASR frame), the owner's own words";
-    out["port"] = "C (swapped with the M12 on 2026-11-20)";
+    out["port"] = "C (the M12 moved to Port A on 2026-11-20)";
     out["uart"] = 2;
     out["baud"] = kBaud;
     out["rx_gpio"] = static_cast<int>(kRx);

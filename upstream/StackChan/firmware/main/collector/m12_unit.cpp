@@ -20,9 +20,10 @@ namespace {
 constexpr char kTag[] = "M12";
 constexpr uart_port_t kUart = UART_NUM_0; // UART1: servo bus, UART2: the StickS3 voice module
 constexpr int kBaud = 115200;
-// CoreS3 Port B since 2026-11-20 (the owner swapped the M12 and the voice module's plugs; was Port C G17 / G18): the
-// yellow wire G9 is our TX, the white G8 our RX, the same cable positions as on Port C.
-constexpr gpio_num_t kTx = GPIO_NUM_9, kRx = GPIO_NUM_8;
+// The CoreS3's red side Grove port, Port A, since collector-0.5.20 (owner 2026-11-20; was Port C G17 / G18, briefly
+// Port B): the yellow wire G2 is our TX, the white G1 our RX, the same cable positions as on Port C (yellow G17,
+// white G18; docs.m5stack.com/en/core/CoreS3). GPIO2 is also the factory ESP-NOW app's laser, never run here.
+constexpr gpio_num_t kTx = GPIO_NUM_2, kRx = GPIO_NUM_1;
 constexpr int64_t kCfgRetryUs = 1000000;      // after a cfg timeout or error
 constexpr float kTemperatureLogStep = 5.0f;   // log the M12 temperature when it moves this much
 constexpr size_t kRecords = 6;                // recent user commands kept for telemetry
@@ -330,7 +331,7 @@ void m12_task(void*)
     // Installed from this task (pinned to core 1) so the UART interrupt is allocated
     // on core 1: core 0 must keep free inputs for Wi-Fi's lazily allocated AES interrupt.
     if (!install_uart()) vTaskDeleteWithCaps(nullptr);
-    ESP_LOGI(kTag, "M12 (m12d) on Port B: UART0 %d 8N1, TX GPIO%d, RX GPIO%d (core %d)", kBaud, kTx, kRx, xPortGetCoreID());
+    ESP_LOGI(kTag, "M12 (m12d) on Port A: UART0 %d 8N1, TX GPIO%d, RX GPIO%d (core %d)", kBaud, kTx, kRx, xPortGetCoreID());
     char* storage = static_cast<char*>(heap_caps_malloc(kM12MaxLine, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     void* message_memory = heap_caps_malloc(sizeof(M12Message), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     void* who_memory = heap_caps_malloc(sizeof(M12WhoPolicy), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

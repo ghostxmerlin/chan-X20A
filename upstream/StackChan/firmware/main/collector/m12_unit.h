@@ -6,8 +6,8 @@
 #include <cstdint>
 
 namespace collector {
-// UnitV2 M12 running m12d on Port B since 2026-11-20 (swapped with the voice module; was the blue Port C): UART0 at 115200 8N1,
-// TX GPIO9, RX GPIO8 (CoreS3 pin table). The log console runs on USB Serial/JTAG only,
+// UnitV2 M12 running m12d on the red side Port A since 2026-11-20 (was the blue Port C): UART0 at 115200 8N1,
+// TX GPIO2, RX GPIO1 (CoreS3 pin table). The log console runs on USB Serial/JTAG only,
 // so UART0 is free. One task (PSRAM stack, core 1) reads lines, matches replies, expires
 // requests and keeps det (standby/detect) in line with what is requested. It powers the
 // M12 from the Grove port only: never plug the M12's USB-C at the same time.
