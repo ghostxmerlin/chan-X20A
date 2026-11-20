@@ -1032,11 +1032,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._debug_from(str(text), now, trace)
         self._low_from(str(text), now, trace)
         self._role_from(str(text), now, trace)
-        word = order_word(text)
-        if word is not None and (call_rest(text) is not None or self.in_called(now)):
-            # only right after a call: a bare "OK." in ordinary talk is not an order (the robot's own report is)
-            self.ordered(word, "text", trace)
-            return
+        # (2026-11-20: no more "direct orders": the factory voice commands are off, so a command word after the call
+        # word is an ordinary called sentence; review fix, the early return here had swallowed the call)
         rest = call_rest(text)
         if rest is not None:
             self.called("text", text=text, trace=trace)

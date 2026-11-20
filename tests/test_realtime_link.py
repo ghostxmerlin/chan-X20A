@@ -806,9 +806,12 @@ class CalledTest(HubBase):
         self.hub.on_order(self.link, {"type": "asr_order", "word": "turn left", "n": 1})
         self.assertEqual((self.hub._called_until, self.hub._called_text, self.hub._order_at), (until, text, None))
     async def test_a_spoken_command_word_is_not_an_order(self):
+        # review 2026-11-20: "Providence, turn left." is a call like any other sentence (the factory commands are off),
+        # so the call window opens and the sentence is kept for the called answer
         await self.open_ready()
-        self.hub.local_heard("hello, turn left.")
-        self.hub.local_heard("OK.")
+        self.hub.local_heard("Providence, turn left.")
+        self.assertTrue(self.hub.in_called())
+        self.assertEqual((self.hub._called_text or {}).get("text"), "turn left.")
         self.assertIsNone(self.hub._order_at)
     async def test_outside_a_call_ambient_stays_silent(self):
         ws = await self.open_ready()
