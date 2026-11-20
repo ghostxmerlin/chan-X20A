@@ -211,6 +211,13 @@ test('paused: why and since when, in Beijing time', ()=>{
  assert.match(sw.pauseView(PAUSE({spent_usd:11,over:true,override:true})).spend,/已按 9 放行/);
 });
 
+test('paused for maintenance: its own text, first, and away still listed after it', ()=>{
+ const m=sw.pauseView(PAUSE({paused:true,reasons:['maintenance']}));
+ assert.equal(m.paused,true);assert.equal(m.text,'暂停中：维护中（图库页「结束维护」才恢复）');
+ const both=sw.pauseView(PAUSE({paused:true,reasons:['maintenance','away'],away_since:Date.UTC(2026,10,17,6,5)}));
+ assert.match(both.text,/^暂停中：维护中（图库页「结束维护」才恢复）；没人（14:05 起）/);
+});
+
 test('智能断句: off by default, toggles realtime_smart_turn, says when the ear has not switched yet', ()=>{
  const now=Date.now();
  const on={realtime_smart_turn:{on:true},realtime:{on:true},realtime_status:{running:[],available:true,at:now,stale:false,turn:'smart_turn_v2'}};

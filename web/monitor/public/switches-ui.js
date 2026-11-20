@@ -117,6 +117,7 @@ export function pauseView(switches){
  const spend=`今天 ${usd($u(p.spent_usd,p.spent_cny))} / ${cap}`+(p.override?'（已按 9 放行）':p.warn&&!p.over?'（已过 80%）':'');
  if(!p.paused)return {known:true,paused:false,spend,text:'',cls:p.warn?'warn':''};
  const why=[];
+ if(p.reasons?.includes('maintenance'))why.push('维护中（图库页「结束维护」才恢复）');
  if(p.reasons?.includes('budget'))why.push('今天花费到上限（北京时间 0 点、按 9 或调高上限恢复）');
  if(p.reasons?.includes('away'))why.push(`没人${typeof p.away_since==='number'?'（'+BJ_TIME(p.away_since)+' 起）':''}，有人出现、认识的声音或按任何开关就恢复`);
  return {known:true,paused:true,spend,text:'暂停中：'+why.join('；'),cls:'paused'};
