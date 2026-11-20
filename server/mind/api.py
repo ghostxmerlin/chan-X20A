@@ -949,6 +949,10 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             r = ms.apply("billing", body["on"], source="page", now_ms=now)      # = preset 9 / preset 0
             return {**switches(), "result": r["result"], "robot": r.get("robot", {}),
                     **({"failed": r["failed"]} if r.get("failed") else {})}
+        if path == "/switches" and body.get("name") == "realtime" and body.get("on") is True and \
+                body.get("by") == "touch" and modes().billing() is False:
+            # review 2026-11-20: in 关 / 收集 (billing off) a tap or a head pat must not turn the paid Docking on
+            raise Conflict("大模式是关 / 收集：点屏幕不打开付费对话（切到智能再试）")
         if path == "/switches" and body.get("name") in TOGGLES:
             if not isinstance(body.get("on"), bool):
                 raise BadRequest("on (true/false) required")

@@ -246,6 +246,18 @@ class OwnerBillingTest(ModeApiBase):
     def sw(self):
         return self.call('/switches')[1]
 
+    def test_a_tap_cannot_open_docking_in_off_or_collect(self):
+        # review 2026-11-20: in 关 / 收集 (billing off) a tap or a head pat must not switch the paid realtime on
+        self.call('/preset', {'n': 2, 'source': 'page'})
+        st, r = self.call('/switches', {'name': 'realtime', 'on': True, 'by': 'touch'})
+        self.assertEqual(st, 409)
+        self.assertFalse(self.sw()['realtime']['on'])
+        self.assertEqual(self.call('/switches', {'name': 'realtime', 'on': True})[0], 200)   # the page may
+        self.call('/switches', {'name': 'realtime', 'on': False})
+        self.call('/preset', {'n': 9, 'source': 'page'})                                    # 智能: a tap may
+        self.call('/switches', {'name': 'realtime', 'on': False})
+        self.assertEqual(self.call('/switches', {'name': 'realtime', 'on': True, 'by': 'touch'})[0], 200)
+
     def test_start_changes_no_switch(self):
         # owner 2026-11-15 "重启后保持原来的状态": a mind start (deploy, crash) runs no preset; hello's power-on sends 9
         sw = self.sw()

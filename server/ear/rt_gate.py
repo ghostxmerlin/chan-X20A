@@ -89,7 +89,18 @@ class GateMixin:
                 log("realtime: reply muted (wait_search)", flush=True)
                 self._log_gate(rid, turn, v, done)
                 return
-        if aa:                                         # 全答: every reply plays (no 嗯 / repeat / 没听清 / marker / blind gate)
+        if aa:                                         # 全答: every reply plays (no 嗯 / repeat / 没听清 / blind gate) ...
+            tx = str(turn.get("tx") or "")
+            if MARKER_RE.search(tx[:40]):              # ... but never a marker (2026-11-20 17:04: "[tool] 主人说：…" was
+                v = "marker"                           # played and then copied from 【刚才的对话】 into every reply)
+                turn["gate"], turn["held"], turn["muted"] = v, [], f"muted_{v}"
+                self._dropped.add(rid)
+                self.stats["muted_marker"] += 1
+                log("realtime: reply muted (marker, 点屏幕聊天)", flush=True)
+                self._log_gate(rid, turn, v, done, answer_all=True)
+                return
+            if not done and tx.lstrip()[:1] in ("[", "【") and len(tx.strip()) < 12:
+                return                                 # may be a marker: its audio waits a few more characters
             turn["gate"], held, turn["held"] = "play", turn["held"], []
             self._log_gate(rid, turn, "play", done, answer_all=True)
             for pcm in held:

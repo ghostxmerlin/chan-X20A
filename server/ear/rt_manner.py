@@ -177,7 +177,9 @@ class MannerMixin:
         """level quiet / low / off; how long: minutes, until exit / called (the tool) or span (mode_span.parse, said).
         -> until (clock, mode_span.OPEN) or None."""
         now = self.clock()
-        if self.cfg.answer_all and level == "quiet":   # 点屏幕聊天: 安静 = the chat ends (no quiet mode to wake from)
+        # 点屏幕聊天: a said / tool 安静 = the chat ends (no quiet mode to wake from); a double tap (by touch, owner
+        # 2026-11-20) is a real 安静 too: no voice, no dialogue, no line of her own until a tap, a pat or her name
+        if self.cfg.answer_all and level == "quiet" and by != "touch":
             self._interrupt(now)
             self.end_chat("quiet", trace)
             return None

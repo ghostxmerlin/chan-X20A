@@ -75,7 +75,11 @@ class Billing:
         """ModeStore preset_fn. Owner 2026-11-20 (collector-0.5.21): hello's power-on digit is its stored big mode
         (0 关 / 2 收集 / 9 智能) and is applied like any other (the small switches are temporary); the answer says
         power_on so the run log and the away pause do not take a reboot for the owner."""
-        on = n in (0, 2, 9) and self.power_on(source, meta)
+        on = (n in (0, 2, 9) if source == 'boot' else n == 9) and self.power_on(source, meta)
+        if on and source != 'boot':
+            # review 2026-11-20: HelloMac and firmware before 0.5.21 send a power-on 9 with source quick; only the
+            # robot's stored big mode (source boot) decides, so that one keeps every switch (as since 2026-11-17)
+            return _kept_result(source)
         out = apply_preset(n, self, source=source, now_ms=now_ms)
         return {**out, 'power_on': True} if on else out
 
@@ -200,6 +204,16 @@ def _realtime_toggle(b, source, now_ms, out):
     failed = b._run_all('realtime toggle', [(REALTIME, lambda: b.ctx.set_switch(REALTIME, on))])
     out['failed'] += failed
     return None, ('DOCK ON' if on else 'DOCK QUIET') if not failed else None    # Docking (owner 2026-11-18, was MEET)
+
+
+def _kept_result(source):
+    """An old power-on 9 (source quick): nothing changes on the server; ok stops the resends. One preset.apply row."""
+    res = result('ok', 'POWER ON: SWITCHES KEPT')
+    with hello_log.scope(trace=log_trace()):
+        hello_log.emit('preset.apply', by=source, sum='预设 9：旧的开机 9，开关保持原样',
+                       extra={'n': 9, 'code': res['code'], 'toast': res['toast'], 'failed': [], 'robot': {},
+                              'power_on': True})
+    return {'result': res, 'robot': {}, 'power_on': True}
 
 
 ACTIONS = {'realtime_toggle': _realtime_toggle, 'billing_off': _billing_off, 'billing_on': _billing_on, 'paid_senses_on': _paid_senses_on,

@@ -131,14 +131,15 @@ class InterruptMixin:
         return True
 
     def touch_quiet(self, trace=None):
-        """A double tap on the screen in Docking (owner 2026-11-19): 安静一下 (stops a reply; a call or a tap ends it)."""
+        """A double tap on the screen (or two head pats) in Docking: 安静一下 (stops a reply; a call or a tap ends it).
+        Owner 2026-11-20: in 点屏幕聊天 too — the chat ends and she ignores every voice, no dialogue at all, until she
+        is woken (a tap, a pat, her name)."""
         if not self.armed():
             return False
-        if self.cfg.answer_all:                        # 点屏幕聊天: a double tap ends the chat (stops a reply)
+        if self.cfg.answer_all:                        # 点屏幕聊天: the chat ends (stops a reply), then 安静 as below
             self._interrupt(self.clock())
             self._called_until, self._called_text = 0.0, None
             self.end_chat("double_tap", trace)
-            return True
         self.stats["touch_quiet"] += 1
         self._touch_word = False
         self._called_until, self._called_text = 0.0, None

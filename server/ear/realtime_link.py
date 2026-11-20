@@ -147,6 +147,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._called_until = 0.0                       # inside a call window (hello / Dynames): see CALLED_S
         self._called_at = None                         # the last call (merges sources that heard the same call)
         self._called_text = None                       # {text, at, trace}: a called sentence still waiting for an answer
+        self._body_at = None                           # when a shaken / patted line was sent (want(): said to the end)
         self._turn_changed = False                     # 智能断句 / 全答 switched while a session was open: close it when idle
         self._smart_wanted = None                      # the 智能断句 switch's last value (None: not read yet)
         self._chat_at = None                           # 点屏幕聊天: the tap that opened the chat (None: no chat)
@@ -247,7 +248,11 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
 
     def want(self):
         # 点屏幕聊天: no session outside a chat a tap opened (collect only)
-        body_line = self._greet is not None and self._greet.get("kind") == "body"   # shaken / patted: said anyway
+        # shaken / patted: said anyway, and the session stays until the line is said (review 2026-11-20: it closed 0.2 s
+        # after the line went out): 3 s for the reply to start, then while it plays, 30 s at most
+        b, now = self._body_at, self.clock()
+        body_line = (self._greet is not None and self._greet.get("kind") == "body") or \
+            (b is not None and now - b < 30 and (now - b < 3 or self.output_busy()))
         return self.armed() and self.link() is not None and not (self.cfg.answer_all and not self.chat_on() and not body_line)
 
     def chat_on(self, now=None):

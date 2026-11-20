@@ -373,9 +373,12 @@ class PowerOnBigModeTest(unittest.TestCase):
         self.assertEqual((self.ctx.tingwu, self.ctx.realtime, self.ctx.mouth), (False, False, 'off'))
         self.assertEqual(r['robot'], {'hearing': 'off', 'vision': 'off'})
 
-    def test_older_firmwares_quick_power_on_nine_is_applied_too(self):
+    def test_a_quick_power_on_nine_keeps_the_switches(self):
+        # review 2026-11-20: HelloMac and firmware before 0.5.21 send a power-on 9 with source quick; only the
+        # robot's stored big mode (source boot) decides, so that one changes nothing (as before)
         r = self.digit(9, source='quick')
-        self.assertEqual((r.get('power_on'), self.ctx.tingwu, self.ctx.realtime), (True, True, True))
+        self.assertEqual((r['result'], r.get('power_on')), ({'code': 'ok', 'toast': 'POWER ON: SWITCHES KEPT'}, True))
+        self.assertEqual((self.ctx.tingwu, self.ctx.realtime, self.ctx.mouth), (False, False, 'clips'))
 
     def test_a_big_mode_chosen_later_is_the_owners(self):
         self.digit(9)

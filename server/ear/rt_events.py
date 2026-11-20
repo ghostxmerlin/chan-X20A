@@ -57,6 +57,8 @@ class EventsMixin:
         if ev not in ("shaken", "patted") or not self.armed():
             return False
         now = self.clock()
+        if self.quiet_on(now) or self.low_on(now):     # 安静 / 少插话: no line (review 2026-11-20: no idle paid session)
+            return False
         if self._last_shaken_say is not None and now - self._last_shaken_say < SHAKEN_SAY_S:
             return False
         if self._greet is not None and self._greet.get("kind") != "body":
@@ -134,6 +136,8 @@ class EventsMixin:
         self._next_kind = ("greet" if g.get("size", "long") == "long" else "greet_short") if g["kind"] == "owner" \
             else g["kind"] if g["kind"] in ("body", "debug", "debug_end") else "tap"
         self._next_trace, self._next_prompt = ear_log.new_trace(), text
+        if g["kind"] == "body":
+            self._body_at = now                        # want(): the session stays until this line is said
         ear_log.emit("trigger.greet", trace=self._next_trace,
                      by={"tap": "tap", "body": "body", "debug": "mind", "debug_end": "debug"}.get(g["kind"], "m12"),
                      sum=f"招呼 {self._next_kind}", ref={"session": self.session_no},

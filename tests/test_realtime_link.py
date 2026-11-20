@@ -398,14 +398,21 @@ class AnswerAllTest(HubBase):
         self.assertFalse(self.hub.chat_on())
         self.assertEqual(self.hub.state, "closed")     # back to collect only
 
-    async def test_a_double_tap_or_quiet_ends_it(self):
+    async def test_a_double_tap_ends_it_and_she_stays_quiet_until_woken(self):
+        # owner 2026-11-20: a double tap = ignore every voice, no dialogue at all, until she is woken again
         await self.chat()
         self.hub.touch_quiet()
         self.hub.step()
         await settle(10)
         self.assertEqual(self.hub.state, "closed")
-        self.assertFalse(self.hub.quiet_on())          # no quiet mode to wake from: a tap starts the next chat
-        self.hub.touched()
+        self.assertTrue(self.hub.quiet_on())
+        self.speak(10)
+        self.speak(3, speaking=False)
+        self.hub.step()
+        await settle(10)
+        self.assertEqual(self.hub.state, "closed")     # talking does not wake her
+        self.hub.touched()                             # a tap (or a pat, or her name) does
+        self.assertFalse(self.hub.quiet_on())
         self.hub.step()
         await settle(20)
         self.assertNotEqual(self.hub.state, "closed")
@@ -413,6 +420,34 @@ class AnswerAllTest(HubBase):
         self.hub.step()
         await settle(10)
         self.assertEqual(self.hub.state, "closed")
+
+    async def test_a_marker_reply_is_never_played_nor_remembered(self):
+        # 2026-11-20 17:04: in 点屏幕聊天 the model said "[tool] 主人说：“你在听”"; every reply played, so it was heard
+        # and copied from 【刚才的对话】 into the next replies. A marker is dropped in this mode too.
+        ws = await self.chat()
+        self.speak(5)
+        self.speak(2, speaking=False)
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(100)).decode()})
+        ws.push({"type": "response.audio_transcript.delta", "delta": "["})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(100)).decode()})
+        ws.push({"type": "response.audio_transcript.delta", "delta": "tool] 主人说："})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "[tool] 主人说：“你在听”"})
+        ws.push({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {}}})
+        await settle(30)
+        self.assertEqual(self.link.frames(), [])
+        self.assertEqual(self.hub.stats["muted_marker"], 1)
+        self.assertEqual(self.hub._recent_pairs(), [])
+
+    async def test_an_ordinary_reply_still_plays_at_once(self):
+        ws = await self.chat()
+        self.speak(5)
+        self.speak(2, speaking=False)
+        ws.push({"type": "response.created", "response": {"id": "r1"}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(100)).decode()})
+        ws.push({"type": "response.audio_transcript.delta", "delta": "好"})
+        await settle(30)
+        self.assertTrue(self.link.frames())
 
     async def test_nothing_of_its_own_outside_a_chat(self):
         self.hub.set_answer_all(True)
@@ -2542,6 +2577,25 @@ class BodyEventsInTapModeTest(HubBase):
         await settle(10)
         sent = [m for m in ws.sent if m["type"] == "conversation.item.create"]
         self.assertIn("用力晃了几下", json.dumps(sent[-1], ensure_ascii=False))
+        # review 2026-11-20 (Critical): the session must stay until her line is said, then close
+        self.t[0] += 0.5
+        self.hub.step()
+        await settle(10)
+        self.assertNotEqual(self.hub.state, "closed")
+        ws.push({"type": "response.created", "response": {"id": "rb"}})
+        ws.push({"type": "response.audio.delta", "delta": base64.b64encode(pcm24(100)).decode()})
+        ws.push({"type": "response.audio_transcript.done", "transcript": "别晃了，头晕。"})
+        ws.push({"type": "response.done", "response": {"id": "rb", "status": "completed", "usage": {}}})
+        await settle(20)
+        self.assertTrue(self.link.frames())
+        sid = self.link.texts()[-1]["stream"]
+        self.hub.on_report(self.link, {"type": "tts.playing", "stream": sid})
+        self.hub.on_report(self.link, {"type": "tts.done", "stream": sid, "played_ms": 100})
+        await settle()
+        self.t[0] += 5
+        self.hub.step()
+        await settle(10)
+        self.assertEqual(self.hub.state, "closed")     # said: back to collect only
 
     async def test_patted_is_a_protest_sharing_the_shake_cooldown(self):
         ws = await self.open_ready()
@@ -2569,7 +2623,7 @@ class ShakenSayTest(HubBase):
         self.assertFalse(self.hub.body_event("shaken"))                    # within SHAKEN_SAY_S
         self.t[0] += self.rl.SHAKEN_SAY_S + 1
         self.hub.set_quiet("quiet")
-        self.assertTrue(self.hub.body_event("shaken"))
+        self.assertFalse(self.hub.body_event("shaken"))                    # 安静: not even queued (review 2026-11-20)
         n = len(ws.sent)
         self.hub.step()
         await settle(10)
