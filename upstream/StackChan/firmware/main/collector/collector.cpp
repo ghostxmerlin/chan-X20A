@@ -123,7 +123,7 @@ std::atomic<uint32_t> head_pat_count{0};
 // 0.5.23 diagnostics: the Si12T's raw output byte, and a live sensitivity (type * 8 + level, -1 = none asked)
 std::atomic<uint8_t> head_raw{0};
 std::atomic<int> head_sens_request{-1};
-std::atomic<int> head_sens_now{3};          // SI12T_TYPE_LOW, level 3 (the factory setting)
+std::atomic<int> head_sens_now{0};          // SI12T_TYPE_LOW, level 0 (0.5.25; the factory's 3 missed most pats)
 // 0.5.24: after a crash (reset reason panic) the coredump's summary, read once at boot: telemetry health.last_crash
 char last_crash[256] = {};
 
@@ -542,7 +542,7 @@ void sensor_task(void*)
     si12t_handle_t head = nullptr;
     si12t_config_t config{.i2c_bus = bus, .dev_addr = SI12T_GND_ADDRESS};
     const bool head_available = si12t_init(&config, &head) == ESP_OK &&
-        si12t_setup(head, SI12T_TYPE_LOW, SI12T_SENSITIVITY_LEVEL_3) == ESP_OK;
+        si12t_setup(head, SI12T_TYPE_LOW, SI12T_SENSITIVITY_LEVEL_0) == ESP_OK;   // 0.5.25: low 0 (the owner's test: 3 missed most)
     Sensors sample;
     TickType_t wake = xTaskGetTickCount();
     while (true) {
@@ -582,7 +582,8 @@ void sensor_task(void*)
                     touched_since = now_us;
                     ESP_LOGI(kTag, "head touch down (zones %u %u %u)", sample.head[0], sample.head[1], sample.head[2]);
                 } else {
-                    ESP_LOGI(kTag, "head touch up after %lld ms%s", static_cast<long long>((now_us - touched_since) / 1000),
+                    // %ld, never %lld: nano printf (0.5.22-0.5.24 crashed here at every release, tests/test_no_long_long_printf.py)
+                    ESP_LOGI(kTag, "head touch up after %ld ms%s", static_cast<long>((now_us - touched_since) / 1000),
                              sample.head_valid ? "" : " (read failed)");
                 }
                 was_touched = touched;

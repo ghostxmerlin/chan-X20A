@@ -372,7 +372,7 @@ void m12_task(void*)
                 ++shared->offline_events;
                 shared->tracker.clear(now, "m12_offline", vision_sink);
                 status_event_locked(M12VisionKind::m12_offline, now);
-                ESP_LOGW(kTag, "no heartbeat for %lld ms: M12 offline", static_cast<long long>((now - s.last_hb_us) / 1000));
+                ESP_LOGW(kTag, "no heartbeat for %ld ms: M12 offline", static_cast<long>((now - s.last_hb_us) / 1000));   // nano printf: no %lld
             }
             online = s.online;
             shared->tracker.tick(now, vision_sink);
