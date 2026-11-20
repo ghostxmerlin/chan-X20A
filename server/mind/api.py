@@ -1,9 +1,13 @@
 """HTTP API of mind on the server's loopback only (the Mac reaches it over ssh). Every call needs
 "Authorization: Bearer <token>". POST bodies: application/json, at most 16 KiB (validated settings: 512 KiB). POSTs write only
 mind tables (settings versions, labels/marks, rerun lane) — never raw records, never the live
-scenes. Sentence text only leaves through this API; nothing is logged.
+scenes; the 图库 delete (/gallery/delete) is the one exception and it only deletes. Sentence text only leaves through this API; nothing is logged.
 
 GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes /roles /utterances /voices
+GET  /gallery/days /gallery/hours?day /gallery/frames?from&to /gallery/images?ids /gallery/frame?id /gallery/maintenance
+     (图库, mind/gallery.py: the body camera's photos by day / hour, thumbnails, one photo with what was read from it)
+POST /gallery/maintenance {on} /gallery/plan {ids} /gallery/delete {ids, fp} (delete only while 维护中 and no robot is
+     connected, else 409 not_maintenance; a changed plan is 409 stale; none of these is an owner input)
 POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voice/try
 GET  /place; POST /place {label: text | null, source: page | robot} /place/choices {choices} | {add} | {remove}
      /place/told {text, source: crowd | chat} (where hello is now, mind/place.py; spec 2026-11-15-place-contract.md)
@@ -40,6 +44,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo
 
 from . import fusion, memory_extract, pause, place, prompts, runlog, segments, settings as settings_mod, speak
 from . import debug_mode, docs_qa
@@ -53,6 +58,8 @@ from . import owner_signals
 from .library import Library, LibraryConflict, COLLECTIONS, ID_RE
 from .modes import INPUTS as MODE_INPUTS, result as mode_result
 from . import tool_impls
+from . import gallery
+from .runlog import hello_log
 from . import body_roster
 from .tools import Tools, load_registry
 
@@ -381,15 +388,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
 
     def _read_jpeg(rel):
         """A frame file under recordings_root (realpath-checked) -> base64 text, or None."""
-        root = ctx.get("recordings_root")
-        if not root or not isinstance(rel, str) or not rel:
-            return None
-        base = os.path.realpath(root)
-        full = os.path.realpath(os.path.join(base, rel))
-        if not full.startswith(base + os.sep) or not os.path.isfile(full):
-            return None
-        with open(full, "rb") as f:
-            return base64.b64encode(f.read()).decode()
+        data = gallery.read_file(ctx.get("recordings_root"), rel)
+        return None if data is None else base64.b64encode(data).decode()
 
     def looks(limit):
         """视觉爆发 (ear vision_burst.py) for the page: the newest looks (no photos: /looks/frame), the last bursts, and
@@ -428,14 +428,97 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         out = {k: doc.get(k) for k in ("at", "session", "seq", "diff", "bytes", "w", "h")}
         out["today"] = db["frames"].count_documents({"at": {"$gte": day0}})
         out["jpeg_b64"], out["missing"] = None, True
-        root = ctx.get("recordings_root")
-        if root and isinstance(doc.get("path"), str):
-            base = os.path.realpath(root)
-            full = os.path.realpath(os.path.join(base, doc["path"]))
-            if full.startswith(base + os.sep) and os.path.isfile(full):
-                with open(full, "rb") as f:
-                    out["jpeg_b64"], out["missing"] = base64.b64encode(f.read()).decode(), False
+        b64 = _read_jpeg(doc.get("path"))
+        if b64 is not None:
+            out["jpeg_b64"], out["missing"] = b64, False
         return out
+
+    # ---- 图库 (2026-11-20) ----
+    def gallery_tz():
+        tz = current_settings()[0].get("tz") or "Asia/Shanghai"
+        return ZoneInfo(tz) if isinstance(tz, str) else tz
+
+    def gallery_state():
+        pc = ctx.get("pause")
+        if pc is None:
+            raise Unavailable("pause is not running here")
+        since = pc.doc().get("maintenance_since")
+        on = bool(pc.view().get("maintenance"))
+        try:                                       # the ear keeps one doc per body (mind/body_roster.py)
+            connected = any(r["online"] for r in (body_roster._row(d) for d in db["bodies"].find({}).limit(50))
+                            if r["kind"] == "stackchan")
+        except Exception as e:                     # noqa: BLE001 - cannot tell: treat as connected, never delete
+            print(f"mind gallery: robot state unreadable: {type(e).__name__}", flush=True)
+            connected = True
+        why = "还没开始维护" if not on else ("机器人还连着，请先关机" if connected else None)
+        return {"on": on, "since": since if on else None, "robot_connected": connected,
+                "can_delete": why is None, "why_not": why}
+
+    def gallery_ids(v):
+        if not isinstance(v, list) or not all(isinstance(i, str) for i in v):
+            raise BadRequest("ids must be a list of strings")
+        return v
+
+    def gallery_get(path, q):
+        try:
+            if path == "/gallery/days":
+                return {"days": gallery.days(db, gallery_tz())}
+            if path == "/gallery/hours":
+                day = _one(q, "day", LOG_DAY_RE) or ""
+                return {"day": day, "hours": gallery.hours(db, day, gallery_tz())}
+            if path == "/gallery/frames":
+                return {"frames": gallery.frames(db, _int(q, "from"), _int(q, "to"))}
+            if path == "/gallery/images":
+                ids = [i for i in (_one(q, "ids") or "").split(",") if i]
+                if not ids:
+                    raise BadRequest("ids required")
+                return {"images": gallery.images(db, ctx.get("recordings_root"), ids)}
+            if path == "/gallery/frame":
+                fid = _one(q, "id")
+                if not fid or len(fid) > 80:
+                    raise BadRequest("id required")
+                doc = gallery.detail(db, ctx.get("recordings_root"), fid)
+                if doc is None:
+                    raise NotFound("no such frame")
+                return doc
+            if path == "/gallery/maintenance":
+                return gallery_state()
+        except ValueError as e:
+            raise BadRequest(str(e)[:120]) from None
+        raise NotFound("not found")
+
+    def gallery_post(path, body):
+        pc = ctx.get("pause")
+        try:
+            if path == "/gallery/maintenance":
+                if not isinstance(body.get("on"), bool):
+                    raise BadRequest("on (true/false) required")
+                if pc is None:
+                    raise Unavailable("pause is not running here")
+                pc.set_maintenance(body["on"])
+                return gallery_state()
+            if path == "/gallery/plan":
+                return gallery.plan(db, gallery_ids(body.get("ids")), spool_dir=ctx.get("spool_dir"))
+            if path == "/gallery/delete":
+                ids = gallery_ids(body.get("ids"))
+                if not isinstance(body.get("fp"), str):
+                    raise BadRequest("fp required")
+                st = gallery_state()
+                if not st["can_delete"]:
+                    raise ModeConflict(st["why_not"], "not_maintenance")
+                try:
+                    return gallery.delete(db, ctx.get("recordings_root"), ids, body["fp"],
+                                          spool_dir=ctx.get("spool_dir"), emit=hello_log.emit)
+                except gallery.Stale as e:
+                    raise ModeConflict(str(e), "stale") from None
+                except ValueError:
+                    raise
+                except Exception as e:            # noqa: BLE001 - started and failed: 503 from _run, type logged
+                    print(f"mind gallery: delete failed: {type(e).__name__}", flush=True)
+                    raise
+        except ValueError as e:
+            raise BadRequest(str(e)[:120]) from None
+        raise NotFound("not found")
 
     DB_POST = {'/db/person': 'people_cards', '/db/person/note': 'people_notes', '/db/memory': 'memory_items',
                '/db/knowledge': 'knowledge_items'}
@@ -556,6 +639,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         raise NotFound("not found")
 
     def get(path, q):
+        if path.startswith('/gallery/'):
+            return gallery_get(path, q)
         if path == '/log' or path.startswith('/log/'):
             return log_get(path, q)
         if path.startswith('/db/'):
@@ -741,6 +826,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
 
     def post(path, body):
         now = int(time.time() * 1000)
+        if path.startswith("/gallery/"):
+            return gallery_post(path, body)
         if path == "/tool/call":                          # B1: one tool call -> the envelope (errors inside it)
             trace = body.get("trace")
             trace = trace if isinstance(trace, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", trace) else None
@@ -1141,7 +1228,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                                 '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge',
                                 '/db/memory/review', '/db/extract/switch', '/db/extract/run',
                                 '/mode', '/mode/input', '/mode/report', '/mode/robot', '/preset', '/chat/heard', '/chat/stage',
-                                '/tool/call', '/proposal/decide'):
+                                '/tool/call', '/proposal/decide', '/gallery/maintenance', '/gallery/plan', '/gallery/delete'):
                 if url.path in ("/state", "/timeline", "/minute", "/now", "/segments", "/scene", "/names", "/prompts", "/labels", "/stats", "/mode/seq"):
                     self._send(405, {"error": "read only"})
                 else:

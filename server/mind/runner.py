@@ -469,6 +469,7 @@ def main():
                                                                          "say_auto": say_auto_live, "mode_store": mode_store,
                                                                          "billing": billing, "round_gate": round_gate,
                                                                          "chat": chat, "pause": pause_ctl, "daily": daily,
+                                                                         "spool_dir": os.path.expanduser(runlog.SPOOL_DIR),
                                                                          "research": research, "embed": embed}),
                      daemon=True).start()
     cursor = store.state().get("cursor_minute")
