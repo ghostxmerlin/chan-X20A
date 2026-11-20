@@ -1,8 +1,8 @@
 import {hearingBody} from './hearing.mjs';
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
-const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'],mic_gain:['value'],m12_mode:['mode'],m12:['enabled'],m12_learn:['name'],m12_forget:['name'],m12_faces:[],m12_who:[],m12_ping:[],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_turn:['duration_ms'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],head_pat:['enabled'],light:['r','g','b'],big_mode:['mode'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
+const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'],mic_gain:['value'],m12_mode:['mode'],m12:['enabled'],m12_learn:['name'],m12_forget:['name'],m12_faces:[],m12_who:[],m12_ping:[],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_turn:['duration_ms'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],head_pat:['enabled'],head_sensitivity:['sensitivity','type'],light:['r','g','b'],big_mode:['mode'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
 // Every JSON control reaches the robot through one endpoint; `target` selects the feature.
-const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',mic_gain:'mic_gain',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_turn:'yaw_turn',yaw_step:'yaw_step',pitch:'pitch',camera:'camera',head_pat:'head_pat',light:'light',big_mode:'big_mode'};
+const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',mic_gain:'mic_gain',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_turn:'yaw_turn',yaw_step:'yaw_step',pitch:'pitch',camera:'camera',head_pat:'head_pat',head_sensitivity:'head_pat',light:'light',big_mode:'big_mode'};
 const route = '/v1/control';
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
 Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[],hearing_forget:['name']});
@@ -17,6 +17,7 @@ export class Controls {
     const keys=['action','boot',...fields[input.action]];
     if (Object.keys(input).length !== keys.length || !keys.every(k=>Object.hasOwn(input,k))) fail(400,'控制参数无效');
     if (['interaction','m12','motor','camera','head_pat'].includes(input.action) && typeof input.enabled !== 'boolean') fail(400,'启用状态必须是布尔值');
+    if (input.action==='head_sensitivity' && !(Number.isInteger(input.sensitivity)&&input.sensitivity>=0&&input.sensitivity<=7&&['low','high'].includes(input.type))) fail(400,'灵敏度 0–7，类型 low / high');
     if (input.action==='big_mode' && !['off','collect','smart'].includes(input.mode)) fail(400,'大模式只能是 关 / 收集 / 智能');
     if (input.action==='light' && !['r','g','b'].every(k=>Number.isInteger(input[k])&&input[k]>=0&&input[k]<=255)) fail(400,'颜色须为 r g b 0–255 的整数');
     if (input.action==='interaction' && !['tracking','recognition','advanced'].includes(input.mode)) fail(400,'未知交互模式');
@@ -69,7 +70,7 @@ export class Controls {
       return {target:'eyes',op:input.action.slice(5),...body,...(input.action==='eyes_play'?{mode:'once'}:{})};
     }
     if (input.action==='camera' && m.info?.capabilities?.camera_control!=='supported') fail(409,'当前固件尚未支持相机开关');
-    if (input.action==='head_pat' && m.info?.capabilities?.head_pat!=='supported') fail(409,'固件过旧：拍头感应需要 collector-0.5.21');
+    if (input.action.startsWith('head_') && m.info?.capabilities?.head_pat!=='supported') fail(409,'固件过旧：拍头感应需要 collector-0.5.21');
     if (input.action==='light' && m.info?.capabilities?.body_light!=='supported') fail(409,'固件过旧：机身灯需要 collector-0.5.21');
     if (input.action==='big_mode' && m.info?.capabilities?.big_mode!=='supported') fail(409,'固件过旧：大模式需要 collector-0.5.21');
     if (input.action==='yaw' && m.info?.capabilities?.yaw_step_45!=='supported') fail(409,'当前固件尚未支持 45° 左右步进');

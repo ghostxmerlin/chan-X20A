@@ -303,3 +303,12 @@ test('big mode goes to the robot (0.5.21)',async()=>{
   await assert.rejects(c.execute(bad));
  assert.equal(calls.length,1);
 });
+test('head sensitivity goes to the robot live (0.5.23 diagnostics)',async()=>{
+ const {m,c,calls}=fixture();
+ m.info.capabilities.head_pat='supported';
+ await c.execute({action:'head_sensitivity',sensitivity:6,type:'high',boot:'boot-a'});
+ assert.deepEqual(calls[0][1],{target:'head_pat',sensitivity:6,type:'high'});
+ for(const bad of [{action:'head_sensitivity',sensitivity:8,type:'low',boot:'boot-a'},{action:'head_sensitivity',sensitivity:2,type:'mid',boot:'boot-a'}])
+  await assert.rejects(c.execute(bad));
+ assert.equal(calls.length,1);
+});

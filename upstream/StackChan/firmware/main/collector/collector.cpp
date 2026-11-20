@@ -119,6 +119,10 @@ const char* big_mode_by = "boot";
 std::atomic<uint8_t> head_pat_last{0};
 std::atomic<int64_t> head_pat_last_us{0};
 std::atomic<uint32_t> head_pat_count{0};
+// 0.5.23 diagnostics: the Si12T's raw output byte, and a live sensitivity (type * 8 + level, -1 = none asked)
+std::atomic<uint8_t> head_raw{0};
+std::atomic<int> head_sens_request{-1};
+std::atomic<int> head_sens_now{3};          // SI12T_TYPE_LOW, level 3 (the factory setting)
 // Two independent bounded cursors share the existing capture ring: phone + Mac.
 std::atomic<unsigned> audio_clients{0};
 std::atomic<uint32_t> audio_errors{0}, camera_errors{0}, audio_sent{0}, audio_skipped{0};
@@ -528,7 +532,17 @@ void sensor_task(void*)
         }
         if (sample.seq % 2 == 0) {                 // every 40 ms (0.5.21: a pat lasts only 100-200 ms)
             uint8_t value = 0;
+            if (const int r = head_sens_request.exchange(-1); r >= 0 && head_available) {
+                const esp_err_t e = si12t_set_sensitivity(head, r >= 8 ? SI12T_TYPE_HIGH : SI12T_TYPE_LOW,
+                                                          static_cast<si12t_sensitivity_level_t>(r % 8));
+                if (e == ESP_OK) head_sens_now = r;
+                ESP_LOGI(kTag, "head sensitivity -> %s %d (%s)", r >= 8 ? "high" : "low", r % 8, esp_err_to_name(e));
+            }
             sample.head_valid = head_available && si12t_read_touch_result(head, &value) == ESP_OK;
+            if (sample.head_valid && value != head_raw.load()) {
+                ESP_LOGI(kTag, "head raw 0x%02x -> 0x%02x", head_raw.load(), value);   // 0.5.23 diagnostics
+                head_raw = value;
+            }
             if (sample.head_valid) {
                 si12t_parse_touch_result_to(value, sample.head);
                 sample.head_us = esp_timer_get_time();
@@ -1215,6 +1229,8 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     auto values = head["values"].to<JsonArray>();
     for (auto value : sample.head) values.add(value);
     head["pat_enabled"] = head_pat_enabled.load();
+    head["raw"] = head_raw.load();
+    head["sensitivity"] = head_sens_now.load() % 8; head["sensitivity_type"] = head_sens_now.load() >= 8 ? "high" : "low";
     head["pat_count"] = head_pat_count.load();
     head["last_gesture"] = head::gesture_name(static_cast<head::Gesture>(head_pat_last.load()));
     head["last_gesture_us"] = head_pat_last_us.load();
@@ -1611,6 +1627,19 @@ esp_err_t big_mode_control(ControlReply* request, JsonObject doc, const char*)
 // 0.5.21: {"target":"head_pat","enabled":bool}, saved in NVS (default on).
 esp_err_t head_pat_control(ControlReply* request, JsonObject doc, const char*)
 {
+    // 0.5.23 diagnostics: {"target":"head_pat","sensitivity":0..7[,"type":"low|high"]} sets the Si12T live (RAM only)
+    if (doc["sensitivity"].is<int>()) {
+        const int level = doc["sensitivity"].as<int>();
+        const char* type = doc["type"] | "low";
+        const bool high = !std::strcmp(type, "high");
+        if (level < 0 || level > 7 || (!high && std::strcmp(type, "low")) || doc.size() > 2) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected sensitivity 0..7 and type low / high"); return ESP_OK;
+        }
+        head_sens_request = (high ? 8 : 0) + level;
+        JsonDocument result;
+        result["accepted"] = true; result["sensitivity"] = level; result["type"] = high ? "high" : "low"; result["persisted"] = false;
+        return send_json(request, result);
+    }
     if (doc.size() != 1 || !doc["enabled"].is<bool>()) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
     }

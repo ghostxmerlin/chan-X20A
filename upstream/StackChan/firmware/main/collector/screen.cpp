@@ -1429,7 +1429,20 @@ void screen_touch(bool down, uint32_t now_ms, int x, int y)
     }
     if (page == Page::Home) {
         home_gesture.sample(down, now_ms, x, y);
-        if (!down && pressed) last_release = now_ms;
+        // 0.5.23 diagnostics (owner 2026-11-20: some double taps are not seen): every home stroke in the log
+        static uint32_t stroke_at = 0, gap_ms = 0;
+        static int stroke_x = -1, stroke_y = -1, stroke_dx = 0, stroke_dy = 0;
+        if (down && !pressed && x >= 0 && y >= 0) {
+            gap_ms = last_release ? now_ms - last_release : 0;
+            stroke_at = now_ms; stroke_x = x; stroke_y = y; stroke_dx = stroke_dy = 0;
+        } else if (down && pressed && x >= 0 && stroke_x >= 0) {
+            stroke_dx = std::max(stroke_dx, std::abs(x - stroke_x)); stroke_dy = std::max(stroke_dy, std::abs(y - stroke_y));
+        }
+        if (!down && pressed) {
+            last_release = now_ms;
+            ESP_LOGI("Touch", "home stroke %lu ms, moved %d,%d px, %lu ms after the last release",
+                     static_cast<unsigned long>(now_ms - stroke_at), stroke_dx, stroke_dy, static_cast<unsigned long>(gap_ms));
+        }
         pressed = down;
         return;
     }
@@ -1480,7 +1493,10 @@ void screen_cancel_touch()
     // Home: a failed read is only a release for the classifier, which rejoins the stroke if the finger is still
     // there within 60 ms. Cancelling here (touch_cancelled) would drop the rest of the stroke and turn a cut-off
     // stroke into a phantom tap (review I1). Other pages keep the cancel.
-    if (page == Page::Home) { home_gesture.lost(); pressed = false; return; }
+    if (page == Page::Home) {
+        if (pressed) ESP_LOGI("Touch", "home touch lost mid-stroke (stale or failed read)");   // 0.5.23 diagnostics
+        home_gesture.lost(); pressed = false; return;
+    }
     touch_cancelled = pressed || touch_cancelled;
     pressed = false;
     touch_start_x = touch_start_y = touch_last_x = touch_last_y = -1;
