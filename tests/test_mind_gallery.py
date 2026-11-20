@@ -276,7 +276,7 @@ class DeleteTest(unittest.TestCase):
 
     def test_open_segment_overlaps_and_owns_later_segment_calls(self):
         self.db["mind_segments"].insert_one({"_id": "g4", "start": M2 - 60_000, "end": None, "lane": "live",
-                                             "summary": {"title": "现在还在进行的段落", "text": "t"}})
+                                             "at": M2 + 70_000, "summary": {"title": "现在还在进行的段落", "text": "t"}})
         out = gallery.plan(self.db, ["d"], spool_dir=self.spool)
         self.assertEqual(sorted(s["title"] for s in out["segments"]), ["后来去客厅休息的时间段", "现在还在进行的段落"])
         self.db[self.log].insert_one({"_id": "mind:1:6", "kind": "call.segment", "at": M2 + 70_000,
@@ -426,6 +426,43 @@ class DeleteTest(unittest.TestCase):
         self.assertEqual(out["spool_redacted"], 1)
         self.assertEqual(self.old.read_bytes(), old)                   # outside the photos' days
         self.assertEqual((Path(self.spool) / "ear-20261120.offset").read_text(), "12")
+
+    def open_segment(self, id, start, **extra):
+        self.db["mind_segments"].insert_one({"_id": id, "start": start, "end": None, "lane": "live", "version": 1,
+                                             "summary": {"title": f"段落{id}", "text": "t"}, **extra})
+
+    def segment_ids(self, ids):
+        return sorted(s["title"][2:] for s in gallery.plan(self.db, ids, spool_dir=self.spool)["segments"])
+
+    def test_old_open_segment_versions_do_not_match(self):
+        """Production (2026-11-21 read-only check): 835 of 1009 mind_segments rows are old open versions (end None,
+        written 5 min after their start, never closed). An open row covers [start, at) only, not until now."""
+        old = M2 - 10 * 86400_000
+        self.open_segment("o1", old, at=old + 300_000)                     # (1) days before: not matched
+        self.db[self.log].insert_one({"_id": "mind:9:1", "kind": "call.segment", "at": old + 300_000,
+                                      "ref": {"minute": old, "lane": "live"}})
+        self.db["mind_runs"].insert_one({"_id": "ro1", "minute": old, "lane": "live", "step": "segment"})
+        self.open_segment("o2", M2 - 120_000, at=M2 + 30_000)               # (2) [start, at) holds M2: matched
+        self.open_segment("o3", M2 - 300_000, at=M2 - 60_000)               # ended before M2: not matched
+        self.open_segment("o4", M2)                                         # (3) no at: [start, start + 60 s)
+        self.open_segment("o5", M2 - 60_000)                                # no at, the minute before: not matched
+        self.open_segment("o6", M2 - 60_000, at=None)
+        out = gallery.plan(self.db, ["d"], spool_dir=self.spool)
+        self.assertEqual(self.segment_ids(["d"]), ["o2", "o4", "去客厅休息的时间段"])      # + g2 (closed, overlaps)
+        self.assertEqual(out["runs"], 2)                                    # r2 + rs2 (g2's run), not ro1
+        self.assertEqual(out["log_rows"], 2)                                # eye:1:3 + g2's call.segment, not mind:9:1
+        self.run_delete(["d"])
+        self.assertEqual([i for i in self.ids("mind_segments") if i.startswith("o")], ["o1", "o3", "o5", "o6"])
+        self.assertIn("ro1", self.ids("mind_runs"))
+        self.assertIn("ref", self.db[self.log].find_one({"_id": "mind:9:1"}))
+
+    def test_segments_starting_after_the_photo_minute_never_match(self):
+        """Guard: photos in one minute cannot match a segment that starts after that minute, open or closed."""
+        self.open_segment("a1", M2 + 60_000, at=M2 + 600_000)
+        self.db["mind_segments"].insert_one({"_id": "a2", "start": M2 + 120_000, "end": M2 + 600_000, "lane": "live",
+                                             "summary": {"title": "段落a2", "text": "t"}})
+        self.open_segment("a3", M2 + 60_000)
+        self.assertFalse({"a1", "a2", "a3"} & set(self.segment_ids(["d"])))
 
     def test_live_eye_scene_text_is_redacted_elsewhere(self):
         """C1 (reviewer's scene_leak.py): a vision_looks kind scene row's text quoted in a realtime instructions body."""

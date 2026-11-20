@@ -246,6 +246,16 @@ def _fragments(looks, eyes, scenes, segs):
     return sorted((p for p in out if len(p) >= MIN_FRAGMENT), key=lambda p: (-len(p), p))
 
 
+def _segment_end(s):
+    """Where a mind_segments row ends for the overlap test. A closed row: its end. An open row (end None) covers only
+    [start, at), at = when its summary was written (it cannot hold scenes after that); without at, [start, start + 60 s).
+    Production keeps hundreds of old open versions that were never closed: "open until now" matched them all."""
+    if isinstance(s.get("end"), (int, float)):
+        return s["end"]
+    at = s.get("at")
+    return at if isinstance(at, (int, float)) and at > s["start"] else s["start"] + 60000
+
+
 def _collect(db, ids):
     """Everything a delete of these photos removes: {collection: [docs]}, paths, minutes, fragments, fp."""
     rows = list(db["frames"].find({"_id": _ids(ids)}))
@@ -261,10 +271,15 @@ def _collect(db, ids):
         hit[c] = list(db[c].find({"minute": {"$in": minutes}}))
     runs, months = [{"minute": {"$in": minutes}, "step": {"$in": list(RUN_STEPS)}}], []
     if minutes:
+        first = minutes[0]
         near = db["mind_segments"].find({"start": {"$lt": minutes[-1] + 60000}, "$or": [
-            {"end": None}, {"end": {"$exists": False}}, {"end": {"$gt": minutes[0]}}]})
-        hit["mind_segments"] = [s for s in near if any(
-            s["start"] < m + 60000 and (s.get("end") is None or s["end"] > m) for m in minutes)]
+            {"end": {"$gt": first}}, {"end": None, "at": {"$gt": first}},
+            {"end": {"$exists": False}, "at": {"$gt": first}},
+            {"end": None, "at": None, "start": {"$gt": first - 60000}},
+            {"end": {"$exists": False}, "at": {"$exists": False}, "start": {"$gt": first - 60000}},
+            {"end": None, "at": {"$exists": False}, "start": {"$gt": first - 60000}}]})
+        hit["mind_segments"] = [s for s in near if isinstance(s.get("start"), (int, float)) and any(
+            s["start"] < m + 60000 and _segment_end(s) > m for m in minutes)]
         # a segment's summary run and its call.segment row are keyed by the segment's start + lane (segments.py)
         runs += [{"step": "segment", "lane": s.get("lane"), "minute": s["start"]} for s in hit["mind_segments"]]
         ors = [{"kind": {"$in": ["call.eye", "call.fusion"]}, "ref.minute": {"$in": minutes}}]

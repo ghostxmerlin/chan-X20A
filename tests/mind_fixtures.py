@@ -54,6 +54,12 @@ def _get(doc, key):
 _MISSING = object()
 
 
+def _comparable(a, b):
+    num = (int, float)
+    return (isinstance(a, num) and isinstance(b, num) and not isinstance(a, bool) and not isinstance(b, bool)) or \
+        (type(a) is type(b) and a is not None)
+
+
 class FakeDuplicateKey(Exception):
     code = 11000
 
@@ -72,6 +78,8 @@ def _match(doc, flt):
                         return False
                 elif value is _MISSING:
                     return False
+                elif op in ("$gte", "$gt", "$lt", "$lte") and not _comparable(value, arg):
+                    return False                   # Mongo: no match across types (null vs a number)
                 elif op == "$gte" and not value >= arg: return False
                 elif op == "$gt" and not value > arg: return False
                 elif op == "$lt" and not value < arg: return False
