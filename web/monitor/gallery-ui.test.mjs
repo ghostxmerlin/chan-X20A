@@ -75,3 +75,60 @@ test('the gallery writes are whitelisted in both places', async ()=>{
  for(const p of ['/gallery.html','/gallery-ui.js','/gallery.css'])assert.ok(server.includes(`'${p}'`),p);
  assert.match(readFileSync(new URL('./public/index.html',import.meta.url),'utf8'),/href="\/gallery.html"[^>]*>图库</);
 });
+
+// ---- the delete state machine, with a scripted post ----
+function script(handlers){
+ const calls=[];
+ const post=async(path,body)=>{calls.push([path,body]);return handlers(path,body,calls.filter(c=>c[0]===path).length);};
+ return {post,calls};
+}
+const plan=(ids,fp)=>({status:200,json:{fp,frames:ids.length,looks:0,eye_minutes:0,scenes:0,segments:[]}});
+const ids1001=Array.from({length:1001},(_,i)=>'i'+i);
+const deletes=calls=>calls.filter(c=>c[0]==='/gallery/delete');
+
+test('deleteFlow (a): all batches ok, counts per batch, all deleted', async ()=>{
+ const asked=[];
+ const {post,calls}=script((p,b)=>p==='/gallery/plan'?plan(b.ids,'fp'+b.ids[0]):{status:200,json:{frames:b.ids.length,looks:1}});
+ const r=await ui.deleteFlow(ids1001,{post,confirm:async t=>{asked.push(t);return true;}});
+ assert.equal(asked.length,1);assert.match(asked[0],/将删除 1001 张照片/);
+ assert.deepEqual(r.deleted,ids1001);assert.equal(r.stopped,null);
+ assert.equal(r.counts.reduce((n,o)=>n+o.frames,0),1001);
+ assert.deepEqual(deletes(calls).map(c=>c[1].fp),['fpi0','fpi500','fpi1000']);
+});
+
+test('deleteFlow (b): stale on batch 2 re-plans only the rest and asks again', async ()=>{
+ const asked=[];let stale=true;
+ const {post,calls}=script((p,b)=>{
+  if(p==='/gallery/plan')return plan(b.ids,'fp'+b.ids[0]+(stale?'-old':''));
+  if(b.ids[0]==='i500'&&stale){stale=false;return {status:409,json:{code:'stale',error:'the delete plan changed'}};}
+  return {status:200,json:{frames:b.ids.length}};
+ });
+ const ids=ids1001.slice(0,1000);
+ const r=await ui.deleteFlow(ids,{post,confirm:async t=>{asked.push(t);return true;}});
+ assert.equal(asked.length,2);assert.match(asked[1],/变化/);assert.match(asked[1],/将删除 500 张照片/);
+ const plans=calls.filter(c=>c[0]==='/gallery/plan');
+ assert.equal(plans.length,3);assert.equal(plans[2][1].ids[0],'i500');   // third plan = only batch 2
+ assert.deepEqual(r.deleted,ids);assert.equal(r.stopped,null);
+ assert.equal(deletes(calls).at(-1)[1].fp,'fpi500');
+});
+
+test('deleteFlow (c): a 503 on batch 2 stops, only batch 1 counted deleted', async ()=>{
+ const {post}=script((p,b)=>p==='/gallery/plan'?plan(b.ids,'f'+b.ids[0]):b.ids[0]==='i500'?{status:503,json:{error:'busy'}}:{status:200,json:{frames:b.ids.length}});
+ const ids=ids1001.slice(0,1000);
+ const r=await ui.deleteFlow(ids,{post,confirm:async()=>true});
+ assert.deepEqual(r.deleted,ids.slice(0,500));
+ assert.deepEqual(r.stopped.remaining,ids.slice(500));
+ assert.equal(r.stopped.error,'busy');assert.equal(r.counts.length,1);
+});
+
+test('deleteFlow (d): 409 not_maintenance on the first batch deletes nothing', async ()=>{
+ const {post}=script((p,b)=>p==='/gallery/plan'?plan(b.ids,'f'):{status:409,json:{code:'not_maintenance',error:'机器人还连着，请先关机'}});
+ const r=await ui.deleteFlow(['a','b'],{post,confirm:async()=>true});
+ assert.deepEqual(r.deleted,[]);assert.equal(r.stopped.code,'not_maintenance');assert.deepEqual(r.stopped.remaining,['a','b']);
+});
+
+test('deleteFlow (e): declining the confirmation sends no delete', async ()=>{
+ const {post,calls}=script((p,b)=>plan(b.ids,'f'));
+ const r=await ui.deleteFlow(['a'],{post,confirm:async()=>false});
+ assert.equal(deletes(calls).length,0);assert.deepEqual(r.deleted,[]);assert.equal(r.cancelled,true);
+});

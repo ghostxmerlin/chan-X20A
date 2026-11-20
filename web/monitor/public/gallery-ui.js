@@ -43,6 +43,31 @@ export function planSummary(plans){
  if(seen.size)parts.push(`${seen.size} 段段落总结（${[...seen.values()].join('、')}）`);
  return `将删除 ${parts.join('、')}，删除后无法恢复。`;
 }
+// The delete orchestration, free of the DOM. post(path, body) -> {status, json}; confirm(text) -> Promise<bool>.
+// Plans every batch, asks once, deletes batch by batch with each batch's fp. A stale 409 re-plans the batches not yet
+// done and asks again; any other failure stops. -> {deleted, counts, cancelled, stopped: null | {code, error, remaining}}.
+export async function deleteFlow(ids,{post,confirm,onProgress=()=>{}}){
+ const out={deleted:[],counts:[],cancelled:false,stopped:null};
+ let pending=batches(ids),note='';
+ while(pending.length){
+  const plans=[];
+  for(const b of pending){
+   const r=await post('/gallery/plan',{ids:b});
+   if(r.status<200||r.status>=300){out.stopped={code:r.json?.code||null,error:r.json?.error||('状态 '+r.status),remaining:pending.flat(),phase:'plan'};return out;}
+   plans.push(r.json);
+  }
+  if(!await confirm((note?note+'\n':'')+planSummary(plans))){out.cancelled=true;return out;}
+  let stale=false;
+  for(let i=0;i<pending.length;i++){
+   const r=await post('/gallery/delete',{ids:pending[i],fp:plans[i].fp});
+   if(r.status>=200&&r.status<300){out.deleted.push(...pending[i]);out.counts.push(r.json);onProgress(out);continue;}
+   if(r.status===409&&r.json?.code==='stale'){pending=pending.slice(i);stale=true;note='清单在你确认之后有了变化，已重新生成：';break;}
+   out.stopped={code:r.json?.code||null,error:r.json?.error||('状态 '+r.status),remaining:pending.slice(i).flat()};return out;
+  }
+  if(!stale)break;
+ }
+ return out;
+}
 // The 维护 note at the top: not in it / in it but the robot is still connected / in it and ready.
 export function maintenanceHtml(m){
  if(!m)return '<span class="dot off"></span><b>读不到维护状态</b>';
@@ -256,41 +281,21 @@ export function mountGallery(doc,{fetchImpl=(...a)=>fetch(...a),URLImpl=URL,Obse
    $('g-modal').hidden=false;no.focus();
   });
  }
- async function planAll(bs){
-  const plans=[];
-  for(const b of bs){
-   const r=await api('/gallery/plan',{ids:b});
-   if(!r.ok)throw new Error(r.json?.error||('状态 '+r.status));
-   plans.push(r.json);
-  }
-  return plans;
- }
  async function runDelete(ids){
   if(!ids.length||!canDelete())return;
   S.busy=true;renderBar();
-  const done=[];let all=batches(ids),removed=new Set();
-  const total=ids.length;
+  const total=ids.length;let r={deleted:[],counts:[]};
   try{
-   let pending=all,note='';
-   for(;;){
-    let plans;
-    try{plans=await planAll(pending);}catch(e){await ask({title:'无法删除',text:'没能拿到删除清单：'+e.message,ok:null});break;}
-    const go=await ask({title:'确认删除',text:(note?note+'\n':'')+planSummary(plans),ok:`删除 ${pending.reduce((n,b)=>n+b.length,0)} 张`});
-    if(!go)break;
-    let stale=false,stopped=null;
-    for(let i=0;i<pending.length;i++){
-     const r=await api('/gallery/delete',{ids:pending[i],fp:plans[i].fp});
-     if(r.ok){done.push(r.json);pending[i].forEach(x=>removed.add(x));continue;}
-     if(r.status===409&&r.json?.code==='stale'){pending=pending.slice(i);stale=true;note='清单在你确认之后有了变化，已重新生成：';break;}
-     stopped=r.json?.error||('状态 '+r.status);pending=pending.slice(i);break;
-    }
-    if(stopped){await ask({title:'删除中断',text:`${stopped}。${done.length?resultText(done,total)+'；其余没有删。':'一张也没有删。'}`,ok:null});break;}
-    if(!stale){await ask({title:'删除完成',text:resultText(done,total)+'。',ok:null});break;}
-   }
-  }finally{
-   S.busy=false;
+   r=await deleteFlow(ids,{post:async(p,b)=>{const x=await api(p,b);return {status:x.status,json:x.json};},
+    confirm:t=>ask({title:'确认删除',text:t,ok:'确认删除'})});
+   if(r.stopped){
+    const sofar=r.deleted.length?resultText(r.counts,total)+'；其余没有删。':'一张也没有删。';
+    await ask({title:r.stopped.phase==='plan'?'无法删除':'删除中断',text:`${r.stopped.error}。${sofar}`,ok:null});
+   }else if(!r.cancelled)await ask({title:'删除完成',text:resultText(r.counts,total)+'。',ok:null});
+  }catch(e){await ask({title:'删除中断',text:'出错：'+e.message,ok:null});}
+  finally{
+   S.busy=false;const removed=new Set(r.deleted);
    if(removed.size){
-    const keep=new Set([...S.urls.keys()].filter(k=>!removed.has(k)));
     for(const id of removed)if(S.urls.has(id)){URLImpl.revokeObjectURL(S.urls.get(id));S.urls.delete(id);}
     S.frames=S.frames.filter(f=>!removed.has(f.id));
     S.sel=new Set([...S.sel].filter(x=>!removed.has(x)));
