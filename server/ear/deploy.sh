@@ -10,7 +10,7 @@ need SOUL_SERVER_SSH SOUL_SERVER_DIR SOUL_SERVER_UNIT
 cd "$HERE"
 FILES="ear_server.py ear_hearing.py ear_log.py recorder.py sound_kinds.py hearing_protocol.py tingwu.py tingwu_switch.py presence.py mouth_link.py mouth_mode.py realtime_link.py rt_base.py rt_cards.py rt_rules.py rt_gate.py rt_looks.py rt_tools.py rt_skills.py rt_interrupt.py rt_events.py rt_manner.py vision_burst.py web_search.py hello_db.py hello_db_import.py vision_link.py body_sense.py mode_span.py signal_link.py kws_link.py ask_api.py intent.py"
 COMMON="$HERE/../common"
-LOGFILES="$COMMON/hello_log.py $COMMON/prices.py"   # the run log's shared modules (the ear never reads the log: no hello_log_query), copied flat next to ear_server.py, before FILES
+LOGFILES="$COMMON/hello_log.py $COMMON/prices.py $COMMON/bodies.py"   # bodies.py: hello's bodies (2026-11-20); the run log's shared modules (the ear never reads the log: no hello_log_query), copied flat next to ear_server.py, before FILES
 for f in $LOGFILES; do [ -f "$f" ] || { echo "$f not found" >&2; exit 1; }; done
 PERSONA="$HERE/../../config/persona/$(cat "$HERE/../../config/persona/active")"   # hello's persona (config/persona/README.md) -> persona.md
 [ -f "$PERSONA" ] || { echo "$PERSONA not found" >&2; exit 1; }

@@ -28,6 +28,9 @@ class FakeDB:
     def frame(self, doc):
         self.calls.append(("frame", doc))
 
+    def body_seen(self, b, part, links, device=None):
+        self.calls.append(("body", b["id"], part, links))
+
 
 class FakeWS:
     def __init__(self, messages):

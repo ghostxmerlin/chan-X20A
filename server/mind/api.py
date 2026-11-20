@@ -53,6 +53,7 @@ from . import owner_signals
 from .library import Library, LibraryConflict, COLLECTIONS, ID_RE
 from .modes import INPUTS as MODE_INPUTS
 from . import tool_impls
+from . import body_roster
 from .tools import Tools, load_registry
 
 try:                                             # ~/soul-mind/hello_log_query.py; server/common in the repository
@@ -654,6 +655,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             return {"snapshot": ms.current(), "robot": ms.robot(), "log": ms.log(10)}
         if path == "/mode/seq":
             return {"seq": modes().seq()}
+        if path == "/bodies":                    # hello's bodies and what each can do (2026-11-20)
+            return body_roster.roster(db)
         if path == "/frames/latest":
             return latest_frame()
         if path == "/eye/latest":

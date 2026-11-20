@@ -33,6 +33,7 @@ import struct
 import time
 
 import ear_log
+import bodies                  # server/common (ear_log puts it on sys.path in the repository)
 
 IDLE_TIMEOUT = 60
 # m12d event types -> the run log's sum (Chinese, like the page's labels in web/monitor/public/log-ui.js)
@@ -145,6 +146,7 @@ class NameCarry:
             out = {k: e[k] for k in ("t_us", "f", "face", "box", "prob", "gender", "age", "age_group") if k in e}
             return {**out, "type": "vision", "event": "face_carried", "name": name, "carried": True, "from_face": old_face}
         return None
+_live = {}                                   # body id -> live vision link numbers (a reconnect overlaps the old one)
 FRAME_MAGIC = b"SVF1"
 FRAME_HEAD_MAX = 512
 FRAME_MAX = 32768
@@ -169,6 +171,7 @@ class VisionLink:
         self.session = None
         self.device = None                       # the hello's device dict (boot_id)
         self.source = None                       # the hello's source (the robot, for robot.state)
+        self.body_of = None                      # which of hello's bodies (bodies.py), from the hello
         self.why = None                          # why the link ended: idle / closed
         self.events = 0
         self.frames = 0
@@ -193,6 +196,11 @@ class VisionLink:
                     self.db.session_open(self.session, {
                         "kind": "vision", "source": msg.get("source"), "peer": self.peer, "start_ms": self.start_ms,
                         "device": msg.get("device") if isinstance(msg.get("device"), dict) else None})
+                self.body_of = bodies.body(msg.get("source"), msg.get("body"))
+                if self.body_of is not None:
+                    _live.setdefault(self.body_of["id"], set()).add(self.number)
+                    if self.db is not None:
+                        self.db.body_seen(self.body_of, "vision", len(_live[self.body_of["id"]]), self.device)
             return None
         if kind == "vision":
             if self.session is None:
@@ -288,6 +296,12 @@ class VisionLink:
         return None
 
     def close(self):
+        if self.body_of is not None:
+            live = _live.get(self.body_of["id"], set())
+            live.discard(self.number)
+            if self.db is not None:
+                self.db.body_seen(self.body_of, "vision", len(live), self.device)
+            self.body_of = None
         if self.db is not None and self.session:
             self.db.session_update(self.session, {"end_ms": int(time.time() * 1000), "vision_events": self.events,
                                                   "frames": self.frames})

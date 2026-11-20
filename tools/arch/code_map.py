@@ -17,7 +17,7 @@ import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PKGS = ("ear", "mind", "common", "kws")
-SHARED = {"hello_log": "common/hello_log.py", "hello_log_query": "common/hello_log_query.py", "prices": "common/prices.py"}
+SHARED = {"hello_log": "common/hello_log.py", "hello_log_query": "common/hello_log_query.py", "prices": "common/prices.py", "bodies": "common/bodies.py"}
 COLL_RE = re.compile(r"""\b(?:db|self\.db|_db|database)\s*\[\s*["']([a-z_0-9]+)["']\s*\]""")
 
 

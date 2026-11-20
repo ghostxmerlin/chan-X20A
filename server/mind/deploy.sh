@@ -14,7 +14,7 @@ UNIT=${SOUL_MIND_UNIT:-soul-mind}
 cd "$HERE"
 FILES="$(ls ./*.py | sed 's#^\./##' | tr '\n' ' ')settings.example.json"   # every module, so new ones are never left behind
 COMMON="$HERE/../common"
-LOGFILES="$COMMON/hello_log.py $COMMON/hello_log_query.py $COMMON/prices.py"   # shipped into ~/soul-mind/ (the package's parent, on sys.path)
+LOGFILES="$COMMON/hello_log.py $COMMON/hello_log_query.py $COMMON/prices.py $COMMON/bodies.py"   # shipped into ~/soul-mind/ (the package's parent, on sys.path)
 for f in $LOGFILES; do [ -f "$f" ] || { echo "$f not found" >&2; exit 1; }; done
 SPOOL=${SOUL_SERVER_DIR:-soul-spike}/log-spool
 SHA=$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo nogit)

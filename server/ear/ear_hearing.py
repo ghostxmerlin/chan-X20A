@@ -22,6 +22,7 @@ from websockets.asyncio.server import serve
 
 import recorder
 import ear_log
+import bodies                  # server/common (ear_log puts it on sys.path in the repository)
 import hello_db
 import vision_link
 import body_sense
@@ -55,7 +56,8 @@ SOUND_MIN_DB = 15.0
 # CED calls single clicks/taps "Music / Drum machine / Percussion"; on the Mac mic those false
 # "music" events spanned at most 3 windows (2 s). Real music and singing go on. (2026-11-06)
 SUSTAIN = {"music": 5}             # 5 windows = 3 s of audio
-# Quiet sounds on the robot's own mic ("stackchan-*" sources only; the Mac mic keeps the gate above).
+# Quiet sounds on the robot's own mic (bodies with tuning quiet_labels, bodies.py: the StackChan; the Mac mic keeps
+# the gate above).
 # StackChan, 2026-11-09: mic ADC already at max gain, floor -42..-45 dBFS with a 100 Hz harmonic hum,
 # speech only +7..+19 dB above it. Over 127 min of its recordings CED heard typing at a median +6.7 dB
 # (p 0.2-0.66), never above the 15 dB gate; the hum itself reads as insect/appliance/bird/heartbeat,
@@ -244,11 +246,12 @@ class Ear:
         # the same for what VAD/ASR/tags hear (after the denoiser); gates compare against this floor
         self.heard_sq, self.heard_n = 0.0, 0
         self.heard_levels = collections.deque(maxlen=600)
-        self.denoiser = None          # streaming GTCRN for robot sources (set by the audio message)
+        self.denoiser = None          # streaming GTCRN for bodies tuned `denoise` (set by the audio message)
         self.outbox = []
         self.hi, self.lo = 0.6, 0.4
         self.sound_min_db = SOUND_MIN_DB
-        self.device_profile = False   # robot mic: quiet labels use DEVICE_QUIET_* (set by the audio message)
+        self.device_profile = False   # one of hello's bodies (bodies.py), not the page's mic or a test client
+        self.body = None              # that body: kind, abilities, tuning (set by the audio message)
         self.voice_hi, self.voice_lo = VOICE_HI, VOICE_LO
         self.self_flags = {"sounding": False, "moving": False}
         # speech state
@@ -294,7 +297,7 @@ class Ear:
                       "voice_hi": self.voice_hi, "voice_lo": self.voice_lo,
                       "models": {"asr": "sense-voice int8 2024-07-17", "spk": "3dspeaker campplus zh",
                                  "vad": "silero (min_silence 0.4 s)", "tags": "ced-mini → sound_kinds",
-                                 "denoise": "gtcrn_simple (stackchan sources)" if m.denoise_cfg else None}}
+                                 "denoise": "gtcrn_simple (bodies tuned denoise)" if m.denoise_cfg else None}}
         self.post(dict(self.hello))
 
     # ---------- helpers ----------
@@ -709,8 +712,9 @@ class Ear:
             except Exception as error:     # noqa: BLE001
                 print(f"chat: stage failed: {type(error).__name__}", flush=True)
         # The robot mic's CED voice probability runs low (office noise, hum): the user's clear
-        # sentences scored 0.17-0.26 on 2026-11-10, so robot sources also accept "unclear" (>= voice_lo).
-        voiced = ev["voice"]["acoustic_band"] == "voice" or (self.device_profile and ev["voice"]["acoustic_band"] == "unclear")
+        # sentences scored 0.17-0.26 on 2026-11-10, so bodies tuned unclear_is_voice also accept "unclear" (>= voice_lo).
+        voiced = ev["voice"]["acoustic_band"] == "voice" or (bodies.tuning(self.body, "unclear_is_voice")
+                                                            and ev["voice"]["acoustic_band"] == "unclear")
         ready = self.enroll.accept(cur["enroll_epoch"], e, dur,
                                    voiced and ev["event"] == "speech" and bool(text),
                                    cur["self"]["sounding"], time.monotonic())
@@ -740,7 +744,7 @@ class Ear:
         lift = None if f is None else loudest_100ms(x) - f
         faint = rms(x) < QUIET_RMS if f is None else lift < self.sound_min_db
         # robot mic: quiet labels (typing, breathing...) may start an event from a lower lift
-        quiet_ok = self.device_profile and lift is not None and lift >= DEVICE_QUIET_MIN_DB
+        quiet_ok = bodies.tuning(self.body, "quiet_labels") and lift is not None and lift >= DEVICE_QUIET_MIN_DB
         # a faint window can't start an event, but still feeds ongoing ones: a steady sound (TV, rain)
         # slowly becomes the floor itself and must not be cut off when it does
         need = not faint or quiet_ok or bool(self.sounds) or bool(self.pending)
@@ -843,12 +847,17 @@ class Ear:
                 else:
                     self.opus = None
                 self.framing = framing
-                self.device_profile = str(msg.get("source") or "").startswith("stackchan")
+                # which of hello's bodies this is (owner 2026-11-20: one robot, several bodies); its kind's
+                # tuning, never the source name, decides the mic gates below
+                self.body = bodies.body(msg.get("source"), msg.get("body"))
+                self.device_profile = self.body is not None
                 self.device = msg.get("device") if isinstance(msg.get("device"), dict) else None
                 if self.device_profile:
                     self.source = vision_link.safe_source(msg.get("source"))
                     ear_log.robot_link("hearing", self.source, self.link_conn or f"e{id(self)}", True)
-                self.denoiser = self.m.new_denoiser() if self.device_profile else None
+                    if self.db is not None:
+                        self.db.body_seen(self.body, "hearing", ear_log.live_links("hearing", self.source), self.device)
+                self.denoiser = self.m.new_denoiser() if bodies.tuning(self.body, "denoise") else None
                 stream = self.denoiser is not None and getattr(self.m, "denoise_mode", "stream") == "stream"
                 asr_only = self.denoiser is not None and not stream
                 self.tag_ring = Ring(RING_SECONDS * SR) if stream else self.ring
@@ -864,7 +873,8 @@ class Ear:
                 self.audio_declared = True       # 听悟 starts from the ticker when the server switch is on
                 self.post({"type":"audio", "format":fmt, "sample_rate":SR,
                            "input_sample_rate":rate, "framing":framing, "frame_ms":msg.get("frame_ms"),
-                           "sound_profile": "device" if self.device_profile else "default",
+                           "sound_profile": "device" if bodies.tuning(self.body, "quiet_labels") else "default",
+                           "body": {k: self.body[k] for k in ("kind", "abilities")} if self.body else None,
                            "denoise": "gtcrn" if self.denoiser is not None else None})
             elif k == "config":
                 hi, lo = float(msg.get("speaker_hi", self.hi)), float(msg.get("speaker_lo", self.lo))

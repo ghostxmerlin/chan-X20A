@@ -46,7 +46,8 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/funnel.html', ['funnel.html', 'text/html; charset=utf-8']], ['/funnel-ui.js', ['funnel-ui.js', 'text/javascript; charset=utf-8']],
     ['/docking.html', ['docking.html', 'text/html; charset=utf-8']], ['/docking-ui.js', ['docking-ui.js', 'text/javascript; charset=utf-8']],
     ['/layers.html', ['layers.html', 'text/html; charset=utf-8']], ['/layers.css', ['layers.css', 'text/css; charset=utf-8']],
-    ['/code.html', ['code.html', 'text/html; charset=utf-8']], ['/code-ui.js', ['code-ui.js', 'text/javascript; charset=utf-8']]]);
+    ['/code.html', ['code.html', 'text/html; charset=utf-8']], ['/code-ui.js', ['code-ui.js', 'text/javascript; charset=utf-8']],
+    ['/bodies.html', ['bodies.html', 'text/html; charset=utf-8']], ['/bodies-ui.js', ['bodies-ui.js', 'text/javascript; charset=utf-8']], ['/bodies.css', ['bodies.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
     const port = server.address().port;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
@@ -109,7 +110,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/tools', '/proposals', '/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain', '/say/rounds', '/say/stats', '/scenes', '/signals', '/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item', '/db/changes', '/db/sources', '/db/extract', '/mode', '/mode/seq', '/chat/turns', '/chat/state', '/looks', '/looks/frame', '/log', '/log/body', '/log/chain', '/log/ledger', '/log/gaps', '/log/last'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/tools', '/proposals', '/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain', '/say/rounds', '/say/stats', '/scenes', '/signals', '/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item', '/db/changes', '/db/sources', '/db/extract', '/mode', '/mode/seq', '/bodies', '/chat/turns', '/chat/state', '/looks', '/looks/frame', '/log', '/log/body', '/log/chain', '/log/ledger', '/log/gaps', '/log/last'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
       mind.get(sub + url.search).then(r => {
         res.writeHead(r.status, { 'Content-Type': r.status === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });

@@ -208,6 +208,23 @@ class EarLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.quiet_window('mac-mic', [('Typing', 0.34)]), [])
         self.assertEqual(await self.quiet_window(None, [('Typing', 0.9)]), [])  # still faint at +7 dB
 
+    async def test_the_mac_body_is_a_body_with_the_mac_mic_gate(self):
+        """2026-11-20 (one robot, several bodies, server/common/bodies.py): the Mac (stackchan-mac-*) is one of hello's
+        bodies (chat, Docking, presence, 听悟 as before), but its mic keeps the 15 dB gate; the robot keeps its own."""
+        seen = []
+        self.ear.db = SimpleNamespace(body_seen=lambda b, part, links, device=None: seen.append((b['kind'], part, links)))
+        self.assertEqual(await self.quiet_window('stackchan-mac-a1', [('Typing', 0.34)]), [])
+        self.assertTrue(self.ear.device_profile)
+        audio = [e for e in self.ear.outbox if e.get('type') == 'audio'][-1]
+        self.assertEqual((audio['sound_profile'], audio['body']['kind']), ('default', 'mac'))
+        self.assertEqual(audio['body']['abilities']['motion'], 'eyes')
+        self.assertEqual(seen, [('mac', 'hearing', 1)])
+
+    async def test_the_robot_body_is_declared_in_the_audio_answer(self):
+        await self.ear.on_text('{"type":"audio","format":"pcm16","sample_rate":16000,"channels":1,"source":"stackchan-test"}')
+        audio = self.ear.outbox[-1]
+        self.assertEqual((audio['sound_profile'], audio['body']['kind']), ('device', 'stackchan'))
+
     async def test_robot_quiet_gate_limits(self):
         self.assertEqual(await self.quiet_window('stackchan-test', [('Heart sounds, heartbeat', 0.6)]), [])
         self.assertEqual(await self.quiet_window(None, [('Typing', 0.29)]), [])          # below 0.30

@@ -29,7 +29,7 @@ VER="$SHA $(date '+%Y-%m-%dT%H:%M:%S%z') mac-stack"
 
 $SSH "$SOUL_SERVER_SSH" "mkdir -p ~/$EAR_DIR/log-spool ~/$MIND_DIR/mind ~/$MIND_DIR/tools ~/$MIND_DIR/log-spool && chmod 700 ~/$EAR_DIR/log-spool ~/$MIND_DIR/log-spool"
 # ear: the same files as server/ear/deploy.sh
-(cd "$ROOT/server/ear" && rsync -aic -e "$SSH" "$ROOT/server/common/hello_log.py" "$ROOT/server/common/prices.py" $EAR_FILES "$SOUL_SERVER_SSH:$EAR_DIR/")
+(cd "$ROOT/server/ear" && rsync -aic -e "$SSH" "$ROOT/server/common/hello_log.py" "$ROOT/server/common/prices.py" "$ROOT/server/common/bodies.py" $EAR_FILES "$SOUL_SERVER_SSH:$EAR_DIR/")
 rsync -aic -e "$SSH" "$PERSONA" "$SOUL_SERVER_SSH:$EAR_DIR/persona.md"
 rsync -aic -e "$SSH" "$(dirname "$PERSONA")/" "$SOUL_SERVER_SSH:$EAR_DIR/personas/"
 rsync -aic -e "$SSH" "$ROOT/config/skills/skills.json" "$SOUL_SERVER_SSH:$EAR_DIR/skills.json"
@@ -38,7 +38,7 @@ rsync -aic --delete -e "$SSH" "$ROOT/config/skills/skills/" "$SOUL_SERVER_SSH:$E
 printf '%s\n' "$VER" | $SSH "$SOUL_SERVER_SSH" "cat > ~/$EAR_DIR/CODE_VERSION"
 # mind: as server/mind/deploy.sh (code, run-log modules, roles, persona, tool registry)
 (cd "$ROOT/server/mind" && rsync -aic -e "$SSH" ./*.py settings.example.json "$SOUL_SERVER_SSH:$MIND_DIR/mind/")
-rsync -aic -e "$SSH" "$ROOT/server/common/hello_log.py" "$ROOT/server/common/hello_log_query.py" "$ROOT/server/common/prices.py" "$SOUL_SERVER_SSH:$MIND_DIR/"
+rsync -aic -e "$SSH" "$ROOT/server/common/hello_log.py" "$ROOT/server/common/hello_log_query.py" "$ROOT/server/common/prices.py" "$ROOT/server/common/bodies.py" "$SOUL_SERVER_SSH:$MIND_DIR/"
 rsync -aic -e "$SSH" "$ROOT/config/roles/" "$SOUL_SERVER_SSH:$MIND_DIR/roles/"
 rsync -aic -e "$SSH" "$PERSONA" "$SOUL_SERVER_SSH:$MIND_DIR/persona.md"
 rsync -aic -e "$SSH" "$ROOT/config/tools/registry.json" "$SOUL_SERVER_SSH:$MIND_DIR/tools/registry.json"

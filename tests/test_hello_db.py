@@ -191,7 +191,8 @@ class EarTingwuTest(unittest.IsolatedAsyncioTestCase):
 
         rows = []
         db = SimpleNamespace(event=lambda *a: rows.append(("event",) + a), session_open=lambda *a: rows.append(("open",) + a),
-                             session_update=lambda *a: rows.append(("update",) + a), tingwu=lambda *a: rows.append(("tingwu",) + a))
+                             session_update=lambda *a: rows.append(("update",) + a), tingwu=lambda *a: rows.append(("tingwu",) + a),
+                             body_seen=lambda *a: None)
         ex = ThreadPoolExecutor(1)
         with patch.object(ear_server.so, "VoiceActivityDetector", return_value=SimpleNamespace(reset=lambda: None)), \
                 patch.object(ear_server.tingwu_rt, "TingwuStream", FakeStream), tempfile.TemporaryDirectory() as d:
@@ -237,7 +238,8 @@ class EarTingwuTest(unittest.IsolatedAsyncioTestCase):
 
         rows = self.rows
         db = SimpleNamespace(event=lambda *a: None, session_open=lambda *a: None,
-                             session_update=lambda *a: rows.append(("update",) + a), tingwu=lambda *a: rows.append(("tingwu",) + a))
+                             session_update=lambda *a: rows.append(("update",) + a), tingwu=lambda *a: rows.append(("tingwu",) + a),
+                             body_seen=lambda *a: None)
         self.patches = [patch.object(ear_server.so, "VoiceActivityDetector", return_value=SimpleNamespace(reset=lambda: None)),
                         patch.object(ear_server.tingwu_rt, "TingwuStream", FakeStream)]
         for p in self.patches:

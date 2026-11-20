@@ -24,6 +24,9 @@ class FakeDb:
     def session_open(self, *a):
         pass
 
+    def body_seen(self, *a):
+        pass
+
 
 class Hub:
     def __init__(self):

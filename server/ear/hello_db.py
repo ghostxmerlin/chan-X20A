@@ -11,6 +11,9 @@ Collections (one document per thing; `session` = the recording folder name, e.g.
             `at` = wall time of the event; unique (session, t_us, event, face, person[, ev])
   tingwu    听悟 realtime sentences (kind "sentence", final only) and the diarized result after
             the session (kind "paragraph", speaker); unique (session, kind, n)
+  bodies    hello's bodies (owner 2026-11-20: one robot, several bodies; server/common/bodies.py), one row per body
+            id (its source): kind, name, abilities (as it last declared them, or its kind's), first / last seen,
+            links {hearing, vision: live link count}; the ear zeroes the counts when it starts
   vision_looks  视觉爆发 (2026-11-15): kind "look" = one snap photo recognised (text, latency, usage, cost_usd,
             burst_id, frame path), kind "burst" = one burst's summary (reason, counts, cost); unique lid
 Audio stays in the recording files (never deleted); the database stores paths and positions.
@@ -154,6 +157,21 @@ class HelloDB:
         self._put("upsert", "body", {"session": doc.get("session"), "kind": doc.get("kind"), "seq": doc.get("seq"),
                                      "received": doc.get("received")}, doc)
 
+    def body_seen(self, b, part, links, device=None):
+        """A body's link `part` opened or closed: its registry row (bodies) with the live link count now."""
+        if not b:
+            return
+        now = int(time.time() * 1000)
+        doc = {"kind": b["kind"], "name": b["name"], "abilities": b["abilities"], "declared": b["declared"],
+               "last_seen_ms": now, f"links.{part}": int(links)}
+        if isinstance(device, dict):
+            doc["device"] = {k: device.get(k) for k in ("device_id", "boot_id", "firmware") if device.get(k) is not None}
+        self._put("seen", "bodies", {"_id": b["id"]}, (doc, {"first_seen_ms": now}))
+
+    def bodies_reset(self):
+        """The ear (re)started: no body has a live link to it any more."""
+        self._put("many", "bodies", {}, {"links.hearing": 0, "links.vision": 0})
+
     def realtime_turn(self, doc):
         """One 围观 realtime response (timings, transcript lengths, usage, cost; never text)."""
         self._put("upsert", "realtime_turns", {"tid": doc["tid"]}, doc)
@@ -208,6 +226,10 @@ class HelloDB:
                         db = self._connect()
                     if op == "upsert":
                         db[collection].replace_one(key, doc, upsert=True)
+                    elif op == "seen":                    # (fields to set, fields only for a new row)
+                        db[collection].update_one(key, {"$set": doc[0], "$setOnInsert": doc[1]}, upsert=True)
+                    elif op == "many":
+                        db[collection].update_many(key, {"$set": doc})
                     else:
                         db[collection].update_one(key, {"$set": doc}, upsert=True)
                     self.written += 1

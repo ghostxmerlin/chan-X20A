@@ -1,0 +1,16 @@
+/* hello 的身体 (2026-11-20): on top of layers.css */
+.kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 8px 0 18px; }
+.kind h2 { margin: 0 0 6px; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); display: inline-block; }
+.dot.on { background: var(--robot); }
+.dev { border-top: 1px solid var(--line); padding: 8px 0 2px; font-size: 13px; }
+.dev:first-of-type { border-top: 0; }
+.dev .id { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+.tablebox { overflow-x: auto; }
+table.abil { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 14px; }
+table.abil th, table.abil td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.abil thead th { color: var(--muted); font-weight: 600; font-size: 13px; }
+table.abil tr.diff td, table.abil tr.diff th { background: var(--b3); }
+table.abil td.no { color: var(--muted); }
+table.abil .k { font-weight: 600; }
+table.abil .sub { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }

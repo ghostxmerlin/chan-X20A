@@ -282,6 +282,11 @@ def robot_link(part, device, conn, up, **extra):
     return robot_state(part, "on" if live else "off", device=device, conn=conn, links=len(live), **extra)
 
 
+def live_links(part, device):
+    """How many live links of that device carry `part` now (robot_link's set)."""
+    return len(_live.get((part, device), ()))
+
+
 def reset_robot_state():
     _robot.clear()
     _live.clear()

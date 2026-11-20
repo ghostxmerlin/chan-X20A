@@ -128,6 +128,8 @@ async def serve_hearing(ws, peer, number, ctx):
                                        "session": ear.session} if ear is not None else None)
             if ear is not None and ear.device_profile:
                 ear_log.robot_link("hearing", ear.source, conn, False)
+                if ear.db is not None:          # the body's registry row follows the live links (a reconnect overlaps)
+                    ear.db.body_seen(ear.body, "hearing", ear_log.live_links("hearing", ear.source), ear.device)
             if ear is not None and ear.rec is not None:
                 print(f"- {peer} ({ear.sid} utterances, {ear.aid} sounds) recorded in {ear.rec.dir}", flush=True)
 
@@ -220,6 +222,7 @@ def main():
         try:
             import pymongo  # noqa: F401
             database = hello_db.HelloDB(secrets["MONGO_URI"])
+            database.bodies_reset()             # no body is linked to a new ear yet (bodies registry)
         except ImportError:
             print("hello db off: pymongo not installed", flush=True)
     tingwu_keys = (secrets["DASHSCOPE_API_KEY"], secrets["DASHSCOPE_APP_ID"]) \

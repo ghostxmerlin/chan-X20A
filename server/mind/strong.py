@@ -6,7 +6,9 @@ Rules: docs/superpowers/plans/2026-11-10-mind-phase0.md, Task 3.
 """
 import re
 
+from . import runlog  # noqa: F401 - puts server/common on sys.path in the repository (bodies.py)
 from . import selfvoice
+import bodies
 from . import settings as settings_mod
 from .package import face_intervals
 
@@ -34,7 +36,8 @@ def _union_overlap(spans, m0, m1):
 
 
 def _is_hearing(sess):
-    return (str(sess.get("source", "")).startswith("stackchan-") and sess.get("kind") != "vision"
+    # a hearing link of one of hello's bodies (bodies.py; was: a "stackchan-" source, which the Mac's also is)
+    return (bodies.kind_of(sess.get("source")) is not None and sess.get("kind") != "vision"
             and not VISION_SESSION.search(str(sess.get("session", ""))))
 
 
