@@ -69,16 +69,11 @@
     <section class="panel voice-panel" aria-labelledby="voice-heading">
       <div class="panel-head"><h2 id="voice-heading">台词</h2><span id="voice-count" class="muted">等待台词库</span></div>
       <div class="panel-body">
-        <section class="say-section" aria-labelledby="say-heading">
-          <h3 id="say-heading" class="say-heading">让 hello 说一句 <span class="muted">TTS</span></h3><div id="say-buttons" class="say-buttons"></div>
-          <p id="say-msg" class="command-result" role="status"></p><div id="chat-stage" class="chat-stage"></div><div id="say-chat" class="say-chat"></div><div id="say-round" class="say-round"></div><div id="say-prefetch"></div>
-          <div class="say-extras"><details><summary>试听音色</summary><div id="say-voices" class="say-buttons"></div></details><details><summary>最近说过的话</summary><div id="say-utterances"></div></details><details><summary>遥控信号</summary><div id="say-signals"></div></details></div>
-        </section>
         <h3 class="recordings-heading">固定录音</h3>
         <div class="inline-status"><span id="voice-status">等待连接</span><span id="voice-trigger" class="muted">等待 ASR 能力</span></div><p id="voice-current" class="voice-current">尚未播放台词</p><p id="voice-progress" class="note">网页点播，每次播放一条</p>
         <label class="sr-only" for="voice-select">选择台词</label><select id="voice-select" disabled aria-label="选择本体播放的台词"></select>
         <div class="control-buttons"><button id="voice-play" disabled>播放所选</button><button id="voice-random" disabled>随机播放</button></div><p id="voice-asr-counts" data-detail-title class="note">ASR 计数：—</p>
-        <div class="volume-row" title="所有播放共用；保存在机身，重启后保留。机身上可说 increase / decrease / maximum / medium / minimum volume。"><label for="volume-input">音量</label><input id="volume-input" type="range" min="10" max="100" step="10" value="80" disabled><span id="volume-value">—</span></div><p id="voice-command" class="command-result" role="status">由 StackChan 本体发声。</p>
+        <div class="volume-row" title="所有播放共用；保存在机身，重启后保留。"><label for="volume-input">音量</label><input id="volume-input" type="range" min="10" max="100" step="10" value="80" disabled><span id="volume-value">—</span></div><p id="voice-command" class="command-result" role="status">由 StackChan 本体发声。</p>
 
       </div>
     </section>
