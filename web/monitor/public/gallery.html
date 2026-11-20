@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hello 图库</title>
+  <link rel="stylesheet" href="/log.css"><link rel="stylesheet" href="/gallery.css"><script type="module" src="/gallery-ui.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><h1>图库</h1><nav class="links" aria-label="其它页面"><a href="/">观察台</a><a href="/log.html">日志</a></nav></div>
+    <div id="g-maint" class="maint" aria-live="polite"></div>
+    <button id="g-maint-btn" class="btn" hidden>开始维护</button>
+    <button id="g-refresh" class="btn ghost">刷新</button>
+    <span id="g-status" class="status"></span>
+  </header>
+  <div class="g-layout">
+    <aside class="side" aria-label="日期和小时">
+      <h2>日期</h2><div id="g-days" class="list"></div>
+      <h2 id="g-hours-title" hidden>小时</h2><div id="g-hours" class="list"></div>
+    </aside>
+    <main class="g-main">
+      <div class="g-head"><button id="g-hour-title" class="hour-title" hidden title="选中整个小时"></button><button id="g-hour-select" class="btn ghost" hidden>选中整小时</button></div>
+      <div id="g-grid"></div>
+      <div class="g-bar"><span id="g-count" class="small"></span><span id="g-why" class="small warn"></span><button id="g-delete" class="btn danger" disabled>删除所选</button></div>
+    </main>
+    <aside id="g-detail" class="detail-pane" aria-live="polite"></aside>
+  </div>
+  <div id="g-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="g-modal-title" hidden>
+    <div class="modal-box"><h2 id="g-modal-title"></h2><p id="g-modal-text"></p>
+      <div class="modal-actions"><button id="g-modal-no" class="btn">取消</button><button id="g-modal-ok" class="btn danger">确定</button></div></div>
+  </div>
+</body>
+</html>

@@ -37,6 +37,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/switches-ui.js', ['switches-ui.js', 'text/javascript; charset=utf-8']], ['/bigmode-ui.js', ['bigmode-ui.js', 'text/javascript; charset=utf-8']], ['/scene-ui.js', ['scene-ui.js', 'text/javascript; charset=utf-8']], ['/looks-ui.js', ['looks-ui.js', 'text/javascript; charset=utf-8']], ['/looks-ui-main.js', ['looks-ui-main.js', 'text/javascript; charset=utf-8']], ['/switches.css', ['switches.css', 'text/css; charset=utf-8']],
     ['/mode-ui.js', ['mode-ui.js', 'text/javascript; charset=utf-8']], ['/mode.css', ['mode.css', 'text/css; charset=utf-8']],
     ['/log.html', ['log.html', 'text/html; charset=utf-8']], ['/log-ui.js', ['log-ui.js', 'text/javascript; charset=utf-8']], ['/log.css', ['log.css', 'text/css; charset=utf-8']],
+    ['/gallery.html', ['gallery.html', 'text/html; charset=utf-8']], ['/gallery-ui.js', ['gallery-ui.js', 'text/javascript; charset=utf-8']], ['/gallery.css', ['gallery.css', 'text/css; charset=utf-8']],
     ['/crowd-flow.html', ['crowd-flow.html', 'text/html; charset=utf-8']], ['/crowd-flow.css', ['crowd-flow.css', 'text/css; charset=utf-8']],
     ['/crowd-plan.html', ['crowd-plan.html', 'text/html; charset=utf-8']], ['/crowd-plan.css', ['crowd-plan.css', 'text/css; charset=utf-8']], ['/crowd-plan.js', ['crowd-plan.js', 'text/javascript; charset=utf-8']],
     ['/tools.html', ['tools.html', 'text/html; charset=utf-8']], ['/tools-ui.js', ['tools-ui.js', 'text/javascript; charset=utf-8']],
@@ -80,7 +81,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (req.method === 'POST' && url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/tool/call', '/proposal/decide', '/settings', '/mark', '/label', '/rerun', '/place', '/switch', '/switches', '/say', '/say/stop', '/voice/try', '/speech/settings', '/memory/edit', '/role/try', '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge', '/db/memory/review', '/db/extract/switch', '/db/extract/run', '/mode', '/preset'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/tool/call', '/proposal/decide', '/settings', '/mark', '/label', '/rerun', '/place', '/switch', '/switches', '/say', '/say/stop', '/voice/try', '/speech/settings', '/memory/edit', '/role/try', '/say/round', '/say/play', '/signal', '/say/prefetch', '/say/auto', '/db/person', '/db/person/note', '/db/memory', '/db/knowledge', '/db/memory/review', '/db/extract/switch', '/db/extract/run', '/mode', '/preset', '/gallery/maintenance', '/gallery/plan', '/gallery/delete'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (origin !== 'http://' + req.headers.host) { respond(403, '写入必须来自当前观察页面'); return; }
       if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') { respond(415, '只接受 JSON'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
@@ -110,7 +111,7 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     }
     if (url.pathname.startsWith('/api/mind/')) {
       const sub = url.pathname.slice('/api/mind'.length);
-      if (!['/tools', '/proposals', '/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain', '/say/rounds', '/say/stats', '/scenes', '/signals', '/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item', '/db/changes', '/db/sources', '/db/extract', '/mode', '/mode/seq', '/bodies', '/chat/turns', '/chat/state', '/looks', '/looks/frame', '/log', '/log/body', '/log/chain', '/log/ledger', '/log/gaps', '/log/last'].includes(sub)) { respond(404, '未找到页面'); return; }
+      if (!['/tools', '/proposals', '/state', '/timeline', '/minute', '/now', '/segments', '/scene', '/settings', '/names', '/prompts', '/labels', '/stats', '/switches', '/frames/latest', '/eye/latest', '/eye', '/notes', '/roles', '/utterances', '/voices', '/speech/settings', '/memories', '/memory/history', '/say/explain', '/say/rounds', '/say/stats', '/scenes', '/signals', '/db/overview', '/db/people', '/db/person', '/db/memories', '/db/knowledge', '/db/item', '/db/changes', '/db/sources', '/db/extract', '/mode', '/mode/seq', '/bodies', '/chat/turns', '/chat/state', '/looks', '/looks/frame', '/log', '/log/body', '/log/chain', '/log/ledger', '/log/gaps', '/log/last', '/gallery/days', '/gallery/hours', '/gallery/frames', '/gallery/images', '/gallery/frame', '/gallery/maintenance'].includes(sub)) { respond(404, '未找到页面'); return; }
       if (!mind) { respond(503, '情景服务未配置'); return; }
       mind.get(sub + url.search).then(r => {
         res.writeHead(r.status, { 'Content-Type': r.status === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8' });

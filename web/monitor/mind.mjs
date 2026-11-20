@@ -10,13 +10,15 @@ import http from 'node:http';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import {fileURLToPath} from 'node:url';
-const PATHS=new Set(['/tools','/proposals','/looks','/looks/frame','/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item','/db/changes','/db/sources','/db/extract','/mode','/mode/seq','/bodies','/chat/turns','/chat/state','/log','/log/body','/log/chain','/log/ledger','/log/gaps','/log/last']);
-const POST_PATHS=new Set(['/tool/call','/proposal/decide','/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try','/say/round','/say/play','/signal','/say/prefetch','/say/auto','/db/person','/db/person/note','/db/memory','/db/knowledge','/db/memory/review','/db/extract/switch','/db/extract/run','/mode','/preset']);   // not /mode/input, /mode/robot: ear only
-const PARAMS=new Set(['all','state','lid','from','to','t','version','days','lane','offset','limit','status','id','uid','rid','kind','person','topic','q','c','svc','trace','cost','before','day','at']);
+const PATHS=new Set(['/tools','/proposals','/looks','/looks/frame','/state','/timeline','/minute','/now','/segments','/scene','/settings','/names','/prompts','/labels','/stats','/switches','/frames/latest','/eye/latest','/eye','/notes','/roles','/utterances','/voices','/speech/settings','/memories','/memory/history','/say/explain','/say/rounds','/say/stats','/scenes','/signals','/db/overview','/db/people','/db/person','/db/memories','/db/knowledge','/db/item','/db/changes','/db/sources','/db/extract','/mode','/mode/seq','/bodies','/chat/turns','/chat/state','/log','/log/body','/log/chain','/log/ledger','/log/gaps','/log/last','/gallery/days','/gallery/hours','/gallery/frames','/gallery/images','/gallery/frame','/gallery/maintenance']);
+const POST_PATHS=new Set(['/tool/call','/proposal/decide','/settings','/mark','/label','/rerun','/place','/switch','/switches','/say','/say/stop','/voice/try','/speech/settings','/memory/edit','/role/try','/say/round','/say/play','/signal','/say/prefetch','/say/auto','/db/person','/db/person/note','/db/memory','/db/knowledge','/db/memory/review','/db/extract/switch','/db/extract/run','/mode','/preset','/gallery/maintenance','/gallery/plan','/gallery/delete']);   // not /mode/input, /mode/robot: ear only
+const PARAMS=new Set(['all','state','lid','from','to','t','version','days','lane','offset','limit','status','id','uid','rid','kind','person','topic','q','c','svc','trace','cost','before','day','at','ids']);
 // 日志 page (run/audit log, docs/hello-log.md): its own kind (a dotted kind, "call." = prefix) and id (a body's sha256).
 const LOG_SVCS=new Set(['ear','mind','eye','notes','memory','tts']);
 const LOG_PARAMS={kind:/^[a-z][a-z0-9_.]{0,63}$/,id:/^[a-f0-9]{64}$/,svc:{test:v=>LOG_SVCS.has(v)},trace:/^[A-Za-z0-9._-]{1,64}$/,
  cost:/^[01]$/,before:/^[a-z]{1,16}:[A-Za-z0-9_-]{1,32}:\d{1,12}$/,day:/^\d{4}-\d{2}-\d{2}$/};
+// 图库 (docs/superpowers/specs/2026-11-20-photo-library-design.md): ids = photo ids joined by commas (<= 60 per call)
+const GALLERY_PARAMS={ids:/^[A-Za-z0-9,]{1,1600}$/};
 const LOG_ONLY=new Set(['svc','trace','cost','before','day','at']);
 const KINDS=new Set('owner regular visitor family unknown trait fact preference boundary relation event told feeling place work commitment life term self other'.split(' '));
 const DB_CARDS=new Set(['people_cards','people_notes','memory_items','knowledge_items']);
@@ -61,8 +63,8 @@ export class MindProxy {
   if(!pathAndQuery.startsWith('/')||!PATHS.has(url.pathname)||url.pathname!==pathAndQuery.split('?')[0])return null;
   const log=url.pathname==='/log'||url.pathname.startsWith('/log/');
   for(const [k,v] of url.searchParams){
-   if(!PARAMS.has(k)||(!log&&LOG_ONLY.has(k)))return null;
-   const valid=log&&LOG_PARAMS[k]?LOG_PARAMS[k].test(v):k==='lane'?['live','rerun','replay'].includes(v):k==='state'?['pending','all','approved','rejected','expired','failed'].includes(v):k==='status'?['candidate','known','review','disabled'].includes(v):k==='id'?/^(m[a-f0-9]{24}|owner|[pnek]_[a-f0-9]{12})$/.test(v):k==='person'||k==='topic'?/^(owner|[pnek]_[a-f0-9]{12})$/.test(v):k==='kind'?KINDS.has(v):k==='c'?DB_CARDS.has(v):k==='q'?[...v].length>=1&&[...v].length<=40&&!/[\u0000-\u001f]/.test(v):k==='uid'?/^u[a-zA-Z0-9._-]{1,80}$/.test(v):k==='rid'?/^r[a-f0-9]{1,40}$/.test(v):k==='lid'?/^b\d{1,16}-\d{1,10}$/.test(v):/^\d{1,16}$/.test(v);
+   if(!PARAMS.has(k)||(!log&&LOG_ONLY.has(k)&&!(k==='day'&&url.pathname==='/gallery/hours')))return null;
+   const valid=k==='day'&&!log?/^\d{4}-\d{2}-\d{2}$/.test(v):k==='ids'?(url.pathname==='/gallery/images'&&GALLERY_PARAMS.ids.test(v)):k==='id'&&url.pathname==='/gallery/frame'?/^[A-Za-z0-9]{1,40}$/.test(v):log&&LOG_PARAMS[k]?LOG_PARAMS[k].test(v):k==='lane'?['live','rerun','replay'].includes(v):k==='state'?['pending','all','approved','rejected','expired','failed'].includes(v):k==='status'?['candidate','known','review','disabled'].includes(v):k==='id'?/^(m[a-f0-9]{24}|owner|[pnek]_[a-f0-9]{12})$/.test(v):k==='person'||k==='topic'?/^(owner|[pnek]_[a-f0-9]{12})$/.test(v):k==='kind'?KINDS.has(v):k==='c'?DB_CARDS.has(v):k==='q'?[...v].length>=1&&[...v].length<=40&&!/[\u0000-\u001f]/.test(v):k==='uid'?/^u[a-zA-Z0-9._-]{1,80}$/.test(v):k==='rid'?/^r[a-f0-9]{1,40}$/.test(v):k==='lid'?/^b\d{1,16}-\d{1,10}$/.test(v):/^\d{1,16}$/.test(v);
    if(!valid||url.searchParams.getAll(k).length!==1)return null;
   }
   return url.pathname+url.search;

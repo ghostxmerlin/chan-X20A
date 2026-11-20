@@ -1,0 +1,48 @@
+/* 图库 page (gallery.html): log.css tokens and top bar; colour only on the small flags (看 描 景 快). */
+:root { --g-look: #2563eb; --g-eye: #059669; --g-scene: #7c3aed; --g-snap: #ea580c; }
+.maint { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.maint .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--text-3); }
+.dot.on { background: #12b76a; } .dot.warn { background: #f79009; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.danger:hover { filter: brightness(.94); background: var(--danger); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.small { font-size: 12px; color: var(--text-3); }
+.g-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr) minmax(360px, 34%); align-items: start; }
+.list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.row { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 7px 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; }
+.row:hover { background: var(--hover); }
+.row[aria-pressed="true"] { background: var(--panel); box-shadow: 0 0 0 1.5px var(--ink), 0 1px 3px rgb(0 0 0 / .06); font-weight: 600; }
+.row-name { font-variant-numeric: tabular-nums; }
+.g-main { padding: 16px 20px 80px; min-width: 0; }
+.g-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.hour-title { border: 0; background: transparent; padding: 0; font-size: 17px; font-weight: 650; cursor: pointer; }
+.minute { margin-bottom: 16px; }
+.minute-head { display: inline-flex; gap: 10px; align-items: baseline; border: 0; background: transparent; padding: 2px 0; margin-bottom: 6px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-2); }
+.minute-head:hover { color: var(--text); }
+.cells { display: flex; flex-wrap: wrap; gap: 6px; }
+.cell { position: relative; width: 120px; height: 90px; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); }
+.cell img { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .15s; }
+.cell img.ready { opacity: 1; }
+.cell[aria-pressed="true"] { box-shadow: 0 0 0 3px var(--focus); }
+.cell.cur { outline: 2px solid var(--ink); outline-offset: 1px; }
+.tags { position: absolute; left: 4px; bottom: 4px; display: flex; gap: 3px; }
+.tag { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 3px; border-radius: 5px; font-size: 11px; font-weight: 600; color: #fff; }
+.tag-look { background: var(--g-look); } .tag-eye { background: var(--g-eye); }
+.tag-scene { background: var(--g-scene); } .tag-snap { background: var(--g-snap); }
+.g-bar { position: fixed; left: 220px; right: calc(max(360px, 34%)); bottom: 0; display: flex; align-items: center; gap: 14px; padding: 12px 20px; background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
+.g-bar .btn { margin-left: auto; }
+.detail-pane { position: sticky; top: var(--top); height: calc(100vh - var(--top)); overflow: auto; padding: 18px 20px; border-left: 1px solid var(--line); }
+.detail-pane .big { display: block; width: 100%; border-radius: 10px; background: var(--hover); }
+.meta { display: flex; align-items: center; gap: 8px; margin: 12px 0 2px; }
+.note { margin-top: 14px; }
+.note h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.note h3 small { margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--text-3); }
+.note .text { margin: 0 0 4px; white-space: pre-wrap; }
+.actions { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
+.modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgb(0 0 0 / .45); }
+.modal-box { width: min(480px, 92vw); padding: 22px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 12px 40px rgb(0 0 0 / .25); }
+.modal-box h2 { margin: 0 0 10px; font-size: 17px; }
+.modal-box p { margin: 0 0 18px; white-space: pre-wrap; line-height: 1.6; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+@media (max-width: 980px) { .g-layout { grid-template-columns: 1fr; } .g-bar { left: 0; right: 0; } .side, .detail-pane { position: static; height: auto; } }
