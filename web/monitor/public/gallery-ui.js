@@ -3,6 +3,7 @@
 // photo large with its 看一眼 / 分钟描述 / 情景. Deleting only works while the server says 维护中 (mind/gallery.py).
 // The pure functions are exported for gallery-ui.test.mjs; the DOM part lives in mountGallery.
 const MINUTE=60000, BJ_MS=8*3600000, BATCH=500, PER_CALL=60;
+const POST_TIMEOUT_MS=210000;   // longer than the 8787 proxy's 200 s (mind.mjs), so the proxy answers first
 const two=n=>String(n).padStart(2,'0');
 const escText=t=>String(t??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const bj=ms=>new Date(Number(ms)+BJ_MS);
@@ -45,10 +46,13 @@ export function planSummary(plans){
  if(seen.size)parts.push(`${seen.size} 段段落总结（${[...seen.values()].join('、')}）`);
  return `将删除 ${parts.join('、')}，删除后无法恢复。`;
 }
-// The delete orchestration, free of the DOM. post(path, body) -> {status, json}; confirm(text) -> Promise<bool>.
-// Plans every batch, asks once, deletes batch by batch with each batch's fp. A stale 409 re-plans the batches not yet
-// done and asks again; any other failure stops. -> {deleted, counts, cancelled, stopped: null | {code, error, remaining}}.
-export async function deleteFlow(ids,{post:rawPost,confirm,onProgress=()=>{}}){
+// The delete orchestration, free of the DOM. post(path, body) -> {status, json}; confirm(text) -> Promise<bool>;
+// wait(job, {batch, of}) -> the job's end {state: done | failed | unknown, counts, error} (mind runs each delete as a
+// background job, POST answers 202 {job}). Plans every batch, asks once, deletes batch by batch with each batch's fp.
+// A stale 409 re-plans the batches not yet done and asks again; any other failure stops. A failed job stops with its
+// counts so far (partial); a delete whose answer or job got lost is code "unknown" (it may still be running).
+// -> {deleted, counts, cancelled, stopped: null | {code, error, remaining, phase?, partial?}}.
+export async function deleteFlow(ids,{post:rawPost,confirm,wait=async()=>({state:'unknown',error:'没有等待删除任务的办法'}),onProgress=()=>{}}){
  const post=async(p,b)=>{try{return await rawPost(p,b);}catch(e){return {status:0,json:{error:'连接出错：'+(e?.message||e)}};}};   // never throws
  const out={deleted:[],counts:[],cancelled:false,stopped:null};
  let pending=batches(ids),note='';
@@ -63,14 +67,54 @@ export async function deleteFlow(ids,{post:rawPost,confirm,onProgress=()=>{}}){
   let stale=false;
   for(let i=0;i<pending.length;i++){
    const r=await post('/gallery/delete',{ids:pending[i],fp:plans[i].fp});
-   if(r.status>=200&&r.status<300){out.deleted.push(...pending[i]);out.counts.push(r.json);onProgress(out);continue;}
+   const stop=(code,error,extra={})=>{out.stopped={code,error,remaining:pending.slice(i).flat(),...extra};return out;};
+   if(r.status===202&&r.json?.job){
+    let j;try{j=await wait(r.json.job,{batch:i+1,of:pending.length});}catch(e){j={state:'unknown',error:String(e?.message||e)};}
+    if(j?.state==='done'){out.deleted.push(...pending[i]);out.counts.push(j.counts||{});onProgress(out);continue;}
+    if(j?.state==='failed')return stop('failed',j.error||'出错',{partial:j.counts||{}});
+    return stop('unknown',j?.error||'不知道这一批删到哪里了');
+   }
+   if(r.status>=200&&r.status<300){out.deleted.push(...pending[i]);out.counts.push(r.json);onProgress(out);continue;}   // an older mind: synchronous
    if(r.status===409&&r.json?.code==='stale'){pending=pending.slice(i);stale=true;note='清单在你确认之后有了变化，已重新生成：';break;}
-   out.stopped={code:r.json?.code||null,error:r.json?.error||('状态 '+r.status),remaining:pending.slice(i).flat()};return out;
+   // no answer, or the proxy / mind failed: the delete may have started anyway
+   if(r.status===0||r.status>=500)return stop('unknown',r.json?.error||('状态 '+r.status));
+   return stop(r.json?.code||null,r.json?.error||('状态 '+r.status));
   }
   if(!stale)break;
  }
  return out;
 }
+// The steps a delete job reports (mind/gallery.py run), in the page's words.
+export const STEP_ZH={start:'准备',bodies:'删日志正文',redact:'清掉别处的副本',spool:'改写日志缓存',logs:'处理日志行',records:'删记录',files:'删照片文件',done:'完成'};
+// Poll GET /gallery/job until the job ends. get(path) -> {status, json}. A few poll errors in a row are ridden out;
+// more, or a job mind no longer knows (404: restarted), end as {state: 'unknown'} — never as "not deleted".
+export async function waitJob(id,{get,sleep=ms=>new Promise(r=>setTimeout(r,ms)),onStep=()=>{},every=1500,tries=5}){
+ let fails=0;
+ for(;;){
+  let r;try{r=await get('/gallery/job?id='+id);}catch(e){r={status:0,json:{error:String(e?.message||e)}};}
+  if(r.status===200&&r.json){
+   fails=0;
+   if(r.json.state!=='running')return r.json;
+   onStep(r.json);
+  }else if(r.status===404)return {state:'unknown',error:(r.json?.error||'这次删除已不在记录里')+'，删除可能已经停下'};
+  else if(++fails>=tries)return {state:'unknown',error:'连接出错，删除可能仍在进行'};
+  await sleep(every);
+ }
+}
+// The message after a stopped delete: {title, text}. Only a refusal before the start may say "没有删".
+export function stopText(stopped,counts,total){
+ const done=counts.length?resultText(counts,total):'';
+ if(stopped.code==='unknown')
+  return {title:'删除状态未知',text:`${stopped.error}。${done?done+'；':''}这一批可能仍在进行，请稍后刷新再看删到了哪里。`};
+ if(stopped.code==='failed'){
+  const part=resultText([stopped.partial||{}],null).replace(/^已删除 /,'');
+  return {title:'删除中断',text:`这一批中途出错（${stopped.error}）。${done?done+'；':''}这一批已经处理的：${part}。请刷新后重新选择没删掉的照片。`};
+ }
+ return {title:stopped.phase==='plan'&&!counts.length?'无法删除':'删除中断',
+  text:`${stopped.error}。${done?done+'；其余没有删。':'一张也没有删。'}`};
+}
+// The detail pane when a photo cannot be read.
+export function detailError(status,msg){return status===404?'这张已被删除':`读不到这张：${status} ${msg||''}`.trim();}
 // A photo's vision_looks rows for the detail pane: 看一眼 (kind look) apart from the live eye's 实时识别 (kind scene).
 export function lookRows(looks){
  const out={look:[],live:[]};
@@ -104,7 +148,7 @@ export function mountGallery(doc,{fetchImpl=(...a)=>fetch(...a),URLImpl=URL,Obse
  const status=t=>{$('g-status').textContent=t||'';};
  const api=async(p,body)=>{
   const r=await fetchImpl('/api/mind'+p,body===undefined?{cache:'no-store',signal:AbortSignal.timeout(30000)}
-   :{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)});
+   :{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(POST_TIMEOUT_MS)});
   const text=await r.text();let json=null;try{json=JSON.parse(text);}catch{}
   return {ok:r.ok,status:r.status,json,text};
  };
@@ -113,7 +157,7 @@ export function mountGallery(doc,{fetchImpl=(...a)=>fetch(...a),URLImpl=URL,Obse
  // -- maintenance
  function renderMaint(){
   const m=S.maint;$('g-maint').innerHTML=maintenanceHtml(m);
-  const b=$('g-maint-btn');b.hidden=!m;if(m){b.textContent=m.on?'结束维护':'开始维护';}
+  const b=$('g-maint-btn');b.hidden=!m;b.disabled=S.busy;if(m){b.textContent=m.on?'结束维护':'开始维护';}
   renderBar();
  }
  async function loadMaint(){try{S.maint=await need('/gallery/maintenance');}catch{S.maint=null;}renderMaint();}
@@ -251,8 +295,10 @@ export function mountGallery(doc,{fetchImpl=(...a)=>fetch(...a),URLImpl=URL,Obse
  // -- detail
  async function showDetail(id){
   const box=$('g-detail');box.textContent='';box.append(el(doc,'p','empty','读取中…'));
-  let d;try{d=await need('/gallery/frame?id='+id);}catch(e){if(S.cur===id){box.textContent='';box.append(el(doc,'p','empty','读不到这张：'+e.message));}return;}
-  if(S.cur!==id)return;renderDetail(d);
+  let r;try{r=await api('/gallery/frame?id='+id);}catch(e){r={ok:false,status:0,json:null,text:e.message};}
+  if(S.cur!==id)return;
+  if(!r.ok){box.textContent='';box.append(el(doc,'p','empty',detailError(r.status,(r.json?.error||r.text||'').slice(0,100))));return;}
+  renderDetail(r.json);
  }
  function renderDetail(d){
   const box=$('g-detail');box.textContent='';
@@ -294,20 +340,23 @@ export function mountGallery(doc,{fetchImpl=(...a)=>fetch(...a),URLImpl=URL,Obse
  }
  async function runDelete(ids){
   if(!ids.length||!canDelete())return;
-  S.busy=true;renderBar();
-  const total=ids.length;let r={deleted:[],counts:[]};
+  S.busy=true;renderBar();renderMaint();
+  const total=ids.length;let r={deleted:[],counts:[],cancelled:false,stopped:null};
+  const wait=(job,{batch,of})=>waitJob(job,{get:async p=>{const x=await api(p);return {status:x.status,json:x.json};},
+   onStep:j=>status(`正在删除${of>1?`第 ${batch}/${of} 批`:''}：${STEP_ZH[j.step]||j.step||'…'}`)});
   try{
-   r=await deleteFlow(ids,{post:async(p,b)=>{const x=await api(p,b);return {status:x.status,json:x.json};},
+   r=await deleteFlow(ids,{post:async(p,b)=>{const x=await api(p,b);return {status:x.status,json:x.json};},wait,
     confirm:(t,n)=>ask({title:'确认删除',text:t,ok:`删除 ${n} 张`})});
-   if(r.stopped){
-    const sofar=r.deleted.length?resultText(r.counts,total)+'；其余没有删。':'一张也没有删。';
-    await ask({title:r.stopped.phase==='plan'&&!r.deleted.length?'无法删除':'删除中断',text:`${r.stopped.error}。${sofar}`,ok:null});
-   }else if(!r.cancelled)await ask({title:'删除完成',text:resultText(r.counts,total)+'。',ok:null});
-  }catch(e){await ask({title:'删除中断',text:'出错：'+e.message,ok:null});}
+   status('');
+   if(r.stopped){const t=stopText(r.stopped,r.counts,total);await ask({title:t.title,text:t.text,ok:null});}
+   else if(!r.cancelled)await ask({title:'删除完成',text:resultText(r.counts,total)+'。',ok:null});
+  }catch(e){r.stopped={code:'unknown'};await ask({title:'删除中断',text:'出错：'+e.message+'。请刷新后再看删到了哪里。',ok:null});}
   finally{
    S.busy=false;const removed=new Set(r.deleted);
-   if(removed.size){
-    for(const id of removed)if(S.urls.has(id)){URLImpl.revokeObjectURL(S.urls.get(id));S.urls.delete(id);}
+   for(const id of removed)if(S.urls.has(id)){URLImpl.revokeObjectURL(S.urls.get(id));S.urls.delete(id);}
+   if(r.stopped){                                // not sure what is left: read the day and the hour again
+    await loadDays();if(S.day)await pickDay(S.day,true);if(S.hour!=null)await pickHour(S.hour);
+   }else if(removed.size){
     S.frames=S.frames.filter(f=>!removed.has(f.id));
     S.sel=new Set([...S.sel].filter(x=>!removed.has(x)));
     if(removed.has(S.cur)){S.cur=null;renderDetail(null);}

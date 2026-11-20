@@ -167,3 +167,86 @@ test('lookRows: 看一眼 and 实时识别 (vision_looks kind scene) are shown a
  assert.deepEqual(r.live,['10:05:08  坐在床边']);
  assert.deepEqual(ui.lookRows(undefined),{look:[],live:[]});
 });
+
+// ---- the delete job (review C2): 202 {job}, then the page waits on GET /gallery/job ----
+const accepted=(b)=>({status:202,json:{job:'j'+b.ids[0]}});
+
+test('deleteFlow (h): a 202 waits on the job; its counts are the batch result', async ()=>{
+ const waited=[];
+ const {post,calls}=script((p,b)=>p==='/gallery/plan'?plan(b.ids,'f'+b.ids[0]):accepted(b));
+ const wait=async(job,info)=>{waited.push([job,info]);return {state:'done',counts:{frames:job==='ji0'?500:1}};};
+ const r=await ui.deleteFlow(ids1001.slice(0,501),{post,wait,confirm:async()=>true});
+ assert.deepEqual(waited,[['ji0',{batch:1,of:2}],['ji500',{batch:2,of:2}]]);
+ assert.equal(r.stopped,null);assert.equal(r.deleted.length,501);
+ assert.deepEqual(r.counts.map(c=>c.frames),[500,1]);
+ assert.equal(deletes(calls).length,2);
+});
+
+test('deleteFlow (i): a failed job stops with what it did; later batches are not sent', async ()=>{
+ const {post,calls}=script((p,b)=>p==='/gallery/plan'?plan(b.ids,'f'+b.ids[0]):accepted(b));
+ const wait=async job=>job==='ji0'?{state:'done',counts:{frames:500}}:{state:'failed',error:'OSError',counts:{log_rows:3}};
+ const ids=ids1001;
+ const r=await ui.deleteFlow(ids,{post,wait,confirm:async()=>true});
+ assert.deepEqual(r.deleted,ids.slice(0,500));
+ assert.equal(r.stopped.code,'failed');assert.deepEqual(r.stopped.partial,{log_rows:3});
+ assert.deepEqual(r.stopped.remaining,ids.slice(500));
+ assert.equal(deletes(calls).length,2);
+});
+
+test('deleteFlow (j): a lost job or a lost delete answer is unknown, never "not deleted"', async ()=>{
+ const {post}=script((p,b)=>p==='/gallery/plan'?plan(b.ids,'f'):accepted(b));
+ const r=await ui.deleteFlow(['a'],{post,wait:async()=>({state:'unknown',error:'连接出错'}),confirm:async()=>true});
+ assert.equal(r.stopped.code,'unknown');assert.deepEqual(r.deleted,[]);
+ const t=ui.stopText(r.stopped,r.counts,1);
+ assert.match(t.text,/可能仍在进行，请稍后刷新/);assert.doesNotMatch(t.text,/没有删/);
+ for(const res of [{status:0,json:{error:'连接出错：socket hang up'}},{status:503,json:{error:'情景服务连接中'}}]){
+  const {post:p2}=script((p,b)=>p==='/gallery/plan'?plan(b.ids,'f'):res);
+  const r2=await ui.deleteFlow(['a'],{post:p2,wait:async()=>{throw new Error('not called');},confirm:async()=>true});
+  assert.equal(r2.stopped.code,'unknown',String(res.status));
+  assert.doesNotMatch(ui.stopText(r2.stopped,r2.counts,1).text,/没有删/);
+ }
+});
+
+test('stopText: refused before the start says nothing was deleted; a failed job shows what it did', ()=>{
+ const refused=ui.stopText({code:'not_maintenance',error:'机器人还连着，请先关机',remaining:['a'],phase:null},[],1);
+ assert.equal(refused.title,'删除中断');assert.match(refused.text,/机器人还连着，请先关机。一张也没有删/);
+ const backlog=ui.stopText({code:'spool_backlog',error:'先等日志上传完再删',remaining:['a']},[{frames:500}],501);
+ assert.match(backlog.text,/已删除 500 张照片（共选了 501 张）；其余没有删/);
+ const failed=ui.stopText({code:'failed',error:'OSError',partial:{log_rows:3,looks:2,frames:0},remaining:['b']},[],1);
+ assert.match(failed.text,/OSError/);assert.match(failed.text,/2 条看一眼/);assert.match(failed.text,/刷新/);
+ assert.equal(ui.stopText({code:null,error:'x',phase:'plan',remaining:['a']},[],1).title,'无法删除');
+});
+
+test('waitJob: polls until the job ends, reports steps, rides out a few poll errors', async ()=>{
+ const seen=[],steps=[];let n=0;
+ const get=async p=>{seen.push(p);n++;
+  if(n===2)return {status:0,json:null};
+  if(n<4)return {status:200,json:{state:'running',step:n===1?'bodies':'spool'}};
+  return {status:200,json:{state:'done',step:'done',counts:{frames:3}}};};
+ const j=await ui.waitJob('0123456789ab',{get,sleep:async()=>{},onStep:s=>steps.push(s.step)});
+ assert.deepEqual(j,{state:'done',step:'done',counts:{frames:3}});
+ assert.equal(seen[0],'/gallery/job?id=0123456789ab');assert.deepEqual(steps,['bodies','spool']);
+ const down=await ui.waitJob('x',{get:async()=>{throw new Error('down');},sleep:async()=>{},tries:3});
+ assert.equal(down.state,'unknown');assert.match(down.error,/可能仍在进行/);
+ const gone=await ui.waitJob('x',{get:async()=>({status:404,json:{error:'这次删除已不在记录里'}}),sleep:async()=>{}});
+ assert.equal(gone.state,'unknown');
+ assert.equal(ui.STEP_ZH.spool,'改写日志缓存');
+});
+
+test('detailError: a photo deleted meanwhile says so', ()=>{
+ assert.equal(ui.detailError(404,'no such frame'),'这张已被删除');
+ assert.equal(ui.detailError(503,'MongoError'),'读不到这张：503 MongoError');
+});
+
+test('the job path and its id are whitelisted; page POSTs outwait the proxy', async ()=>{
+ const {MindProxy}=await import(new URL('./mind.mjs',import.meta.url));
+ assert.equal(MindProxy.check('/gallery/job?id=0123456789ab'),'/gallery/job?id=0123456789ab');
+ assert.equal(MindProxy.check('/gallery/job?id=../x'),null);
+ assert.equal(MindProxy.check('/gallery/job?id=0123456789abc'),null);
+ const server=readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
+ assert.ok(server.includes(`'/gallery/job'`));
+ const page=readFileSync(new URL('./public/gallery-ui.js',import.meta.url),'utf8');
+ const post=Number(page.match(/POST_TIMEOUT_MS=(\d+)/)?.[1]);
+ const proxy=Number(readFileSync(new URL('./mind.mjs',import.meta.url),'utf8').match(/method:'POST',body:bodyText,timeout:(\d+)/)?.[1]);
+ assert.ok(post>=proxy&&proxy>0,`${post} >= ${proxy}`);
+});
