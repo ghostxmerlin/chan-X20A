@@ -210,8 +210,9 @@ class SessionTest(HubBase):
         upd = ws.sent[0]
         self.assertEqual(upd["type"], "session.update")
         s = upd["session"]
-        # owner 2026-11-18: smart_turn_v2 (addressee judgement), threshold only; server_vad keeps its silence
-        self.assertEqual((s["voice"], s["turn_detection"]), ("v-secret", {"type": "smart_turn_v2", "threshold": 0.6}))
+        # owner 2026-11-20: 智能断句 off by default = server_vad with its silence (smart_turn_v2: threshold only)
+        self.assertEqual((s["voice"], s["turn_detection"]),
+                         ("v-secret", {"type": "server_vad", "threshold": 0.6, "silence_duration_ms": 1000}))
         self.assertEqual(self.rl.session_config("v", "i", 1000, 0.6)["turn_detection"],
                          {"type": "server_vad", "threshold": 0.6, "silence_duration_ms": 1000})
         self.assertIn("此刻的情景：大家在聊午饭", s["instructions"])
@@ -282,6 +283,10 @@ class SessionTest(HubBase):
 
 class TurnSwitchTest(HubBase):
     """智能断句 switch (owner 2026-11-19 night): set_turn changes the turn detection; an open, idle session reopens with it."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.hub.cfg.turn = "smart_turn_v2"            # these start with the switch on (default off since 2026-11-20)
+
     async def test_switching_off_reopens_the_idle_session_with_server_vad(self):
         ws = await self.open_ready()
         self.assertEqual(ws.sent[0]["session"]["turn_detection"]["type"], "smart_turn_v2")
@@ -978,6 +983,7 @@ class ToolGateTest(HubBase):
     """Owner 2026-11-18 "我不想让闲聊触发了工具调用": smart_turn let it through, the tool gate decides."""
     async def asyncSetUp(self):
         await super().asyncSetUp()
+        self.hub.cfg.turn, self.hub.intent_on = "smart_turn_v2", True   # the features under test (off by default since 2026-11-20)
         self.calls = []
 
         def call(method, path, body=None, timeout=5):
@@ -1477,6 +1483,10 @@ class SceneTest(HubBase):
 
 class SearchGateTest(HubBase):
     """2026-11-18 18:12: "别扔了就行，那只能去网上搜搜看有没有" said to a colleague started a search hello read out."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.hub.cfg.turn, self.hub.intent_on = "smart_turn_v2", True   # the features under test (both off by default since 2026-11-20)
+
     async def test_a_search_word_waits_for_a_real_reply(self):
         asked = []
         self.hub.searcher = lambda q: (asked.append(q), "二手市场数据")[1]
@@ -1505,6 +1515,10 @@ class SearchGateTest(HubBase):
 
 class VisionGateTest(HubBase):
     """Owner 2026-11-18: "决定视觉爆发的前提是过了qwen的拒识闸门，别一有人说话就爆发" (smart_turn_v2)."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.hub.cfg.turn, self.hub.intent_on = "smart_turn_v2", True   # the features under test (both off by default since 2026-11-20)
+
     class Burst:
         def __init__(self):
             self.heards, self.asks = [], []
@@ -2308,6 +2322,10 @@ if __name__ == "__main__":
 
 class AutoModeTest(HubBase):
     """自动档 (owner 2026-11-18): the ear's own ASR text preloads the skill before the model answers."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.hub.cfg.turn, self.hub.intent_on = "smart_turn_v2", True   # the features under test (both off by default since 2026-11-20)
+
     class Head:
         version = "test"
         def reload(self):

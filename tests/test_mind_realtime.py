@@ -165,8 +165,8 @@ class EndpointTest(Base):
         with urllib.request.urlopen(req, timeout=5) as r:
             sw = json.load(r)
         self.assertEqual(sw['realtime'], {'on': False, 'at': None})          # default off
-        self.assertTrue(sw['realtime_smart_turn']['on'])                     # 智能断句: no document = on (the ear's default)
-        self.assertTrue(sw['realtime_intent']['on'])                         # 工具分类器: likewise
+        self.assertFalse(sw['realtime_smart_turn']['on'])                    # 智能断句: no document = off (owner 2026-11-20)
+        self.assertFalse(sw['realtime_intent']['on'])                        # 工具分类器: likewise
         self.assertTrue(sw['realtime_answer_all']['on'])                     # 点屏幕聊天: on (owner: 暂时退回全手动)
         req = urllib.request.Request(f'http://127.0.0.1:{server.server_address[1]}/switches', method='POST',
                                      data=json.dumps({'name': 'realtime_smart_turn', 'on': False}).encode(),

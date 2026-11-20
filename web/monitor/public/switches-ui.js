@@ -173,8 +173,8 @@ export function toggleRequest(which,robot,mindOrFresh){
  if(which==='notes')return {kind:'switch',body:{name:'notes',on:!(mindOrFresh?.notes?.on===true)}};
  if(which==='meet')return {kind:'switch',body:{name:'realtime',on:!(mindOrFresh?.realtime?.on===true)}};
  if(which==='all')return {kind:'switch',body:{name:'realtime_answer_all',on:!(mindOrFresh?.realtime_answer_all?.on!==false)}};
- if(which==='intent')return {kind:'switch',body:{name:'realtime_intent',on:!(mindOrFresh?.realtime_intent?.on!==false)}};
- if(which==='turn')return {kind:'switch',body:{name:'realtime_smart_turn',on:!(mindOrFresh?.realtime_smart_turn?.on!==false)}};
+ if(which==='intent')return {kind:'switch',body:{name:'realtime_intent',on:mindOrFresh?.realtime_intent?.on!==true}};   // unknown = off (owner 2026-11-20)
+ if(which==='turn')return {kind:'switch',body:{name:'realtime_smart_turn',on:mindOrFresh?.realtime_smart_turn?.on!==true}};
  const v=switchView(robot,mindOrFresh,null);
  if(which==='hearing')return {kind:'control',body:{action:'hearing_listen',enabled:!v.hearing.on,boot:robot?.boot}};
  return {kind:'control',body:{action:'m12',enabled:!v.vision.on,boot:robot?.boot}};

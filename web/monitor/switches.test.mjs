@@ -211,7 +211,7 @@ test('paused: why and since when, in Beijing time', ()=>{
  assert.match(sw.pauseView(PAUSE({spent_usd:11,over:true,override:true})).spend,/已按 9 放行/);
 });
 
-test('智能断句: on by default, toggles realtime_smart_turn, says when the ear has not switched yet', ()=>{
+test('智能断句: off by default, toggles realtime_smart_turn, says when the ear has not switched yet', ()=>{
  const now=Date.now();
  const on={realtime_smart_turn:{on:true},realtime:{on:true},realtime_status:{running:[],available:true,at:now,stale:false,turn:'smart_turn_v2'}};
  let v=sw.switchView(robot(),true,{enabled:false},on);
@@ -222,9 +222,10 @@ test('智能断句: on by default, toggles realtime_smart_turn, says when the ea
  assert.equal(v.turn.on,false);assert.match(v.turn.detail,/按停顿/);assert.match(v.turn.detail,/正在换/);
  assert.deepEqual(sw.toggleRequest('turn',null,off).body.on,true);
  assert.equal(sw.switchView(robot(),true,{enabled:false},null).turn.known,false);
+ assert.equal(sw.toggleRequest('turn',null,{}).body.on,true);          // no document = off (owner 2026-11-20): a press turns it on
 });
 
-test('工具分类器: on by default, toggles realtime_intent', ()=>{
+test('工具分类器: off by default, toggles realtime_intent', ()=>{
  const now=Date.now();
  const on={realtime_intent:{on:true},realtime:{on:true},realtime_status:{running:[],available:true,at:now,stale:false,intent:true}};
  let v=sw.switchView(robot(),true,{enabled:false},on);
@@ -232,6 +233,7 @@ test('工具分类器: on by default, toggles realtime_intent', ()=>{
  assert.deepEqual(sw.toggleRequest('intent',null,on),{kind:'switch',body:{name:'realtime_intent',on:false}});
  v=sw.switchView(robot(),true,{enabled:false},{...on,realtime_intent:{on:false}});
  assert.match(v.intent.detail,/不判断/);assert.match(v.intent.detail,/还没换过来/);
+ assert.equal(sw.toggleRequest('intent',null,{}).body.on,true);        // no document = off (owner 2026-11-20)
 });
 
 test('点屏幕聊天: on by default; says when a chat runs; the other two do nothing while it is on', ()=>{

@@ -238,7 +238,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
     TOGGLES = ("realtime_tools", "realtime_smart_turn", "realtime_intent", "realtime_answer_all")   # 点屏幕聊天: on by default    # 千问用工具 (L6 2026-11-18): Docking's Qwen may call tools;
     # 智能断句 (owner 2026-11-19 night): Docking's turn detection smart_turn_v2 (on) / server_vad (off)
     # 工具分类器 (owner 2026-11-19 night): the ear's local tool classifier (preload + tool gate) judges / judges nothing
-    TOGGLE_DEFAULTS = {"realtime_smart_turn": True, "realtime_intent": True,    # no document yet = the ear's default
+    TOGGLE_DEFAULTS = {"realtime_smart_turn": False, "realtime_intent": False,  # no document = the ear's default: off (owner 2026-11-20)
                        "realtime_answer_all": True}   # owner 2026-11-19 night: "暂时退回全手动"
     MOUTH_MODES = ("off", "clips", "tts")    # 嘴: emotion clips (default) or soul-tts, never both (user 2026-11-11)
 

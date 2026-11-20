@@ -77,8 +77,10 @@ log = print                                         # tests silence it
 _LOG_FAILED = set()                                 # run-log helpers that have failed once (said once on the console)
 
 import rt_base as _rt_base  # noqa: E402
-# every name of rt_base (also the underscore ones), so the moved code resolves exactly as before
-globals().update({_k: _v for _k, _v in vars(_rt_base).items() if not _k.startswith("__")})
+# every name of rt_base (also the underscore ones), so the moved code resolves exactly as before; never log /
+# _LOG_FAILED: rt_base's are shims that look up ours, so copying them made log call itself (2026-11-20: every Docking
+# task died in a RecursionError on the Mac stack; the tests patch log, so they never saw it)
+globals().update({_k: _v for _k, _v in vars(_rt_base).items() if not _k.startswith("__") and _k not in ("log", "_LOG_FAILED")})
 from rt_gate import GateMixin  # noqa: E402
 from rt_cards import CardsMixin  # noqa: E402
 from rt_looks import LooksMixin  # noqa: E402
@@ -216,7 +218,7 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
         self._called_source = None                     # the last call's source (asr / name / text / touch)
         self._speaker_sent = None
         self.intent = None                             # intent.Auto (自动档): decides before the model answers
-        self.intent_on = True                          # 工具分类器 switch (realtime_intent): off = it judges nothing
+        self.intent_on = False                         # 工具分类器 switch (realtime_intent): off = it judges nothing; off by default (owner 2026-11-20)
         self._preloaded = {}                           # auto: skill id -> preloaded at (clock), not used yet
         self._next_depth = 0
         self._tool_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="rt-tool")

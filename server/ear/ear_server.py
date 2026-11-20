@@ -266,13 +266,13 @@ def main():
                     doc, read_ok = None, False
                 if read_ok:                            # no document = on (owner 2026-11-19 night: 暂时退回全手动)
                     rt_hub.set_answer_all(doc["on"] if doc and isinstance(doc.get("on"), bool) else True)
-                try:                                   # 智能断句 (realtime_smart_turn); no document = cfg default
+                try:                                   # 智能断句 (realtime_smart_turn); no document = cfg default (off)
                     doc = await asyncio.to_thread(database.read_switch, "realtime_smart_turn")
                 except Exception:                      # noqa: BLE001 - a failed read keeps the current setting
                     doc = None
                 if doc and isinstance(doc.get("on"), bool):
                     rt_hub.set_turn(doc["on"])
-                try:                                   # 工具分类器 (realtime_intent); no document = on
+                try:                                   # 工具分类器 (realtime_intent); no document = off (owner 2026-11-20)
                     doc = await asyncio.to_thread(database.read_switch, "realtime_intent")
                 except Exception:                      # noqa: BLE001
                     doc = None

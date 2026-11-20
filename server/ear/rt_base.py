@@ -900,7 +900,7 @@ class Config:
     # can never cancel a reply (no interrupt option is documented for this model); guard_s after it ends.
     silence_ms = 1000
     vad_threshold = 0.6
-    turn = "smart_turn_v2"       # owner 2026-11-18: try DashScope's addressee judgement ("server_vad" = before)
+    turn = "server_vad"          # 智能断句 off by default (owner 2026-11-20); the switch turns smart_turn_v2 on (2026-11-18 trial)
     # 点屏幕聊天 / 全手动 (owner 2026-11-19 night: "开了它就应答所有的话，关了它就只收集"; "调试模式，你看看之类的…也是要在
     # 我点击屏幕…以后才能启动"; "暂时退回全手动"): no session and no word of its own unless a tap opened a chat; in the
     # chat every sentence is answered, no judgement (server_vad, no 「嗯」 rule, no reply / tool gate). Live default: on

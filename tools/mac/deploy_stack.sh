@@ -1,14 +1,16 @@
 #!/bin/sh
 # The Mac stand-in's own server stack (owner 2026-11-19 night: the server assumes one robot; "clone一份现在的数据给mac").
-# Copies this checkout's ear / mind code into ~/soul-spike-mac and ~/soul-mind-mac and (re)starts three loopback-only
+# Copies this checkout's ear / mind code into ~/soul-spike-mac and ~/soul-mind-mac and (re)starts loopback-only
 # units beside the robot's, on the cloned database hello_mac (tools/mac/clone_db.py):
 #   soul-spike-mac  ear     127.0.0.1:52832 (ask API 52843)    the Mac app reaches it through an ssh tunnel
 #   soul-mind-mac   mind    127.0.0.1:52840
 #   soul-tts-mac    tts     127.0.0.1:52850 (mouth 52851)      soul-tts takes one device: the robot keeps its own
+#   soul-eye-mac / soul-notes-mac / soul-memory-mac   the vision eye, 纪要 and memory workers on hello_mac (2026-11-20:
+#                   without them the Mac's 全开 turned 识别 / 纪要 on with nothing doing the work)
 # The keyword ear (soul-kws), models, fillers, personas, hello.env and the ear token are shared read-only. Nothing of
 # the robot's stack is restarted, copied over or written. No public port: everything listens on 127.0.0.1.
-#   tools/mac/deploy_stack.sh            copy + (re)start the three units
-#   tools/mac/deploy_stack.sh --stop     stop the three units (data stays)
+#   tools/mac/deploy_stack.sh            copy + (re)start the units
+#   tools/mac/deploy_stack.sh --stop     stop the units (data stays)
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -17,7 +19,7 @@ need SOUL_SERVER_SSH
 EAR_DIR=soul-spike-mac
 MIND_DIR=soul-mind-mac
 if [ "${1:-}" = "--stop" ]; then
-  $SSH "$SOUL_SERVER_SSH" "for u in soul-spike-mac soul-mind-mac soul-tts-mac; do sudo systemctl stop \$u 2>/dev/null || true; echo \"\$u: \$(systemctl is-active \$u 2>/dev/null || true)\"; done"
+  $SSH "$SOUL_SERVER_SSH" "for u in soul-spike-mac soul-mind-mac soul-tts-mac soul-eye-mac soul-notes-mac soul-memory-mac; do sudo systemctl stop \$u 2>/dev/null || true; echo \"\$u: \$(systemctl is-active \$u 2>/dev/null || true)\"; done"
   exit 0
 fi
 EAR_FILES=$(sed -n 's/^FILES="\(.*\)"$/\1/p' "$ROOT/server/ear/deploy.sh")
@@ -69,6 +71,14 @@ start soul-mind-mac "hello mind (Mac stand-in)" -p WorkingDirectory="$M" -p Memo
   --setenv=SOUL_DB=hello_mac --setenv=SOUL_EAR_ASK_URL=http://127.0.0.1:52843/ask \
   --setenv=SOUL_LOG_SPOOL="$M/log-spool" --setenv=SOUL_CODE_VERSION_FILE="$M/CODE_VERSION" \
   "$PY" -m mind.runner --token-file "$TOKEN" --settings "$M/settings.json" --api-port 52840 --tts-url http://127.0.0.1:52850
+for w in eye:eye_runner notes:notes_runner memory:memory_worker; do   # the workers beside mind, on the Mac's own data
+  extra=""
+  [ "${w%%:*}" = eye ] && extra="--recordings $E/recordings"
+  [ "${w%%:*}" = eye ] || extra="--clip-texts $M/clip_texts.json"
+  start "soul-${w%%:*}-mac" "hello ${w%%:*} (Mac stand-in)" -p WorkingDirectory="$M" -p MemoryMax=512M -p CPUQuota=50% \
+    --setenv=SOUL_DB=hello_mac --setenv=SOUL_LOG_SPOOL="$M/log-spool" --setenv=SOUL_CODE_VERSION_FILE="$M/CODE_VERSION" \
+    "$PY" -m "mind.${w#*:}" --settings "$M/settings.json" $extra
+done
 start soul-spike-mac "hello ear (Mac stand-in)" -p WorkingDirectory="$E" -p MemoryMax=3G -p CPUQuota=150% \
   --setenv=SOUL_TOKEN_FILE="$TOKEN" --setenv=SOUL_DB=hello_mac --setenv=SOUL_MIND_URL=http://127.0.0.1:52840 \
   --setenv=SOUL_TTS_MOUTH_URL=ws://127.0.0.1:52851/mouth --setenv=SOUL_LOG_SPOOL="$E/log-spool" \
@@ -78,7 +88,7 @@ for i in $(seq 60); do
   if sudo journalctl -u soul-spike-mac --since "$since" --no-pager | grep -q 'listening on'; then break; fi
   sleep 2
 done
-for u in soul-tts-mac soul-mind-mac soul-spike-mac; do
+for u in soul-tts-mac soul-mind-mac soul-eye-mac soul-notes-mac soul-memory-mac soul-spike-mac; do
   echo "== $u: $(systemctl is-active $u)"
   sudo journalctl -u "$u" --since "$since" --no-pager -o cat | grep -v -i -E 'token|key|uri|password' | tail -n 3
 done
