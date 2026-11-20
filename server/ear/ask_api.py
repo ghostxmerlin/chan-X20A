@@ -203,7 +203,7 @@ class Asks:
         return {"level": level, "minutes": None if until is None or open_ else round((until - hub.clock()) / 60),
                 "open": open_,
                 "ends": ("直到主人说退出" if open_ else "到时间或主人说退出（被叫时只答那一句）" if sticky
-                         else "被叫 hello / Dynames 就结束") if level == "quiet"
+                         else "被叫 Providence 就结束") if level == "quiet"
                 else ("直到主人说退出" if open_ else "说「可以说话了」或到时间") if level == "low" else None}
 
     async def set_debug(self, args):

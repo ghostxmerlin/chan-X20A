@@ -352,13 +352,13 @@ def main():
                                         presence_mod.Gated(eye_switch, pause), hub=rt_hub, db=database)
     print(f"live eye: {'follows the 识别 switch' if live_eye else 'off (no key)'}", flush=True)
 
-    kws = None                                     # 关键词耳朵 (2026-11-17, server/kws): SOUL_KWS_URL or kws.url
-    kws_url = kws_link.configured_url(os.environ, os.path.join(os.path.dirname(os.path.abspath(__file__)), "kws.url"))
+    kws = None                                     # 关键词耳朵 (2026-11-17, server/kws): off since 2026-11-20 (Dynames gone)
+    kws_url = kws_link.ear_url(os.environ)         # only an explicit SOUL_KWS_URL turns it back on
     if kws_url:
         kws = kws_link.KeywordLink(kws_url, emit=ear_log.emit)
         if rt_hub is not None:             # 2026-11-18: the name heard = hello was called (围观)
             kws.on_hit = lambda out: rt_hub.called("name")
-    print(f"keyword ear: {kws.url if kws else 'off (no SOUL_KWS_URL, no kws.url)'}", flush=True)
+    print(f"keyword ear: {kws.url if kws else 'off (no SOUL_KWS_URL)'}", flush=True)
 
     import ask_api                                 # mind's tools ask the ear (L1 2026-11-18), 127.0.0.1 only
     robots = mouth_link.RobotLinks()               # the robot command line (collector-0.5.10): newest /mouth link

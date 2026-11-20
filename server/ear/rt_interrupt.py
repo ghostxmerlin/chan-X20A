@@ -8,7 +8,8 @@ class InterruptMixin:
 
     # ---- being called (see CALLED_S) ----
     def on_wake(self, link, m):
-        """MouthLink: the robot's {"type":"asr_wake","word":"hello",...} (collector-0.5.06; it already stopped its speech)."""
+        """MouthLink: the robot's {"type":"asr_wake","word":"providence",...} (the StickS3's PROVIDENCE since
+        collector-0.5.19, the Unit ASR's hello before; the robot already stopped its speech)."""
         self.called("asr", interrupted=bool((m or {}).get("interrupted")))
 
     def called(self, source, text=None, trace=None, interrupted=False):
@@ -16,8 +17,10 @@ class InterruptMixin:
         if not self.armed():
             return
         now = self.clock()
-        if self.cfg.answer_all and source != "touch" and not self.chat_on(now):
-            return                                     # 点屏幕聊天: only a tap opens a chat (the name: later)
+        if self.cfg.answer_all and source not in ("touch", "asr") and not self.chat_on(now):
+            return                                     # 点屏幕聊天: only a tap or the robot's name word opens a chat
+        if self.cfg.answer_all and source == "asr" and not self.chat_on(now):
+            self.start_chat(trace, "name")             # owner 2026-11-20: the StickS3's PROVIDENCE opens a chat
         merged = self._called_at is not None and now - self._called_at < 2.0
         self._called_at, self._called_until = now, now + CALLED_S
         self._called_source = source

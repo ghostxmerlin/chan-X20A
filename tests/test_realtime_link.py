@@ -330,10 +330,26 @@ class AnswerAllTest(HubBase):
         self.hub.set_answer_all(True)
         self.speak(10)
         self.speak(3, speaking=False)
-        self.hub.called("asr")                         # a call does not open it (only a tap, for now)
+        self.hub.called("text")                        # a call word in the text does not open it
         self.hub.step()
         await settle(10)
         self.assertEqual((self.wss, self.hub.state), ([], "closed"))
+
+    async def test_providence_opens_a_chat_in_tap_mode(self):
+        # owner 2026-11-20: the StickS3's PROVIDENCE word (asr_wake) opens a chat like a tap
+        self.hub.set_answer_all(True)
+        self.hub.on_wake(self.link, {"type": "asr_wake", "word": "providence", "n": 1, "interrupted": False})
+        self.assertTrue(self.hub.chat_on())
+        await self.open_ready()
+
+    def test_call_words_are_providence(self):
+        r = self.rl.CALL_RE
+        for said in ("Providence，过来", "providence, hi", "普罗维登斯你好", "神意，看这里"):
+            self.assertTrue(r.match(said), said)
+        for said in ("hello，你好", "Dynames 过来", "你好呀"):
+            self.assertIsNone(r.match(said), said)
+        self.assertIn("Providence", self.rl.BODY)
+        self.assertNotIn("Dynames", self.rl.BODY)
 
     async def test_the_chat_opens_with_server_vad_and_no_en_rule(self):
         self.hub.persona = self.rl.build_persona("")
@@ -732,9 +748,11 @@ class CalledTest(HubBase):
 
     def test_call_words(self):
         r = self.rl.call_rest
-        self.assertEqual([r("hello,今天天气怎么样？"), r("Hello."), r("哈喽 你在吗"), r("Dynames 过来"), r("我说 hello")],
-                         ["今天天气怎么样？", "", "你在吗", "过来", None])
-        self.assertEqual(r("Hello. I'm here. 查一下比特币"), "查一下比特币")       # the ASR unit's own reply is dropped
+        # owner 2026-11-20: the robot is Providence (hello / Dynames are no longer call words)
+        self.assertEqual([r("Providence,今天天气怎么样？"), r("Providence."), r("普罗维登斯 你在吗"), r("神意 过来"),
+                          r("我说 Providence"), r("hello，你好")],
+                         ["今天天气怎么样？", "", "你在吗", "过来", None, None])
+        self.assertEqual(r("Providence. I'm here. 查一下比特币"), "查一下比特币")
 
     async def test_the_asr_hello_stops_the_reply_and_opens_a_window(self):
         ws = await self.open_ready()
@@ -776,7 +794,7 @@ class CalledTest(HubBase):
 
     def test_order_words(self):
         o = self.rl.order_word
-        self.assertEqual([o("Turn left."), o("Hello. I'm here. Next."), o("Five"), o("左转"), o("turn left please")],
+        self.assertEqual([o("Turn left."), o("Providence. I'm here. Next."), o("Five"), o("左转"), o("turn left please")],
                          ["turn left", "next", "five", None, None])
 
     async def test_an_asr_order_changes_nothing(self):
@@ -801,7 +819,7 @@ class CalledTest(HubBase):
     async def test_a_called_sentence_said_while_hello_spoke_is_answered_from_the_ears_text(self):
         ws = await self.open_ready()
         await self.playing(ws, "r1")
-        self.hub.local_heard("hello，你在北京找那个药看看")          # the model never got this audio
+        self.hub.local_heard("Providence，你在北京找那个药看看")          # the model never got this audio
         await settle(10)
         self.assertIn("response.cancel", ws.kinds())                    # the text call interrupts too
         ws.push({"type": "response.done", "response": {"id": "r1", "status": "cancelled", "usage": {}}})
@@ -1434,11 +1452,11 @@ class QuietLowRoleTest(HubBase):
         ws = await self.open_ready()
         self.hub.local_heard("他想当个医生")                                 # not to hello: nothing
         self.assertIsNone(self.hub.role_text())
-        self.hub.local_heard("hello，当个大姐姐，陪陪老人")
+        self.hub.local_heard("Providence，当个大姐姐，陪陪老人")
         await settle(10)
         self.assertEqual(self.hub.role_text(), "当个大姐姐，陪陪老人")
         self.assertIn("【临时角色】主人刚让你：当个大姐姐，陪陪老人", self.last_instr(ws))
-        self.hub.local_heard("hello，做回你自己吧")
+        self.hub.local_heard("Providence，做回你自己吧")
         self.assertIsNone(self.hub.role_text())
         self.hub.set_role("像个老师一样耐心", 30)
         self.assertEqual(self.hub.role_text(), "像个老师一样耐心")
@@ -2692,7 +2710,7 @@ class MustAnswerPinTest(CalledTest):
 
     async def test_a_call_word_in_the_text_then_qwen_silent_is_answered(self):
         ws = await self.open_ready()
-        self.hub.local_heard("hello，今天天气怎么样")
+        self.hub.local_heard("Providence，今天天气怎么样")
         self.t[0] += self.rl.CALLED_ANSWER_WAIT_S + 0.5
         self.hub.step()
         await settle(20)

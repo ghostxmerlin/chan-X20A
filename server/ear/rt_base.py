@@ -104,8 +104,8 @@ def _run_log(fn):
 # The persona file (owner 2026-11-18: 鹿野; config/persona/<active>, deployed next to this module as persona.md):
 # character and voice only, read once at import (the ear restarts on deploy). Without it, the old built-in identity.
 PERSONA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persona.md")
-BODY = ("你住在主人的桌面机器人 Dynames（デュナメス）里，主人去哪常带着你（办公室、家里、车上、饭店、户外都有可能）。"
-        "有人叫 Dynames 就是在叫你。")
+BODY = ("你住在主人的桌面机器人 Providence（神意高达）里，主人去哪常带着你（办公室、家里、车上、饭店、户外都有可能）。"
+        "有人叫 Providence 就是在叫你。")      # owner 2026-11-20: renamed from Dynames
 OLD_IDENTITY = (
     "你是 hello，主人的小宠物机器人，主人去哪常带着你（办公室、家里、车上、饭店、户外都有可能）。"
     # owner 2026-11-16: 傲娇霸气 (was 小孩子的语气：活泼、好奇、爱凑热闹，有点小脾气)
@@ -260,9 +260,10 @@ def addressed(text):
     return bool(t) and bool(ADDRESS.search(t))
 
 
-# Being called (owner 2026-11-18: "hello" heard by the ASR unit is a strong, independent "talking to me"; what follows
-# must be taken seriously; hello may interrupt hello's own speech). Sources: the robot's ASR wake word (asr_wake on
-# /mouth), the keyword ear's Dynames hit, a sentence that starts with hello / Dynames. A call opens CALLED_S: hello's
+# Being called (owner 2026-11-18, renamed 2026-11-20: the robot is Providence; the StickS3 voice module's PROVIDENCE
+# word is a strong, independent "talking to me"; what follows must be taken seriously; hello may interrupt hello's own
+# speech). Sources: the robot's name word (asr_wake on /mouth), a sentence that starts with the name, a tap (the
+# keyword ear is no longer used). A call opens CALLED_S: hello's
 # reply stops, the ear's audio goes up for the whole window, and a sentence in it is answered even when smart_turn
 # calls it not for hello (ambient) or the model only says 「嗯」; a called sentence the model never got (said while
 # hello spoke) is answered from the ear's own ASR after CALLED_ANSWER_WAIT_S.
@@ -276,8 +277,8 @@ TOUCH_S = 20.0
 SHAKEN_SAY_S = 60.0
 SHAKEN_TEXT = "[事件] 你刚被人用力晃了几下：照你的性格自然地说一句（抗议、喊晕、问他干嘛都行），一句话就够，不提传感器，每次换个说法。"
 CALLED_ANSWER_WAIT_S = 2.5
-CALL_RE = re.compile(r"^\W*(hello|hallo|哈喽|哈罗|嗨喽|dynames|dynamis|デュナメス)\W*", re.I)
-CALLED_SOURCES = {"asr": "语音模块听到 hello", "name": "关键词耳朵听到 Dynames", "text": "句子开头叫了 hello / Dynames",
+CALL_RE = re.compile(r"^\W*(providence|普罗维登斯|神意)\W*", re.I)
+CALLED_SOURCES = {"asr": "语音模块听到 Providence", "name": "关键词耳朵（已停用）", "text": "句子开头叫了 Providence",
                   "touch": "主人点了屏幕（必答）"}
 
 

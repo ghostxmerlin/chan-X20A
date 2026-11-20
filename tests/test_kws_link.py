@@ -143,5 +143,19 @@ class ConfiguredUrlTest(unittest.TestCase):
             self.assertIsNone(kws_link.configured_url({"SOUL_KWS_URL": "http://example.com:9"}, path))
 
 
+class EarUrlTest(unittest.TestCase):
+    """Owner 2026-11-20: the ear no longer uses the keyword service (Dynames is gone); only an explicit
+    SOUL_KWS_URL turns it on, a kws.url file next to the ear is ignored."""
+    def test_ear_url_reads_only_the_environment(self):
+        self.assertIsNone(kws_link.ear_url({}))
+        self.assertEqual(kws_link.ear_url({"SOUL_KWS_URL": "http://127.0.0.1:52760"}), "http://127.0.0.1:52760")
+        self.assertIsNone(kws_link.ear_url({"SOUL_KWS_URL": "http://example.com:9"}))
+
+    def test_the_ear_server_uses_ear_url(self):
+        src = (Path(__file__).resolve().parents[1] / "server" / "ear" / "ear_server.py").read_text(encoding="utf-8")
+        self.assertIn("kws_link.ear_url(os.environ)", src)
+        self.assertNotIn('"kws.url"', src)                     # the file name, not the link's url attribute
+
+
 if __name__ == "__main__":
     unittest.main()

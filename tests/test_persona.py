@@ -30,7 +30,8 @@ class PersonaFileTest(unittest.TestCase):
     def test_crowd_puts_the_persona_first_and_keeps_its_rules(self):
         p = rl.build_persona("你是鹿野。")
         self.assertTrue(p.startswith("【人设】\n你是鹿野。"))
-        self.assertIn("Dynames", p)
+        self.assertIn("Providence", p)                      # owner 2026-11-20: renamed from Dynames
+        self.assertNotIn("Dynames", p)
         self.assertNotIn("傲娇又霸气", p)
         self.assertIn("只回一个字「嗯」", p)
         self.assertIn("现在的地点", p)

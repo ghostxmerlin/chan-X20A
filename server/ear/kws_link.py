@@ -23,6 +23,13 @@ SEND_S = 0.25           # send when this much audio is waiting (the spotter look
 MAX_PENDING_S = 4.0     # more than this waiting (spotter slow/down): drop the oldest
 
 
+def ear_url(env):
+    """The keyword ear's URL for the ear (owner 2026-11-20: Dynames is gone, the service is off): only an explicit
+    SOUL_KWS_URL (local addresses only), never the kws.url file next to the ear."""
+    url = (env.get("SOUL_KWS_URL") or "").strip()
+    return configured_url({"SOUL_KWS_URL": url}, None) if url else None
+
+
 def configured_url(env, path):
     """The keyword ear's URL: SOUL_KWS_URL, else the first line of the kws.url file next to the ear (written by
     server/kws/deploy.sh, so the ear's unit needs no new environment), else None (off). Local addresses only."""
