@@ -100,8 +100,7 @@ class MindToolsTest(unittest.TestCase):
                 return {"connected": True, "at": 1795000000000}
         d = self.impls(mode_store=MS())["mode_status"]({})
         self.assertEqual((d["mode"], d["name"], d["label"], d["robot_online"]), ("crowd", "Docking", "DOCK", True))
-        talk = next(m for m in d["modes"] if m["id"] == "talk")
-        self.assertIn("forward", talk["how_to_enter"])
+        self.assertEqual([m["id"] for m in d["modes"]], ["crowd"])           # Docking only (owner 2026-11-20)
         with self.assertRaises(ToolError):
             self.impls()["mode_status"]({})
 

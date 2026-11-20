@@ -216,10 +216,6 @@ class CrowdTapTest(unittest.TestCase):
         n = len(stops)
         rep(2, 'crowd', 'tap')                                   # hello was speaking: her rules attach stop_speech
         self.assertGreater(len(stops), n)
-        rep(3, 'chat', 'select')
-        n = len(stops)
-        rep(4, 'chat', 'tap')
-        self.assertGreater(len(stops), n)
 
 
 if __name__ == '__main__':

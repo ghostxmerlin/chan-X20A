@@ -95,10 +95,8 @@ class FakeHello:
     change is reported to mind (ModeStore.report, as ear forwards hello's mode_report). It has just booted: the first
     report is by boot, in crowd (shown as Docking, owner 2026-11-18; only stop_speech, as hello's first link sends).
     "Speaking" is never true here (nothing plays).
-    The settings timer runs here too, as on hello. 4-8 as a digit enter that mode (coordinator ruling 2026-11-14:
-    never toggle off; already there = already)."""
-    DIGIT_SELECT = {4: {'mode': 'idle'}, 5: {'mode': 'crowd'}, 6: {'mode': 'companion'},
-                    7: {'mode': 'subtitle', 'dir': 'zh_en'}, 8: {'mode': 'subtitle', 'dir': 'en_zh'}}
+    Docking is the only mode since 2026-11-20: digit 5 (enter Docking) answers already, 1-4 and 6-8 do nothing."""
+    DIGIT_SELECT = {5: {'mode': 'crowd'}}
 
     def __init__(self, ms, *, settings_timeout_ms, clock_ms=lambda: int(time.time() * 1000)):
         self.ms, self.timeout_ms, self.clock_ms = ms, settings_timeout_ms, clock_ms
@@ -120,6 +118,8 @@ class FakeHello:
         with self.lock:
             now = self.clock_ms()
             self.last_input = now
+            if inp == 'digit' and value not in self.DIGIT_SELECT:
+                return modes.result('no_action'), None                # the other modes' digits are gone
             if inp == 'digit' and value in self.DIGIT_SELECT:
                 target = self.DIGIT_SELECT[value]
                 if (self.state['mode'], self.state['dir']) == (target['mode'], target.get('dir')):

@@ -28,9 +28,10 @@ from mind.mode_store import valid_state  # noqa: E402
 
 OUT = ROOT / "tests" / "data" / "mode_vectors.json"
 FIELDS = ('mode', 'dir', 'host', 'return_to')
-DIGIT_SELECT = {4: {'mode': 'idle'}, 5: {'mode': 'crowd'}, 6: {'mode': 'companion'},
-                7: {'mode': 'subtitle', 'dir': 'zh_en'}, 8: {'mode': 'subtitle', 'dir': 'en_zh'}}
-DIGIT_EMPTY = (1, 2, 3)
+# Owner 2026-11-20 (Providence): Docking is the only mode. 5 (enter Docking) stays as 'already'; the other digits
+# selected modes that are gone and now do nothing.
+DIGIT_SELECT = {5: {'mode': 'crowd'}}
+DIGIT_EMPTY = (1, 2, 3, 4, 6, 7, 8)
 
 
 def states():

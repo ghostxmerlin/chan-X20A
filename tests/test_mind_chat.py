@@ -905,54 +905,6 @@ class HookAndApiTest(unittest.TestCase):
                                           'host': None, 'return_to': None, 'by': 'asr', 'input': inp,
                                           'effects': ['stop_speech']})
 
-    def test_enter_and_leave_follow_the_mode(self):
-        self.assertFalse(self.chat.active())
-        self.report('chat', 'play')
-        self.assertTrue(self.chat.active())
-        stops = self.tts.stops
-        self.report('idle', 'pause')
-        self.assertFalse(self.chat.active())
-        self.assertGreater(self.tts.stops, stops)
-
-    def test_leaving_chat_runs_before_the_other_effects(self):
-        order = []
-        self.tts.stop = lambda: order.append('stop') or []
-
-        class FakeChat:
-            mode_fn = None
-
-            def enter(self, now):
-                order.append('enter')
-
-            def leave(self, now):
-                order.append('leave')
-        ms, _, _ = runner.wire_modes(FakeDB(), Store(FakeDB()), settings_store=self.ss, tts=self.tts, say_worker=None,
-                                     say_auto=None, say_round_fn=None, log=lambda *a, **k: None, chat=FakeChat())
-        rep = lambda seq, mode, inp: ms.report({'seq': seq, 'mode': mode, 'dir': None, 'host': None, 'return_to': None,
-                                                'by': 'asr', 'input': inp, 'effects': ['stop_speech']}, boot='b2', conn=1)
-        rep(1, 'chat', 'play')
-        order.clear()
-        rep(2, 'talk', 'forward')                                    # effects: stop_speech (+ talk_enter in live)
-        self.assertEqual(order, ['leave', 'stop'])
-
-    def test_settings_over_chat_stops_chat_and_close_comes_back(self):
-        self.report('chat', 'play')
-        self.seq += 1
-        self.call('/mode/report', {'boot': 'b1', 'conn': 1, 'age_ms': 0, 'seq': self.seq, 'mode': 'settings', 'dir': None,
-                                   'host': None, 'return_to': 'chat', 'by': 'asr', 'input': 'open', 'effects': ['stop_speech']})
-        self.assertFalse(self.chat.active())
-        self.report('chat', 'close')
-        self.assertTrue(self.chat.active())
-
-    def test_heard_over_http(self):
-        self.report('chat', 'play')
-        st, r = self.call('/chat/heard', heard())
-        self.assertEqual((st, r['accepted']), (200, True))
-        self.chat.process_once()
-        st, rows = self.call('/chat/turns?limit=3')
-        self.assertEqual((st, rows[0]['text'], rows[0]['reply'], rows[0]['state']), (200, heard()['text'], '我在听，你说。', 'answered'))
-        self.assertEqual(self.call('/chat/heard', {'text': 5})[0], 400)
-
     def test_the_model_switches_through_speech_settings(self):
         st, cfg = self.call('/speech/settings')
         self.assertEqual((st, cfg['speech']['chat']['model']), (200, 'gpt-6.1-terra'))
@@ -965,24 +917,10 @@ class HookAndApiTest(unittest.TestCase):
         self.assertEqual(self.call('/speech/settings', {'speech': cfg['speech'], 'memory': cfg['memory'],
                                                         'expected_version': out['version']})[0], 400)
 
-    def test_stage_note_and_state_over_http(self):
-        self.report('chat', 'play')
-        self.assertEqual(self.call('/chat/stage', {'stage': 'listen', 'at_ms': 1})[0], 200)
-        st, r = self.call('/chat/state')
-        self.assertEqual((st, r['active'], r['stage']), (200, True, 'listening'))
-        self.assertEqual(self.call('/chat/stage', {'stage': 'dance'})[0], 400)
-
     def test_heard_outside_chat_is_recorded_as_not_chat(self):
         st, r = self.call('/chat/heard', heard())
         self.assertEqual((st, r['skip']), (200, 'not_chat'))
 
-    def test_mind_restart_in_chat_starts_chat(self):
-        self.report('chat', 'play')
-        chat2 = chat_mod.Chat(self.db, self.store, settings_fn=lambda: self.ss.current()[0], roles_fn=lambda: {},
-                              tts=self.tts, env=ENV, chat_fn=self.model, log=lambda *a, **k: None, threaded=False)
-        runner.wire_modes(self.db, self.store, settings_store=self.ss, tts=self.tts, say_worker=None, say_auto=None,
-                          say_round_fn=None, log=lambda *a, **k: None, chat=chat2)
-        self.assertTrue(chat2.active())
 
 
 class ThreadedTest(ChatBase):

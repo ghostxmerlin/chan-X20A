@@ -24,18 +24,7 @@ from mind import api, mode_store, runner, say_auto, say_prefetch, speak
 from mind.settings_store import SettingsStore
 from mind.store import Store
 
-# owner 2026-11-18: a fresh mind starts in crowd (Docking) now. These tests drive the talk pipeline from a fresh
-# mind, as written for the old talk default, so this module starts its stores in talk (tests/test_mind_mode_store.py
-# BootDefaultTest pins the real default).
-_TALK_START = mock.patch.object(mode_store, 'BOOT_STATE', {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None})
-
-
-def setUpModule():
-    _TALK_START.start()
-
-
-def tearDownModule():
-    _TALK_START.stop()
+# Since 2026-11-20 Docking (crowd) is the only mode: every mind here starts and stays in crowd.
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -145,37 +134,14 @@ class ReportTest(ModeApiBase):
                          ('crowd', 'crowd', 1, True))
         self.assertEqual(self.call('/mode/seq')[1]['seq'], r['snapshot']['seq'])
 
-    def test_leaving_talk_stops_paid_behaviors(self):
-        self.worker.set_enabled(True, 1); self.auto.set_enabled(True, 1)
-        self.report('idle', self.LEAVE, inp='backward')
-        self.assertEqual((self.worker.enabled(), self.auto.enabled(), self.tts.stops >= 1), (False, False, True))
-
-    def test_entering_talk_turns_writing_on(self):
-        self.settings_family(True)
-        self.report('idle', self.LEAVE, inp='backward'); self.report('talk', self.ENTER)
-        self.assertEqual((self.worker.enabled(), self.auto.enabled(), self.family()), (True, True, False))
-        self.auto.set_enabled(False, 2)
-        self.report('talk', self.ENTER, by='boot', inp=None, boot='b9', seq=0)          # hello rebooted: same
-        self.assertTrue(self.auto.enabled())
-
-    def test_forward_in_talk_starts_one_round_then_too_soon(self):
-        self.assertEqual(self.report('talk', ['say_round'])[1]['result']['code'], 'ok')
-        self.wait_rounds(1)
-        self.assertEqual(self.say_calls[0]['trigger'], {'source': 'asr', 'input': 'forward', 'sid': None})
-        self.assertEqual(self.report('talk', ['say_round'])[1]['result']['code'], 'too_soon')
-
     def test_tap_while_speaking_stops(self):
-        self.report('talk', ['stop_speech'], by='touch', inp='tap')        # hello knows it is playing: tap = stop
+        self.report('crowd', ['stop_speech'], by='touch', inp='tap')       # hello knows it is playing: tap = stop
         self.assertEqual((self.tts.stops >= 1, len(self.say_calls)), (True, 0))
-
     def test_same_report_twice_runs_once(self):
-        body = dict(seq=7)
-        self.report('talk', ['say_round'], **body)
-        self.wait_rounds(1)
-        self.gate.last = None                                             # not too_soon: only dedup may stop it
-        r = self.report('talk', ['say_round'], **body)[1]
-        self.assertEqual((r.get('duplicate'), len(self.say_calls)), (True, 1))
-
+        self.report('crowd', ['stop_speech'], by='touch', inp='tap', seq=7)
+        stops = self.tts.stops
+        r = self.report('crowd', ['stop_speech'], by='touch', inp='tap', seq=7)[1]
+        self.assertEqual((r.get('duplicate'), self.tts.stops), (True, stops))
     def test_older_report_is_stale(self):
         self.report('crowd', self.LEAVE, inp='select', seq=5)
         r = self.report('idle', self.LEAVE, inp='backward', seq=4)[1]
@@ -192,30 +158,24 @@ class ReportTest(ModeApiBase):
         self.assertEqual((self.worker.enabled(), self.auto.enabled()), (False, False))
 
     def test_paid_effects_outside_talk_are_refused(self):
-        # review I2 (defence in depth): the rules never send these outside talk, but a report that does starts nothing
-        r = self.report('idle', ['say_round'], inp='forward')[1]
-        self.assertEqual((r['result']['code'], r['effects'], self.say_calls), ('only_talk', [], []))
+        # review I2 (defence in depth): there is no talk any more, so a report carrying a talk-show effect starts nothing
         r = self.report('crowd', ['prefetch_on'], by='touch', inp='double_tap')[1]
         self.assertEqual((r['result']['code'], r['effects'], self.worker.enabled(), self.auto.enabled()),
                          ('only_talk', [], False, False))
+        r = self.report('crowd', ['say_round'], inp='forward')[1]
+        self.assertEqual((r['result']['code'], r['effects'], self.say_calls), ('only_talk', [], []))
         self.assertIsNone(self.gate.last)                                  # no 10 s reservation taken
-        meta = {'source': 'asr', 'input': 'x', 'value': None, 'device': 'robot.report', 'sid': None, 'mode': 'idle'}
-        self.assertEqual([self.ms.guard(e, meta) for e in ('say_round', 'prefetch_on', 'talk_enter')],
-                         ['only_talk', 'only_talk', None])
-        r = self.report('talk', ['say_round'])[1]                          # in talk it still works
-        self.assertEqual(r['result']['code'], 'ok')
-
     def test_bad_reports(self):
         self.assertEqual(self.report('fly')[0], 400)
-        self.assertEqual(self.report('settings')[0], 400)                 # settings without return_to
-        self.assertEqual(self.report('talk', ['fly'])[0], 400)
-        self.assertEqual(self.report('talk', by='nobody')[0], 400)
-        self.assertEqual(self.report('talk', boot='')[0], 400)
-        self.assertEqual(self.report('talk', age_ms=-1)[0], 400)
-        self.assertEqual(self.call('/mode/report', {'boot': 'b1', 'seq': 1, 'mode': 'idle', 'by': 'asr'})[1]['effects'], [])
-
+        self.assertEqual(self.report('crowd', ['fly'])[0], 400)
+        self.assertEqual(self.report('crowd', by='nobody')[0], 400)
+        self.assertEqual(self.report('crowd', boot='')[0], 400)
+        self.assertEqual(self.report('crowd', age_ms=-1)[0], 400)
+        s, r = self.report('settings', seq=3)                             # old firmware (before 0.5.19): shown as Docking
+        self.assertEqual((s, r['snapshot']['mode']), (200, 'crowd'))
+        self.assertEqual(self.call('/mode/report', {'boot': 'b1', 'seq': 4, 'mode': 'idle', 'by': 'asr'})[1]['effects'], [])
     def test_robot_closed(self):
-        self.report('talk', conn=4)
+        self.report('crowd', conn=4)
         self.assertEqual(self.call('/mode/robot', {'boot': 'b1', 'conn': 3, 'event': 'closed'})[0], 200)
         self.assertTrue(self.call('/mode')[1]['robot']['connected'])            # an older link closing late
         self.call('/mode/robot', {'boot': 'b1', 'conn': 4, 'event': 'closed'})
@@ -232,7 +192,7 @@ class NotFromHereTest(ModeApiBase):
             s, r = self.call('/mode', body)
             self.assertEqual((s, r['error'], r['code']), (409, 'mode is switched on hello', 'on_hello'), body)
         s, r = self.call('/mode', {'input': 'billing', 'value': False})
-        self.assertEqual((s, r['snapshot']['billing'], r['snapshot']['mode']), (200, False, 'talk'))
+        self.assertEqual((s, r['snapshot']['billing'], r['snapshot']['mode']), (200, False, 'crowd'))
         self.assertEqual(self.call('/mode', {'input': 'fly'})[0], 400)
         self.assertEqual(self.call('/mode', {'input': 'boot'})[0], 400)
 
@@ -249,7 +209,7 @@ class NotFromHereTest(ModeApiBase):
     def test_dualkey_signals_do_not_touch_the_mode(self):
         src = {'device': 'dualkey-aa', 'boot': 'x', 'seq': 3}
         s, r = self.call('/signal', {'kind': 'mode', 'value': {'direction': 'left'}, 'age_ms': 120, 'source': src})
-        self.assertEqual((s, self.call('/mode')[1]['snapshot']['mode']), (200, 'talk'))
+        self.assertEqual((s, self.call('/mode')[1]['snapshot']['mode']), (200, 'crowd'))
         self.call('/signal', {'kind': 'click', 'value': {'type': 'single'}, 'age_ms': 0, 'source': dict(src, seq=4)})
         self.assertEqual((self.tts.stops, self.say_calls, self.db.count('mode_log')), (0, [], 0))
         self.assertNotIn('result', self.db['owner_signals'].docs[-1])
@@ -304,14 +264,15 @@ class OwnerBillingTest(ModeApiBase):
                           self.store.enabled(), self.worker.enabled(), self.auto.enabled(), self.tts.stops >= 1),
                          (False, False, False, False, False, False, False, True))
         r = self.call('/preset', {'n': 9, 'source': 'page'})[1]
-        self.assertEqual((r['snapshot']['billing'], self.sw()['tingwu']['on'], self.worker.enabled()), (True, True, True))
+        # 提前写 turns on only in talk, which is gone since 2026-11-20
+        self.assertEqual((r['snapshot']['billing'], self.sw()['tingwu']['on'], self.worker.enabled()), (True, True, False))
 
     def test_switch_on_and_off_are_presets_nine_and_zero(self):
         self.call('/switches', {'name': 'billing', 'on': False})
         self.assertEqual((self.sw()['tingwu']['on'], self.worker.enabled()), (False, False))
         r = self.call('/switches', {'name': 'billing', 'on': True})[1]
         self.assertEqual((r['billing']['on'], r['tingwu']['on'], r['robot'], self.worker.enabled()),
-                         (True, True, {'hearing': 'tingwu', 'vision': 'recognize'}, True))
+                         (True, True, {'hearing': 'tingwu', 'vision': 'recognize'}, False))      # no talk: no 提前写
 
     def test_single_switches_work_whatever_billing_shows(self):
         self.call('/preset', {'n': 0, 'source': 'page'})
@@ -320,73 +281,22 @@ class OwnerBillingTest(ModeApiBase):
         sw = self.sw()
         self.assertEqual((sw['billing']['on'], sw['tingwu']['on'], self.store.enabled()), (False, True, True))
 
-    def test_speech_works_after_zero_when_the_owner_presses_it(self):
-        self.call('/preset', {'n': 0, 'source': 'page'})
-        self.assertEqual(self.call('/say/prefetch', {'enabled': True})[1], {'enabled': True})
-        self.assertEqual(self.call('/say/auto', {'enabled': True})[1]['enabled'], True)
-        s, r = self.call('/say/round', {})                       # reaches today's pipeline (no model in this ctx)
-        self.assertEqual((s, r.get('code')), (409, None))
-        self.assertNotEqual(self.call('/voice/try', {'voice': 'tang'})[1].get('code'), 'billing_off')
-        r = self.report('talk', ['say_round'])[1]                # hello's forward after 0 still says a round
-        self.assertEqual(r['result']['code'], 'ok')
-        self.wait_rounds(1)
-
-    def test_entering_talk_after_zero_still_turns_writing_on(self):
-        self.call('/preset', {'n': 0, 'source': 'page'})
-        self.report('idle', self.LEAVE, inp='backward')
-        r = self.report('talk', self.ENTER)[1]
-        self.assertEqual((r['result'], self.worker.enabled(), self.auto.enabled()),
-                         ({'code': 'ok', 'toast': 'OK'}, True, True))
-
     def test_only_talk_still_holds(self):
+        # the talk show's endpoints answer only_talk for good: Docking is the only mode (owner 2026-11-20)
         self.call('/preset', {'n': 9, 'source': 'page'})
-        self.report('idle', self.LEAVE, inp='backward')
         self.assertEqual(self.call('/say/round', {})[1]['code'], 'only_talk')
-        self.assertEqual(self.report('idle', ['say_round'])[1]['result']['code'], 'only_talk')
+        self.assertEqual(self.report('crowd', ['say_round'])[1]['result']['code'], 'only_talk')
+        self.assertEqual(self.report('idle', ['say_round'], seq=2)[1]['effects'], [])    # old firmware: nothing runs
 
 
 class CarriedTest(ModeApiBase):
     """A4 review items, kept through step 1b."""
-
-    def test_talk_enter_goes_through_billing_with_is_current(self):
-        calls, real = [], self.billing.talk_enter
-
-        def spy(now_ms, *, is_current):
-            calls.append(is_current)
-            return real(now_ms, is_current=is_current)
-        self.billing.talk_enter = spy
-        self.report('idle', self.LEAVE, inp='backward'); self.report('talk', self.ENTER)
-        self.assertEqual(len(calls), 1)
-        self.assertTrue(calls[0]())
-        self.report('idle', self.LEAVE, inp='backward')
-        self.assertFalse(calls[0]())                     # a later mode change: no longer current
 
     def test_guard_answers_none_for_talk_enter(self):
         meta = {'source': 'asr', 'input': 'forward', 'value': None, 'device': 'robot.report', 'sid': None, 'mode': 'talk'}
         self.assertIsNone(self.ms.guard('talk_enter', meta))
         self.call('/switches', {'name': 'billing', 'on': False})
         self.assertIsNone(self.ms.guard('talk_enter', meta))
-
-    def test_say_round_gets_is_current_of_its_commit(self):
-        self.report('talk', ['say_round'])
-        self.wait_rounds(1)
-        self.assertTrue(self.say_calls[0]['current'])
-        self.report('idle', self.LEAVE, inp='backward')
-        self.assertFalse(self.say_calls[0]['is_current']())
-
-    def test_prefetch_on_needs_the_commit_to_be_current(self):
-        self.worker.set_enabled(False, 0)                                  # the start turned it on (全开)
-        hook = self.ms.on_change[0]
-        snap = self.ms.current()
-        meta = {'source': 'touch', 'input': 'double_tap', 'value': None, 'device': 'robot.report', 'sid': None, 'mode': 'talk'}
-        hook(snap, dict(snap, seq=snap['seq'] - 1), ['prefetch_on'], meta, 1)       # superseded commit
-        self.assertFalse(self.worker.enabled())
-        hook(snap, snap, ['prefetch_on'], meta, 2)
-        self.assertTrue(self.worker.enabled())
-
-    def test_double_tap_in_talk_turns_prefetch_on(self):
-        r = self.report('talk', ['prefetch_on'], by='touch', inp='double_tap')[1]
-        self.assertEqual((r['result']['code'], r['effects'], self.worker.enabled()), ('ok', ['prefetch_on'], True))
 
     def test_billing_change_bumps_seq(self):
         s0 = self.call('/mode/seq')[1]['seq']
@@ -446,32 +356,6 @@ class CarriedTest(ModeApiBase):
         self.assertEqual(self.call('/say/auto', {'enabled': False})[0], 200)
         self.assertEqual(self.call('/say/stop', {})[0], 200)
 
-    def test_in_talk_the_say_pipeline_is_todays(self):
-        s, r = self.call('/say/round', {})            # no model access in this ctx: today's own refusal
-        self.assertEqual((s, r.get('code'), r['error']), (409, None, 'soul-tts or model access not configured'))
-        self.assertEqual(self.call('/say/prefetch', {'enabled': True})[1], {'enabled': True})
-
-    def test_family_already_off_writes_no_settings_version(self):
-        v0 = self.ss.current()[1]
-        self.report('idle', self.LEAVE, inp='backward'); self.report('talk', self.ENTER)
-        self.assertEqual(self.ss.current()[1], v0)
-        self.settings_family(True)
-        self.report('idle', self.LEAVE, inp='backward'); self.report('talk', self.ENTER)
-        self.assertEqual(self.ss.history()[0]['note'], '家人声音 关（进脱口秀）')
-
-    def test_say_round_needs_mouth_on_tts(self):
-        self.db['switches'].update_one({'_id': 'mouth'}, {'$set': {'mode': 'clips'}})
-        r = self.report('talk', ['say_round'])[1]
-        self.assertEqual((r['result']['code'], r['effects']), ('mouth_not_tts', []))
-        self.assertEqual(self.say_calls, [])
-
-    def test_say_round_while_one_runs_is_busy(self):
-        self.gate.running = True
-        self.assertEqual(self.report('talk', ['say_round'])[1]['result']['code'], 'busy')
-
-    def test_page_round_counts_for_too_soon(self):
-        self.gate.note(int(time.time() * 1000))
-        self.assertEqual(self.report('talk', ['say_round'])[1]['result']['code'], 'too_soon')
 
 
 class NoModesTest(unittest.TestCase):

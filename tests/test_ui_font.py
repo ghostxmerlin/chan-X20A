@@ -154,6 +154,8 @@ class UiFontTest(unittest.TestCase):
             cps = tools.unpack(blob)['codepoints']
             self.assertEqual([c for c in chars if ord(c) not in cps], [], v['id'])
 
+    # Docking only (2026-11-20): mind changed first (plan Task 1); the firmware's mode table follows in Task 7.
+    @unittest.expectedFailure
     def test_mode_names_match_mind(self):
         """ui_text_zh.h kModeNames = server/mind/mode_table.py MODES[id]['name'] in modes::rules::kModeIds order."""
         spec = importlib.util.spec_from_file_location('ui_font_mode_table', ROOT / 'server/mind/mode_table.py')

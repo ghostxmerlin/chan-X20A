@@ -46,7 +46,7 @@ import copy
 import threading
 import time
 
-from .mode_table import MODES, SUBTITLE_DIRS
+from .mode_table import MODES, REMOVED_MODES
 from .modes import EFFECTS, SOURCES, result, snapshot as _snapshot, transition
 from .runlog import hello_log, trace as log_trace
 
@@ -91,19 +91,11 @@ def ensure_indexes(db):
 
 
 def valid_state(st):
-    """True only for states the machine can be in: no host on event / settings / idle, return_to only (and
-    always) in settings and never settings / event itself, dir exactly when subtitle shows (or will on return)."""
+    """True only for the one state the machine can be in since Docking became the only mode (owner 2026-11-20):
+    crowd, no dir, no host, no return_to."""
     if not isinstance(st, dict) or any(k not in st for k in FIELDS):
         return False
-    mode, d, host, rt = (st[k] for k in FIELDS)
-    if mode not in MODES or host not in (None, 'event') or d not in (None, *SUBTITLE_DIRS) or \
-            rt not in (None, *MODES):
-        return False
-    if host == 'event' and mode in ('event', 'settings', 'idle'):
-        return False
-    if (rt is not None) != (mode == 'settings') or rt in ('settings', 'event'):
-        return False
-    return (d is not None) == (mode == 'subtitle' or (mode == 'settings' and rt == 'subtitle'))
+    return st['mode'] in MODES and st['dir'] is None and st['host'] is None and st['return_to'] is None
 
 
 def _undefined_preset(n, **kw):
@@ -135,6 +127,7 @@ class ModeStore:
         self._recent = collections.OrderedDict()
         self._pending = {}
         self._robot = {'connected': False, 'boot': None, 'conn': None, 'seq': None, 'at': None}
+        self._old_modes_said = set()                 # removed modes an old firmware reported (said once each)
         with _LOCK:
             self._load()
 
@@ -423,6 +416,13 @@ class ModeStore:
         st = {k: rep.get(k) for k in FIELDS}
         if not (_is_int(rseq) and rseq >= 0) or not (isinstance(boot, str) and boot):
             raise ValueError('report needs an integer seq and the robot boot')
+        if st['mode'] in REMOVED_MODES:
+            # Firmware older than collector-0.5.19 still has the removed modes: mirror Docking (the only mode) and
+            # run none of the old mode's effects, so nothing paid starts from a talk entry (owner 2026-11-20).
+            if st['mode'] not in self._old_modes_said:
+                self._old_modes_said.add(st['mode'])
+                _log(f"robot reported removed mode {st['mode']!r} (old firmware): shown as Docking")
+            st, effects = dict(BOOT_STATE), []
         if not valid_state(st):
             raise ValueError(f'impossible reported state {st!r}')
         if by not in SOURCES:

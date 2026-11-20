@@ -397,15 +397,13 @@ class ModeAndPresetTest(LogCase):
         inp, pre = self.flows("mode.input")[-1], self.one("preset.apply")
         self.assertEqual(inp["trace"], pre["trace"])
         ctx.mode_store.apply("play", None, source="page", now_ms=20)
-        ch = self.one("mode.change")
-        self.assertEqual((ch["by"], ch["mode"], ch["extra"]["from"]["mode"], ch["extra"]["to"]["mode"]),
-                         ("page", "chat", "crowd", "chat"))      # a fresh store starts in crowd (Docking, 2026-11-18)
+        self.assertEqual(self.flows("mode.change"), [])          # Docking is the only mode: nothing changes it
 
     def test_report_change_and_billing_set(self):
         ms = ModeStore(FakeDB(), clock_ms=lambda: 0)
         ms.report({"seq": 1, "mode": "chat", "dir": None, "host": None, "return_to": None, "by": "asr", "input": "play",
-                   "effects": []}, boot="b1", now_ms=5)
-        self.assertEqual(self.one("mode.change")["extra"]["to"]["mode"], "chat")
+                   "effects": []}, boot="b1", now_ms=5)                 # old firmware: shown as Docking, no change
+        self.assertEqual(self.flows("mode.change"), [])
         ms.set_billing(False, source="page", now_ms=6)
         r = self.one("billing.set")
         self.assertEqual((r["extra"], r["by"]), ({"before": True, "after": False}, "page"))

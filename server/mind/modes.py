@@ -12,7 +12,7 @@ State = {mode, dir, host, return_to}:
   host       'event' while event-driven hosts a guest mode (never set in step 1: nothing enters a guest yet)
   return_to  the mode settings goes back to; None outside settings
 """
-from .mode_table import MODES, DIRECTIONS, SUBTITLE_DIRS
+from .mode_table import MODES, DIRECTIONS, SUBTITLE_DIRS, REMOVED_MODES
 
 INPUTS = ('forward', 'backward', 'play', 'pause', 'open', 'close', 'start', 'stop', 'next', 'previous',
           'digit', 'tap', 'double_tap', 'long', 'direction', 'select', 'billing', 'boot', 'timeout')
@@ -31,15 +31,15 @@ CODES = {
     'billing_off': 'BILLING OFF', 'busy': 'BUSY', 'too_soon': 'TOO SOON', 'mouth_not_tts': 'MOUTH NOT TTS',
     'not_implemented': 'NOT YET', 'undefined_preset': 'PRESET UNDEFINED', 'stale': '', 'unknown_input': 'NO EFFECT',
     'no_action': 'NO ACTION', 'senses_on_page': 'SENSES: USE PAGE',
+    'removed_mode': 'DOCKING ONLY', 'asr_off': 'ASR OFF',      # Providence, Docking only (owner 2026-11-20)
 }
 _EFFECT_TOAST = {'say_round': 'SAYING', 'prefetch_on': 'PREFETCH ON', 'prefetch_off': 'PREFETCH OFF',
                  'stop_speech': 'STOP', 'talk_enter': 'TALK'}
 
-_WORDS = {w: (mid, 'enter') for mid, m in MODES.items() for w in m['enter']}
-_WORDS.update({w: (mid, 'leave') for mid, m in MODES.items() for w in m['leave']})
-_DIR_OWNER = {d: mid for mid, m in MODES.items() for d in (m['dirs'] or {})}
+# The old voice word pairs (forward / backward talk, play / pause chat, open / close settings, start / stop event):
+# their modes are gone (owner 2026-11-20), so they answer no_action like the voice module's other words.
+VOICE_WORDS = ('forward', 'backward', 'play', 'pause', 'open', 'close', 'start', 'stop')
 _NOT_HERE = ('digit', 'billing')               # presets / master switch: ModeStore routes them (A2, A3)
-_DEFAULT_DIR = SUBTITLE_DIRS[0]                 # select subtitle without a dir = 中→英 (【我定】, same as DualKey up)
 
 
 def result(code, toast=None, *, mode=None):
@@ -94,41 +94,6 @@ def _same(st, code, **kw):
     return dict(st), result(code, **kw), []
 
 
-def _enter(st, target, dir=None):
-    """A manual pick of `target`: straight there, never via IDLE. Event-driven stops (host cleared, owner 12)."""
-    new = {'mode': target, 'dir': dir if target == 'subtitle' else None, 'host': None, 'return_to': None}
-    if target == 'settings':
-        # Remember what was on screen: event-driven waiting shows the IDLE screen, so it comes back to idle; a
-        # hosted guest comes back unhosted (close must not switch event-driven back on, spec §3.8).
-        new['return_to'] = 'idle' if st['mode'] == 'event' else st['mode']
-        new['dir'] = st['dir'] if st['mode'] == 'subtitle' else None
-    return _done(st, new)
-
-
-def _leave(st):
-    """Leave the current mode: settings -> return_to (or idle); a hosted guest -> event waiting; else -> idle."""
-    if st['mode'] == 'settings':
-        target = st['return_to'] or 'idle'
-        new = {'mode': target, 'dir': st['dir'] if target == 'subtitle' else None, 'host': None, 'return_to': None}
-    elif st['host'] == 'event':
-        new = {'mode': 'event', 'dir': None, 'host': None, 'return_to': None}
-    else:
-        new = {'mode': 'idle', 'dir': None, 'host': None, 'return_to': None}
-    if new['mode'] == st['mode'] and new['dir'] == st['dir']:
-        return _same(st, 'already')               # leaving idle: nowhere to go
-    return _done(st, new)
-
-
-def _leave_host(st):
-    """stop / picking event again while it hosts a guest: event-driven and its guest stop together (spec §3.8)."""
-    return _done(st, {'mode': 'idle', 'dir': None, 'host': None, 'return_to': None})
-
-
-def _switch_dir(st, d):
-    new = dict(st, dir=d)
-    return _done(st, new)
-
-
 def transition(state, input, value=None, *, source, speaking=False):
     """(state, input, value) -> (new_state, {code, toast}, effects). Pure: never touches the database or the clock.
 
@@ -149,69 +114,39 @@ def transition(state, input, value=None, *, source, speaking=False):
         raise ValueError(f'{input!r}: digit/billing are routed by ModeStore, not transition')
     mode, m = st['mode'], MODES[st['mode']]
 
-    # 1. the same in every mode
-    if input == 'boot':
-        # robot reboot (new boot id): crowd (shown as Docking, hello's main mode; owner 2026-11-18, was talk with
-        # talk_enter). Always stop_speech, even when already there; leaving talk adds talk_leave as any change does.
-        # Nothing paid starts: crowd has no entry effect (its realtime session follows the mirrored mode + switch).
+    # 1. the same in every mode: a robot reboot and the DualKey long press both land in Docking and stop speech
+    if input in ('boot', 'long'):
         return _done(st, {'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech'])
-    if input == 'long':
-        # DualKey long press: stop the current thing, back to talk; a manual pick, so event-driven stops too
-        return _done(st, {'mode': 'talk', 'dir': None, 'host': None, 'return_to': None}, ['stop_speech'])
 
-    # 2. what this mode gives the input (tap, double_tap, next, previous, and forward inside talk)
+    # 2. what Docking gives the input: tap = listen (stop while speaking), double tap = quiet
     if input in m['inputs']:
         meaning = m['inputs'][input]
         if meaning == 'listen':                                 # crowd tap (owner 2026-11-19): stop, else listen
             return (dict(st), result('ok', 'STOP'), ['stop_speech']) if speaking else (dict(st), result('ok', 'LISTEN'), [])
         if meaning == 'quiet':                                  # crowd double tap: 安静一下 (stops a reply too)
             return dict(st), result('ok', 'QUIET'), ['stop_speech'] if speaking else []
-        if input == 'tap' and speaking and m['touch']['tap'] == 'server':
-            return _done(st, dict(st), ['stop_speech'])        # hello is speaking: a tap stops it (owner 9)
-        if isinstance(meaning, str):
-            return _same(st, meaning)
-        return _done(st, dict(st), list(meaning))
+        return _same(st, meaning)
     if input in ('next', 'previous'):
         return _same(st, 'only_talk')
 
-    # 3. select {mode, dir?}: the swipe-up picker and the page; picking the current mode leaves it
+    # 3. select {mode}: Docking is already on; a removed mode is refused by name
     if input == 'select':
         target = value.get('mode') if isinstance(value, dict) else None
-        d = value.get('dir') if isinstance(value, dict) else None
-        if target not in MODES or (target == 'subtitle' and d not in (None, *SUBTITLE_DIRS)):
+        if target in REMOVED_MODES:
+            return _same(st, 'removed_mode')
+        if target not in MODES:
             return _same(st, 'unknown_input')
-        if st['host'] == target:
-            return _leave_host(st)
-        if target == mode:
-            if target == 'subtitle' and d is not None and d != st['dir']:
-                return _switch_dir(st, d)
-            return _leave(st)
-        return _enter(st, target, d or _DEFAULT_DIR)
+        return _same(st, 'already')
 
-    # 4. DualKey stick: up / down = subtitle 中→英 / 英→中, left = crowd, right = companion; same push again leaves
+    # 4. DualKey stick: left was Docking's own direction (already there); the others belonged to removed modes
     if input == 'direction':
-        owner = _DIR_OWNER.get(value)
-        if value not in DIRECTIONS or owner is None:
-            return _same(st, 'unknown_input')
-        d = MODES[owner]['dirs'][value]
-        if owner == mode:
-            if d is None or d == st['dir']:
-                return _leave(st)
-            return _switch_dir(st, d)              # in subtitle, the other up / down = change direction, not via IDLE
-        return _enter(st, owner, d)
+        if value in DIRECTIONS and value in (m['dirs'] or {}):
+            return _same(st, 'already')
+        return _same(st, 'unknown_input')
 
-    # 5. the voice word pairs (and timeout, settings' second leave input)
-    if input in _WORDS:
-        owner, kind = _WORDS[input]
-        if kind == 'enter':
-            if owner == mode or owner == st['host']:
-                return _same(st, 'already')
-            return _enter(st, owner)
-        if owner == mode:
-            return _leave(st)
-        if owner == st['host']:
-            return _leave_host(st)
-        return _same(st, 'not_in_mode', mode=owner)
+    # 5. the old voice words
+    if input in VOICE_WORDS:
+        return _same(st, 'no_action')
 
     return _same(st, 'unknown_input')
 

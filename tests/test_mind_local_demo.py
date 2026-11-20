@@ -64,37 +64,27 @@ class LocalDemoTest(unittest.TestCase):
         self.assertEqual(self.workers(), (False, False))              # 提前写 / 连续说 stay off outside talk
 
     def test_switching_goes_through_hello_and_reaches_mind(self):
-        self.assertEqual(self.select('talk')[1]['result']['code'], 'ok')
-        self.assertEqual((self.call('/mode')[1]['snapshot']['mode'], self.workers()), ('talk', (True, True)))
-        self.assertEqual(self.select('crowd')[1]['result']['code'], 'ok')
-        self.assertEqual(self.call('/mode')[1]['snapshot']['mode'], 'crowd')
-        self.assertEqual(self.workers(), (False, False))              # leaving talk
-        self.select('crowd')
-        self.assertEqual(self.call('/mode')[1]['snapshot']['mode'], 'idle')     # picking the current mode leaves it
-        self.select('talk')
-        self.assertEqual((self.call('/mode')[1]['snapshot']['mode'], self.workers()), ('talk', (True, True)))
+        # Docking is the only mode (owner 2026-11-20): another mode is refused on hello, Docking again is already
+        self.assertEqual(self.select('talk')[1]['result']['code'], 'removed_mode')
+        self.assertEqual(self.select('crowd')[1]['result']['code'], 'already')
+        self.assertEqual((self.call('/mode')[1]['snapshot']['mode'], self.workers()), ('crowd', (False, False)))
         t = self.hello_call('/v1/telemetry')[1]
-        self.assertEqual((t['mode']['mode'], t['mode']['seq'], t['boot_id']), ('talk', 5, self.ctx['hello'].boot))
-
-    def test_digits_four_to_eight_are_hello_selects(self):
-        self.hello_call('/v1/control', {'target': 'mode', 'input': 'digit', 'value': 8})
-        snap = self.call('/mode')[1]['snapshot']
-        self.assertEqual((snap['mode'], snap['dir']), ('subtitle', 'en_zh'))
+        self.assertEqual((t['mode']['mode'], t['mode']['seq'], t['boot_id']), ('crowd', 1, self.ctx['hello'].boot))
+    def test_digits_select_nothing_but_docking(self):
         r = self.hello_call('/v1/control', {'target': 'mode', 'input': 'digit', 'value': 8})[1]
-        self.assertEqual((r['result']['code'], self.call('/mode')[1]['snapshot']['mode']), ('already', 'subtitle'))
-
+        self.assertEqual((r['result']['code'], self.call('/mode')[1]['snapshot']['mode']), ('no_action', 'crowd'))
+        r = self.hello_call('/v1/control', {'target': 'mode', 'input': 'digit', 'value': 5})[1]
+        self.assertEqual(r['result']['code'], 'already')
     def test_page_cannot_switch_on_mind(self):
         st, r = self.call('/mode', {'input': 'select', 'value': {'mode': 'crowd'}})
         self.assertEqual((st, r['code']), (409, 'on_hello'))
 
-    def test_forward_in_talk_costs_nothing(self):
-        self.select('talk')                                           # hello boots in crowd (Docking)
-        self.hello_call('/v1/control', {'target': 'mode', 'input': 'forward', 'value': None})
-        row = self.ctx['mode_store'].db['mode_log'].docs[-1]
-        self.assertEqual((row['input'], row['code']), ('forward', 'not_implemented'))  # no say_round_fn: no model, no tts
-
+    def test_forward_costs_nothing(self):
+        rows = len(self.ctx['mode_store'].db['mode_log'].docs)
+        r = self.hello_call('/v1/control', {'target': 'mode', 'input': 'forward', 'value': None})[1]
+        self.assertEqual(r['result']['code'], 'no_action')                     # the old talk-show word does nothing
+        self.assertEqual(len(self.ctx['mode_store'].db['mode_log'].docs), rows)
     def test_preset_zero_then_single_switches_still_work(self):
-        self.select('talk')                                           # hello boots in crowd (Docking)
         _, r = self.call('/preset', {'n': 0, 'source': 'page'})
         self.assertFalse(r['snapshot']['billing'])
         self.assertEqual(self.workers(), (False, False))
@@ -103,20 +93,7 @@ class LocalDemoTest(unittest.TestCase):
         _, r = self.call('/preset', {'n': 9, 'source': 'page'})
         self.assertEqual(r['robot'], {'hearing': 'tingwu', 'vision': 'recognize'})
         self.assertTrue(r['snapshot']['billing'])
-        self.assertEqual(self.workers(), (True, True))
-
-    def test_settings_returns_after_the_short_timeout_on_hello(self):
-        self.select('talk')                                           # hello boots in crowd (Docking)
-        self.select('settings')
-        self.assertEqual(self.call('/mode')[1]['snapshot']['return_to'], 'talk')
-        hello = self.ctx['hello']
-        self.now[0] += 29_000
-        hello.tick()
-        self.assertEqual(self.call('/mode')[1]['snapshot']['mode'], 'settings')
-        self.now[0] += 2_000
-        hello.tick()
-        snap = self.call('/mode')[1]['snapshot']
-        self.assertEqual((snap['mode'], snap['by']), ('talk', 'timeout'))
+        self.assertEqual(self.workers(), (False, False))              # 提前写 / 连续说 belonged to talk (gone)
 
     def test_hello_needs_its_token_and_knows_only_mode(self):
         req = urllib.request.Request(self.hbase + '/v1/info')
@@ -125,26 +102,6 @@ class LocalDemoTest(unittest.TestCase):
         self.assertEqual(e.exception.code, 401)
         self.assertEqual(self.hello_call('/v1/control', {'target': 'yaw_step', 'delta_deg': 45})[0], 404)
         self.assertEqual(self.hello_call('/v1/control', {'target': 'mode', 'input': 'billing', 'value': False})[0], 400)
-
-    def test_a_chat_turn_end_to_end_without_cost(self):
-        self.assertEqual(demo.hear(self.ctx, '你好呀')['skip'], 'not_chat')          # talk: chat does not answer
-        self.select('chat')
-        self.now[0] += 1000
-        r = demo.hear(self.ctx, '你好呀，今天忙不忙')
-        self.assertTrue(r['accepted'])
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            st, rows = self.call('/chat/turns?limit=1')
-            if rows and rows[0]['state'] not in ('queued', 'thinking'):
-                break
-            time.sleep(0.05)
-        self.assertEqual((rows[0]['state'], rows[0]['text']), ('answered', '你好呀，今天忙不忙'))
-        self.assertIn('你好呀', rows[0]['reply'])
-        text, kw = self.ctx['demo_tts'].said[-1]
-        self.assertEqual((text, kw['voice']), (rows[0]['reply'], 'wuxian'))
-        self.assertEqual(demo.hear(self.ctx, '嗯')['skip'], 'filler')
-        self.select('chat')                                                          # leave: chat stops
-        self.assertFalse(self.ctx['chat'].active())
 
     def test_nothing_paid_is_configured(self):
         self.assertNotIn('env', self.ctx)
