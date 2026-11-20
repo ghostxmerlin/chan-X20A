@@ -180,7 +180,7 @@ class BillingRealtimeTest(unittest.TestCase):
         self.ctx = FakeCtx(mode='crowd')
         self.b = Billing(self.ctx)
 
-    def test_zero_off_nine_on_mind_start_keeps_it(self):
+    def test_zero_off_nine_on_and_the_power_on_nine_too(self):
         self.ctx.realtime = True
         self.b.off('page', 1)
         self.assertFalse(self.ctx.realtime)
@@ -188,11 +188,9 @@ class BillingRealtimeTest(unittest.TestCase):
         self.assertTrue(self.ctx.realtime)
         apply_preset(9, self.b, source='asr', now_ms=3)
         self.assertTrue(self.ctx.realtime)
-        self.b.on('boot', 4)                                     # mind start = preset 9; realtime kept as it was (on)
-        self.assertTrue(self.ctx.realtime)
         self.b.off('page', 5)
-        self.b.on('boot', 6)                                     # ... and kept off when it was off
-        self.assertFalse(self.ctx.realtime)
+        apply_preset(9, self.b, source='boot', now_ms=6)         # 0.5.21: the robot's power-on 智能 turns it on too
+        self.assertTrue(self.ctx.realtime)
         self.assertTrue(self.ctx.tingwu)
 
 

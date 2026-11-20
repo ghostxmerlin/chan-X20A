@@ -310,7 +310,7 @@ def wire_modes(db, store, *, settings_store, tts, say_worker, say_auto, say_roun
 
     # Owner 2026-11-14 evening "启动默认全开" is hello's power-on: since collector-0.4.96 the robot sends 9 itself at
     # power-on. Owner 2026-11-15 ("重启后保持原来的状态"): mind's own start (a deploy, a crash) changes no switch; 听悟 /
-    # 识别 / 纪要 / 情景 / 围观 / 嘴 stay as stored. billing.on('boot') still keeps 围观 as stored if anything calls it.
+    # 识别 / 纪要 / 情景 / 围观 / 嘴 stay as stored. (The robot's power-on digit, its stored big mode, sets them since collector-0.5.21: billing.preset.)
     log('mind mode: start keeps every switch as it was', flush=True)
     return ms, billing, gate
 
