@@ -74,25 +74,30 @@ int main() {
       g.feed(true, 0, 100, 100); g.feed(true, 20, 100, 101); g.feed(true, 40, 101, 101);
       g.feed(false, 60, -1, -1); g.feed(true, 80, 102, 101); g.feed(false, 100, -1, -1);
       assert(idle(g, 120, 1200) == Gesture::Tap); }
-    // A re-press inside the 60 ms window but far away is not a continuation; and being < 180 ms after the
-    // release it is ignored (fw/screen.cpp:879), so only the first tap counts.
+    // A re-press inside the 60 ms window but far away is not a continuation; and being < 80 ms after the
+    // release it is ignored (bounce), so only the first tap counts.
     { GestureClassifier g;
       stroke(g, 0, 100, 100, 100, 100, 80);                      // release at 100
       stroke(g, 140, 260, 60, 260, 60, 60);                      // pressed 40 ms after, 160 px away
       assert(idle(g, 220, 1200) == Gesture::Tap); }
-    // Bounce 100 ms after a release: ignored (< 180 ms), still a single tap.
+    // 0.5.22 (owner 2026-11-20 "双击没有效果"): a second press 100 ms after the release is a human double tap,
+    // not a bounce (the 180 ms debounce left only 180-300 ms for the second press).
     { GestureClassifier g;
       stroke(g, 0, 100, 100, 100, 100, 80);                      // release at 100
       stroke(g, 200, 100, 100, 100, 100, 40);                    // pressed at 200 (100 ms after), held 60 ms
-      assert(idle(g, 260, 1200) == Gesture::Tap); }
+      assert(idle(g, 260, 1200) == Gesture::DoubleTap); }
+    { GestureClassifier g;                                       // a slower double tap: 400 ms after
+      stroke(g, 0, 100, 100, 100, 100, 80);
+      stroke(g, 500, 104, 98, 104, 98, 80);
+      assert(idle(g, 620, 1400) == Gesture::DoubleTap); }
 
-    // ---- Double tap window: second press 300 ms or more after the first release = two taps.
+    // ---- Double tap window: second press 450 ms or more after the first release = two taps.
     { GestureClassifier g;
       stroke(g, 0, 100, 100, 100, 100, 80);                      // release at 100
-      assert(idle(g, 120, 380) == Gesture::None);
-      assert(idle(g, 400, 400) == Gesture::Tap);                 // 300 ms after the release
-      stroke(g, 420, 100, 100, 100, 100, 80);
-      assert(idle(g, 540, 1200) == Gesture::Tap); }
+      assert(idle(g, 120, 530) == Gesture::None);
+      assert(idle(g, 550, 550) == Gesture::Tap);                 // 450 ms after the release
+      stroke(g, 570, 100, 100, 100, 100, 80);
+      assert(idle(g, 690, 1400) == Gesture::Tap); }
     // A tap followed quickly by a swipe: the tap first, then the swipe.
     { GestureClassifier g;
       stroke(g, 0, 100, 100, 100, 100, 80);                      // release at 100

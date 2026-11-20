@@ -213,7 +213,17 @@ public:
             }
         }
         // Offline, an input that only asks mind for something (say a round, prefetch) does nothing: say so.
-        toast(!online_ && !a.changed && (a.out.n_effects || accepted) ? "OFFLINE" : a.out.toast);
+        // 0.5.22 (owner 2026-11-20 "在屏幕上直接可以看到双击触发了"): a screen tap / head pat names its gesture
+        // first ("2x TAP: QUIET", "PAT: LISTEN").
+        const char* what = !online_ && !a.changed && (a.out.n_effects || accepted) ? "OFFLINE" : a.out.toast;
+        const bool screen = !std::strcmp(source, "touch"), head = !std::strcmp(source, "head");
+        if ((screen || head) && (in == Input::Tap || in == Input::DoubleTap) && *what) {
+            char t[64];                                 // toast() keeps the first kToastMax bytes
+            std::snprintf(t, sizeof t, "%s%s: %s", in == Input::DoubleTap ? "2x " : "", screen ? "TAP" : "PAT", what);
+            toast(t);
+        } else {
+            toast(what);
+        }
         return a;
     }
 

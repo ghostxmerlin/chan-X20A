@@ -539,6 +539,19 @@ void sensor_task(void*)
             pats.set_enabled(head_pat_enabled.load());
             const bool touched = sample.head_valid && (sample.head[0] || sample.head[1] || sample.head[2]);
             const int64_t now_us = esp_timer_get_time();
+            // 0.5.22: every press / release in the log (the pat test, owner 2026-11-20: most pats were not seen)
+            static bool was_touched = false;
+            static int64_t touched_since = 0;
+            if (touched != was_touched) {
+                if (touched) {
+                    touched_since = now_us;
+                    ESP_LOGI(kTag, "head touch down (zones %u %u %u)", sample.head[0], sample.head[1], sample.head[2]);
+                } else {
+                    ESP_LOGI(kTag, "head touch up after %lld ms%s", static_cast<long long>((now_us - touched_since) / 1000),
+                             sample.head_valid ? "" : " (read failed)");
+                }
+                was_touched = touched;
+            }
             const head::Gesture g = pats.feed(now_us, touched);
             if (g != head::Gesture::None) {
                 head_pat_last = static_cast<uint8_t>(g); head_pat_last_us = now_us; ++head_pat_count;
@@ -2106,6 +2119,14 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                         screen_update_billing(view.result_digit, view.result.code, static_cast<uint32_t>(view.result_at_us / 1000));
                     if (view.toasts != toasts_seen) { toasts_seen = view.toasts; screen_show_toast(view.toast, static_cast<uint32_t>(now / 1000)); }
                     if (cd) { cd->in_chat = mouth::dots_mode(view.state.mode); cd->color = view.look.color; cd->state = view.chat; }
+                }
+                {   // 0.5.22: a burst of head pats (the protest) shows on the screen too (taps / pats: their mode toast)
+                    static uint32_t pats_seen = 0;
+                    if (const uint32_t n = head_pat_count.load(); n != pats_seen) {
+                        pats_seen = n;
+                        if (static_cast<head::Gesture>(head_pat_last.load()) == head::Gesture::Protest)
+                            screen_show_toast("4x PAT: PROTEST", static_cast<uint32_t>(now / 1000));
+                    }
                 }
                 {   // 0.5.10 robot command line words (robot_cmd.h): shown now; a word held longer than a toast
                     // (安静中, 少插话) stays, and comes back after another toast took the row, until it ends or is cleared.

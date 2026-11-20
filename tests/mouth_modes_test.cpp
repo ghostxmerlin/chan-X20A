@@ -225,9 +225,9 @@ void inputs_become_reports()
     r.drain();
     // Docking's tap = listen (reported, no effect); speaking: tap = stop.
     Applied a = r.in(Input::Tap, "touch");
-    assert(!a.changed && a.reported && !std::strcmp(r.view().toast, "LISTEN"));
+    assert(!a.changed && a.reported && !std::strcmp(r.view().toast, "TAP: LISTEN"));
     a = r.in(Input::Tap, "touch", Value{}, true);
-    assert(a.reported && !std::strcmp(r.view().toast, "STOP"));
+    assert(a.reported && !std::strcmp(r.view().toast, "TAP: STOP"));
     // next: only_talk (there is no talk any more), no report; the old voice words: no_action, no report.
     assert(!r.in(Input::Next).reported && !std::strcmp(r.view().toast, "ONLY IN TALK"));
     assert(!r.in(Input::Play).reported && !std::strcmp(r.view().toast, "NO ACTION"));
@@ -246,7 +246,7 @@ void links()
     // Offline: an input with an effect says OFFLINE and is not reported (the ear could not act on it later).
     r.s.link_down();
     assert(!r.view().online);
-    assert(!r.in(Input::Tap, "touch", Value{}, true).reported && !std::strcmp(r.view().toast, "OFFLINE"));
+    assert(!r.in(Input::Tap, "touch", Value{}, true).reported && !std::strcmp(r.view().toast, "TAP: OFFLINE"));
     assert(r.drain().empty());
     // Back: the state again (input null, by = the last change's source: boot).
     r.feed(kHello);
@@ -357,7 +357,7 @@ void telemetry_and_versions()
     std::string text;
     serializeJson(t, text);
     assert(t["mode"] == "crowd" && t["dir"].isNull() && t["host"].isNull() && t["return_to"].isNull());
-    assert(t["by"] == "boot" && t["label"] == "DOCK" && t["online"] == false && t["toast"] == "LISTEN");
+    assert(t["by"] == "boot" && t["label"] == "DOCK" && t["online"] == false && t["toast"] == "TAP: LISTEN");
     assert(t["since_ms"] == 5000 && text.find("\"by\":\"boot\"") != std::string::npos);
 }
 }
@@ -415,18 +415,18 @@ void crowd_tap()
     r.drain();
     assert(r.view().state.mode == Mode::Crowd);                               // Docking from boot
     Applied a = r.in(Input::Tap, "touch");
-    assert(!a.changed && a.reported && !a.out.n_effects && !a.look && !std::strcmp(r.view().toast, "LISTEN"));
+    assert(!a.changed && a.reported && !a.out.n_effects && !a.look && !std::strcmp(r.view().toast, "TAP: LISTEN"));
     a = r.in(Input::Tap, "touch", Value{}, true);                             // while speaking: a stop
-    assert(a.reported && a.out.has(collector::modes::rules::Effect::StopSpeech) && !std::strcmp(r.view().toast, "STOP"));
+    assert(a.reported && a.out.has(collector::modes::rules::Effect::StopSpeech) && !std::strcmp(r.view().toast, "TAP: STOP"));
     assert(r.drain() == report(3, "crowd", "touch", "\"tap\"", "") + report(4, "crowd", "touch", "\"tap\"", "\"stop_speech\""));
     Applied dt = r.in(Input::DoubleTap, "touch");
-    assert(!dt.to_mind && dt.reported && !dt.changed && !dt.out.n_effects && !std::strcmp(r.view().toast, "QUIET"));
+    assert(!dt.to_mind && dt.reported && !dt.changed && !dt.out.n_effects && !std::strcmp(r.view().toast, "2x TAP: QUIET"));
     dt = r.in(Input::DoubleTap, "touch", Value{}, true);
-    assert(dt.reported && dt.out.has(collector::modes::rules::Effect::StopSpeech) && !std::strcmp(r.view().toast, "QUIET"));
+    assert(dt.reported && dt.out.has(collector::modes::rules::Effect::StopSpeech) && !std::strcmp(r.view().toast, "2x TAP: QUIET"));
     assert(r.drain() == report(5, "crowd", "touch", "\"double_tap\"", "") + report(6, "crowd", "touch", "\"double_tap\"", "\"stop_speech\""));
     // Offline the tap cannot reach the ear: OFFLINE, no report.
     r.s.link_down();
-    assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "OFFLINE"));
+    assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "TAP: OFFLINE"));
 }
 
 // 0.4.98 (owner 2026-11-15, 能让hello在围观模式中闭嘴): digit 1 goes to mind like 0 / 9, but it is a toggle: offline it
@@ -446,7 +446,12 @@ void digit_one()
     assert(r.view().result_digit == 1 && !std::strcmp(r.view().toast, "PRESET 1: DOCK QUIET"));
     // Docking: a double tap is 安静一下 (QUIET), not a digit
     Applied t = r.in(Input::DoubleTap, "touch");
-    assert(!t.to_mind && t.reported && !std::strcmp(r.view().toast, "QUIET"));
+    assert(!t.to_mind && t.reported && !std::strcmp(r.view().toast, "2x TAP: QUIET"));
+    // 0.5.22 (owner 2026-11-20 "在屏幕上直接可以看到双击触发了"): the toast names the gesture, pats too
+    r.in(Input::Tap, "head");
+    assert(!std::strcmp(r.view().toast, "PAT: LISTEN"));
+    r.in(Input::DoubleTap, "head");
+    assert(!std::strcmp(r.view().toast, "2x PAT: QUIET"));
     assert(!r.digit(3).to_mind && !std::strcmp(r.view().toast, "NO ACTION"));   // 2 is 收集 since 0.5.21
     // offline: nothing owed; the owner's 1 drops the power-on 9 still owed (review 2026-11-15: latest action wins)
     Robot o(false);

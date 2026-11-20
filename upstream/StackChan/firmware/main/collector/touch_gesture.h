@@ -16,14 +16,16 @@ namespace collector::touch {
 //   swipe      main axis moved >= 55 px, main > 2 x cross axis, cross axis never strayed > 55 px
 //              from the start, held 30-1000 ms; up/down added beside left/right.
 //   tap        held 30-700 ms, never more than 18 px from the start on either axis.
-//   double     a second tap pressed < 300 ms after the first tap's release. A first tap with no
-//              second press for 300 ms is a Tap.
-//   debounce   a press < 180 ms after the last release is ignored until its own release.
+//   double     a second tap pressed < 450 ms after the first tap's release. A first tap with no
+//              second press for 450 ms is a Tap.
+//   debounce   a press < 80 ms after the last release is ignored until its own release.
+//   (0.5.22, owner 2026-11-20 "双击没有效果": the old 180 ms debounce + 300 ms window left only 180-300 ms
+//   for the second press; a human double tap presses again 80-250 ms after lifting.)
 //   lost touch the finger "lifts" for a frame or two mid-stroke: a press <= 60 ms after the release
 //              and <= 80 px from the last point continues the same stroke (owner-approved rule
 //              "60 ms, position continuous"; 80 px covers a fast swipe across a 60 ms gap).
 // A stroke is classified 60 ms after its release (once it can no longer continue); a tap waits for
-// the 300 ms double-tap window. The classifier only names the gesture; what it does depends on the
+// the 450 ms double-tap window. The classifier only names the gesture; what it does depends on the
 // mode (snapshot touch.tap / touch.double) and is decided by the caller.
 enum class Gesture : uint8_t { None, Tap, DoubleTap, SwipeUp, SwipeDown, SwipeLeft, SwipeRight };
 
@@ -34,8 +36,8 @@ public:
     static constexpr uint32_t kSwipeMinMs = 30, kSwipeMaxMs = 1000;
     static constexpr int kTapMaxPx = 18;
     static constexpr uint32_t kTapMinMs = 30, kTapMaxMs = 700;
-    static constexpr uint32_t kDoubleWindowMs = 300;
-    static constexpr uint32_t kDebounceMs = 180;
+    static constexpr uint32_t kDoubleWindowMs = 450;
+    static constexpr uint32_t kDebounceMs = 80;
     static constexpr uint32_t kRejoinMs = 60;
     static constexpr int kRejoinPx = 80;
 
