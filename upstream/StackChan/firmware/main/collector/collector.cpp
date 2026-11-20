@@ -12,6 +12,7 @@
 #include "body_sense.h"
 #include "head_pat.h"
 #include "big_mode.h"
+#include <esp_core_dump.h>
 #include "body_light.h"
 #include "mouth_link.h"
 #include "robot_cmd.h"
@@ -123,6 +124,26 @@ std::atomic<uint32_t> head_pat_count{0};
 std::atomic<uint8_t> head_raw{0};
 std::atomic<int> head_sens_request{-1};
 std::atomic<int> head_sens_now{3};          // SI12T_TYPE_LOW, level 3 (the factory setting)
+// 0.5.24: after a crash (reset reason panic) the coredump's summary, read once at boot: telemetry health.last_crash
+char last_crash[256] = {};
+
+void read_last_crash()
+{
+    if (esp_reset_reason() != ESP_RST_PANIC) return;
+    auto* s = static_cast<esp_core_dump_summary_t*>(heap_caps_calloc(1, sizeof(esp_core_dump_summary_t), MALLOC_CAP_SPIRAM));
+    if (!s) return;
+    if (esp_core_dump_get_summary(s) == ESP_OK) {
+        int n = std::snprintf(last_crash, sizeof last_crash, "task %.16s pc 0x%08lx cause %lu vaddr 0x%08lx bt", s->exc_task,
+                              static_cast<unsigned long>(s->exc_pc), static_cast<unsigned long>(s->ex_info.exc_cause),
+                              static_cast<unsigned long>(s->ex_info.exc_vaddr));
+        for (uint32_t i = 0; i < s->exc_bt_info.depth && i < 16 && n > 0 && n < int(sizeof last_crash) - 12; ++i)
+            n += std::snprintf(last_crash + n, sizeof last_crash - n, " 0x%08lx", static_cast<unsigned long>(s->exc_bt_info.bt[i]));
+        ESP_LOGW(kTag, "last crash: %s", last_crash);
+    } else {
+        std::snprintf(last_crash, sizeof last_crash, "panic, no coredump summary");
+    }
+    heap_caps_free(s);
+}
 // Two independent bounded cursors share the existing capture ring: phone + Mac.
 std::atomic<unsigned> audio_clients{0};
 std::atomic<uint32_t> audio_errors{0}, camera_errors{0}, audio_sent{0}, audio_skipped{0};
@@ -1281,6 +1302,7 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     health["dma_free"] = heap_caps_get_free_size(dma_caps);
     health["dma_largest_free"] = heap_caps_get_largest_free_block(dma_caps);
     health["reset_reason_code"] = static_cast<int>(esp_reset_reason());
+    if (last_crash[0]) health["last_crash"] = last_crash;
     health["psram_free"] = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     mem_diag_cpu_json(health["cpu_top"].to<JsonArray>());
     health["alloc_failures"] = mem_diag_failed_allocs(); health["alloc_failures_internal"] = mem_diag_failed_internal();
@@ -2383,6 +2405,7 @@ void run()
     ESP_ERROR_CHECK(create_psram_task(audio_task, "collector_audio", 6144, nullptr, 7) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     load_camera_setting();
     load_head_pat_setting();
+    read_last_crash();
     // Keep JPEG work off Wi-Fi's core 0, still below sensor and audio priorities.
     ESP_ERROR_CHECK(create_psram_task(camera_task, "collector_camera", 8192, nullptr, 2, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     serial_monitor_start(device_id,boot_id,token,MonitorHooks{

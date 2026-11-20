@@ -15,7 +15,7 @@ namespace collector::touch {
 // Rules (numbers from fw/screen.cpp:879-889 so home feels like the other pages):
 //   swipe      main axis moved >= 55 px, main > 2 x cross axis, cross axis never strayed > 55 px
 //              from the start, held 30-1000 ms; up/down added beside left/right.
-//   tap        held 30-700 ms, never more than 18 px from the start on either axis.
+//   tap        held 15-700 ms (0.5.24: real quick taps are one or two 20 ms frames), never more than 18 px from the start on either axis.
 //   double     a second tap pressed < 450 ms after the first tap's release. A first tap with no
 //              second press for 450 ms is a Tap.
 //   debounce   a press < 80 ms after the last release is ignored until its own release.
@@ -35,7 +35,7 @@ public:
     static constexpr int kSwipeCrossMaxPx = 55;
     static constexpr uint32_t kSwipeMinMs = 30, kSwipeMaxMs = 1000;
     static constexpr int kTapMaxPx = 18;
-    static constexpr uint32_t kTapMinMs = 30, kTapMaxMs = 700;
+    static constexpr uint32_t kTapMinMs = 15, kTapMaxMs = 700;   // 0.5.24: a 20 ms (one-frame) tap counts
     static constexpr uint32_t kDoubleWindowMs = 450;
     static constexpr uint32_t kDebounceMs = 80;
     static constexpr uint32_t kRejoinMs = 60;

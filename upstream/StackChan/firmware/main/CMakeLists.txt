@@ -328,6 +328,7 @@ idf_component_register(SRCS ${SOURCES}
                         tcp_transport
                         esp_http_server
                         esp_driver_usb_serial_jtag
+                        espcoredump
                         mbedtls
                         json
                         esp_driver_tsens

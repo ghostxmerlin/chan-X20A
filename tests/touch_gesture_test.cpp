@@ -113,7 +113,14 @@ int main() {
       assert(idle(g, 1200, 2000) == Gesture::Tap); }
 
     // ---- Limits (same numbers as fw/screen.cpp:880-889).
-    { GestureClassifier g; g.feed(true, 0, 100, 100); g.feed(false, 20, -1, -1);           // held 20 ms: too short
+    // 0.5.24 (owner 2026-11-20 test: real taps lasted 20-30 ms, one or two 20 ms frames): one frame is a tap ...
+    { GestureClassifier g; g.feed(true, 0, 100, 100); g.feed(false, 20, -1, -1);           // held 20 ms: a tap
+      assert(idle(g, 40, 1000) == Gesture::Tap); }
+    { GestureClassifier g;                                                               // ... and two make a double
+      g.feed(true, 0, 100, 100); g.feed(false, 20, -1, -1);
+      g.feed(true, 200, 101, 100); g.feed(false, 220, -1, -1);
+      assert(idle(g, 240, 1200) == Gesture::DoubleTap); }
+    { GestureClassifier g; g.feed(true, 0, 100, 100); g.feed(false, 10, -1, -1);           // 10 ms: a glitch, nothing
       assert(idle(g, 40, 1000) == Gesture::None); }
     { GestureClassifier g; stroke(g, 0, 100, 100, 100, 100, 680);                            // held 700 ms: still a tap
       assert(idle(g, 720, 1400) == Gesture::Tap); }
@@ -149,7 +156,7 @@ int main() {
     { GestureClassifier g; stroke(g, 0, 100, 100, 100, 100, 80); assert(g.take(150) == Gesture::None);
       g.reset(); assert(idle(g, 160, 1000) == Gesture::None); }
     { GestureClassifier g; g.feed(true, 0, 250, 120); g.feed(true, 100, 150, 120); g.reset();
-      g.feed(true, 120, 100, 120); g.feed(false, 140, -1, -1);  // the rest of that finger: too short, no swipe
+      g.feed(true, 120, 100, 120); g.feed(false, 130, -1, -1);  // the rest of that finger: too short, no swipe
       assert(idle(g, 160, 1000) == Gesture::None); }
 
     // ---- The millisecond clock wraps (uint32_t, ~49.7 days of uptime).

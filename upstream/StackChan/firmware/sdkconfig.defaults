@@ -117,3 +117,7 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # Soul eye assets retain their original state names on the shared microSD.
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=64
+# 0.5.24 (2026-11-20): a crash is kept in the coredump partition (64 KB: at most 8 tasks, the crashed one first)
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=8
