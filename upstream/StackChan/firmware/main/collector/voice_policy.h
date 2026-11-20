@@ -22,8 +22,8 @@ inline int choose_voice(int requested, uint32_t random, int last)
     const int candidate=int(random%(kVoiceCount-1))+1;
     return candidate>=last ? candidate+1 : candidate;
 }
-// next no longer plays a random clip (hello modes step 1, owner 2026-11-14): it is a mode input
-// (asr_mode_words.h). Clips still play from the web page.
+// next no longer plays a random clip (hello modes step 1, owner 2026-11-14), and the voice module has no "next" since
+// 2026-11-20 (the StickS3). Clips still play from the web page.
 inline bool voice_asr_next(uint8_t, bool) { return false; }
 class VoiceCooldown {
 public:

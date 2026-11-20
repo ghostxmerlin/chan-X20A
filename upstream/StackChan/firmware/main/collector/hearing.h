@@ -17,7 +17,6 @@ bool set_listening(bool enabled);
 bool toggle_listening();
 OwnerStart start_for_owner(uint32_t expected_revision,uint32_t& owner_revision);
 void stop_for_owner(uint32_t owner_revision);
-void asr_command(uint8_t id,bool has_value);
 // events: include hearing events with seq > events_after (speech, sound, gap, error, link).
 void json(ArduinoJson::JsonObject target,bool events=false,uint32_t events_after=0);
 void events_json(ArduinoJson::JsonObject out,uint32_t after);

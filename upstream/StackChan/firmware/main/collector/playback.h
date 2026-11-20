@@ -14,7 +14,6 @@ bool playback_reaction(RemoteReaction reaction);
 // 0 selects a random local clip; 1..40 selects one. Busy requests never queue.
 void playback_set_audio_ready();
 esp_err_t playback_voice(int requested_id, bool from_asr, uint32_t* job_id = nullptr, int* selected_id = nullptr);
-void playback_asr_command(uint8_t id, bool has_value);
 // Speaker volume (10..100) for every following playback; saved in NVS by the caller's task (persist = false:
 // RAM only, no flash access, 0.5.10 robot command line).
 int playback_volume();

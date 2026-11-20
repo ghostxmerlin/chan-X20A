@@ -4,10 +4,10 @@
 #include <cstdint>
 
 namespace collector {
-// M5Stack Unit ASR (CI-03T) factory firmware, UART 115200 8N1, no initialisation.
-// Every recognised command is sent as AA 55 <id> 55 AA. A few replies (e.g. the
-// firmware version, 0x45) carry one value byte: AA 55 <id> <value> 55 AA.
-// IDs follow M5Stack's unit_asr library (factory English vocabulary).
+// The voice module's wire protocol, UART 115200 8N1, no initialisation: every recognised command is sent as
+// AA 55 <id> 55 AA; a frame may carry one value byte: AA 55 <id> <value> 55 AA. Since 2026-11-20 the module is the
+// owner's StickS3 (~/exia/stick/docs/voice-protocol.md), which keeps the M5Stack Unit ASR's frame and sends only its
+// own eight words (ids 0x50-0x5F); the factory vocabulary (motion words, digits, volume, wake words) is gone.
 struct AsrFrame {
     uint8_t id = 0;
     bool has_value = false;
@@ -50,70 +50,29 @@ private:
     uint32_t discarded_ = 0;
 };
 
+// The StickS3's words (ids from its main/voice_words.h); nullptr for every other id.
 inline const char* asr_word(uint8_t id)
 {
     switch (id) {
-    case 0x01: return "up";
-    case 0x02: return "down";
-    case 0x03: return "left";
-    case 0x04: return "turn left";
-    case 0x05: return "right";
-    case 0x06: return "turn right";
-    case 0x07: return "forward";
-    case 0x08: return "front";
-    case 0x09: return "backward";
-    case 0x0A: return "back";
-    case 0x10: return "open";
-    case 0x11: return "close";
-    case 0x12: return "start";
-    case 0x13: return "stop";
-    case 0x14: return "turn on";
-    case 0x15: return "turn off";
-    case 0x16: return "play";
-    case 0x17: return "pause";
-    case 0x18: return "turn on the lights";
-    case 0x19: return "turn off the lights";
-    case 0x1A: return "previous";
-    case 0x1B: return "next";
-    case 0x20: return "zero";
-    case 0x21: return "one";
-    case 0x22: return "two";
-    case 0x23: return "three";
-    case 0x24: return "four";
-    case 0x25: return "five";
-    case 0x26: return "six";
-    case 0x27: return "seven";
-    case 0x28: return "eight";
-    case 0x29: return "nine";
-    case 0x30: return "ok";
-    case 0x31: return "hi A S R";
-    case 0x32: return "hello";
-    case 0x40: return "increase volume";
-    case 0x41: return "decrease volume";
-    case 0x42: return "maximum volume";
-    case 0x43: return "medium volume";
-    case 0x44: return "minimum volume";
-    case 0x45: return "check firmware version";
-    case 0xFE: return "announce";
-    case 0xFF: return "Hi M Five";
+    case 0x50: return "docking sequence";
+    case 0x51: return "o raiser";
+    case 0x52: return "inevitable";
+    case 0x53: return "providence";
+    case 0x55: return "say what again";
+    case 0x5A: return "inception";
+    case 0x5E: return "expelliarmus";
+    case 0x5F: return "expecto patronum";
     default: return nullptr;
     }
 }
 
-// "forward" / "backward" showed the heart / reject X from 2026-11-07 until 2026-11-13. Since 0.4.92 they
-// are mode words (enter / leave the talk show, asr_mode_words.h); the screen shows no reaction for them.
-enum class AsrReaction : uint8_t { none, heart, reject };
-inline AsrReaction asr_reaction(uint8_t)
+// What a frame means to hello: Call = PROVIDENCE, the robot's name (owner 2026-11-20: being called, as the Unit ASR's
+// hello was); Heard = one of the Stick's other words (reported, no action yet); Ignore = anything else, a frame
+// with a value included.
+enum class AsrAction : uint8_t { Ignore, Call, Heard };
+inline AsrAction asr_action(const AsrFrame& f)
 {
-    return AsrReaction::none;
-}
-
-// Second soul test (user, 2026-11-07): "turn on" starts the M12 face view,
-// "turn off" stops it and returns home. +1 on, -1 off, 0 not a face command.
-inline int asr_face_switch(uint8_t id)
-{
-    if (id == 0x14) return 1;
-    if (id == 0x15) return -1;
-    return 0;
+    if (f.has_value || asr_word(f.id) == nullptr) return AsrAction::Ignore;
+    return f.id == 0x53 ? AsrAction::Call : AsrAction::Heard;
 }
 }

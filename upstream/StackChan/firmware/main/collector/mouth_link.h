@@ -40,14 +40,12 @@ void set_look_hook(void (*hook)(uint32_t token));
 void mode_look_done(uint32_t token);
 // hello is speaking: a /mouth stream is playing (tts.start until done or stopped). Takes the audio lock briefly.
 bool speaking();
-// 0.5.06 (owner 2026-11-18): the ASR unit heard its wake word "hello" (an independent, strong "talking to me"). The
-// stream playing now stops at once (hello may interrupt), and {"type":"asr_wake","word":"hello","n":..,
-// "interrupted":..} goes up on /mouth. ASR task only; lock-free except the short player lock.
+// The voice module heard the robot's name (since 2026-11-20 the StickS3's "providence"; 0.5.06 the Unit ASR's "hello"):
+// an independent, strong "talking to me". The stream playing now stops at once (hello may interrupt), and
+// {"type":"asr_wake","word":"providence","n":..,"interrupted":..} goes up on /mouth. ASR task only; lock-free except
+// the short player lock.
 void asr_wake(const char* word);
 uint32_t asr_wakes();                  // how many so far (the screen shows 在呢 for each new one)
-// 0.5.07 (owner 2026-11-18): any other Unit ASR command word is a direct order the robot carries out itself; it goes
-// up as {"type":"asr_order","word":"turn left","n":..} so 围观 does not answer that sentence.
-void asr_order(const char* word);
 // Main loop: closes settings after 5 minutes without input.
 void mode_tick();
 // A copy of the mode state (state, look, online, latest toast and mode_result) taken under the mode lock.

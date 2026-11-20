@@ -53,26 +53,10 @@ bool is(const AsrMotionOutcome& o, const char* action, const char* result) {
 
 int main()
 {
-    {   // Factory ids (M5Stack unit_asr commandList) for the eight words; every other id is not a motion word.
-        assert(asr_motion_word(0x01, false) == AsrMotionWord::TrackingOn && !std::strcmp(asr_word(0x01), "up"));
-        assert(asr_motion_word(0x02, false) == AsrMotionWord::TrackingOff && !std::strcmp(asr_word(0x02), "down"));
-        assert(asr_motion_word(0x03, false) == AsrMotionWord::Left && !std::strcmp(asr_word(0x03), "left"));
-        assert(asr_motion_word(0x04, false) == AsrMotionWord::TurnLeft && !std::strcmp(asr_word(0x04), "turn left"));
-        assert(asr_motion_word(0x05, false) == AsrMotionWord::Right && !std::strcmp(asr_word(0x05), "right"));
-        assert(asr_motion_word(0x06, false) == AsrMotionWord::TurnRight && !std::strcmp(asr_word(0x06), "turn right"));
-        assert(asr_motion_word(0x08, false) == AsrMotionWord::Front && !std::strcmp(asr_word(0x08), "front"));
-        assert(asr_motion_word(0x0A, false) == AsrMotionWord::Back && !std::strcmp(asr_word(0x0A), "back"));
-        // forward/backward keep the heart / X; open/close, turn on/off, start/stop, next, volume untouched.
-        for (int id = 0; id < 256; ++id) {
-            const bool motion = (id >= 0x01 && id <= 0x06) || id == 0x08 || id == 0x0A;
-            assert((asr_motion_word(uint8_t(id), false) != AsrMotionWord::None) == motion);
-            assert(asr_motion_word(uint8_t(id), true) == AsrMotionWord::None); // value replies never move
-        }
+    {   // The notches per yaw word (the robot command line's words since 2026-11-20).
         assert(asr_motion_notches(AsrMotionWord::Left) == -1 && asr_motion_notches(AsrMotionWord::TurnLeft) == -2);
         assert(asr_motion_notches(AsrMotionWord::Right) == 1 && asr_motion_notches(AsrMotionWord::TurnRight) == 2);
         assert(asr_motion_notches(AsrMotionWord::Front) == 0 && asr_motion_notches(AsrMotionWord::Back) == 0);
-        assert(asr_reaction(0x07) == AsrReaction::none && asr_reaction(0x09) == AsrReaction::none);
-        assert(asr_reaction(0x08) == AsrReaction::none && asr_reaction(0x0A) == AsrReaction::none);
     }
     AsrYawPlan plan;
     {   // up / down: the tracking switch, nothing else.

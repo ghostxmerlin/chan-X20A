@@ -60,9 +60,6 @@ std::atomic<uint32_t> wake_n{0};          // 0.5.06: ASR "hello" count (+ the in
 std::atomic<bool> wake_interrupted{false};
 std::atomic<const char*> wake_word{"hello"};   // a static string of asr_protocol.h
 uint32_t wake_sent = 0;                   // run() task only
-std::atomic<uint32_t> order_n{0};         // 0.5.07: Unit ASR command words (direct orders), the last one's word
-std::atomic<const char*> order_word{""};
-uint32_t order_sent = 0;                  // run() task only
 uint32_t burst_frames = 0;                   // accepted burst frames (under `mutex`, for json())
 void burst_publish(const burst::Frame& f, bool lost)
 {
@@ -238,18 +235,6 @@ bool send_wake(hearing::HearingSocket& socket)
     return true;
 }
 
-bool send_order(hearing::HearingSocket& socket)
-{
-    const uint32_t n = order_n.load(std::memory_order_acquire);
-    if (n == order_sent) return true;
-    char line[96];
-    const int len = std::snprintf(line, sizeof line, "{\"type\":\"asr_order\",\"word\":\"%s\",\"n\":%lu}",
-                                  order_word.load(), static_cast<unsigned long>(n));
-    if (!socket.Send(line, static_cast<size_t>(len), false)) return false;
-    order_sent = n;
-    return true;
-}
-
 // 0.5.10: the robot command line's cmd_result lines, at most 4 a pass, sent without any lock held.
 bool send_cmds(hearing::HearingSocket& socket)
 {
@@ -311,7 +296,6 @@ void run(void*)
             { std::lock_guard<std::mutex> lock(mutex); ++connects; connected_us = esp_timer_get_time(); }
             set_state("connected");
             wake_sent = wake_n.load(std::memory_order_acquire);   // a wake from before this link is stale: not sent
-            order_sent = order_n.load(std::memory_order_acquire);
             ESP_LOGI(kTag, "connected");
         }
         int64_t checked_us = esp_timer_get_time();
@@ -337,7 +321,6 @@ void run(void*)
             if (ok) ok = send_snaps(socket);
             if (ok) ok = send_cmds(socket);
             if (ok) ok = send_wake(socket);
-            if (ok) ok = send_order(socket);
             const int64_t now = esp_timer_get_time();
             if (now - checked_us > 2000000) {    // backend changed or removed: reconnect
                 checked_us = now;
@@ -445,11 +428,6 @@ void asr_wake(const char* word)
     ESP_LOGI(kTag, "asr wake: %s%s", wake_word.load(), stopped ? " (stopped the speech)" : "");
 }
 uint32_t asr_wakes() { return wake_n.load(std::memory_order_acquire); }
-void asr_order(const char* word)
-{
-    order_word.store(word && *word ? word : "?");
-    order_n.fetch_add(1, std::memory_order_acq_rel);
-}
 
 namespace {
 std::atomic<void (*)(bool)> senses_hook{nullptr};

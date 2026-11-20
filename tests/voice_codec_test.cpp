@@ -15,11 +15,6 @@ int main(int argc, char** argv) {
     block[2]=89; assert(!decode_voice_ima(block, 256, output, 505)); block[2]=0;
     block[3]=1; assert(!decode_voice_ima(block, 256, output, 505));
     assert(kVoiceCount==80);
-    // Volume: ASR 0x40..0x44 step, clamp and preset; other commands and valued frames ignored.
-    assert(volume_for_asr(0x40,false,80)==90 && volume_for_asr(0x40,false,100)==100 && volume_for_asr(0x40,false,95)==100);
-    assert(volume_for_asr(0x41,false,80)==70 && volume_for_asr(0x41,false,10)==10 && volume_for_asr(0x41,false,15)==10);
-    assert(volume_for_asr(0x42,false,30)==100 && volume_for_asr(0x43,false,30)==60 && volume_for_asr(0x44,false,90)==10);
-    assert(volume_for_asr(0x1b,false,80)==-1 && volume_for_asr(0x40,true,80)==-1);
     assert(volume_valid(10) && volume_valid(100) && !volume_valid(9) && !volume_valid(101) && volume_valid(kVolumeDefault));
     for (int last=0; last<=kVoiceCount; ++last) for (uint32_t seed=0;seed<1000;++seed) {
         int id=choose_voice(0,seed,last); assert(id>=1 && id<=kVoiceCount && id!=last);

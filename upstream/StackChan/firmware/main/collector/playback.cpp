@@ -706,12 +706,6 @@ bool playback_self_sounding()
 }
 bool playback_busy() { return gate.busy(); }
 
-// Volume words only: "next" is a mode word since 0.4.92 and no longer plays a random clip.
-void playback_asr_command(uint8_t id, bool has_value)
-{
-    const int volume = volume_for_asr(id, has_value, playback_volume());
-    if (volume >= 0) playback_set_volume(volume, "asr");
-}
 
 bool playback_output_enabled()
 {

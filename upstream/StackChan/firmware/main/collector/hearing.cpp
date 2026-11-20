@@ -433,10 +433,6 @@ void stop_for_owner(uint32_t owner_revision) {
     std::lock_guard<std::mutex> lock(mutex);
     if(control.stop_for_owner(owner_revision))apply_listening_locked(false);
 }
-// No ASR word switches hearing since 0.4.92 (start / stop are mode words; hearing_policy.h asr_action is 0).
-void asr_command(uint8_t id,bool has_value) {
-    if(const int action=asr_action(id,has_value))set_listening(action>0);
-}
 void json(JsonObject out,bool with_events,uint32_t events_after) {
     std::lock_guard<std::mutex> lock(mutex);
     const int64_t now=esp_timer_get_time();

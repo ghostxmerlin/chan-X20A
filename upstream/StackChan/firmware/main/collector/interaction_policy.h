@@ -4,14 +4,6 @@
 #include <cmath>
 #include <cstring>
 namespace collector::interaction {
-// open/close no longer toggle tracking: since hello modes step 1 (owner 2026-11-14) they are mode
-// inputs (settings, asr_mode_words.h). Tracking by voice is up/down (asr_motion.h). turn on/off
-// keep releasing the visual modes for the M12 view.
-enum class AsrModeAction { None, ReleaseModes };
-inline AsrModeAction asr_mode_action(uint8_t id,bool has_value) {
-    if(has_value)return AsrModeAction::None;
-    return id==0x14||id==0x15?AsrModeAction::ReleaseModes:AsrModeAction::None;
-}
 // m12d detects all the time while det is on; recognition only needs detection plus names.
 inline M12Function camera_mode(bool tracking,bool recognition) {
     return recognition||tracking?M12Function::detect:M12Function::standby;

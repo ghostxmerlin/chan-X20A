@@ -5,25 +5,9 @@
 #include <cstdint>
 
 namespace collector {
-// Spoken yaw words (user, 2026-11-13). Factory ids from M5Stack unit_asr (commandList):
-// 0x01 up, 0x02 down, 0x03 left, 0x04 turn left, 0x05 right, 0x06 turn right, 0x08 front, 0x0A back.
-// 0x07 forward / 0x09 backward do not move the head: they are mode words since 0.4.92 (asr_mode_words.h).
+// Yaw words (user, 2026-11-13): once the Unit ASR's spoken words, now only the server's robot command line
+// (asr_yaw_request, collector-0.5.10) uses them; the StickS3 has no motion words (owner 2026-11-20).
 enum class AsrMotionWord : uint8_t { None, TrackingOn, TrackingOff, Front, Back, Left, TurnLeft, Right, TurnRight };
-inline AsrMotionWord asr_motion_word(uint8_t id, bool has_value)
-{
-    if (has_value) return AsrMotionWord::None;
-    switch (id) {
-    case 0x01: return AsrMotionWord::TrackingOn;
-    case 0x02: return AsrMotionWord::TrackingOff;
-    case 0x03: return AsrMotionWord::Left;
-    case 0x04: return AsrMotionWord::TurnLeft;
-    case 0x05: return AsrMotionWord::Right;
-    case 0x06: return AsrMotionWord::TurnRight;
-    case 0x08: return AsrMotionWord::Front;
-    case 0x0A: return AsrMotionWord::Back;
-    default: return AsrMotionWord::None;
-    }
-}
 // Relative 45-degree notches, the robot's own left negative like the web page's left button.
 inline int asr_motion_notches(AsrMotionWord word)
 {

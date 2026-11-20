@@ -1,11 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "asr_unit.h"
-#include "playback.h"
-#include "hearing.h"
 #include "interaction.h"
 #include "remote.h"
 #include "asr_motion.h"
-#include "asr_mode_words.h"
 #include "boot_tracking.h"
 #include "interaction_policy.h"
 #include "m12_unit.h"
@@ -64,17 +61,6 @@ AsrMotionOutcome ask_outcome;
 AsrYawPlan yaw_plan;
 BootTracking boot_tracking; // only asr_task changes it; asr_json reads the result string
 
-// Mode words (hello modes step 1b): hello owns the mode, so the word runs through mode_rules.h right
-// here (fast, under the mode lock; never waits on the network). Changes are reported to mind over
-// /mouth; digits 0 / 9 are sent to mind. Fills code / toast for the log.
-void apply_mode_word(const char* input, int digit, const char*& code, char (&toast)[33])
-{
-    modes::rules::Value v;
-    v.digit = digit;
-    const mouth::Applied a = mouth::mode_apply("asr", modes::rules::input_from(input), v);
-    code = a.to_mind ? (a.input_seq ? "to mind" : "offline") : modes::rules::code_id(a.out.code);
-    std::snprintf(toast, sizeof toast, "%s", a.out.toast);
-}
 struct MotionState {
     uint32_t seq = 0;           // ASR event that started the latest action
     const char* word = "";
@@ -174,50 +160,25 @@ void asr_task(void*)
             AsrFrame frame;
             if (!parser.push(buffer[i], frame)) continue;
             Event event{++seq, esp_timer_get_time(), frame};
-            // A spoken motion word (up/down tracking, the yaw words) wins over boot auto-tracking,
-            // which then never fires. open/close are mode inputs since step 1 and do not cancel it.
-            if (asr_motion_word(frame.id, frame.has_value) != AsrMotionWord::None) boot_tracking.cancel();
-            // Consume each newly parsed frame once, independent of webpage/LVGL polling.
-            // Local uses left: volume (playback), turn on/off (interaction). hearing::asr_command
-            // and voice next are no-ops since step 1 (their words are mode inputs).
-            // 0.5.06: any of the unit's three wake words ("hello", "Hi M Five", "hi A S R") -> server, stops speech
-            if (!frame.has_value && (frame.id == 0x32 || frame.id == 0xFF || frame.id == 0x31)) mouth::asr_wake(asr_word(frame.id));
-            else if (asr_word(frame.id) && frame.id != 0xFE) mouth::asr_order(asr_word(frame.id));   // 0.5.07: a direct order
-            playback_asr_command(frame.id,frame.has_value);
-            hearing::asr_command(frame.id,frame.has_value);
-            interaction::asr_command(frame.id,frame.has_value);
-            int digit = -1;
-            const char* mode_input = asr_mode_input(frame.id, frame.has_value, &digit);
-            const char* mode_code = "";
-            char mode_toast[33] = "";
-            if (mode_input) apply_mode_word(mode_input, digit, mode_code, mode_toast);
+            // The StickS3 (owner 2026-11-20): PROVIDENCE = being called (the server opens a chat, speech stops here as
+            // with the Unit ASR's hello); its other words are only reported (telemetry asr.events, the log). No
+            // factory word does anything any more: no motion, no mode input, no digit, no volume.
+            const AsrAction action = asr_action(frame);
+            if (action == AsrAction::Call) mouth::asr_wake(asr_word(frame.id));
             const char* word = asr_word(frame.id);
-            const auto outcome = yaw_plan.command(asr_motion_word(frame.id, frame.has_value), port, esp_timer_get_time());
-            event.action = outcome.action; event.result = outcome.result;
             {
-                // Published after dispatch so every reader sees the word together with its outcome.
                 std::lock_guard<std::mutex> lock(history_mutex);
                 history[event.seq % kHistory] = event;
-                if (outcome.action) {
-                    motion_state = MotionState{event.seq, word, outcome.action, outcome.result, yaw_plan.stage_name(),
-                                               yaw_plan.stage() == AsrYawPlan::Stage::Idle ? "" : yaw_plan.last_result()};
-                }
             }
             latest = (event.seq << 8) | frame.id;
             ++frames;
             rx_seen = true;
             if (frame.has_value)
-                ESP_LOGI(kTag, "#%lu id=0x%02X value=0x%02X %s", static_cast<unsigned long>(event.seq), frame.id,
-                         frame.value, word ? word : "(unknown)");
-            else if (outcome.action)
-                ESP_LOGI(kTag, "#%lu id=0x%02X %s -> %s %s", static_cast<unsigned long>(event.seq), frame.id,
-                         word ? word : "(unknown)", outcome.action, outcome.result);
-            else if (mode_input)
-                ESP_LOGI(kTag, "#%lu id=0x%02X %s -> mode %s: %s %s", static_cast<unsigned long>(event.seq), frame.id,
-                         word ? word : "(unknown)", mode_input, mode_code, mode_toast);
+                ESP_LOGI(kTag, "#%lu id=0x%02X value=0x%02X (ignored)", static_cast<unsigned long>(event.seq), frame.id,
+                         frame.value);
             else
-                ESP_LOGI(kTag, "#%lu id=0x%02X %s", static_cast<unsigned long>(event.seq), frame.id,
-                         word ? word : "(unknown)");
+                ESP_LOGI(kTag, "#%lu id=0x%02X %s%s", static_cast<unsigned long>(event.seq), frame.id,
+                         word ? word : "(unknown)", action == AsrAction::Call ? " -> called" : "");
         }
         discarded = parser.discarded();
     }
@@ -289,57 +250,25 @@ void asr_json(ArduinoJson::JsonObject out,uint32_t after)
         if (const char* word = asr_word(e.frame.id)) item["word"] = word;
         if (e.frame.has_value) item["value"] = e.frame.value;
         if (e.action) { item["action"] = e.action; item["result"] = e.result; }
-        // Derived from the id, so the history keeps no extra bytes per event.
-        int digit = -1;
-        if (const char* mode = asr_mode_input(e.frame.id, e.frame.has_value, &digit)) {
-            item["mode_input"] = mode;
-            if (digit >= 0) item["mode_value"] = digit;
-        }
+        if (asr_action(e.frame) == AsrAction::Call) item["called"] = true;
     }
 }
 
 void asr_info_json(ArduinoJson::JsonObject out)
 {
-    out["device"] = "M5Stack Unit ASR (CI-03T), factory English vocabulary";
-    out["port"] = "B (top black)";
+    out["device"] = "StickS3 voice module (Unit ASR frame), the owner's own words";
+    out["port"] = "C (swapped with the M12 on 2026-11-20)";
     out["uart"] = 2;
     out["baud"] = kBaud;
     out["rx_gpio"] = static_cast<int>(kRx);
     out["tx_gpio"] = static_cast<int>(kTx);
-    out["tx"] = "unused";
+    out["tx"] = "wired, nothing sent (control frames E0-E3 not used yet)";
     out["frame"] = "AA 55 <id> 55 AA; AA 55 <id> <value> 55 AA";
     out["history"] = kHistory;
-    // Independent ASR home reactions; display only, no sound
-    // (the unit already speaks its own reply).
-    auto reactions = out["screen_reactions"].to<ArduinoJson::JsonObject>();
-    reactions["0x14 turn on"] = "M12 face view";
-    reactions["0x15 turn off"] = "home";
-    out["reaction_sound"] = false;
     out["boot_tracking"] = boot_tracking.result();
-    // Mode words (hello modes step 1b, owner 2026-11-14): hello runs them through its own mode rules
-    // (mode_rules.h) and reports changes to mind over /mouth; digits 0 / 9 go to mind (paid off / on),
-    // 4-8 pick a mode, 1-3 do nothing. Their old local uses are gone.
-    auto modes = out["mode_words"].to<ArduinoJson::JsonObject>();
-    modes["0x07 forward"] = "forward (enter talk show)";
-    modes["0x09 backward"] = "backward (leave talk show)";
-    modes["0x16 play"] = "play (conversation)";
-    modes["0x17 pause"] = "pause (conversation)";
-    modes["0x10 open"] = "open (settings; no longer tracking on)";
-    modes["0x11 close"] = "close (settings; no longer tracking off)";
-    modes["0x12 start"] = "start (event-driven; no longer hearing start)";
-    modes["0x13 stop"] = "stop (event-driven; no longer hearing stop)";
-    modes["0x1B next"] = "next (per mode; no longer a random clip)";
-    modes["0x1A previous"] = "previous (per mode)";
-    modes["0x20-0x29 zero..nine"] = "digit: 0 / 9 = mind's all paid off / on; 4 idle, 5 crowd, 6 companion, 7 subtitle zh>en, 8 subtitle en>zh; 1-3 none";
-    // Spoken yaw words (2026-11-13), robot's own left/right like the web buttons.
-    auto yaw = out["yaw_words"].to<ArduinoJson::JsonObject>();
-    yaw["0x01 up"] = "tracking_on";
-    yaw["0x02 down"] = "tracking_off";
-    yaw["0x03 left"] = "one 45 deg notch left";
-    yaw["0x04 turn left"] = "two notches left, clipped at -90 deg";
-    yaw["0x05 right"] = "one 45 deg notch right";
-    yaw["0x06 turn right"] = "two notches right, clipped at +90 deg";
-    yaw["0x08 front"] = "centre; when turned around: return turn, then centre";
-    yaw["0x0A back"] = "timed turn-around, centring first when off centre";
+    auto words = out["words"].to<ArduinoJson::JsonObject>();
+    words["0x53 providence"] = "called: the server opens a chat (and speech stops)";
+    words["0x50 0x51 0x52 0x55 0x5A 0x5E 0x5F"] = "heard: reported only";
+    words["other ids"] = "ignored (the factory vocabulary is off)";
 }
 } // namespace collector

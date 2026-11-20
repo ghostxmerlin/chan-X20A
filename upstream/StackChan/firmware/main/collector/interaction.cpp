@@ -69,16 +69,6 @@ esp_err_t set_mode(const char* mode,bool enabled) {
     std::lock_guard<std::mutex> lock(mutex);return set_locked(mode,enabled,esp_timer_get_time());
 }
 void release_for_manual_m12() {std::lock_guard<std::mutex> lock(mutex);release_locked();}
-void asr_command(uint8_t id,bool has_value) {
-    switch(asr_mode_action(id,has_value)) {
-    case AsrModeAction::ReleaseModes: {
-        // Consume the visual mode in UART order, never later from a collapsed LVGL snapshot.
-        std::lock_guard<std::mutex> lock(mutex);
-        release_locked();m12_set_view(id==0x14);break;
-    }
-    default:break;
-    }
-}
 void tick(int64_t now) {
     std::lock_guard<std::mutex> lock(mutex);
     if(last_tick&&now-last_tick<50000)return;

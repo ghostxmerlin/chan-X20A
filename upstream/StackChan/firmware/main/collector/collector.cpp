@@ -2052,23 +2052,11 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                              static_cast<unsigned long>(esp_timer_get_time() - enqueue_started));
                 }
             }
-            // Unit ASR: "forward" shows the home heart, "backward" the reject X.
-            // Display only: the unit already speaks its own reply, and a second
-            // sound would also reach the microphone. M12 commands are consumed
-            // once by the ASR task in UART order; this timer applies the requested
-            // preview visibility and handles explicit touch exits.
-            static uint32_t asr_seen = 0;
+            // This timer applies the requested M12 preview visibility and handles explicit touch exits (the Unit ASR's
+            // screen reactions and turn on / off words are gone since 2026-11-20).
             static bool face_view = false;
             static uint32_t view_seen = 0;
-            const uint32_t asr = asr_latest();
             const auto tick_ms = static_cast<uint32_t>(now / 1000);
-            if (asr != asr_seen) {
-                asr_seen = asr;
-                const uint8_t id = asr & 0xFF;
-                const auto spoken = asr_reaction(id);
-                if (spoken != AsrReaction::none)
-                    screen_show_reaction(spoken == AsrReaction::heart ? ScreenReaction::Heart : ScreenReaction::Reject, tick_ms);
-            }
             const uint32_t requested_view = m12_view_request();
             if (requested_view != view_seen) {
                 // Normal eye mode (user, 2026-11-10): turning vision on no longer opens the full-screen
