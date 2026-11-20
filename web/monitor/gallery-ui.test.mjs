@@ -153,3 +153,11 @@ test('deleteFlow (g): confirm gets the count; a failed re-plan after a deletion 
  assert.deepEqual(counts,[1000]);
  assert.deepEqual(r.deleted,ids.slice(0,500));assert.equal(r.stopped.phase,'plan');assert.deepEqual(r.stopped.remaining,ids.slice(500));
 });
+
+test('lookRows: 看一眼 and 实时识别 (vision_looks kind scene) are shown apart', ()=>{
+ const t=Date.UTC(2026,10,20,2,5,7);
+ const r=ui.lookRows([{at:t,kind:'look',text:'一杯茶'},{at:t+1000,kind:'scene',text:'坐在床边'},{at:null,text:'旧行'}]);
+ assert.deepEqual(r.look,['10:05:07  一杯茶','旧行']);
+ assert.deepEqual(r.live,['10:05:08  坐在床边']);
+ assert.deepEqual(ui.lookRows(undefined),{look:[],live:[]});
+});

@@ -64,6 +64,17 @@ class GalleryTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             gallery.frames(self.db, minute, minute + 3600_001)
 
+    def test_live_eye_scene_rows_count_as_read(self):
+        """C1: the live eye's 识别 rows (vision_looks kind scene, with the photo's path) are shown like 看一眼."""
+        at = ms(2026, 11, 20, 10, 5, 30)
+        self.frame("a", at, 1)
+        self.db["vision_looks"].insert_one({"kind": "scene", "lid": "live-s-1", "at": at + 1000,
+                                            "path": "frames/s/1.jpg", "text": "主人坐在床边看手机"})
+        minute = at // 60000 * 60000
+        self.assertTrue(gallery.frames(self.db, minute, minute + 3600_000)[0]["look"])
+        self.assertEqual(gallery.detail(self.db, self.root, "a")["looks"],
+                         [{"at": at + 1000, "kind": "scene", "text": "主人坐在床边看手机"}])
+
     def test_images_reads_only_under_root(self):
         self.frame("a", 1000, 1)
         self.db["frames"].insert_one({"_id": "e", "at": 2000, "path": "../outside.jpg"})
@@ -95,9 +106,9 @@ class GalleryTest(unittest.TestCase):
         d = gallery.detail(self.db, self.root, "a")
         self.assertEqual((d["id"], d["at"], d["session"], d["snap"]), ("a", at, "s", False))
         self.assertEqual(base64.b64decode(d["jpeg_b64"]), b"\xff\xd8one")
-        self.assertEqual(d["looks"], [{"at": at, "text": "一杯茶"}])
+        self.assertEqual(d["looks"], [{"at": at, "kind": "look", "text": "一杯茶"}])
         self.assertEqual(d["eye"]["minute"], minute)
-        self.assertEqual(d["eye"]["text"], "me\n写字\n书房")
+        self.assertEqual(d["eye"]["text"], "写字\n书房")
         self.assertEqual(d["scene"], {"minute": minute, "text": "新情景"})
         self.assertIsNone(gallery.detail(self.db, self.root, "nope"))
 
@@ -106,6 +117,14 @@ class GalleryTest(unittest.TestCase):
                "n": 3}
         self.assertEqual(gallery.texts(obj), ["你好", "吃饭", "写字"])
         self.assertEqual(gallery.texts(None), [])
+
+    def test_texts_only_descriptive_fields(self):
+        """I8: ids, codes and machine values are no description (they would become fragments and over-redact)."""
+        obj = {"kind": "look", "lane": "live", "id": "abc", "_id": "x1", "code": "ok_code", "source": "model",
+               "model": "qwen-vl-max", "prompt": "eye-v3", "version": "v2", "who_id": "owner", "subject_id": "room",
+               "run_id": "r123", "dimension": "room", "people": [{"who": "me", "who_id": "p_1", "doing": "低头写字"}],
+               "scene": "书房", "tag": "eye_minutes:1794300000000", "en": "A cup of tea on the desk", "cjk": "写字abc"}
+        self.assertEqual(gallery.texts(obj), ["低头写字", "书房", "A cup of tea on the desk", "写字abc"])
 
     def test_oid(self):
         from bson import ObjectId
@@ -346,6 +365,19 @@ class DeleteTest(unittest.TestCase):
         self.assertEqual(out["spool_redacted"], 1)
         self.assertEqual(self.old.read_bytes(), old)                   # outside the photos' days
         self.assertEqual((Path(self.spool) / "ear-20261120.offset").read_text(), "12")
+
+    def test_live_eye_scene_text_is_redacted_elsewhere(self):
+        """C1 (reviewer's scene_leak.py): a vision_looks kind scene row's text quoted in a realtime instructions body."""
+        text = "主人穿着红色睡衣坐在床边看手机"
+        self.db["vision_looks"].insert_one({"_id": "ls", "kind": "scene", "lid": "live-s-1", "at": M1 + 8_000,
+                                            "path": self.paths["a"], "text": text})
+        self.db[self.log].insert_one({"_id": "ear:1:20", "kind": "call.realtime", "at": M1 + 9_000,
+                                      "body": {"instructions": sha("7")}})
+        self.db[self.body].insert_one({"_id": sha("7"), "text": "3 秒前：" + text})
+        out = self.run_delete()
+        self.assertNotIn("ls", self.ids("vision_looks"))
+        self.assertEqual(out["looks"], 2)
+        self.assertEqual(self.db[self.body].find_one({"_id": sha("7")})["text"], "3 秒前：" + MARK)
 
     def test_stale_plan_is_refused(self):
         fp = gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)["fp"]

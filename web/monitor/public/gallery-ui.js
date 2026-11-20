@@ -69,6 +69,12 @@ export async function deleteFlow(ids,{post:rawPost,confirm,onProgress=()=>{}}){
  }
  return out;
 }
+// A photo's vision_looks rows for the detail pane: 看一眼 (kind look) apart from the live eye's 实时识别 (kind scene).
+export function lookRows(looks){
+ const out={look:[],live:[]};
+ for(const l of looks||[])out[l.kind==='scene'?'live':'look'].push(`${l.at?hms(l.at)+'  ':''}${l.text||''}`);
+ return out;
+}
 // The 维护 note at the top: not in it / in it but the robot is still connected / in it and ready.
 export function maintenanceHtml(m){
  if(!m)return '<span class="dot off"></span><b>读不到维护状态</b>';
@@ -190,7 +196,7 @@ export function mountGallery(doc,{fetchImpl=(...a)=>fetch(...a),URLImpl=URL,Obse
    }
   }catch{ids.forEach(i=>S.asked.delete(i));}   // retried when scrolled into view again
  }
- const BADGES=[['look','看','看一眼'],['eye','描','分钟描述'],['scene','景','情景'],['snap','快','快拍']];
+ const BADGES=[['look','看','看一眼 / 实时识别'],['eye','描','分钟描述'],['scene','景','情景'],['snap','快','快拍']];
  function cell(f){
   const b=el(doc,'button','cell');b.dataset.id=f.id;b.title=`${hms(f.at)}`;
   b.setAttribute('aria-pressed',String(S.sel.has(f.id)));
@@ -261,7 +267,9 @@ export function mountGallery(doc,{fetchImpl=(...a)=>fetch(...a),URLImpl=URL,Obse
    const s=el(doc,'section','note');const h=el(doc,'h3',null,title);h.append(el(doc,'small',null,small));s.append(h);
    if(!rows.length)s.append(el(doc,'p','muted','没有'));for(const t of rows)s.append(el(doc,'p','text',t));box.append(s);
   };
-  sect('看一眼','vision_looks',(d.looks||[]).map(l=>`${l.at?hms(l.at)+'  ':''}${l.text||''}`));
+  const lr=lookRows(d.looks);
+  sect('看一眼','vision_looks',lr.look);
+  if(lr.live.length)sect('实时识别','vision_looks · scene',lr.live);
   sect('分钟描述','eye_minutes',d.eye?[d.eye.text]:[]);
   sect('情景','mind_scenes',d.scene?[d.scene.text]:[]);
   const act=el(doc,'div','actions');

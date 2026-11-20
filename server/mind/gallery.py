@@ -24,7 +24,11 @@ except ImportError:                                       # pragma: no cover - b
 MAX_SPAN_MS = 3600_000
 MAX_IMAGES = 60
 LANE = "live"
-_SKIP_KEYS = {"key", "op", "dimension", "confidence"}
+LOOK_KINDS = ("look", "scene")        # vision_looks rows read from one photo: 看一眼 and the live eye's 实时识别
+# texts(): keys whose values are ids, codes or machine settings, never a description of the picture (review I8)
+_SKIP_KEYS = {"key", "op", "dimension", "confidence", "kind", "lane", "id", "_id", "code", "source", "model", "prompt",
+              "version", "who_id", "subject_id", "run_id"}
+_CODE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 
 
 def oid(s):
@@ -42,12 +46,14 @@ def _ids(ids):
 
 
 def texts(obj):
-    """Every string leaf of a nested eye result / scene, depth first, skipping id-like keys and strings under 2 chars."""
+    """The descriptive string leaves of a nested eye result / scene, depth first: strings of at least 2 characters
+    that are not under an id / code key (_SKIP_KEYS) and are not code-like themselves (only ASCII letters, digits and
+    _.:- : ids, names like "me", enum values)."""
     out = []
 
     def walk(v):
         if isinstance(v, str):
-            if len(v.strip()) >= 2:
+            if len(v.strip()) >= 2 and not _CODE.match(v.strip()):
                 out.append(v)
         elif isinstance(v, dict):
             for k, x in v.items():
@@ -100,7 +106,7 @@ def frames(db, lo, hi):
         return []
     paths = [r["path"] for r in rows if r.get("path")]
     minutes = sorted({_minute(r["at"]) for r in rows})
-    looked = {d.get("path") for d in db["vision_looks"].find({"kind": "look", "path": {"$in": paths}})}
+    looked = {d.get("path") for d in db["vision_looks"].find({"kind": {"$in": list(LOOK_KINDS)}, "path": {"$in": paths}})}
     eyed = {d["minute"] for d in db["eye_minutes"].find({"minute": {"$in": minutes}, "result": {"$ne": None}})}
     scened = {d["minute"] for d in db["mind_scenes"].find({"minute": {"$in": minutes}, "lane": LANE})}
     return [{"id": str(r["_id"]), "at": r["at"], "session": r.get("session"), "snap": "snap" in r,
@@ -150,13 +156,14 @@ def detail(db, root, id):
     if not doc:
         return None
     at, minute = doc["at"], _minute(doc["at"])
-    looks = sorted(db["vision_looks"].find({"kind": "look", "path": doc.get("path")}), key=lambda d: d.get("at") or 0) \
+    looks = sorted(db["vision_looks"].find({"kind": {"$in": list(LOOK_KINDS)}, "path": doc.get("path")}),
+                   key=lambda d: d.get("at") or 0) \
         if doc.get("path") else []
     eye = _latest([d for d in db["eye_minutes"].find({"minute": minute}) if d.get("result")])
     scene = _latest([d for d in db["mind_scenes"].find({"minute": minute, "lane": LANE}) if d.get("scene")])
     return {"id": str(doc["_id"]), "at": at, "session": doc.get("session"), "snap": "snap" in doc,
             "jpeg_b64": _b64(root, doc.get("path")),
-            "looks": [{"at": d.get("at"), "text": d.get("text")} for d in looks],
+            "looks": [{"at": d.get("at"), "kind": d.get("kind"), "text": d.get("text")} for d in looks],
             "eye": {"minute": minute, "text": "\n".join(texts(eye["result"]))} if eye else None,
             "scene": {"minute": minute, "text": "\n".join(texts(scene["scene"]))} if scene else None}
 
@@ -232,7 +239,7 @@ def _collect(db, ids):
     hit["mind_runs"] = list(db["mind_runs"].find({"$or": runs}))
     fp = hashlib.sha256(json.dumps({c: sorted(str(d.get("_id")) for d in docs) for c, docs in hit.items()},
                                    sort_keys=True).encode()).hexdigest()[:16]
-    looks = [d for d in hit["vision_looks"] if d.get("kind", "look") == "look"]
+    looks = hit["vision_looks"]               # every row read from these photos: look, the live eye's scene, ...
     return {"hit": hit, "paths": paths, "months": months,
             "from": min(ats) if ats else None, "to": max(ats) if ats else None,
             "fp": fp, "fragments": _fragments(looks, hit["eye_minutes"], hit["mind_scenes"], hit["mind_segments"])}
