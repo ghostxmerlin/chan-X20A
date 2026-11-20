@@ -46,7 +46,8 @@ export function planSummary(plans){
 // The delete orchestration, free of the DOM. post(path, body) -> {status, json}; confirm(text) -> Promise<bool>.
 // Plans every batch, asks once, deletes batch by batch with each batch's fp. A stale 409 re-plans the batches not yet
 // done and asks again; any other failure stops. -> {deleted, counts, cancelled, stopped: null | {code, error, remaining}}.
-export async function deleteFlow(ids,{post,confirm,onProgress=()=>{}}){
+export async function deleteFlow(ids,{post:rawPost,confirm,onProgress=()=>{}}){
+ const post=async(p,b)=>{try{return await rawPost(p,b);}catch(e){return {status:0,json:{error:'连接出错：'+(e?.message||e)}};}};   // never throws
  const out={deleted:[],counts:[],cancelled:false,stopped:null};
  let pending=batches(ids),note='';
  while(pending.length){
@@ -56,7 +57,7 @@ export async function deleteFlow(ids,{post,confirm,onProgress=()=>{}}){
    if(r.status<200||r.status>=300){out.stopped={code:r.json?.code||null,error:r.json?.error||('状态 '+r.status),remaining:pending.flat(),phase:'plan'};return out;}
    plans.push(r.json);
   }
-  if(!await confirm((note?note+'\n':'')+planSummary(plans))){out.cancelled=true;return out;}
+  if(!await confirm((note?note+'\n':'')+planSummary(plans),pending.reduce((n,b)=>n+b.length,0))){out.cancelled=true;return out;}
   let stale=false;
   for(let i=0;i<pending.length;i++){
    const r=await post('/gallery/delete',{ids:pending[i],fp:plans[i].fp});
@@ -287,10 +288,10 @@ export function mountGallery(doc,{fetchImpl=(...a)=>fetch(...a),URLImpl=URL,Obse
   const total=ids.length;let r={deleted:[],counts:[]};
   try{
    r=await deleteFlow(ids,{post:async(p,b)=>{const x=await api(p,b);return {status:x.status,json:x.json};},
-    confirm:t=>ask({title:'确认删除',text:t,ok:'确认删除'})});
+    confirm:(t,n)=>ask({title:'确认删除',text:t,ok:`删除 ${n} 张`})});
    if(r.stopped){
     const sofar=r.deleted.length?resultText(r.counts,total)+'；其余没有删。':'一张也没有删。';
-    await ask({title:r.stopped.phase==='plan'?'无法删除':'删除中断',text:`${r.stopped.error}。${sofar}`,ok:null});
+    await ask({title:r.stopped.phase==='plan'&&!r.deleted.length?'无法删除':'删除中断',text:`${r.stopped.error}。${sofar}`,ok:null});
    }else if(!r.cancelled)await ask({title:'删除完成',text:resultText(r.counts,total)+'。',ok:null});
   }catch(e){await ask({title:'删除中断',text:'出错：'+e.message,ok:null});}
   finally{

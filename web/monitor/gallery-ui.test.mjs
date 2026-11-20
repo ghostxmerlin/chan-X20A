@@ -132,3 +132,24 @@ test('deleteFlow (e): declining the confirmation sends no delete', async ()=>{
  const r=await ui.deleteFlow(['a'],{post,confirm:async()=>false});
  assert.equal(deletes(calls).length,0);assert.deepEqual(r.deleted,[]);assert.equal(r.cancelled,true);
 });
+
+test('deleteFlow (f): post throwing on batch 2 resolves with batch 1 deleted and the rest remaining', async ()=>{
+ const ids=ids1001.slice(0,1000);
+ const post=async(p,b)=>{if(p==='/gallery/plan')return plan(b.ids,'f'+b.ids[0]);if(b.ids[0]==='i500')throw new Error('network down');return {status:200,json:{frames:b.ids.length}};};
+ const r=await ui.deleteFlow(ids,{post,confirm:async()=>true});
+ assert.deepEqual(r.deleted,ids.slice(0,500));
+ assert.match(r.stopped.error,/network down/);assert.deepEqual(r.stopped.remaining,ids.slice(500));
+});
+
+test('deleteFlow (g): confirm gets the count; a failed re-plan after a deletion reports what was deleted', async ()=>{
+ const counts=[];let stale=true;
+ const ids=ids1001.slice(0,1000);
+ const post=async(p,b)=>{
+  if(p==='/gallery/plan'){if(!stale&&b.ids[0]==='i500')return {status:503,json:{error:'busy'}};return plan(b.ids,'f'+b.ids[0]);}
+  if(b.ids[0]==='i500'&&stale){stale=false;return {status:409,json:{code:'stale',error:'x'}};}
+  return {status:200,json:{frames:b.ids.length}};
+ };
+ const r=await ui.deleteFlow(ids,{post,confirm:async(t,n)=>{counts.push(n);return true;}});
+ assert.deepEqual(counts,[1000]);
+ assert.deepEqual(r.deleted,ids.slice(0,500));assert.equal(r.stopped.phase,'plan');assert.deepEqual(r.stopped.remaining,ids.slice(500));
+});
