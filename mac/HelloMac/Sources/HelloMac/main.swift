@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         face.eyesDir = Self.eyesDir()
+        face.luyeDir = Self.luyeDir()
         if let s = UserDefaults.standard.string(forKey: "eyeStyle") { face.style = s }
         face.showIdle()
         faceWin = NSWindow(contentRect: NSRect(x: 120, y: 200, width: 640, height: 520),
@@ -83,6 +84,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return FileManager.default.fileExists(atPath: repo.path) ? repo : nil
     }
 
+    /// 鹿野's frames: inside the app (build-app.sh), else the checkouts' .private/luye-pet (swift run); never in the repo
+    static func luyeDir() -> URL? {
+        let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        var dirs = [Bundle.main.resourceURL?.appendingPathComponent("luye"),
+                    here.appendingPathComponent("../../../../.private/luye-pet").standardized]
+        if let main = try? String(contentsOf: here.appendingPathComponent("../../../../.git").standardized, encoding: .utf8),
+           let r = main.range(of: "gitdir: ") {               // a worktree: the main checkout's .private
+            let gitdir = main[r.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if let w = gitdir.range(of: "/.git/worktrees/") { dirs.append(URL(fileURLWithPath: String(gitdir[..<w.lowerBound]) + "/.private/luye-pet")) }
+        }
+        return dirs.compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("animation-manifest.json").path) }
+    }
+
     private func askPermissions(_ then: @escaping () -> Void) {
         AVCaptureDevice.requestAccess(for: .audio) { _ in
             AVCaptureDevice.requestAccess(for: .video) { _ in DispatchQueue.main.async { then() } }
@@ -105,9 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(row("麦克风", micPop))
         stack.addArrangedSubview(row("摄像头", camPop))
         for s in ["v14", "v05", "v18"] { stylePop.addItem(withTitle: s) }
-        if let s = UserDefaults.standard.string(forKey: "eyeStyle") { stylePop.selectItem(withTitle: s) }
+        if face.luye != nil { stylePop.addItem(withTitle: "鹿野") }
+        if let s = UserDefaults.standard.string(forKey: "eyeStyle") { stylePop.selectItem(withTitle: s == "luye" ? "鹿野" : s) }
         stylePop.target = self; stylePop.action = #selector(stylePicked)
-        stack.addArrangedSubview(row("眼睛", stylePop))
+        stack.addArrangedSubview(row("脸", stylePop))
         let boxes = NSStackView(); boxes.orientation = .horizontal; boxes.spacing = 10
         let boxes2 = NSStackView(); boxes2.orientation = .horizontal; boxes2.spacing = 10
         for (k, title) in [("hear", "听觉"), ("cam", "摄像头"), ("up", "上传画面"), ("faces", "认人"), ("asr", "语音口令"), ("pre", "小画面"), ("mirror", "眼睛左右反")] {
@@ -194,7 +209,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the owner's pick wins; until then the eyes follow the mode, as the robot's (crowd v14, chat v05, companion v18)
     var stylePinned = UserDefaults.standard.string(forKey: "eyeStyle") != nil
     @objc func stylePicked() {
-        face.style = stylePop.titleOfSelectedItem ?? "v14"
+        let t = stylePop.titleOfSelectedItem ?? "v14"
+        face.style = t == "鹿野" ? "luye" : t
         stylePinned = true
         UserDefaults.standard.set(face.style, forKey: "eyeStyle")
     }

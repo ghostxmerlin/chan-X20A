@@ -30,11 +30,23 @@ final class Hello: MouthDelegate {
     var onChange: (() -> Void)?
 
     // owner switches (the panel)
-    private(set) var hearingOn = true, cameraOn = true, uploadOn = true, facesOn = true
+    private(set) var hearingOn = true { didSet { publishDeck() } }
+    private(set) var cameraOn = true { didSet { publishDeck() } }
+    private(set) var facesOn = true { didSet { publishDeck() } }
+    private(set) var uploadOn = true
     var micDevice: AudioDeviceID? = nil
     var cameraDevice: String? = nil
-    private(set) var linkState: [String: String] = [:]
+    private(set) var linkState: [String: String] = [:] { didSet { publishDeck() } }
     private(set) var lastHeard = "", lastSpeaker = "", micPeak: Float = 0
+    /// the camera's last face pass (main thread): how many faces and when, for the observation deck's vision state
+    private(set) var facesSeen: (n: Int, at: Date)? { didSet { publishDeck() } }
+    /// What the observation deck reads (DeckServer's own queue), copied on main whenever it changes: the deck must
+    /// never wait on the main thread (2026-11-20: a stuck main thread took the deck down with it).
+    let deckView = DeckView()
+    /// heard sentences, responses and link changes for the deck's log (telemetry hearing.events)
+    let deckEvents = DeckEvents()
+    private var answering = (text: "", emotion: "")       // core: the sentence a held clip answers
+    func publishDeck() { deckView.set((linkState, facesSeen, hearingOn, cameraOn, facesOn)) }
 
     init(cfg: HelloConfig) throws {
         self.cfg = cfg
@@ -55,7 +67,15 @@ final class Hello: MouthDelegate {
                  WSLink(name: "视觉", url: cfg.url("/vision"), token: token, queue: core, logic: vision)]
         for l in links {
             l.onState = { [weak self] s in
-                DispatchQueue.main.async { self?.linkState[l.name] = s; self?.onChange?() }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    let was = self.linkState[l.name]
+                    self.linkState[l.name] = s
+                    if l.name == "听觉", s != was, s == "open" || was == "open" {
+                        self.deckEvents.add("link", label: s == "open" ? "connected" : "transport_closed")
+                    }
+                    self.onChange?()
+                }
             }
         }
         hearing.onEvent = { [weak self] e in self?.heard(e) }
@@ -89,8 +109,11 @@ final class Hello: MouthDelegate {
         }
         camera.onEnrolled = { [weak self] name, n in self?.log("人脸录入 \(name)：\(n) 张") }
         camera.onFaces = { [weak self] boxes in                       // the eyes follow the largest face
-            let x = boxes.max { $0.width < $1.width }.map { $0.midX }
-            DispatchQueue.main.async { self?.face?.gaze(at: x, mirror: UserDefaults.standard.bool(forKey: "gazeMirror")) }
+            let big = boxes.max { $0.width < $1.width }
+            DispatchQueue.main.async {
+                self?.facesSeen = (boxes.count, Date())
+                self?.face?.gaze(at: big?.midX, y: big?.midY, mirror: UserDefaults.standard.bool(forKey: "gazeMirror"))
+            }
         }
     }
 
@@ -143,8 +166,11 @@ final class Hello: MouthDelegate {
     func ensureMic(restart: Bool = false) {
         let need = hearingOn || voiceModule.wanted
         if need && (restart || !mic.running) {
-            do { try mic.start(device: micDevice); log("麦克风：\(mic.deviceName)\(hearingOn ? "" : "（只给语音口令）")") }
-            catch { log("麦克风打不开：\(error.localizedDescription)") }
+            mic.start(device: micDevice) { [weak self] why in             // off the main thread; the answer on main
+                guard let self else { return }
+                if let why { self.log("麦克风打不开：\(why)") }
+                else { self.log("麦克风：\(self.mic.deviceName)\(self.hearingOn ? "" : "（只给语音口令）")") }
+            }
         } else if !need && mic.running { mic.stop() }
     }
 
@@ -190,7 +216,7 @@ final class Hello: MouthDelegate {
         let clip = allowed && voices.count > 0 ?
             policy.consider(id: id, emotion: emotion, speech: valid, selfSounding: isSelf, ageMs: valid ? Int(processing) : -1,
                             now: monoUs(), random: UInt32.random(in: 0...UInt32.max), tags: voices.tags) : 0
-        if clip != 0 { quiet.hold(clip, now: monoUs()) }
+        if clip != 0 { quiet.hold(clip, now: monoUs()); answering = (text, emotion) }
         else if !isSelf && !text.isEmpty, let eye = Respond.eye(for: emotion) { DispatchQueue.main.async { self.face?.play(eye) } }
     }
 
@@ -200,8 +226,10 @@ final class Hello: MouthDelegate {
         switch quiet.poll(now: monoUs(), speaking: hearing.serverSpeaking || mouth.sounding, lastSpeech: hearing.lastSpeakingUs) {
         case .play:
             quiet.clear()
-            playClip(clip, why: "回应")
-        case .expired: log("回应 PLAY-\(String(format: "%03d", clip))：10 秒没安静下来，不说了")
+            if playClip(clip, why: "回应") { deckEvents.add("response", label: answering.text, detail: "\(answering.emotion)/\(clip)//") }
+        case .expired:
+            log("回应 PLAY-\(String(format: "%03d", clip))：10 秒没安静下来，不说了")
+            deckEvents.add("response", label: answering.text, detail: "\(answering.emotion)/\(clip)/quiet_timeout/10000")
         case .wait: break
         }
     }
@@ -256,6 +284,8 @@ final class Hello: MouthDelegate {
             let sp = (e["speaker"] as? [String: Any])?["name"] as? String ?? ""
             DispatchQueue.main.async { self.lastHeard = text; self.lastSpeaker = sp; self.onChange?() }
             log("听到\(sp.isEmpty ? "" : "（\(sp)）")：\(text)")
+            let d = DeckEvents.speech(e)
+            deckEvents.add("speech", label: d.label, detail: d.detail, p: d.p)
         } else if t == "enroll" {
             log("声纹录入：\(e["phase"] ?? "")\(e["n"].map { " \($0)/5" } ?? "")")
         } else if t == "keyword" {
@@ -354,4 +384,13 @@ final class Hello: MouthDelegate {
         let db = p > 0 ? Int(20 * log10(p)) : -99
         return "\(links) · 麦 \(hearingOn ? "\(db) dB" : "关") · 摄像头 \(cameraOn ? "开" : "关") · \(id.deviceId)"
     }
+}
+
+/// A locked copy of hello's state for the deck's queue.
+final class DeckView {
+    typealias State = (links: [String: String], seen: (n: Int, at: Date)?, hearing: Bool, camera: Bool, faces: Bool)
+    private let lock = NSLock()
+    private var s: State = ([:], nil, true, true, true)
+    func set(_ v: State) { lock.lock(); s = v; lock.unlock() }
+    func get() -> State { lock.lock(); defer { lock.unlock() }; return s }
 }

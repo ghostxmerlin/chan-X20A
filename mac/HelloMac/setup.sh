@@ -26,7 +26,7 @@ except Exception:
     pass
 cfg = {"sshTarget": target, "sshOptions": ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"],
        "remotePort": 52832, "localPort": 18832, "tokenFile": token, "deviceId": dev,
-       "hearingPath": "/hear", "powerOnNine": bool(old.get("powerOnNine", False))}
+       "hearingPath": "/hear", "powerOnNine": bool(old.get("powerOnNine", True))}
 json.dump(cfg, open(path, "w"), indent=1)
 print("config:", path, "| device", dev, "| ear 127.0.0.1:%d -> server 127.0.0.1:%d" % (cfg["localPort"], cfg["remotePort"]))
 EOF

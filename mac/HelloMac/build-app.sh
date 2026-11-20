@@ -21,6 +21,14 @@ if [ -n "$LIB" ]; then
   cp "$ROOT/config/voice-emotions.json" "$APP/Contents/Resources/voice-emotions.json"
   echo "voices: $(ls "$APP/Contents/Resources/voices" | wc -l | tr -d ' ') clips"
 else echo "voices: none (no .private/voice-library): no response clips"; fi
+# 鹿野 (the owner's sprite set, 2026-11-20; .private, never in the repo): frames/ + animation-manifest.json
+LUYE=""
+for d in "$ROOT/.private/luye-pet" "$MAIN/.private/luye-pet"; do [ -s "$d/animation-manifest.json" ] && { LUYE="$d"; break; }; done
+if [ -n "$LUYE" ]; then
+  mkdir -p "$APP/Contents/Resources/luye"
+  cp -R "$LUYE/frames" "$LUYE/animation-manifest.json" "$APP/Contents/Resources/luye/"
+  echo "鹿野: $(find "$APP/Contents/Resources/luye/frames" -name '*.png' | wc -l | tr -d ' ') frames"
+else echo "鹿野: none (no .private/luye-pet): the face menu has only the eyes"; fi
 VER=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -40,6 +48,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
  <key>NSCameraUsageDescription</key><string>hello 用摄像头看人和画面（认人在本机；画面变了才传到你自己的服务器）。</string>
 </dict></plist>
 PLIST
-codesign --force --sign - "$APP" >/dev/null 2>&1 && echo "signed (ad hoc)"
+# 2026-11-20: a plain ad hoc signature is pinned by its hash, so macOS asked for the mic / camera again after every
+# build; a designated requirement of just the bundle id keeps the permission across rebuilds (debug stage: any app
+# signed with this id would match)
+codesign --force --sign - --identifier local.soul.hello-mac -r='designated => identifier "local.soul.hello-mac"' "$APP" >/dev/null 2>&1 \
+  && echo "signed (ad hoc, stable requirement)"
 du -sh "$APP" | cut -f1 | sed 's/^/size: /'
 echo "$APP"

@@ -28,6 +28,8 @@ enum AudioDevices {
         return AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id) == noErr ? id : nil
     }
 
+    static func uid(_ id: AudioDeviceID) -> String? { string(id, kAudioDevicePropertyDeviceUID) }
+
     private static func inputChannels(_ id: AudioDeviceID) -> Int {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
                                               mScope: kAudioDevicePropertyScopeInput, mElement: kAudioObjectPropertyElementMain)
@@ -52,62 +54,135 @@ enum AudioDevices {
 
 /// The microphone: the chosen input device -> 24 kHz mono PCM16 blocks with their capture time (monotonic µs).
 final class AudioIn {
-    private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private let out = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24000, channels: 1, interleaved: true)!
     var onPCM: (([Int16], UInt64) -> Void)?
     var onBuffer: ((AVAudioPCMBuffer) -> Void)?          // raw, for the voice module
     var onLevel: ((Float) -> Void)?
+    var onRestart: ((String) -> Void)?                   // on main
+    /// main thread's view: true from start() until it fails or stop()
     private(set) var running = false
     private(set) var deviceName = "—"
-    private var device: AudioDeviceID?
-    private var observer: NSObjectProtocol?
-    var onRestart: ((String) -> Void)?
+    // 2026-11-20: an AudioQueue, not AVAudioEngine. The engine ties the input to the output device and rebuilt itself on
+    // every configuration change: a Bluetooth headset (its mic switches it to the call profile) sent one a second, the
+    // rebuilds fed the loop, and a pending Apple callback on a freed engine crashed the app; earlier the main thread
+    // waited in the engine and the window froze. The queue is input only, converts to 24 kHz mono itself and rides out
+    // the device's format changes. Control on `q`, buffers on `io` (AudioQueueStop waits for the buffer callbacks).
+    // A watchdog reopens it when no buffer came for 3 s (device gone), at most 5 times a minute.
+    private let q = DispatchQueue(label: "hello.mic")
+    private let io = DispatchQueue(label: "hello.mic.io")
+    private var aq: AudioQueueRef?                        // on q
+    private var wanted = false, device: AudioDeviceID?    // on q
+    private var reopens: [Date] = []
+    private var watchdog: DispatchSourceTimer?
+    private let lock = NSLock()
+    private var lastBuffer = Date.distantPast             // under lock
+    static let rate = 24000.0, frames: UInt32 = 1200, buffers = 4    // 50 ms buffers
+    static let silentLimit = 3.0, maxReopens = 5
 
-    func start(device: AudioDeviceID?) throws {
-        stop()
-        self.device = device
-        let e = AVAudioEngine()
-        let input = e.inputNode
-        if let device, let unit = input.audioUnit {
-            var d = device
-            let st = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &d,
-                                          UInt32(MemoryLayout<AudioDeviceID>.size))
-            if st != noErr { NSLog("hello: could not select input device \(device): \(st)") }
-        }
-        let inFmt = input.outputFormat(forBus: 0)
-        guard inFmt.sampleRate > 0 else { throw NSError(domain: "hello", code: 1, userInfo: [NSLocalizedDescriptionKey: "麦克风不可用（权限？）"]) }
-        let mono = prepare(rate: inFmt.sampleRate)
-        input.installTap(onBus: 0, bufferSize: 2048, format: inFmt) { [weak self] buf, when in
-            self?.handle(buf, mono: mono)
-        }
-        try e.start()
-        engine = e
+    /// Open the chosen input (nil = the system default) off the main thread; `done` on main: nil = open, else why not.
+    func start(device: AudioDeviceID?, done: ((String?) -> Void)? = nil) {
         running = true
-        // review 2026-11-19: the engine stops on a configuration change (device / AirPods / rate): start it again
-        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: e,
-                                                          queue: .main) { [weak self] _ in
-            guard let self, self.running else { return }
-            do { try self.start(device: self.device); self.onRestart?("麦克风换了设置，已重新打开：\(self.deviceName)") }
-            catch { self.running = false; self.onRestart?("麦克风换了设置，重新打开失败：\(error.localizedDescription)") }
+        q.async {
+            self.wanted = true
+            self.device = device
+            self.reopens = []
+            let why = self.open()
+            let name = self.currentName()
+            DispatchQueue.main.async {
+                self.deviceName = name
+                if why != nil { self.running = false }
+                done?(why)
+            }
         }
-        deviceName = AudioDevices.inputs().first { $0.id == device }?.name ?? "默认麦克风"
     }
 
-    /// The converter for an input rate -> the mono format the tap's channel 0 is copied into.
+    func stop() {
+        running = false
+        q.async { self.wanted = false; self.close() }
+    }
+
+    private func currentName() -> String { AudioDevices.inputs().first { $0.id == device }?.name ?? "默认麦克风" }
+
+    /// on q
+    private func open() -> String? {
+        close()
+        let mono = prepare(rate: Self.rate)
+        var asbd = AudioStreamBasicDescription(mSampleRate: Self.rate, mFormatID: kAudioFormatLinearPCM,
+                                               mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+                                               mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4,
+                                               mChannelsPerFrame: 1, mBitsPerChannel: 32, mReserved: 0)
+        var made: AudioQueueRef?
+        var st = AudioQueueNewInputWithDispatchQueue(&made, &asbd, 0, io) { [weak self] queue, buf, _, _, _ in
+            let n = Int(buf.pointee.mAudioDataByteSize) / 4
+            if n > 0, let self, let b = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: AVAudioFrameCount(n)) {
+                b.frameLength = AVAudioFrameCount(n)
+                memcpy(b.floatChannelData![0], buf.pointee.mAudioData, n * 4)
+                self.lock.lock(); self.lastBuffer = Date(); self.lock.unlock()
+                self.handle(b, mono: mono)
+            }
+            AudioQueueEnqueueBuffer(queue, buf, 0, nil)
+        }
+        guard st == noErr, let made else { return "麦克风打不开（\(st)）" }
+        aq = made
+        if let device, let uid = AudioDevices.uid(device) {
+            var cf = uid as CFString
+            st = AudioQueueSetProperty(made, kAudioQueueProperty_CurrentDevice, &cf, UInt32(MemoryLayout<CFString>.size))
+            if st != noErr { close(); return "选不了这个麦克风（\(st)）" }
+        }
+        for _ in 0..<Self.buffers {
+            var b: AudioQueueBufferRef?
+            if AudioQueueAllocateBuffer(made, Self.frames * 4, &b) == noErr, let b { AudioQueueEnqueueBuffer(made, b, 0, nil) }
+        }
+        st = AudioQueueStart(made, nil)
+        if st != noErr { close(); return "麦克风打不开（\(st)，权限？）" }
+        lock.lock(); lastBuffer = Date(); lock.unlock()
+        let t = DispatchSource.makeTimerSource(queue: q)
+        t.schedule(deadline: .now() + 1, repeating: 1)
+        t.setEventHandler { [weak self] in self?.check() }
+        t.resume()
+        watchdog = t
+        return nil
+    }
+
+    /// on q
+    private func close() {
+        watchdog?.cancel(); watchdog = nil
+        if let a = aq { AudioQueueStop(a, true); AudioQueueDispose(a, true); aq = nil }
+    }
+
+    /// on q, every second: no buffer for 3 s while wanted = the device went away or stalled; reopen (limited)
+    private func check() {
+        guard wanted, aq != nil else { return }
+        lock.lock(); let quiet = Date().timeIntervalSince(lastBuffer); lock.unlock()
+        guard quiet >= Self.silentLimit else { return }
+        let now = Date()
+        reopens = reopens.filter { now.timeIntervalSince($0) < 60 } + [now]
+        if reopens.count > Self.maxReopens {
+            wanted = false
+            close()
+            DispatchQueue.main.async {
+                self.running = false
+                self.onRestart?("麦克风一分钟里断了 \(Self.maxReopens) 次以上，先停了；请换个麦克风再选一次")
+            }
+            return
+        }
+        let why = open()
+        let name = currentName()
+        DispatchQueue.main.async {
+            self.deviceName = name
+            self.running = why == nil
+            self.onRestart?(why == nil ? "麦克风 3 秒没声音，已重新打开：\(name)" : "麦克风断了，重新打开失败：\(why!)")
+        }
+    }
+
+    /// The converter for an input rate -> the mono format channel 0 is copied into.
     func prepare(rate: Double) -> AVAudioFormat {
         let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
         converter = AVAudioConverter(from: mono, to: out)
         return mono
     }
 
-    func stop() {
-        if let o = observer { NotificationCenter.default.removeObserver(o); observer = nil }
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-        running = false
-    }
 
     func handle(_ buf: AVAudioPCMBuffer, mono: AVAudioFormat) {      // internal: the app's --selftest feeds it
         let n = Int(buf.frameLength)

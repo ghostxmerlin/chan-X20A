@@ -83,15 +83,18 @@ final class DeckServer {
         switch (r.method, r.path) {
         case ("GET", "/v1/info"):
             return (200, ["boot_id": h.id.bootId, "firmware": h.id.firmware, "device_id": h.id.deviceId,
-                          "capabilities": ["web_control": "supported", "unified_control": "supported"]])
+                          "capabilities": ["web_control": "supported", "unified_control": "supported", "hearing": "supported"]])
         case ("GET", "/v1/telemetry"):
             tseq += 1
             let m = h.core.sync { h.mouth.modes.state }
             let mode: [String: Any] = ["mode": m.mode.id, "dir": m.dir?.rawValue ?? NSNull(), "host": m.hosted ? "event" : NSNull(),
                                        "return_to": m.returnTo?.id ?? NSNull(), "seq": h.core.sync { h.mouth.modes.seq }, "by": "mac"]
-            return (200, ["boot_id": h.id.bootId, "seq": tseq, "timestamp_us": Int(monoUs()), "mode": mode,
-                          "hearing": ["requested": h.hearingOn, "state": h.hearingOn ? "listening" : "idle"],
-                          "health": ["camera_enabled": h.cameraOn], "device": "mac"])
+            let now = Int(monoUs())
+            let (links, seen, hearOn, camOn, facesOn) = h.deckView.get()   // never waits on the main thread
+            return (200, ["boot_id": h.id.bootId, "seq": tseq, "timestamp_us": now, "mode": mode,
+                          "hearing": Self.hearing(on: hearOn, ear: links["听觉"], events: h.deckEvents.snapshot(nowUs: UInt64(now))),
+                          "m12": Self.m12(camera: camOn, faces: facesOn, seen: seen, nowUs: now),
+                          "health": ["camera_enabled": camOn], "device": "mac"])
         case ("POST", "/v1/control"):
             guard let b = (try? JSONSerialization.jsonObject(with: r.body)) as? [String: Any], b["target"] as? String == "mode",
                   let name = b["input"] as? String, let input = ModeRules.Input(rawValue: name),
@@ -102,5 +105,22 @@ final class DeckServer {
         default:
             return (404, ["error": "not found"])
         }
+    }
+
+    /// Hearing in the robot's telemetry words (the page: 监听中 / 连接后端中 / 断线重连中 / 待机), from the ear link's state.
+    /// No ready / url / token_configured: the page's hearing buttons stay off; the app's settings window switches it.
+    static func hearing(on: Bool, ear: String?, events: [[String: Any]] = []) -> [String: Any] {
+        let state = !on ? "idle" : ear == "open" ? "listening" : ear == "retrying" ? "retrying" : "connecting"
+        return ["requested": on, "state": state, "connected": on && ear == "open", "events": events]
+    }
+
+    /// The Mac's face finding (Apple Vision, ~5 passes a second) in the robot's M12 words: valid always (no serial port),
+    /// online = camera on, function detect while 认人 is on, last_result_us = the last pass. No boxes (the page draws
+    /// them in M12 coordinates).
+    static func m12(camera: Bool, faces: Bool, seen: (n: Int, at: Date)?, nowUs: Int) -> [String: Any] {
+        let fn = camera && faces ? "detect" : "standby"
+        let last = seen.map { nowUs - Int(Date().timeIntervalSince($0.at) * 1_000_000) } ?? 0
+        return ["valid": true, "online": camera, "function": fn, "requested_function": fn,
+                "last_result_us": max(0, last), "num": camera && faces ? (seen?.n ?? 0) : 0, "faces": [], "persons": []]
     }
 }

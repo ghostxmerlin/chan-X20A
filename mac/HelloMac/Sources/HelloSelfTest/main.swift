@@ -295,6 +295,59 @@ test("voice module words: whole utterance only, kinds as the robot") {
     check(AsrWords.words.count == 42, "the module's 42 words")
 }
 
+test("鹿野: manifest, actions for expressions and stages, look toward the face, gestures") {
+    let json = """
+    {"animations":[{"state":"idle","durationMs":[280,110]},{"state":"waving","durationMs":[140,280]},
+     {"state":"bad","durationMs":[]},{"state":"slow","durationMs":[9000]}],"lookDirectionsClockwise":[0,22.5,45]}
+    """
+    let m = Luye.parse(Data(json.utf8))
+    check(m?.clips["idle"]?.totalMs == 390 && m?.clips["waving"]?.frames == 2, "clips and timings")
+    check(m?.clips["bad"] == nil && m?.clips["slow"] == nil, "empty or absurd timings dropped")
+    check(m?.looks == [0, 22.5, 45], "look directions")
+    check(Luye.parse(Data(#"{"animations":[{"state":"waving","durationMs":[100]}]}"#.utf8)) == nil, "no idle: no 鹿野")
+    check(Luye.action(forEye: "happy") == "waving" && Luye.action(forEye: "angry") == "jumping", "happy waves, angry punches")
+    check(Luye.action(forEye: "scared") == "failed" && Luye.action(forEye: "surprised") == "review", "scared = shield")
+    check(Luye.action(forEye: "sad") == "idle" && Luye.action(forEye: "nonsense") == "idle", "no action for the rest")
+    check(Luye.action(forStage: "listen") == "review" && Luye.action(forStage: "think") == "running"
+          && Luye.action(forStage: "") == nil, "stages")
+    check(Luye.look(x: nil, y: nil, mirror: false) == nil && Luye.look(x: 330, y: 250, mirror: false) == nil, "middle: none")
+    check(Luye.look(x: 620, y: 240, mirror: true) == 4, "mirrored right edge = look right (90)")
+    check(Luye.look(x: 620, y: 240, mirror: false) == 12, "unmirrored: the other way (270)")
+    check(Luye.look(x: 320, y: 470, mirror: false) == 8, "below = look down (180)")
+    check(Luye.look(x: 600, y: 20, mirror: true) == 3, "up-right = 67.5: up counts less")
+    check(Luye.lookIndex(270) == 12 && Luye.lookIndex(359) == 0, "nearest index")
+    check(Luye.gesture("nod").first?.look == 8 && Luye.gesture("shake").count == 5 && Luye.gesture("nod").last?.look == nil,
+          "nod looks down, every gesture ends straight ahead")
+}
+
+test("tunnel: only our own ssh left behind by a crash counts as ours") {
+    let ps = """
+     1732     1 /usr/bin/ssh -o BatchMode=yes -N -o ExitOnForwardFailure=yes -L 127.0.0.1:18832:127.0.0.1:52832 me@host
+     1800   900 /usr/bin/ssh -N -L 127.0.0.1:18832:127.0.0.1:52832 me@host
+     1801     1 /usr/bin/ssh -N -L 127.0.0.1:18841:127.0.0.1:52840 me@host
+     1802     1 /usr/bin/ssh -N -L 127.0.0.1:18832:127.0.0.1:528320 me@host
+     1803     1 /usr/bin/python3 x.py -L 127.0.0.1:18832:127.0.0.1:52832 y
+     1804     1 /usr/bin/ssh -N -L 127.0.0.1:18832:127.0.0.1:52832 -L 127.0.0.1:18840:127.0.0.1:52840 me@host
+    """
+    check(Tunnel.orphans(ps: ps, local: 18832, remote: 52832) == [1732, 1804],
+          "launchd's ssh with exactly our forward; not a live app's child, another port, a longer port or another program")
+}
+
+test("deck events: the robot's hearing events, last 32, speaker only when known") {
+    let d = DeckEvents()
+    let e: [String: Any] = ["text": "你能听见吗", "emotion": "neutral", "voice": ["p": 0.91],
+                            "speaker": ["band": "known", "name": "主人", "score": 0.7]]
+    let s = DeckEvents.speech(e)
+    check(s.label == "你能听见吗" && s.detail == "neutral/known/主人" && s.p == 0.91, "known speaker named")
+    let u = DeckEvents.speech(["text": "Yeah.", "emotion": "unknown", "speaker": ["band": "unknown", "name": "主人"]])
+    check(u.detail == "unknown/unknown/" && u.p == nil, "unknown band: no name, no p")
+    d.add("speech", label: s.label, detail: s.detail, p: s.p, atUs: 1_000_000)
+    for i in 0..<40 { d.add("link", label: "connected", atUs: 2_000_000 + UInt64(i)) }
+    let snap = d.snapshot(nowUs: 3_000_000)
+    check(snap.count == 32 && (snap.first?["seq"] as? Int) == 10 && (snap.last?["seq"] as? Int) == 41, "keeps the last 32, seq runs on")
+    check((snap.last?["age_ms"] as? Int) == 999 && snap.last?["p"] == nil, "age in ms, p only when given")
+}
+
 var failedTests: [String] = []
 for (name, body) in tests {
     let before = failures

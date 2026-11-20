@@ -69,8 +69,12 @@ public final class Tunnel {
         // 2026-11-19 night: an orphaned tunnel (a killed app) on the port made a dead launch look "up", and every retry
         // reopened the links. A busy port is reported and retried, never taken for ours.
         if Self.portOpen(cfg.localPort) {
-            set("busy: 127.0.0.1:\(cfg.localPort) 已被别的程序占用")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.launch() }
+            // 2026-11-20: a crashed app (no signal handler runs on a crash) leaves its ssh behind, owned by launchd and
+            // forwarding exactly our port to our port: that one is ours, close it. Anything else on the port is not.
+            let mine = Self.orphans(ps: Self.psList(), local: cfg.localPort, remote: cfg.remotePort)
+            for pid in mine { kill(pid, SIGTERM) }
+            set(mine.isEmpty ? "busy: 127.0.0.1:\(cfg.localPort) 已被别的程序占用" : "关掉上次留下的隧道（\(mine.count) 个）")
+            DispatchQueue.main.asyncAfter(deadline: .now() + (mine.isEmpty ? 5 : 1)) { [weak self] in self?.launch() }
             return
         }
         let p = Process()
@@ -101,6 +105,31 @@ public final class Tunnel {
             if Self.portOpen(self.cfg.localPort) { self.set("up") }
             else if n < 60 { self.waitUp(n + 1) }
         }
+    }
+
+    /// `ps -axo pid=,ppid=,command=` lines -> the pids of ssh tunnels left by an earlier hello: parent launchd (1),
+    /// /usr/bin/ssh, forwarding 127.0.0.1:local to 127.0.0.1:remote.
+    public static func orphans(ps: String, local: Int, remote: Int) -> [Int32] {
+        let fwd = "-L 127.0.0.1:\(local):127.0.0.1:\(remote)"
+        return ps.split(separator: "\n").compactMap { line in
+            let f = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard f.count == 3, let pid = Int32(f[0]), f[1] == "1" else { return nil }
+            let cmd = String(f[2])
+            guard cmd.hasPrefix("/usr/bin/ssh ") || cmd.hasPrefix("ssh "), cmd.contains(fwd + " ") || cmd.hasSuffix(fwd) else { return nil }
+            return pid
+        }
+    }
+
+    static func psList() -> String {
+        let p = Process(), pipe = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-axo", "pid=,ppid=,command="]
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return "" }
+        let d = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(decoding: d, as: UTF8.self)
     }
 
     public static func portOpen(_ port: Int) -> Bool {

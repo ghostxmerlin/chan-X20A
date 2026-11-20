@@ -1,9 +1,11 @@
 import AppKit
 import Foundation
+import HelloCore
 
 /// hello's face: the robot's 320x240 screen drawn at 2x. Eyes (the repo's v05 / v14 / v18 GIFs, natural cycle), the
 /// mode corner label, the toast and burst row on top, the word under the eyes, the chat stage dots, a status strip.
-/// A click = the robot's tap, a double click = its double tap.
+/// A click = the robot's tap, a double click = its double tap. Style "luye" (2026-11-20): 鹿野 (LuyeView) instead of the
+/// eyes, on a light screen; expressions, stage dots, gestures and the gaze become her actions and look frames.
 final class FaceView: NSView {
     private let eyes = NSImageView()
     private let modeLabel = NSTextField(labelWithString: "DOCK")
@@ -15,7 +17,12 @@ final class FaceView: NSView {
     private let preview = NSImageView()
     var onTap: ((Bool) -> Void)?                   // double?
     var eyesDir: URL?
-    var style = "v14" { didSet { showIdle() } }
+    var style = "v14" { didSet { applyStyle(); showIdle() } }
+    /// 鹿野's frames (build-app.sh copies them from .private/luye-pet); nil = the option is not offered
+    var luyeDir: URL? { didSet { luye?.removeFromSuperview(); luye = luyeDir.flatMap { LuyeView(dir: $0) }
+                                 if let l = luye { addSubview(l, positioned: .above, relativeTo: eyes) }; applyStyle() } }
+    private(set) var luye: LuyeView?
+    private var luyeOn: Bool { style == "luye" && luye != nil }
     private var playing: String? = nil
     private var cycle: Timer?
     private var wordTimer: Timer?, toastTimer: Timer?
@@ -55,6 +62,7 @@ final class FaceView: NSView {
         burst.frame = NSRect(x: w - 220, y: h - 34, width: 210, height: 24); burst.alignment = .right
         toast.frame = NSRect(x: 170, y: h - 34, width: w - 400, height: 26)
         eyes.frame = NSRect(x: gazeX, y: 70, width: w, height: h - 120)
+        luye?.frame = NSRect(x: 0, y: 92, width: w, height: h - 132)
         preview.frame = NSRect(x: w - 170, y: 76, width: 160, height: 120)
         word.frame = NSRect(x: 10, y: 52, width: w - 20, height: 42)
         dots.frame = NSRect(x: 10, y: 22, width: w - 20, height: 32)
@@ -81,10 +89,22 @@ final class FaceView: NSView {
         return NSImage(contentsOf: dir.appendingPathComponent(style).appendingPathComponent("\(state).gif"))
     }
 
-    func showIdle() { playing = nil; eyes.image = gif("idle"); eyes.animates = true }
+    func showIdle() { playing = nil; if luyeOn { return }; eyes.image = gif("idle"); eyes.animates = true }
+
+    /// eyes on the robot's black screen, or 鹿野 on a light one (her dark clothes vanish on black)
+    private func applyStyle() {
+        let on = luyeOn
+        luye?.isHidden = !on
+        luye?.running = on
+        eyes.isHidden = on
+        layer?.backgroundColor = (on ? NSColor(white: 0.93, alpha: 1) : NSColor.black).cgColor
+        for l in [toast, word] { l.textColor = on ? NSColor(white: 0.12, alpha: 1) : .white }
+        status.textColor = NSColor(white: on ? 0.4 : 0.6, alpha: 1)
+    }
 
     /// Play one expression for about two loops of its 8 frames, then back to idle.
     func play(_ state: String, seconds: Double = 2.2) {
+        if luyeOn { luye?.play(eye: state, seconds: seconds); return }
         guard let g = gif(state) else { return }
         playing = state
         eyes.image = g
@@ -96,7 +116,7 @@ final class FaceView: NSView {
 
     private var nextNatural = Date().addingTimeInterval(4)
     private func naturalTick() {          // the robot's natural cycle: 2-7 s, a weighted random expression, then idle
-        guard playing == nil, Date() >= nextNatural else { return }
+        guard !luyeOn, playing == nil, Date() >= nextNatural else { return }   // 鹿野 keeps her own, slower cycle
         nextNatural = Date().addingTimeInterval(Double.random(in: 2...7) + 2)
         play(Self.lively.randomElement()!, seconds: Double.random(in: 1.2...2.4))
     }
@@ -104,6 +124,7 @@ final class FaceView: NSView {
     /// The robot's gestures without servos: the eyes move instead.
     private var gesturing = false
     func gesture(_ kind: String) {
+        if luyeOn { luye?.gesture(kind); return }
         gesturing = true
         let base = NSRect(x: gazeX, y: 70, width: bounds.width, height: bounds.height - 120)
         let steps: [CGFloat]
@@ -125,8 +146,11 @@ final class FaceView: NSView {
 
     // ---- gaze: no servos, so the eyes lean toward the face the camera sees (the robot's tracking stand-in) ----
     private var gazeX: CGFloat = 0
-    /// x: the face centre in the camera's 640 px width, nil = nobody: back to the middle. mirror: flip left / right.
-    func gaze(at x: CGFloat?, mirror: Bool) {
+    /// x, y: the face centre in the camera's 640x480, nil = nobody: back to the middle. mirror: flip left / right.
+    /// 鹿野 turns her head instead (one of her 16 look frames).
+    func gaze(at x: CGFloat?, y: CGFloat? = nil, mirror: Bool) {
+        luye?.look(Luye.look(x: x.map(Double.init), y: y.map(Double.init), mirror: mirror))
+        if luyeOn { return }
         var target: CGFloat = 0
         if let x { target = max(-1, min(1, (x - 320) / 320)) * 40 * (mirror ? 1 : -1) }
         guard !gesturing, abs(target - gazeX) > 3 else { return }
@@ -173,9 +197,10 @@ final class FaceView: NSView {
         }()
         dots.stringValue = txt
         dots.textColor = col
+        luye?.setStage(stage)
         if !txt.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-                if self?.dots.stringValue == txt { self?.dots.stringValue = "" }
+                if self?.dots.stringValue == txt { self?.dots.stringValue = ""; self?.luye?.setStage("") }
             }
         }
     }
