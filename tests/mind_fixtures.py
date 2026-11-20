@@ -39,8 +39,11 @@ def _get(doc, key):
     parts = key.split(".")
     for i, part in enumerate(parts):
         if isinstance(cur, list):          # Mongo: "a.b" over an array of documents -> the list of their b values
-            rest = ".".join(parts[i:])
-            vals = [v for v in (_get(x, rest) for x in cur if isinstance(x, dict)) if v is not _MISSING]
+            rest = ".".join(parts[i:])     # (an array met deeper, "a.b.c" over arrays of arrays, is flattened too)
+            vals = []
+            for v in (_get(x, rest) for x in cur if isinstance(x, dict)):
+                if v is not _MISSING:
+                    vals.extend(v) if isinstance(v, list) and "." in rest else vals.append(v)
             return vals if vals else _MISSING
         if not isinstance(cur, dict) or part not in cur:
             return _MISSING
@@ -293,6 +296,14 @@ def away_pause(db, since=0):
     clear_pause(db)
     db["switches"].docs.append({"_id": "pause", "on": True, "why": "away", "reasons": ["away"], "since": since,
                                 "away_since": since})
+    return db
+
+
+def maintenance_pause(db, since=0):
+    """hello.switches.pause while the owner keeps hello in 维护中 (the 图库 page; mind/pause.py)."""
+    clear_pause(db)
+    db["switches"].docs.append({"_id": "pause", "on": True, "why": "maintenance", "reasons": ["maintenance"],
+                                "since": since, "maintenance_since": since})
     return db
 
 

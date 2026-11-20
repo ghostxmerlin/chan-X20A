@@ -134,8 +134,9 @@ def tick(db,store,settings_store,env,now_ms,chat=None):
     ready=(now_ms-20_000)//WINDOW*WINDOW-WINDOW
     # away (mind/pause.py: nobody there): the windows are skipped like with 情景 off (TV talk is no habit of the
     # owner's). Today's cap is run_json's BudgetExceeded as before (the window is retried, never skipped). The daily
-    # consolidation (memory_extract) is not paused while away.
-    held=pause.away(db,now_ms)
+    # consolidation (memory_extract) is not paused while away. 维护中 (the 图库 delete, mind/gallery.py) holds it the
+    # same way: no window is read while photos and their minutes are being deleted.
+    held=pause.away(db,now_ms) or pause.maintenance(db)
     if not env or not store.enabled() or not s['memory']['learning'] or held:
         jobs.update_one({'_id':'worker:live'},{'$set':{'cursor_window':max(state['cursor_window'],ready),
                         'state':'paused' if held else 'off','last_tick':now_ms,'last_error':''}},upsert=True)

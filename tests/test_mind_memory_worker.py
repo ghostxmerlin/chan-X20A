@@ -6,7 +6,7 @@ from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from mind_fixtures import FakeDB, T0, budget_pause, clear_pause, session, speech, tingwu
+from mind_fixtures import FakeDB, T0, budget_pause, clear_pause, maintenance_pause, session, speech, tingwu
 from mind import settings
 from mind.settings_store import SettingsStore
 from mind.store import Store
@@ -68,6 +68,13 @@ class MemoryWorkerTest(unittest.TestCase):
         self.store.set_state(enabled=True)
         self.tick(T0+2*W+30_000)
         self.assertEqual(self.fake.calls,[])
+
+    def test_maintenance_holds_the_worker(self):
+        """图库 review I4: while 维护中 (photos being deleted) no window is read or learnt from."""
+        self.tick(T0); self.data(); maintenance_pause(self.db, T0)
+        out=self.tick(T0+W+30_000)
+        self.assertEqual((out['state'],self.fake.calls),('paused',[]))
+        self.assertEqual(self.db.count('mind_memory_evidence'),0)
 
     def test_disabled_sources_and_learning_do_not_extract(self):
         self.tick(T0); self.data()

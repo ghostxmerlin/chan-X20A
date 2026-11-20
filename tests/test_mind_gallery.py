@@ -439,6 +439,95 @@ class DeleteTest(unittest.TestCase):
         self.assertEqual(out["looks"], 2)
         self.assertEqual(self.db[self.body].find_one({"_id": sha("7")})["text"], "3 秒前：" + MARK)
 
+    def test_memory_evidence_excerpts_and_statements_are_redacted(self):
+        """I4: mind_memory_evidence refs to a deleted eye minute carry its activity text (memory_worker.py)."""
+        self.db.add("mind_memory_evidence",
+                    {"_id": "ev1", "lane": "live", "scope_id": "home", "window_ms": M1 - 600_000, "version": 1,
+                     "observations": [
+                         {"key": "desk", "statement": "下午书房里的书桌前面坐着一个人", "refs": [
+                             {"c": "eye_minutes", "minute": M1, "version": 1, "excerpt": "低头在笔记本上写字很认真"},
+                             {"c": "speech", "id": "s1", "excerpt": "我在写作业"}]},
+                         {"key": "sofa", "statement": "客厅沙发上没有人", "refs": [
+                             {"c": "eye_minutes", "minute": M2, "version": 1, "excerpt": "客厅沙发上没有人"}]}]},
+                    {"_id": "ev2", "lane": "live", "scope_id": "home", "window_ms": M1, "version": 1,
+                     "observations": [{"key": "x", "statement": "书房里的书桌前面坐着一个人", "refs": [
+                         {"c": "speech", "id": "s2", "excerpt": "好"}]}]})
+        before = self.db["mind_memory_evidence"].find_one({"_id": "ev2"})
+        out = self.run_delete()
+        ev = self.db["mind_memory_evidence"].find_one({"_id": "ev1"})
+        self.assertEqual(ev["observations"][0]["statement"], "下午" + MARK)
+        self.assertEqual([r["excerpt"] for r in ev["observations"][0]["refs"]], [MARK, "我在写作业"])
+        self.assertEqual(ev["observations"][1], {"key": "sofa", "statement": "客厅沙发上没有人", "refs": [
+            {"c": "eye_minutes", "minute": M2, "version": 1, "excerpt": "客厅沙发上没有人"}]})
+        self.assertEqual(self.db["mind_memory_evidence"].find_one({"_id": "ev2"}), before)
+        self.assertEqual(out["evidence_redacted"], 1)
+
+    def test_neighbour_minutes_quoting_the_photos_are_redacted(self):
+        """M7: eye_minutes / mind_packages / mind_scenes within 3 minutes (eye.recent_looks) that are not deleted."""
+        self.db.add("eye_minutes", {"_id": "en", "minute": M1 + 120_000, "version": 1, "frames": [],
+                                    "result": {"scene": "最近看到：" + LOOK, "people": []}},
+                    {"_id": "ef", "minute": M1 + 240_000, "version": 1, "result": {"scene": LOOK}})
+        self.db.add("mind_packages", {"_id": "pn", "minute": M1 - 180_000, "lane": "live", "version": 1,
+                                      "package": {"eye": {"recent_looks": [{"at": 1, "text": LOOK}]}}})
+        self.db.add("mind_scenes", {"_id": "sn", "minute": M1 + 60_000, "lane": "live", "version": 1,
+                                    "scene": {"text": "还是" + "主人正在书房里安静地写东西"}})
+        out = self.run_delete()
+        self.assertEqual(self.db["eye_minutes"].find_one({"_id": "en"})["result"]["scene"],
+                         f"最近看到：{MARK}。{MARK}。好的")
+        self.assertEqual(self.db["mind_packages"].find_one({"_id": "pn"})["package"]["eye"]["recent_looks"],
+                         [{"at": 1, "text": f"{MARK}。{MARK}。好的"}])
+        self.assertEqual(self.db["mind_scenes"].find_one({"_id": "sn"})["scene"]["text"], "还是" + MARK)
+        self.assertEqual(self.db["eye_minutes"].find_one({"_id": "ef"})["result"]["scene"], LOOK)   # 4 min away
+        self.assertEqual(out["neighbours_redacted"], 3)
+
+    def test_spool_lines_of_deleted_rows_are_wiped(self):
+        """I7: short values (主人, 书房) of a deleted row's own spool line survive fragment redaction: wipe them all."""
+        eye = Path(self.spool) / "eye-20261120.jsonl"
+        own = jline({"_id": "eye:1:1", "kind": "call.look", "at": M1 + 7_000, "svc": "ear", "sum": "主人",
+                     "ref": {"path": self.paths["a"], "lid": 1}, "body": {"output": sha("b")}, "ms": 812},
+                    {sha("b"): "书房\"里"})
+        other = jline({"_id": "eye:1:9", "kind": "call.eye", "at": M1 + 8_000, "sum": "主人"}, {})
+        eye.write_text(own + other, encoding="utf-8")
+        size = eye.stat().st_size
+        self.run_delete()
+        data = eye.read_bytes()
+        self.assertEqual(len(data), size)
+        first, second = data.decode().splitlines()
+        rec = json.loads(first)
+        self.assertEqual(rec["flow"]["_id"], "eye:1:1")                 # replay stays idempotent (duplicate _id)
+        self.assertEqual((rec["flow"]["at"], rec["flow"]["ms"], rec["flow"]["ref"]["lid"]), (M1 + 7_000, 812, 1))
+        self.assertEqual(rec["flow"]["sum"], "******")
+        self.assertEqual(set(rec["flow"]["kind"] + rec["flow"]["svc"] + rec["flow"]["ref"]["path"]), {"*"})
+        self.assertEqual(list(rec["bodies"]), [sha("b")])
+        self.assertEqual(set(rec["bodies"][sha("b")]), {"*"})
+        self.assertNotIn("主人", first)
+        self.assertEqual(json.loads(second)["flow"]["sum"], "主人")      # another row's line: fragments only
+
+    def test_spool_scan_stars_exactly_what_plain_replace_would(self):
+        """The spool's byte-trie regex (one per batch, finditer over the file) vs. one replace per fragment and line:
+        fragments that share prefixes or contain each other, and a trie too deep for the compiler (plain fallback)."""
+        import random
+        rnd = random.Random(7)
+        chars = "主人书房桌上一杯茶看手机红色"
+        frags = sorted({"".join(rnd.choice(chars) for _ in range(rnd.randint(8, 14))) for _ in range(300)}
+                       | {"主人书房桌上一杯茶", "主人书房桌上一杯茶看手机"}, key=lambda f: (-len(f), f))
+        deep = ["甲" * k + "乙" for k in range(8, 1300)]
+        for words in (frags, deep):
+            with tempfile.TemporaryDirectory() as d:
+                lines = [jline({"_id": f"ear:1:{i}", "kind": "call.realtime"},
+                               {"x": "".join(rnd.choice(chars + "甲乙") for _ in range(200))}) for i in range(300)]
+                (Path(d) / "ear-20261120.jsonl").write_text("".join(lines), encoding="utf-8")
+                gallery.redact.redact_spool(d, words, M1, M1)
+                got = (Path(d) / "ear-20261120.jsonl").read_text(encoding="utf-8")
+            want = []
+            for line in lines:
+                b = line.encode()
+                for w in words:
+                    n = w.encode()
+                    b = b.replace(n, b"*" * len(n))
+                want.append(b.decode())
+            self.assertEqual(got, "".join(want))
+
     def test_stale_plan_is_refused(self):
         fp = gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)["fp"]
         self.db["vision_looks"].insert_one({"_id": "la2", "kind": "look", "at": M1 + 9_000, "path": self.paths["a"],

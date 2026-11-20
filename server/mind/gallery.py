@@ -272,7 +272,7 @@ def _collect(db, ids):
     looks = hit["vision_looks"]               # every row read from these photos: look, the live eye's scene, ...
     described = {d.get("minute") for d in hit["eye_minutes"] if d.get("result")} | \
         {d.get("minute") for d in hit["mind_scenes"]}
-    return {"hit": hit, "paths": paths, "months": months, "keys": keys,
+    return {"hit": hit, "paths": paths, "months": months, "keys": keys, "photo_minutes": minutes,
             "minutes": sorted(x for x in described if isinstance(x, (int, float))),
             "from": min(ats) if ats else None, "to": max(ats) if ats else None,
             "fp": fp, "fragments": _fragments(looks, hit["eye_minutes"], hit["mind_scenes"], hit["mind_segments"])}
@@ -357,7 +357,13 @@ def delete(db, root, ids, fp, *, spool_dir, emit):
     out["sums_redacted"] = sum(redact.redact(db["log_" + month], "sum", m["fragments"],
                                        [r["_id"] for r in logs.get(month, [])]) for month in m["months"])
     out["runs_redacted"] = redact.redact_runs(db, m["fragments"], m["from"], m["to"], [d["_id"] for d in h["mind_runs"]])
-    out["spool_redacted"] = redact.redact_spool(spool_dir, m["fragments"], m["from"], m["to"])
+    out["evidence_redacted"] = redact.redact_evidence(
+        db, sorted({d["minute"] for d in h["eye_minutes"] if isinstance(d.get("minute"), (int, float))}
+                   | set(m["photo_minutes"])), m["fragments"])
+    out["neighbours_redacted"] = redact.redact_neighbours(db, m["photo_minutes"], m["fragments"],
+                                                          {c: [d["_id"] for d in h[c]] for c in redact.NEIGHBOURS})
+    out["spool_redacted"] = redact.redact_spool(spool_dir, m["fragments"], m["from"], m["to"],
+                                                [r["_id"] for rows in logs.values() for r in rows])
     out["log_rows"] = sum(_drop_log_rows(db, month, rows) for month, rows in logs.items())
     for key, c in (("segments", "mind_segments"), ("scenes", "mind_scenes"), ("packages", "mind_packages"),
                    ("runs", "mind_runs"), ("eye_minutes", "eye_minutes"), ("looks", "vision_looks"),
