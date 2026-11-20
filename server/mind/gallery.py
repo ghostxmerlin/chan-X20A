@@ -116,6 +116,17 @@ def frames(db, lo, hi):
             for r in rows]
 
 
+FRESH_FRAME_MS = 120_000             # a photo received this recently = the robot is still sending
+
+
+def frame_recent(db, now_ms, within=FRESH_FRAME_MS):
+    """True when the newest frames record was received (or taken) within `within` ms of now."""
+    doc = db["frames"].find_one({}, sort=[("at", -1)])
+    t = max((v for v in ((doc or {}).get("received"), (doc or {}).get("at")) if isinstance(v, (int, float))),
+            default=None)
+    return t is not None and now_ms - t <= within
+
+
 def _inside(root, rel, sub=""):
     """The real path of root/rel when it lies inside root/sub (symlinks and .. resolved), else None."""
     if not root or not isinstance(rel, str) or not rel:
@@ -425,6 +436,11 @@ def _record(emit, m, out):
     n = len(m["hit"]["frames"])
     text = f"删除 {out['frames']} 张照片{span}" if "error" not in out else f"删除 {n} 张照片{span}没删完（出错）"
     emit("gallery.delete", by="page", sum=text, extra={**out, "from": m["from"], "to": m["to"]})
+
+
+def spool_backlog(spool_dir, m):
+    """The spool files of the plan's days with records not shipped yet (they would put deleted rows back)."""
+    return redact.spool_backlog(spool_dir, m["from"], m["to"])
 
 
 def delete(db, root, ids, fp, *, spool_dir, emit, step=None):

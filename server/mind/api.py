@@ -5,9 +5,12 @@ scenes; the 图库 delete (/gallery/delete) is the one exception and it only del
 
 GET  /state /timeline /minute /now /segments /scene /settings /names /prompts /labels /stats /switches /frames/latest /eye/latest /eye /notes /roles /utterances /voices
 GET  /gallery/days /gallery/hours?day /gallery/frames?from&to /gallery/images?ids /gallery/frame?id /gallery/maintenance
-     (图库, mind/gallery.py: the body camera's photos by day / hour, thumbnails, one photo with what was read from it)
+     /gallery/job?id (图库, mind/gallery.py: the body camera's photos by day / hour, thumbnails, one photo with what was
+     read from it; the delete job's state, step and counts). The robot's only: 404 on another database (the Mac).
 POST /gallery/maintenance {on} /gallery/plan {ids} /gallery/delete {ids, fp} (delete only while 维护中 and no robot is
-     connected, else 409 not_maintenance; a changed plan is 409 stale; none of these is an owner input)
+     connected, else 409 not_maintenance; a changed plan is 409 stale; unshipped log spool 409 spool_backlog; checked,
+     then 202 {job} and the delete runs in the background, one at a time: 409 busy, also for {on: false}; none of
+     these is an owner input)
 POST /settings /mark /label /rerun /place /switch /switches /say /say/stop /voice/try
 GET  /place; POST /place {label: text | null, source: page | robot} /place/choices {choices} | {add} | {remove}
      /place/told {text, source: crowd | chat} (where hello is now, mind/place.py; spec 2026-11-15-place-contract.md)
@@ -40,6 +43,7 @@ import gzip
 import json
 import os
 import re
+import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -89,6 +93,10 @@ class BadRequest(Exception):
 
 class NotFound(Exception):
     pass
+
+
+class Accepted(dict):
+    """A reply that started work in the background: 202 instead of 200."""
 
 
 class Conflict(Exception):
@@ -177,6 +185,9 @@ def _log_range(q, now, max_ms=LOG_MAX_RANGE_MS):
 
 def _str(v, n):
     return str(v)[:n] if v is not None else ""
+
+
+GALLERY_JOB_RE = re.compile(r"[a-f0-9]{12}")
 
 
 def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
@@ -444,9 +455,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
             raise Unavailable("pause is not running here")
         since = pc.doc().get("maintenance_since")
         on = bool(pc.view().get("maintenance"))
-        try:                                       # the ear keeps one doc per body (mind/body_roster.py)
-            connected = any(r["online"] for r in (body_roster._row(d) for d in db["bodies"].find({}).limit(50))
-                            if r["kind"] == "stackchan")
+        try:                                       # the ear keeps one doc per body (mind/body_roster.py); a photo
+            connected = body_roster.connected(db) or gallery.frame_recent(db, int(time.time() * 1000))  # still coming in
         except Exception as e:                     # noqa: BLE001 - cannot tell: treat as connected, never delete
             print(f"mind gallery: robot state unreadable: {type(e).__name__}", flush=True)
             connected = True
@@ -454,12 +464,58 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         return {"on": on, "since": since if on else None, "robot_connected": connected,
                 "can_delete": why is None, "why_not": why}
 
+    # The delete runs as one background job (review C2: 500 photos can outlast the page's and the proxy's timeouts).
+    # Only the last job is kept, in memory: a restart forgets it and the page re-reads the photos.
+    gjob, gjob_lock = {"cur": None}, threading.Lock()
+    JOB_KEYS = ("id", "state", "step", "counts", "error", "started_at", "finished_at")
+
+    def gallery_running():
+        j = gjob["cur"]
+        return j is not None and j["state"] == "running"
+
+    def gallery_start(m):
+        now = int(time.time() * 1000)
+        job = {"id": secrets.token_hex(6), "state": "running", "step": "start", "counts": {}, "error": None,
+               "started_at": now, "finished_at": None, "_out": None}
+
+        def step(name, counts):                    # called in the job's thread as each part starts
+            job.update(step=name, counts=dict(counts), _out=counts)
+
+        def work():
+            try:
+                out = gallery.run(db, ctx.get("recordings_root"), m, spool_dir=ctx.get("spool_dir"),
+                                  emit=hello_log.emit, step=step)
+                job.update(state="done", step="done", counts=dict(out))
+            except Exception as e:                 # noqa: BLE001 - a started delete that failed: shown on the job
+                print(f"mind gallery: delete failed: {type(e).__name__}", flush=True)
+                job.update(state="failed", error=type(e).__name__, counts=dict(job["_out"] or job["counts"]))
+            finally:
+                job["finished_at"] = int(time.time() * 1000)
+        with gjob_lock:
+            if gallery_running():
+                raise ModeConflict("正在删除上一批，等它删完", "busy")
+            gjob["cur"] = job
+        threading.Thread(target=work, name="gallery-delete", daemon=True).start()
+        return Accepted({"job": job["id"]})
+
+    def gallery_job(jid):
+        j = gjob["cur"]
+        if j is None or j["id"] != jid:
+            raise NotFound("这次删除已不在记录里（mind 可能重启过），请刷新")
+        return {k: j[k] for k in JOB_KEYS}
+
+    def gallery_scope():
+        """图库 is the robot's (spec: the Mac stand-in, database hello_mac, is not in scope)."""
+        if ctx.get("db_name", getattr(db, "name", None)) != "hello":
+            raise NotFound("图库只管机器人")
+
     def gallery_ids(v):
         if not isinstance(v, list) or not all(isinstance(i, str) for i in v):
             raise BadRequest("ids must be a list of strings")
         return v
 
     def gallery_get(path, q):
+        gallery_scope()
         try:
             if path == "/gallery/days":
                 return {"days": gallery.days(db, gallery_tz())}
@@ -483,11 +539,17 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 return doc
             if path == "/gallery/maintenance":
                 return gallery_state()
+            if path == "/gallery/job":
+                jid = _one(q, "id", GALLERY_JOB_RE)
+                if not jid:
+                    raise BadRequest("id required")
+                return gallery_job(jid)
         except ValueError as e:
             raise BadRequest(str(e)[:120]) from None
         raise NotFound("not found")
 
     def gallery_post(path, body):
+        gallery_scope()
         pc = ctx.get("pause")
         try:
             if path == "/gallery/maintenance":
@@ -495,6 +557,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                     raise BadRequest("on (true/false) required")
                 if pc is None:
                     raise Unavailable("pause is not running here")
+                if not body["on"] and gallery_running():
+                    raise ModeConflict("正在删除，删完才能结束维护", "busy")
                 pc.set_maintenance(body["on"])
                 return gallery_state()
             if path == "/gallery/plan":
@@ -503,19 +567,18 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 ids = gallery_ids(body.get("ids"))
                 if not isinstance(body.get("fp"), str):
                     raise BadRequest("fp required")
+                if gallery_running():
+                    raise ModeConflict("正在删除上一批，等它删完", "busy")
                 st = gallery_state()
                 if not st["can_delete"]:
                     raise ModeConflict(st["why_not"], "not_maintenance")
                 try:
-                    return gallery.delete(db, ctx.get("recordings_root"), ids, body["fp"],
-                                          spool_dir=ctx.get("spool_dir"), emit=hello_log.emit)
+                    m = gallery.prepare(db, ids, body["fp"])       # checked here: a bad request is answered now
                 except gallery.Stale as e:
                     raise ModeConflict(str(e), "stale") from None
-                except ValueError:
-                    raise
-                except Exception as e:            # noqa: BLE001 - started and failed: 503 from _run, type logged
-                    print(f"mind gallery: delete failed: {type(e).__name__}", flush=True)
-                    raise
+                if gallery.spool_backlog(ctx.get("spool_dir"), m):
+                    raise ModeConflict("日志还有没上传完的记录，先等日志上传完再删（通常一分钟内）", "spool_backlog")
+                return gallery_start(m)
         except ValueError as e:
             raise BadRequest(str(e)[:120]) from None
         raise NotFound("not found")
@@ -1196,7 +1259,8 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
 
         def _run(self, fn):
             try:
-                self._send(200, fn())
+                res = fn()
+                self._send(202 if isinstance(res, Accepted) else 200, res)
             except BadRequest as e:
                 self._send(400, {"error": str(e)})
             except NotFound as e:

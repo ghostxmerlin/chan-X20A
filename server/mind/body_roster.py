@@ -16,6 +16,12 @@ def _row(doc):
     return out
 
 
+def connected(db, kind="stackchan"):
+    """True when any body of this kind (all of them, newest or not) has a live hearing or vision link. Read errors
+    are raised: the caller decides (the 图库 treats "cannot tell" as connected)."""
+    return any(_row(d)["online"] for d in db["bodies"].find({"kind": kind}))
+
+
 def roster(db):
     seen = [_row(d) for d in db["bodies"].find({}).sort("last_seen_ms", -1).limit(50)]
     kinds = []
