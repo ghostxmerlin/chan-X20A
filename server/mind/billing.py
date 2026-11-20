@@ -34,7 +34,7 @@ PAID_SWITCHES = ('tingwu', 'eye', 'notes')     # 听悟, 识别, 纪要; 情景 
 REALTIME = 'realtime'
 # collector-0.4.96 (owner 2026-11-15): hello does the robot half of its own 0 / 9 (hearing listen, camera, M12
 # detection), so a digit from hello answers ok like the page; only other sources still answer senses_on_page.
-HELLO_SOURCES = ('asr', 'quick', 'select', 'touch')
+HELLO_SOURCES = ('asr', 'quick', 'select', 'touch', 'boot')   # boot: the power-on big mode (0.5.21)
 
 
 def _log(msg):
@@ -72,10 +72,12 @@ class Billing:
         return apply_preset(9 if on else 0, self, source=source, now_ms=now_ms)
 
     def preset(self, n, *, source, now_ms, meta=None):
-        """ModeStore preset_fn. hello's power-on 9 (power_on) only answers ok: every switch stays as stored."""
-        if n == 9 and self.power_on(source, meta):
-            return power_on_result(source)
-        return apply_preset(n, self, source=source, now_ms=now_ms)
+        """ModeStore preset_fn. Owner 2026-11-20 (collector-0.5.21): hello's power-on digit is its stored big mode
+        (0 关 / 2 收集 / 9 智能) and is applied like any other (the small switches are temporary); the answer says
+        power_on so the run log and the away pause do not take a reboot for the owner."""
+        on = n in (0, 2, 9) and self.power_on(source, meta)
+        out = apply_preset(n, self, source=source, now_ms=now_ms)
+        return {**out, 'power_on': True} if on else out
 
     def power_on(self, source, meta):
         """Is this digit hello's power-on 9 rather than an owner's 9? (2026-11-17: an unexplained reboot must not undo
@@ -165,14 +167,20 @@ def _billing_on(b, source, now_ms, out):
 
 
 def _paid_senses_on(b, source, now_ms, out):
-    keep = () if source == 'boot' else ((REALTIME, lambda: b.ctx.set_switch(REALTIME, True)),)   # boot: as stored
     out['failed'] += b._run_all('senses on', [*((n, lambda n=n: b.ctx.set_switch(n, True)) for n in PAID_SWITCHES),
-                                              *keep, ('mind', lambda: b.ctx.set_mind(True))])
+                                              (REALTIME, lambda: b.ctx.set_switch(REALTIME, True)),   # power-on too (0.5.21)
+                                              ('mind', lambda: b.ctx.set_mind(True))])
     return None, None
 
 
 def _mouth_tts(b, source, now_ms, out):
     b.ctx.set_mouth('tts')
+    return None, None
+
+
+def _mouth_off(b, source, now_ms, out):
+    """关 / 收集: she listens but does not speak (owner 2026-11-20)."""
+    out['failed'] += b._run_all('mouth off', [('mouth', lambda: b.ctx.set_mouth('off'))])
     return None, None
 
 
@@ -194,19 +202,8 @@ def _realtime_toggle(b, source, now_ms, out):
     return None, ('DOCK ON' if on else 'DOCK QUIET') if not failed else None    # Docking (owner 2026-11-18, was MEET)
 
 
-def power_on_result(source):
-    """hello's power-on 9: nothing changes on the server (her own senses came on by themselves); ok stops her resends.
-    One preset.apply record (extra.power_on)."""
-    res = result('ok', 'POWER ON: SWITCHES KEPT')
-    with hello_log.scope(trace=log_trace()):
-        hello_log.emit('preset.apply', by=source, sum='预设 9：开机，开关保持原样',
-                       extra={'n': 9, 'code': res['code'], 'toast': res['toast'], 'failed': [], 'robot': {},
-                              'power_on': True})
-    return {'result': res, 'robot': {}, 'power_on': True}
-
-
 ACTIONS = {'realtime_toggle': _realtime_toggle, 'billing_off': _billing_off, 'billing_on': _billing_on, 'paid_senses_on': _paid_senses_on,
-           'mouth_tts': _mouth_tts, 'talk_on': _talk_on}
+           'mouth_tts': _mouth_tts, 'mouth_off': _mouth_off, 'talk_on': _talk_on}
 
 
 def apply_preset(n, billing, *, source, now_ms):

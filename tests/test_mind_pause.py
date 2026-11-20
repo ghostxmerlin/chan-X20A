@@ -297,19 +297,25 @@ class PauseApiTest(unittest.TestCase):
         self.call('/mode/report', dict(rep, seq=3, by='timeout', input='timeout'))
         dig = {'device': 'robot', 'boot': 'b1', 'age_ms': 0, 'input': 'digit', 'value': 9}
         r = self.call('/mode/input', dict(dig, seq=1, source='quick'))[1]          # hello's power-on 9
-        self.assertEqual((r['result']['toast'], r.get('power_on')), ('POWER ON: SWITCHES KEPT', True))
+        self.assertEqual((r['result']['code'], r.get('power_on')), ('ok', True))      # applied (0.5.21), not the owner
         self.call('/mode/input', dict(dig, seq=2, source='quick'))                 # the owner's 全开 after it
         self.assertEqual(self.notes, [('touch:tap', False), ('quick:digit', True)])
 
-    def test_hellos_power_on_nine_keeps_the_switches(self):
+    def test_hellos_power_on_big_mode_decides_the_switches(self):
+        # owner 2026-11-20 (collector-0.5.21): after a reboot the stored big mode decides; small switches are temporary
         self.call('/switches', {'name': 'billing', 'on': False})
         self.call('/switches', {'name': 'notes', 'on': False})
-        dig = {'device': 'robot', 'boot': 'b9', 'age_ms': 0, 'input': 'digit', 'value': 9, 'seq': 1, 'source': 'quick'}
+        dig = {'device': 'robot', 'boot': 'b9', 'age_ms': 0, 'input': 'digit', 'value': 9, 'seq': 1, 'source': 'boot'}
+        owner_notes = list(self.notes)                                       # the two page switches above
         self.assertEqual(self.call('/mode/input', dig)[0], 200)
         sw = self.call('/switches')[1]
         self.assertEqual((sw['tingwu']['on'], sw['notes']['on'], sw['realtime']['on'], sw['mouth']['mode']),
-                         (False, False, False, 'clips'))
-        self.assertEqual(self.call('/mode/input', dict(dig, seq=2, source='boot'))[0], 200)   # a later firmware's word
+                         (True, True, True, 'tts'))
+        self.assertEqual(self.call('/mode/input', dict(dig, boot='b10', value=2))[0], 200)          # 收集
+        sw = self.call('/switches')[1]
+        self.assertEqual((sw['tingwu']['on'], sw['notes']['on'], sw['realtime']['on'], sw['mouth']['mode']),
+                         (False, False, False, 'off'))
+        self.assertEqual(self.notes, owner_notes)                            # a reboot is not the owner here
 
 
 if __name__ == '__main__':

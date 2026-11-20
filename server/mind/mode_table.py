@@ -110,19 +110,22 @@ _validate(MODES)
 # robot: the robot half, in the page's own tier names (switches-ui.js levelRequests / visionRequests). Only the page
 #   carries it out; a robot-sent 9 does the server half and answers senses_on_page. 9 = tingwu / recognize, the paid
 #   tiers, so the robot half keeps 听悟 / 识别 on (owner 4: 花费全开).
-PRESET_ACTIONS = ('billing_off', 'billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on', 'realtime_toggle')
-ROBOT_HALF = {'hearing': ('local', 'tingwu'), 'vision': ('upload', 'recognize')}
+PRESET_ACTIONS = ('billing_off', 'billing_on', 'paid_senses_on', 'mouth_tts', 'mouth_off', 'talk_on', 'realtime_toggle')
+ROBOT_HALF = {'hearing': ('off', 'local', 'tingwu'), 'vision': ('off', 'upload', 'recognize')}
 _PAID_SENSES = {'hearing': 'tingwu', 'vision': 'recognize'}
 _ON_HELLO = {}    # 4-8 were hello's own mode selects; Docking is the only mode since 2026-11-20
 
 PRESETS = {
-    0: {'name': '花费全关', 'server': ('billing_off',), 'robot': {}},
+    # 0 / 2 / 9 = the big modes 关 / 收集 / 智能 (owner 2026-11-20, collector-0.5.21): the robot stores the mode and
+    # sends its digit at every power-on and when it is chosen; the robot half is the robot's own (big_mode.h).
+    0: {'name': '关', 'server': ('billing_off', 'mouth_off'), 'robot': {'hearing': 'off', 'vision': 'off'}},
     # 1 (owner 2026-11-15 "能让hello在围观模式中闭嘴"): the 围观 realtime switch flips (闭嘴 / 开口); hello sends it for
     # its ASR 1 (a double tap in crowd is 安静一下 since 2026-11-19). 0 / 9 still set it with everything else.
     1: {'name': 'Docking 闭嘴/开口', 'server': ('realtime_toggle',), 'robot': {}},
-    **{n: {'name': '空', 'server': (), 'robot': {}} for n in (2, 3, 4, 5, 6, 7, 8)},
+    2: {'name': '收集', 'server': ('billing_off', 'mouth_off'), 'robot': {'hearing': 'local', 'vision': 'upload'}},
+    **{n: {'name': '空', 'server': (), 'robot': {}} for n in (3, 4, 5, 6, 7, 8)},
     **{n: {'name': f'{name}（hello 自己切）', 'server': (), 'robot': {}} for n, name in _ON_HELLO.items()},
-    9: {'name': '花费全开', 'server': ('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), 'robot': dict(_PAID_SENSES)},
+    9: {'name': '智能', 'server': ('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), 'robot': dict(_PAID_SENSES)},
 }
 PRESETS = dict(sorted(PRESETS.items()))
 

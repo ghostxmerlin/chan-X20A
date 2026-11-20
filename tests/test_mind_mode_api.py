@@ -231,9 +231,11 @@ class NotFromHereTest(ModeApiBase):
     def test_presets(self):
         r = self.call('/preset', {'n': 9, 'source': 'page'})[1]
         self.assertEqual((r['robot'], r['result']['code']), ({'hearing': 'tingwu', 'vision': 'recognize'}, 'ok'))
-        self.assertEqual(self.call('/preset', {'n': 2, 'source': 'page'})[1]['result']['code'], 'undefined_preset')
+        self.assertEqual(self.call('/preset', {'n': 3, 'source': 'page'})[1]['result']['code'], 'undefined_preset')
+        r = self.call('/preset', {'n': 2, 'source': 'page'})[1]                 # 收集 (0.5.21)
+        self.assertEqual((r['robot'], r['result']['code']), ({'hearing': 'local', 'vision': 'upload'}, 'ok'))
         r = self.call('/preset', {'n': 0, 'source': 'page'})[1]
-        self.assertEqual((r['robot'], r['snapshot']['billing']), ({}, False))
+        self.assertEqual((r['robot'], r['snapshot']['billing']), ({'hearing': 'off', 'vision': 'off'}, False))
         self.assertEqual(self.call('/preset', {'n': 10})[0], 400)
 
 

@@ -120,8 +120,8 @@ class BillingTest(unittest.TestCase):
         self.assertEqual((r['result']['toast'], self.ctx.realtime, self.ctx.tingwu), ('PRESET 1: DOCK ON', True, tingwu))   # nothing else changes
 
     def test_one_to_eight_are_undefined_on_mind(self):
-        # owner 2026-11-14 (step 1b): 4-8 are mode selects hello does itself, 1-3 are empty
-        for n in range(2, 9):
+        # owner 2026-11-14 (step 1b): 4-8 are mode selects hello does itself, 1-3 are empty; 2 is 收集 since 0.5.21
+        for n in range(3, 9):
             r = apply_preset(n, self.b, source='asr', now_ms=1)
             self.assertEqual((r['result']['code'], r['robot']), ('undefined_preset', {}), n)
         self.assertTrue(self.b.allowed())
@@ -158,13 +158,17 @@ class PresetDetailTest(unittest.TestCase):
 
     def test_table_matches_spec_section_7(self):
         P = mode_table.PRESETS
-        # owner's step-1b table: 0 = 花费全关, 9 = 花费全开, 1-8 nothing on mind (4-8: hello's own selects)
-        # 9 = 花费全开 (owner 4): the page's paid tiers, so its robot half keeps 听悟 / 识别 on (review I1)
+        # owner 2026-11-20 (collector-0.5.21): 0 / 2 / 9 = the big modes 关 / 收集 / 智能; 1 = Docking 闭嘴 / 开口;
+        # 3-8 nothing on mind. 9's robot half keeps 听悟 / 识别 on (review I1).
         paid = {'hearing': 'tingwu', 'vision': 'recognize'}
         self.assertEqual(set(P), set(range(10)))
         self.assertEqual({n: (P[n]['server'], P[n]['robot']) for n in P},
-                         {0: (('billing_off',), {}), 1: (('realtime_toggle',), {}), **{n: ((), {}) for n in range(2, 9)},
+                         {0: (('billing_off', 'mouth_off'), {'hearing': 'off', 'vision': 'off'}),
+                          1: (('realtime_toggle',), {}),
+                          2: (('billing_off', 'mouth_off'), {'hearing': 'local', 'vision': 'upload'}),
+                          **{n: ((), {}) for n in range(3, 9)},
                           9: (('billing_on', 'paid_senses_on', 'mouth_tts', 'talk_on'), paid)})
+        self.assertEqual([P[n]['name'] for n in (0, 2, 9)], ['关', '收集', '智能'])
         self.assertEqual(list(P), list(range(10)))
         self.assertTrue(all(isinstance(P[n]['name'], str) and P[n]['name'] for n in P))
 
@@ -179,8 +183,9 @@ class PresetDetailTest(unittest.TestCase):
                 mode_table._validate_presets(t)
 
     def test_presets_without_a_robot_half_hand_back_an_empty_one(self):
+        self.assertEqual(apply_preset(1, self.b, source='asr', now_ms=1)['robot'], {})
         self.assertEqual(apply_preset(0, self.b, source='asr', now_ms=1), {'result': {'code': 'ok', 'toast': 'PRESET 0'},
-                                                                         'robot': {}})
+                                                                         'robot': {'hearing': 'off', 'vision': 'off'}})
 
     def test_robot_preset_nine_is_ok_hello_does_its_own_half(self):
         self.b.off('page', 1)
@@ -278,7 +283,7 @@ class StoreWiringTest(unittest.TestCase):
         self._break_eye()
         r = self.ms.apply('digit', 0, source='asr', device='robot', boot='b1', dev_seq=5, now_ms=2)
         self.assertEqual((r['result'], r['failed'], r['robot']),
-                         ({'code': 'ok', 'toast': 'PRESET 0: 1 FAILED'}, ['eye'], {}))
+                         ({'code': 'ok', 'toast': 'PRESET 0: 1 FAILED'}, ['eye'], {'hearing': 'off', 'vision': 'off'}))
         self.assertEqual(self.ms.db['mode_log'].docs[-1]['dev_seq'], 5)
 
     def test_clean_off_has_no_failed_key(self):
@@ -335,66 +340,53 @@ class TalkEnterTest(unittest.TestCase):
         self.assertEqual(self.ctx.prefetch, False)
 
 
-class PowerOnNineTest(unittest.TestCase):
-    """2026-11-17: hello's power-on 9 (source quick, the first digit of a robot boot mind has not answered ok yet)
-    changes no switch: an unexplained reboot keeps the owner's 闭嘴 / 0 / single switches off. Any later 9 is the
-    owner's and turns everything on, as before."""
+class PowerOnBigModeTest(unittest.TestCase):
+    """Owner 2026-11-20 (collector-0.5.21): the robot owns the big mode 关 / 收集 / 智能 and owes mind its digit 0 / 2 / 9
+    at every power-on (source boot). mind applies it: after a restart the big mode decides, the small switches are
+    temporary. The answer still says power_on (a reboot is not the owner being here)."""
     def setUp(self):
-        self.ctx = FakeCtx(mode='crowd', mouth='clips')       # everything off, as the owner left it
+        self.ctx = FakeCtx(mode='crowd', mouth='clips')
         self.b = Billing(self.ctx)
         self.ms = self.ctx.mode_store
         self.seq = 0
 
-    def nine(self, source='quick', boot='b1', device='robot'):
+    def digit(self, n, source='boot', boot='b1', device='robot'):
         self.seq += 1
-        return self.ms.apply('digit', 9, source=source, device=device, boot=boot, dev_seq=self.seq, now_ms=self.seq)
+        return self.ms.apply('digit', n, source=source, device=device, boot=boot, dev_seq=self.seq, now_ms=self.seq)
 
-    def test_power_on_nine_keeps_every_switch(self):
-        r = self.nine()
-        self.assertEqual((r['result'], r.get('power_on')), ({'code': 'ok', 'toast': 'POWER ON: SWITCHES KEPT'}, True))
-        self.assertEqual(self.ctx.calls, [])
-        self.assertEqual((self.ctx.realtime, self.ctx.mouth), (False, 'clips'))
+    def test_power_on_smart_turns_everything_on(self):
+        r = self.digit(9)
+        self.assertEqual((r['result']['code'], r.get('power_on')), ('ok', True))
+        self.assertEqual((self.ctx.tingwu, self.ctx.realtime, self.ctx.mouth), (True, True, 'tts'))
         self.assertEqual(self.ms.db['mode_log'].docs[-1]['code'], 'ok')        # hello stops resending
 
-    def test_the_next_quick_nine_of_that_boot_is_the_owners(self):
-        self.nine()
-        r = self.nine()                                       # the quick page's 全开, pressed after the reboot
+    def test_power_on_collect_is_paid_off_and_quiet(self):
+        self.digit(9)
+        r = self.digit(2, boot='b2')
+        self.assertEqual((r['result']['code'], r.get('power_on')), ('ok', True))
+        self.assertEqual((self.ctx.tingwu, self.ctx.realtime, self.ctx.mouth), (False, False, 'off'))
+        self.assertEqual(r['robot'], {'hearing': 'local', 'vision': 'upload'})
+
+    def test_power_on_off_is_everything_off(self):
+        self.digit(9)
+        r = self.digit(0, boot='b2')
+        self.assertEqual((self.ctx.tingwu, self.ctx.realtime, self.ctx.mouth), (False, False, 'off'))
+        self.assertEqual(r['robot'], {'hearing': 'off', 'vision': 'off'})
+
+    def test_older_firmwares_quick_power_on_nine_is_applied_too(self):
+        r = self.digit(9, source='quick')
+        self.assertEqual((r.get('power_on'), self.ctx.tingwu, self.ctx.realtime), (True, True, True))
+
+    def test_a_big_mode_chosen_later_is_the_owners(self):
+        self.digit(9)
+        r = self.digit(2, source='quick')
         self.assertNotIn('power_on', r)
-        self.assertEqual((self.ctx.tingwu, self.ctx.realtime, self.ctx.mouth), (True, True, 'tts'))
-
-    def test_an_asr_nine_is_always_the_owners(self):
-        r = self.nine(source='asr')
-        self.assertNotIn('power_on', r)
-        self.assertEqual((self.ctx.tingwu, self.ctx.realtime), (True, True))
-
-    def test_any_ok_digit_of_the_boot_ends_the_power_on_window(self):
-        self.seq += 1
-        self.ms.apply('digit', 0, source='asr', device='robot', boot='b1', dev_seq=self.seq, now_ms=self.seq)
-        self.assertNotIn('power_on', self.nine())
-        self.assertEqual(self.ctx.tingwu, True)
-
-    def test_a_new_boot_and_a_mind_restart(self):
-        self.nine()
-        self.assertTrue(self.nine(boot='b2').get('power_on'))            # the next reboot keeps them again
-        b = Billing(self.ctx)                                              # mind restarted: the log still knows
-        self.ctx.mode_store.preset_fn = b.preset
-        self.assertNotIn('power_on', self.nine(boot='b2'))
-
-    def test_an_unanswered_power_on_nine_resent_is_still_kept(self):
-        self.ms.db['mode_log'].docs.append({'device': 'robot', 'boot': 'b1', 'dev_seq': 99, 'input': 'digit',
-                                            'code': 'busy'})
-        self.assertTrue(self.nine().get('power_on'))
-
-    def test_source_boot_is_always_the_power_on_nine(self):
-        self.nine()
-        self.assertTrue(self.nine(source='boot').get('power_on'))
-        self.assertEqual(self.ctx.tingwu, False)
+        self.assertEqual((self.ctx.tingwu, self.ctx.mouth), (False, 'off'))
 
     def test_the_page_nine_is_never_a_power_on(self):
         r = self.ms.apply('digit', 9, source='quick', now_ms=1)               # no device: not hello's link
         self.assertNotIn('power_on', r)
         self.assertEqual(self.ctx.tingwu, True)
-
 
 if __name__ == '__main__':
     unittest.main()
