@@ -84,6 +84,14 @@ int main()
     assert(run(R"({"id":5,"do":"nod","args":{"times":3}})", c) == Parse::BadArgs);
     assert(run(R"({"id":5,"do":"nod","args":{"times":true}})", c) == Parse::BadArgs);
 
+    // light (0.5.21, owner 2026-11-20): the body's 12 RGB LEDs, r g b 0..255 each (0 0 0 = off), seen: rate limited
+    assert(run(R"({"id":7,"do":"light","args":{"r":0,"g":120,"b":255}})", c) == Parse::Ok && c.verb == Verb::Light);
+    assert(c.rgb[0] == 0 && c.rgb[1] == 120 && c.rgb[2] == 255 && rate_limited_verb(Verb::Light));
+    assert(run(R"({"id":7,"do":"light","args":{"r":0,"g":0,"b":0}})", c) == Parse::Ok && !c.rgb[0] && !c.rgb[1] && !c.rgb[2]);
+    for (const char* bad : {R"({"id":7,"do":"light","args":{"r":256,"g":0,"b":0}})", R"({"id":7,"do":"light","args":{"r":1,"g":2}})",
+                            R"({"id":7,"do":"light","args":{"r":-1,"g":0,"b":0}})", R"({"id":7,"do":"light","args":{"r":"red","g":0,"b":0}})"})
+        assert(run(bad, c) == Parse::BadArgs);
+    assert(!std::strcmp(verb_id(Verb::Light), "light"));
     // volume: a level or a step, never both
     assert(run(R"({"id":6,"do":"volume","args":{"level":60}})", c) == Parse::Ok && volume_after(c, 80) == 60);
     assert(run(R"({"id":6,"do":"volume","args":{"step":-30}})", c) == Parse::Ok && volume_after(c, 30) == 10 && volume_after(c, 80) == 50);

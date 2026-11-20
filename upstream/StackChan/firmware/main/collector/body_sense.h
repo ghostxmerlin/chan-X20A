@@ -51,7 +51,7 @@ struct RawSample {
     uint8_t self = 0;          // the robot's own servos were moving
 };
 
-enum class Ev : uint8_t { none, picked_up, put_down, shaken, near, far };
+enum class Ev : uint8_t { none, picked_up, put_down, shaken, near, far, patted };   // patted: a head-pat protest (0.5.21)
 
 inline const char* ev_name(Ev e)
 {
@@ -61,6 +61,7 @@ inline const char* ev_name(Ev e)
     case Ev::shaken: return "shaken";
     case Ev::near: return "near";
     case Ev::far: return "far";
+    case Ev::patted: return "patted";
     default: return "none";
     }
 }
@@ -199,6 +200,8 @@ public:
         e = q_[q_head_]; q_head_ = (q_head_ + 1) % kEvQueue; --q_n_;
         return true;
     }
+    // 0.5.21 (owner 2026-11-20): a burst of head pats (head_pat.h Protest) is said like being shaken.
+    void patted(int64_t t_us) { Event e; e.ev = Ev::patted; e.t_us = t_us; push(e); }
     int pending() const { return q_n_; }
     uint32_t dropped() const { return dropped_; }
     bool held() const { return held_; }

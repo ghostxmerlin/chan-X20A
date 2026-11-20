@@ -46,7 +46,14 @@ void Hal::io_expander_init(bool collectorOnly)
         vTaskDelay(pdMS_TO_TICKS(200));
 
         if (collectorOnly) {
-            ESP_LOGI("CollectorMotion", "Base IO expander ready; VM enable asserted");
+            // 0.5.21 (owner 2026-11-20, hat off): the base's 12 RGB LEDs, dark until something sets them
+            _io_expander->setDirection(13, true);
+            _io_expander->setPullMode(13, true);
+            _io_expander->setDriveMode(13, false);
+            _io_expander->setLedCount(12);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            GetHAL().showRgbColor(0, 0, 0);
+            ESP_LOGI("CollectorMotion", "Base IO expander ready; VM enable asserted; body LEDs dark");
             return;
         }
 

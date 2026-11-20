@@ -17,6 +17,7 @@
 //   volume {level 10..100 | step -30..30}   speaker volume, RAM only (not saved; the saved one returns at boot)
 //   face_learn {name}             M12 learns the largest face in view under name (m12d learn)
 //   status {}                     telemetry for robot_status
+//   light {r, g, b}               the body's 12 RGB LEDs, 0..255 each, 0 0 0 = off (0.5.21; RAM only)
 // Errors: bad_args, unknown_verb, no_glyph, rate_limited, queue_full, busy, speaking, motor_off, no_feedback,
 // facing_back, facing_unknown, at_limit, no_room, m12_offline, eyes_off, no_clip, failed.
 // A-level verbs (everything that can be seen or heard) run at most kRateMax times per kRateWindowUs per verb.
@@ -37,11 +38,11 @@ constexpr int kRateMax = 2;
 constexpr int64_t kRateWindowUs = 10000000;
 constexpr size_t kResultMax = 640;               // the longest result line (status) is about 400 B
 
-enum class Verb : uint8_t { Eyes, Word, Clip, Yaw, Front, TurnAround, Tracking, Nod, Shake, Volume, FaceLearn, Status, Count };
+enum class Verb : uint8_t { Eyes, Word, Clip, Yaw, Front, TurnAround, Tracking, Nod, Shake, Volume, FaceLearn, Status, Light, Count };
 inline const char* verb_id(Verb v)
 {
     static const char* const ids[] = {"eyes", "word", "clip", "yaw", "front", "turn_around", "tracking", "nod",
-                                      "shake", "volume", "face_learn", "status"};
+                                      "shake", "volume", "face_learn", "status", "light"};
     static_assert(sizeof(ids) / sizeof(ids[0]) == size_t(Verb::Count), "one id per verb");
     return v < Verb::Count ? ids[size_t(v)] : "";
 }
@@ -62,6 +63,7 @@ struct Cmd {
     int step = 0;                                // volume step (has_step)
     bool on = false, has_step = false;
     uint32_t hold_ms = kWordDefaultMs;
+    uint8_t rgb[3] = {};                         // light
 };
 
 enum class Parse : uint8_t { Ok, NoId, UnknownVerb, BadArgs, NoGlyph };
@@ -174,6 +176,12 @@ inline Parse parse(ArduinoJson::JsonObjectConst o, size_t n, Cmd& out)
     }
     case Verb::FaceLearn:
         return copy_text(a["name"], out.text, kNameBytes, false) ? Parse::Ok : Parse::BadArgs;
+    case Verb::Light: {
+        int c[3];
+        for (int i = 0; i < 3; ++i) if (!int_in(a[i == 0 ? "r" : i == 1 ? "g" : "b"], 0, 255, c[i])) return Parse::BadArgs;
+        for (int i = 0; i < 3; ++i) out.rgb[i] = static_cast<uint8_t>(c[i]);
+        return Parse::Ok;
+    }
     default:
         return Parse::Ok;                        // front, turn_around, status: no args
     }

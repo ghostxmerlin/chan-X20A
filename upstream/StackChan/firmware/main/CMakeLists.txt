@@ -31,7 +31,7 @@ list(APPEND STACK_CHAN_SOURCES collector/collector.cpp collector/serial_monitor.
 list(APPEND STACK_CHAN_SOURCES collector/remote.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/asr_unit.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/m12_unit.cpp collector/vision_uplink.cpp collector/mouth_link.cpp collector/robot_cmd.cpp)
-list(APPEND STACK_CHAN_SOURCES collector/temperature.cpp)
+list(APPEND STACK_CHAN_SOURCES collector/temperature.cpp collector/body_light.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/ui_font.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/runtime_log.cpp)
 list(APPEND STACK_CHAN_SOURCES collector/mem_diag.cpp)

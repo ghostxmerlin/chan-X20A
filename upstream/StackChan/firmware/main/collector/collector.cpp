@@ -10,6 +10,8 @@
 #include "hearing.h"
 #include "vision_uplink.h"
 #include "body_sense.h"
+#include "head_pat.h"
+#include "body_light.h"
 #include "mouth_link.h"
 #include "robot_cmd.h"
 #include "burst_indicator.h"
@@ -106,6 +108,12 @@ std::string token, device_id, boot_id;
 std::atomic_bool wifi_connected{false}, audio_ready{false};
 // Body camera capture/JPEG/serving is off unless the saved setting enables it.
 std::atomic_bool camera_enabled{false};
+// 0.5.21 (owner 2026-11-20): head pats (head_pat.h) on / off, saved in NVS collector/head_pat (default on); the
+// last gesture for telemetry.
+std::atomic_bool head_pat_enabled{true};
+std::atomic<uint8_t> head_pat_last{0};
+std::atomic<int64_t> head_pat_last_us{0};
+std::atomic<uint32_t> head_pat_count{0};
 // Two independent bounded cursors share the existing capture ring: phone + Mac.
 std::atomic<unsigned> audio_clients{0};
 std::atomic<uint32_t> audio_errors{0}, camera_errors{0}, audio_sent{0}, audio_skipped{0};
@@ -248,6 +256,29 @@ void load_camera_setting()
     }
     camera_enabled = enabled == 1;
     ESP_LOGI(kTag, "Body camera streaming %s (saved setting; default off)", camera_enabled ? "enabled" : "disabled");
+}
+
+esp_err_t save_head_pat_setting(bool enabled)
+{
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open("collector", NVS_READWRITE, &handle);
+    if (error != ESP_OK) return error;
+    error = nvs_set_u8(handle, "head_pat", enabled ? 1 : 0);
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+    return error;
+}
+
+void load_head_pat_setting()
+{
+    nvs_handle_t handle;
+    uint8_t enabled = 1;
+    if (nvs_open("collector", NVS_READONLY, &handle) == ESP_OK) {
+        if (nvs_get_u8(handle, "head_pat", &enabled) != ESP_OK) enabled = 1;
+        nvs_close(handle);
+    }
+    head_pat_enabled = enabled == 1;
+    ESP_LOGI(kTag, "Head pats %s (saved setting; default on)", head_pat_enabled ? "on" : "off");
 }
 
 esp_err_t save_camera_setting(bool enabled)
@@ -451,12 +482,29 @@ void sensor_task(void*)
             sample.imu = imu.getData();
             sample.imu_us = esp_timer_get_time();
         }
-        if (sample.seq % 5 == 0) {
+        if (sample.seq % 2 == 0) {                 // every 40 ms (0.5.21: a pat lasts only 100-200 ms)
             uint8_t value = 0;
             sample.head_valid = head_available && si12t_read_touch_result(head, &value) == ESP_OK;
             if (sample.head_valid) {
                 si12t_parse_touch_result_to(value, sample.head);
                 sample.head_us = esp_timer_get_time();
+            }
+            // 0.5.21 head pats: one = a screen tap, two = a double tap (the mode rules, source "head"); a burst =
+            // a protest, sent up as the body event "patted" (said like being shaken).
+            static head::Detector pats;
+            pats.set_enabled(head_pat_enabled.load());
+            const bool touched = sample.head_valid && (sample.head[0] || sample.head[1] || sample.head[2]);
+            const int64_t now_us = esp_timer_get_time();
+            const head::Gesture g = pats.feed(now_us, touched);
+            if (g != head::Gesture::None) {
+                head_pat_last = static_cast<uint8_t>(g); head_pat_last_us = now_us; ++head_pat_count;
+                ESP_LOGI(kTag, "head pat: %s", head::gesture_name(g));
+                if (g == head::Gesture::Protest) {
+                    std::lock_guard<std::mutex> lock(body_mutex);
+                    if (auto* b = body_sense_locked()) b->patted(now_us);
+                } else {
+                    mouth::mode_apply("head", g == head::Gesture::Tap ? modes::rules::Input::Tap : modes::rules::Input::DoubleTap);
+                }
             }
         }
         sample.timestamp_us = esp_timer_get_time();
@@ -996,6 +1044,8 @@ void fill_info(JsonDocument& doc)
     camera["endpoint"] = "/v1/control";
     camera["target"] = "camera";
     capabilities["camera_control"] = "supported";
+    capabilities["head_pat"] = "supported";
+    capabilities["body_light"] = "supported";
     capabilities["monitor_streams"] = "supported";
     capabilities["yaw_turn"] = "supported";
     capabilities["yaw_step_45"] = "supported";
@@ -1106,6 +1156,12 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     head["timestamp_us"] = sample.head_us;
     auto values = head["values"].to<JsonArray>();
     for (auto value : sample.head) values.add(value);
+    head["pat_enabled"] = head_pat_enabled.load();
+    head["pat_count"] = head_pat_count.load();
+    head["last_gesture"] = head::gesture_name(static_cast<head::Gesture>(head_pat_last.load()));
+    head["last_gesture_us"] = head_pat_last_us.load();
+    head["target"] = "head_pat";
+    light::json(doc["body_light"].to<JsonObject>());
     const auto point = hal_bridge::get_touch_point();
     auto touch = doc["touch"].to<JsonObject>();
     touch["valid"] = point.valid && esp_timer_get_time() - point.timestampUs < 1000000;
@@ -1458,6 +1514,37 @@ esp_err_t wifi_control(ControlReply* request, JsonObject doc, const char*)
     httpd_resp_set_status(request, "202 Accepted"); return send_json(request, result);
 }
 
+// 0.5.21: {"target":"light","r":0..255,"g":..,"b":..} the body LEDs (0 0 0 = off; RAM only, the page's test colours).
+esp_err_t light_control(ControlReply* request, JsonObject doc, const char*)
+{
+    int c[3];
+    const char* keys[] = {"r", "g", "b"};
+    for (int i = 0; i < 3; ++i) {
+        if (doc.size() != 3 || !doc[keys[i]].is<int>() || doc[keys[i]].as<int>() < 0 || doc[keys[i]].as<int>() > 255) {
+            httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected r, g, b 0..255"); return ESP_OK;
+        }
+        c[i] = doc[keys[i]].as<int>();
+    }
+    if (!light::set(uint8_t(c[0]), uint8_t(c[1]), uint8_t(c[2]))) return unavailable(request, "Body LEDs not available");
+    JsonDocument result;
+    result["accepted"] = true; result["r"] = c[0]; result["g"] = c[1]; result["b"] = c[2];
+    return send_json(request, result);
+}
+
+// 0.5.21: {"target":"head_pat","enabled":bool}, saved in NVS (default on).
+esp_err_t head_pat_control(ControlReply* request, JsonObject doc, const char*)
+{
+    if (doc.size() != 1 || !doc["enabled"].is<bool>()) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected enabled boolean"); return ESP_OK;
+    }
+    const bool enabled = doc["enabled"].as<bool>();
+    if (save_head_pat_setting(enabled) != ESP_OK) return unavailable(request, "Head pat setting not persisted; unchanged");
+    head_pat_enabled = enabled;
+    JsonDocument result;
+    result["accepted"] = true; result["enabled"] = enabled; result["persisted"] = true;
+    return send_json(request, result);
+}
+
 esp_err_t camera_control(ControlReply* request, JsonObject doc, const char*)
 {
     if (doc.size() != 1 || !doc["enabled"].is<bool>()) {
@@ -1541,7 +1628,7 @@ esp_err_t mode_control(ControlReply* r, JsonObject body, const char*)
 }
 
 const ControlTarget kControlTargets[] = {
-    {"yaw_turn", yaw_turn_control}, {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control},
+    {"yaw_turn", yaw_turn_control}, {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control}, {"head_pat", head_pat_control}, {"light", light_control},
     {"servo", servo_control}, {"wifi", wifi_control},
     {"m12_view", web_control}, {"m12_mode", web_control}, {"yaw_step", web_control}, {"voice_play", web_control},
     {"m12_request", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t {
@@ -2177,6 +2264,7 @@ void run()
     load_mic_gain_setting();
     ESP_ERROR_CHECK(create_psram_task(audio_task, "collector_audio", 6144, nullptr, 7) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     load_camera_setting();
+    load_head_pat_setting();
     // Keep JPEG work off Wi-Fi's core 0, still below sensor and audio priorities.
     ESP_ERROR_CHECK(create_psram_task(camera_task, "collector_camera", 8192, nullptr, 2, 1) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     serial_monitor_start(device_id,boot_id,token,MonitorHooks{

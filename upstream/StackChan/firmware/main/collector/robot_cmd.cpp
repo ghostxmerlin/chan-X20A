@@ -4,6 +4,7 @@
 // that calls the existing subsystems and queues the cmd_result line for the /mouth task to send.
 #include "robot_cmd.h"
 #include "asr_unit.h"
+#include "body_light.h"
 #include "eye_mode.h"
 #include "eyes/eyes.h"
 #include "head_gesture.h"
@@ -264,6 +265,12 @@ void run_job(const Job& j)
     }
     case Verb::FaceLearn: return do_learn(j);
     case Verb::Status: return do_status(j);
+    case Verb::Light: {
+        if (!light::set(j.c.rgb[0], j.c.rgb[1], j.c.rgb[2])) return answer(j.c.id, j.gen, "failed");
+        return answer(j.c.id, j.gen, nullptr, [&](ArduinoJson::JsonObject d) {
+            d["r"] = j.c.rgb[0]; d["g"] = j.c.rgb[1]; d["b"] = j.c.rgb[2];
+        });
+    }
     default: return answer(j.c.id, j.gen, "unknown_verb");
     }
 }
