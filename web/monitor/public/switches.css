@@ -18,3 +18,20 @@
 .switches .switch-group button[aria-pressed=true]{border-color:#2e9d4f;background:#1f5c35;color:#e8ffef;font-weight:700}
 .switches .switch-group button:disabled{opacity:.5;cursor:not-allowed}
 @media(max-width:600px){.switches .switch-group{flex-basis:100%}}
+/* The three big modes (bigmode-ui.js, owner 2026-11-20): the page's main control; the small switches fold below. */
+.bigmode{display:flex;flex-wrap:wrap;align-items:center;gap:10px;flex-shrink:0;margin:4px 0}
+.bigmode-buttons{display:flex;gap:10px;flex-wrap:wrap}
+.bigmode-buttons button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:190px;max-width:300px;min-height:54px;
+ padding:8px 16px;border:2px solid #3b4a40;border-radius:10px;background:#101712;color:#c9d6cc;text-align:left;white-space:normal;cursor:pointer}
+.bigmode-buttons button b{font-size:20px;letter-spacing:.1em}
+.bigmode-buttons button small{font-size:11px;opacity:.75;line-height:1.35}
+.bigmode-buttons .bigmode-off.on{border-color:#9aa39d;background:#2a2f2c;color:#f1f4f2}
+.bigmode-buttons .bigmode-collect.on{border-color:#3fb7e8;background:#0d2c3a;color:#c9efff}
+.bigmode-buttons .bigmode-smart.on{border-color:#3ccf68;background:#123a20;color:#c8ffd6}
+.bigmode-buttons button:disabled{opacity:.5;cursor:not-allowed}
+.bigmode-buttons button.on:disabled{opacity:.85}
+.bigmode-detail{margin:0;font-size:13px;color:var(--muted)}
+.switch-details{flex-shrink:0;border:1px solid var(--line);border-radius:6px;padding:2px 10px}
+.switch-details>summary{cursor:pointer;font-size:13px;padding:4px 0;color:#d8ffe1}
+.switch-details>summary small{color:var(--muted);font-size:11px;margin-left:8px}
+@media(max-width:600px){.bigmode-buttons{width:100%}.bigmode-buttons button{flex:1 1 30%;min-width:0;padding:6px 8px}.bigmode-buttons button small{display:none}}

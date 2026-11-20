@@ -2544,9 +2544,12 @@ class BodyEventsInTapModeTest(HubBase):
         self.assertIn("用力晃了几下", json.dumps(sent[-1], ensure_ascii=False))
 
     async def test_patted_is_a_protest_sharing_the_shake_cooldown(self):
-        self.hub.set_answer_all(True)
+        ws = await self.open_ready()
         self.assertTrue(self.hub.body_event("patted"))
-        self.assertIn("拍", self.hub._greet["text"])
+        self.hub.step()
+        await settle(10)
+        sent = [m for m in ws.sent if m["type"] == "conversation.item.create"]
+        self.assertIn("拍了你的头", json.dumps(sent[-1], ensure_ascii=False))
         self.assertFalse(self.hub.body_event("shaken"))                    # one line a minute for both
         self.t[0] += self.rl.SHAKEN_SAY_S + 1
         self.assertTrue(self.hub.body_event("shaken"))

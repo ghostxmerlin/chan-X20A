@@ -6,6 +6,7 @@ import { ServoTuningPanel } from '/servo-tuning-ui.js';
 import { WifiPanel } from '/wifi-ui.js';
 import { renderM12, renderThermal, M12LibraryPanel } from '/m12-ui.js';
 import { SwitchBar } from '/switches-ui.js';
+import { BigModeBar } from '/bigmode-ui.js';
 import { SceneMinutesPanel } from '/scene-ui.js';
 import { SpeechSettings } from '/speech-settings.js';
 const $ = id => document.getElementById(id);
@@ -23,6 +24,7 @@ const servoTuning = new ServoTuningPanel(document);
 const wifi = new WifiPanel(document);
 const m12Library = new M12LibraryPanel(document);
 const switches = new SwitchBar(document);
+const bigModes = new BigModeBar(document);
 new SceneMinutesPanel(document);
 const speechSettings = new SpeechSettings(document);
 for (const button of document.querySelectorAll('[data-open]')) {
@@ -136,6 +138,7 @@ function render() {
   wifi.render(state, fresh && !document.hidden);
   m12Library.render(state, fresh && !document.hidden);
   switches.render(state, fresh && !document.hidden);
+  bigModes.render(state, fresh && !document.hidden);
   for (const mirror of document.querySelectorAll('[data-mirror]')) {
     const value = $(mirror.dataset.mirror).textContent;
     if (mirror.textContent !== value) mirror.textContent = value;

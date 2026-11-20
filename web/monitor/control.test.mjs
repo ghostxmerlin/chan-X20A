@@ -293,3 +293,13 @@ test('head pat toggle and light colours need 0.5.21 and exact arguments',async()
   {action:'light',r:0,g:0,boot:'boot-a'},{action:'light',r:1.5,g:0,b:0,boot:'boot-a'}]) await assert.rejects(c.execute(bad));
  assert.equal(calls.length,2);
 });
+test('big mode goes to the robot (0.5.21)',async()=>{
+ const {m,c,calls}=fixture();
+ await assert.rejects(c.execute({action:'big_mode',mode:'smart',boot:'boot-a'}));
+ m.info.capabilities.big_mode='supported';
+ await c.execute({action:'big_mode',mode:'smart',boot:'boot-a'});
+ assert.deepEqual(calls[0][1],{target:'big_mode',mode:'smart'});
+ for(const bad of [{action:'big_mode',mode:'on',boot:'boot-a'},{action:'big_mode',boot:'boot-a'},{action:'big_mode',mode:'off',boot:'old'}])
+  await assert.rejects(c.execute(bad));
+ assert.equal(calls.length,1);
+});

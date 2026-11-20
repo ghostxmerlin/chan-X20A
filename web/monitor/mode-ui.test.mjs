@@ -152,11 +152,10 @@ test('an undefined preset answers in words',async()=>{
 test('the billing switch is preset 0 when it shows on, preset 9 otherwise',()=>{
  assert.equal(ui.billingPreset(true),0);assert.equal(ui.billingPreset(false),9);
 });
-test('page files: modebar under the switch bar on both pages, no inline script or style',()=>{
+test('page files: no mode bar on either page any more (owner 2026-11-20: big modes instead), no inline script or style',()=>{
  for(const f of ['index.html','mind.html']){
   const h=readFileSync(new URL('./public/'+f,import.meta.url),'utf8');
-  assert.match(h,/<nav id="switches"[^>]*><\/nav>\s*<nav id="modebar" class="modebar" aria-label="模式"><\/nav>/);
-  assert.match(h,/href="\/mode\.css"/);assert.match(h,/<script type="module" src="\/mode-ui\.js"><\/script>/);
+  assert.doesNotMatch(h,/id="modebar"/);assert.doesNotMatch(h,/src="\/mode-ui\.js"/);
   assert.doesNotMatch(h,/<script>|style="|onclick=/);
  }
  const js=readFileSync(new URL('./public/mode-ui.js',import.meta.url),'utf8');

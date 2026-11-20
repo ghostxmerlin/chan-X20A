@@ -192,7 +192,8 @@ export function toggleRequest(which,robot,mindOrFresh){
 }
 
 const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'Docking',all:'点屏幕聊天',turn:'智能断句',intent:'工具分类器',pat:'拍头感应',light:'灯'};
-const TOGGLES=['mind','notes','meet','all','turn','intent','pat','light'];
+// Docking (meet) left the bar 2026-11-20: the big modes switch it (智能 on, 关 / 收集 off); its view stays for setLevel
+const TOGGLES=['mind','notes','all','turn','intent','pat','light'];
 // 灯 test colours (0.5.21): straight to the robot's body LEDs, not through 鹿野
 export const LIGHT_COLOURS=[['red','红',[255,0,0]],['green','绿',[0,255,0]],['blue','蓝',[0,0,255]],['white','白',[255,255,255]],['off','关灯',[0,0,0]]];
 export function lightRequest(key,robot){
@@ -227,7 +228,6 @@ export class SwitchBar{
   for(const [k] of MLEVELS)doc.getElementById('sw-mouth-'+k).addEventListener('click',()=>this.setMouth(k));
   doc.getElementById('sw-mind').addEventListener('click',()=>this.toggle('mind'));
   doc.getElementById('sw-notes').addEventListener('click',()=>this.toggle('notes'));
-  doc.getElementById('sw-meet').addEventListener('click',()=>this.toggle('meet'));
   doc.getElementById('sw-all').addEventListener('click',()=>this.toggle('all'));
   doc.getElementById('sw-turn').addEventListener('click',()=>this.toggle('turn'));
   doc.getElementById('sw-intent').addEventListener('click',()=>this.toggle('intent'));
