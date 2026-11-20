@@ -21,6 +21,7 @@
 
 namespace collector::mouth {
 namespace {
+std::atomic<int> boot_digit{9};   // 0.5.21 set_boot_digit: the stored big mode's digit
 constexpr const char* kTag = "mouth";
 constexpr size_t kSlots = 168;               // 10 s of 60 ms frames: the server leads by at most 8 s
 constexpr size_t kOutbox = 16;
@@ -391,7 +392,7 @@ void init(const std::string& device_id, const std::string& boot_id)
         // power-on (0.4.96, owner 2026-11-15): crowd (shown as Docking since 0.5.08, owner 2026-11-18; the rules'
         // boot input lands there too), and 9 (全开) to mind behind the "boot" report of the
         // first link; both wait for that link. The robot half of the 9 is the main loop's, at boot.
-        modes_session->boot(esp_timer_get_time(), modes::rules::Mode::Crowd, 9);
+        modes_session->boot(esp_timer_get_time(), modes::rules::Mode::Crowd, boot_digit.load());   // 0.5.21: the big mode's
         modes_session->set_look_hold(kLookHoldUs);   // 0.4.98: crowd's tap waits up to 0.8 s for the M12 look
         mode_publish_locked();
     } else {
@@ -434,6 +435,7 @@ std::atomic<void (*)(bool)> senses_hook{nullptr};
 std::atomic<void (*)(uint32_t)> look_hook{nullptr};
 }
 void set_senses_hook(void (*hook)(bool on)) { senses_hook.store(hook); }
+void set_boot_digit(int digit) { if (big::is_digit(digit)) boot_digit.store(digit); }
 void set_look_hook(void (*hook)(uint32_t token)) { look_hook.store(hook); }
 
 void mode_look_done(uint32_t token)
@@ -466,8 +468,8 @@ Applied mode_apply(const char* source, modes::rules::Input input, const modes::r
         }
     }
     // 0.4.96: hello's own 0 / 9 also switch its own senses, online or not (the hook only queues for the main loop).
-    if (a.to_mind && (value.digit == 0 || value.digit == 9))
-        if (auto hook = senses_hook.load()) hook(value.digit == 9);
+    if (a.to_mind && big::is_digit(value.digit))      // 0.5.21: 0 关 = off, 2 收集 / 9 智能 = on
+        if (auto hook = senses_hook.load()) hook(value.digit != 0);
     // 0.4.98: crowd's tap (look): the M12 asks who / refreshes attributes, then lets the held report go
     // (mode_look_done); without a hook the report goes when the hold ends.
     if (a.look) {

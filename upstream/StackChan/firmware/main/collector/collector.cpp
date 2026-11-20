@@ -11,6 +11,7 @@
 #include "vision_uplink.h"
 #include "body_sense.h"
 #include "head_pat.h"
+#include "big_mode.h"
 #include "body_light.h"
 #include "mouth_link.h"
 #include "robot_cmd.h"
@@ -111,6 +112,10 @@ std::atomic_bool camera_enabled{false};
 // 0.5.21 (owner 2026-11-20): head pats (head_pat.h) on / off, saved in NVS collector/head_pat (default on); the
 // last gesture for telemetry.
 std::atomic_bool head_pat_enabled{true};
+// 0.5.21 (owner 2026-11-20): the big mode 关 / 收集 / 智能 (big_mode.h), NVS collector/big_mode (default 收集)
+std::atomic<uint8_t> big_mode_value{static_cast<uint8_t>(big::kDefault)};
+std::atomic<int64_t> big_mode_changed_us{0};
+const char* big_mode_by = "boot";
 std::atomic<uint8_t> head_pat_last{0};
 std::atomic<int64_t> head_pat_last_us{0};
 std::atomic<uint32_t> head_pat_count{0};
@@ -256,6 +261,45 @@ void load_camera_setting()
     }
     camera_enabled = enabled == 1;
     ESP_LOGI(kTag, "Body camera streaming %s (saved setting; default off)", camera_enabled ? "enabled" : "disabled");
+}
+
+esp_err_t save_big_mode(big::Mode m)
+{
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open("collector", NVS_READWRITE, &handle);
+    if (error != ESP_OK) return error;
+    error = nvs_set_u8(handle, "big_mode", big::stored(m));
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+    return error;
+}
+
+big::Mode load_big_mode()
+{
+    nvs_handle_t handle;
+    uint8_t v = big::stored(big::kDefault);
+    if (nvs_open("collector", NVS_READONLY, &handle) == ESP_OK) {
+        if (nvs_get_u8(handle, "big_mode", &v) != ESP_OK) v = big::stored(big::kDefault);
+        nvs_close(handle);
+    }
+    const big::Mode m = big::from_stored(v);
+    big_mode_value = big::stored(m);
+    ESP_LOGI(kTag, "Big mode %s (saved setting; default collect)", big::name(m));
+    return m;
+}
+
+// The page (/v1/control big_mode) or the screen's 全开 / 全关: saved first, then the digit through the mode
+// session (to mind, or owed until the link is up) and the senses hook (the robot's own half).
+esp_err_t set_big_mode(big::Mode m, const char* by)
+{
+    const esp_err_t saved = save_big_mode(m);
+    if (saved != ESP_OK) return saved;
+    big_mode_value = big::stored(m); big_mode_changed_us = esp_timer_get_time(); big_mode_by = by;
+    modes::rules::Value v;
+    v.digit = big::digit(m);
+    mouth::mode_apply("quick", modes::rules::Input::Digit, v);
+    ESP_LOGI(kTag, "big mode -> %s (%s)", big::name(m), by);
+    return ESP_OK;
 }
 
 esp_err_t save_head_pat_setting(bool enabled)
@@ -1046,6 +1090,7 @@ void fill_info(JsonDocument& doc)
     capabilities["camera_control"] = "supported";
     capabilities["head_pat"] = "supported";
     capabilities["body_light"] = "supported";
+    capabilities["big_mode"] = "supported";
     capabilities["monitor_streams"] = "supported";
     capabilities["yaw_turn"] = "supported";
     capabilities["yaw_step_45"] = "supported";
@@ -1162,6 +1207,12 @@ void fill_telemetry(JsonDocument& doc,uint32_t imu_after=0,bool imu_requested=fa
     head["last_gesture_us"] = head_pat_last_us.load();
     head["target"] = "head_pat";
     light::json(doc["body_light"].to<JsonObject>());
+    {
+        auto bm = doc["big_mode"].to<JsonObject>();
+        bm["mode"] = big::name(big::from_stored(big_mode_value.load()));
+        bm["by"] = big_mode_by; bm["changed_us"] = big_mode_changed_us.load();
+        bm["target"] = "big_mode";
+    }
     const auto point = hal_bridge::get_touch_point();
     auto touch = doc["touch"].to<JsonObject>();
     touch["valid"] = point.valid && esp_timer_get_time() - point.timestampUs < 1000000;
@@ -1531,6 +1582,19 @@ esp_err_t light_control(ControlReply* request, JsonObject doc, const char*)
     return send_json(request, result);
 }
 
+// 0.5.21: {"target":"big_mode","mode":"off|collect|smart"} (owner 2026-11-20), saved in NVS; see set_big_mode.
+esp_err_t big_mode_control(ControlReply* request, JsonObject doc, const char*)
+{
+    big::Mode m;
+    if (doc.size() != 1 || !doc["mode"].is<const char*>() || !big::parse(doc["mode"].as<const char*>(), m)) {
+        httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Expected mode off, collect or smart"); return ESP_OK;
+    }
+    if (set_big_mode(m, "page") != ESP_OK) return unavailable(request, "Big mode not persisted; unchanged");
+    JsonDocument result;
+    result["accepted"] = true; result["mode"] = big::name(m); result["persisted"] = true;
+    return send_json(request, result);
+}
+
 // 0.5.21: {"target":"head_pat","enabled":bool}, saved in NVS (default on).
 esp_err_t head_pat_control(ControlReply* request, JsonObject doc, const char*)
 {
@@ -1628,7 +1692,7 @@ esp_err_t mode_control(ControlReply* r, JsonObject body, const char*)
 }
 
 const ControlTarget kControlTargets[] = {
-    {"yaw_turn", yaw_turn_control}, {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control}, {"head_pat", head_pat_control}, {"light", light_control},
+    {"yaw_turn", yaw_turn_control}, {"remote", remote_control}, {"pitch", pitch_control}, {"camera", camera_control}, {"head_pat", head_pat_control}, {"light", light_control}, {"big_mode", big_mode_control},
     {"servo", servo_control}, {"wifi", wifi_control},
     {"m12_view", web_control}, {"m12_mode", web_control}, {"yaw_step", web_control}, {"voice_play", web_control},
     {"m12_request", +[](ControlReply* r, JsonObject body, const char*) -> esp_err_t {
@@ -2008,11 +2072,9 @@ void update_screen(const std::string& ip, const std::string& ssid = {}, bool rss
                 size_t tile = 0;
                 if (screen_take_mode_pick(tile) && tile < ui::kTiles)
                     mouth::mode_apply("select", modes::rules::Input::Select, ui::tile_value(tile));
-                if (const int billing = screen_take_billing_request(); billing == 0 || billing == 9) {
-                    modes::rules::Value v;
-                    v.digit = billing;
-                    mouth::mode_apply("quick", modes::rules::Input::Digit, v);
-                }
+                // 0.5.21: 全开 / 全关 = the big modes 智能 / 关, saved like the page's choice
+                if (const int billing = screen_take_billing_request(); billing == 0 || billing == 9)
+                    set_big_mode(billing == 9 ? big::Mode::Smart : big::Mode::Off, "screen");
                 if (const int volume = screen_take_volume_request(); volume >= 0) quick_volume_request = volume;
                 if (const int hearing = screen_take_hearing_request(); hearing >= 0) quick_hearing_request = hearing;
                 static uint32_t refused_seen = 0;
@@ -2244,7 +2306,13 @@ void run()
     // 0.4.98 (owner 2026-11-15): crowd's tap = look; the M12 task asks who / refreshes attributes, then lets the
     // held mode_report go (m12_look only stores the request; never blocks the LVGL timer).
     mouth::set_look_hook([](uint32_t token) { m12_look(token, mouth::mode_look_done); });
-    queue_senses(true);
+    // 0.5.21 (owner 2026-11-20): every power-on applies the stored big mode again (the page's small switches are
+    // temporary): the robot's senses now, mind's half with the first /mouth link (its digit, source boot).
+    {
+        const big::Mode m = load_big_mode();
+        mouth::set_boot_digit(big::digit(m));
+        queue_senses(big::senses_on(m));
+    }
     asr_init();
     m12_init();
     temperature_init();
@@ -2418,7 +2486,7 @@ void run()
                 const bool saved = save_camera_setting(on) == ESP_OK;
                 camera_enabled = on;
                 vision_want = on; vision_until = t + 40000000;
-                ESP_LOGI(kTag, "senses %s: hearing %s, camera %s", on ? "ON (9)" : "OFF (0)",
+                ESP_LOGI(kTag, "senses %s: hearing %s, camera %s", on ? "ON (big mode 收集 / 智能)" : "OFF (big mode 关)",
                          heard ? "ok" : "refused (no backend)", saved ? "saved" : "not saved");
             }
             if (vision_until) {

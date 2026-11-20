@@ -33,6 +33,15 @@ stored and survives restarts; the Docking switch, the DOCK bar, billing and pres
 4. Server: mind / ear accept source "head" (owner input); body_event "patted" (own text) and both events bypass
    点屏幕聊天 (a pending body line opens the session); ear tool set_light -> robot "light"; mind registry + switch.
 5. Monitor: head pat switch, light switch, light test colours (under the switch bar for now).
-6. Big modes: mind stores big_mode (off / collect / smart) and applies it (server half) on change and at start;
-   the page's top shows the three; Docking switch / DOCK bar / billing / presets 0-9 removed; small switches folded.
+6. Big modes, robot-owned (owner 2026-11-20 "一起刷": stored on the robot, in 0.5.21). Pure `big_mode.h`: off /
+   collect / smart = the digits 0 / 2 / 9 (2 was an empty preset). NVS collector/big_mode, default collect. At
+   power-on the robot applies its half (senses off for 关, on otherwise: hearing + camera + M12) and owes mind its
+   digit (source boot) instead of the fixed 9. /v1/control target big_mode {mode} saves it and sends the digit
+   (offline: owed until the link is up); the robot screen's 全开 / 全关 = smart / off, saved too. mouth_modes: 0 / 2 /
+   9 go to mind, the senses hook gets on = digit != 0. Telemetry big_mode {mode}.
+   mind: preset 0 关 = paid off + 嘴 off; preset 2 收集 = the same server half (robot senses on); preset 9 智能
+   unchanged but the realtime switch comes on at power-on too. The power-on digit is applied (no longer "switches
+   kept"); the reply still says power_on (not an owner's presence).
+   page: three big buttons at the top from robot telemetry; the switch bar folds into 详细设置 (temporary until the
+   robot restarts); the Docking switch, the DOCK badge, billing and presets 0 / 9 go.
 7. Build 0.5.21, flash, deploy ear + mind + Mac stack; owner tests.

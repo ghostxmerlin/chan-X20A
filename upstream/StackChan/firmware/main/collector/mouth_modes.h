@@ -2,6 +2,7 @@
 #pragma once
 #include "chat_stage.h"
 #include "mode_rules.h"
+#include "big_mode.h"
 #include "mode_wire.h"
 #include "mouth_stream.h"
 #include <ArduinoJson.hpp>
@@ -129,7 +130,8 @@ public:
         state_ = o.state; since_us_ = last_input_us_ = now_us;
         (void)start;                                   // Docking is the only mode since 0.5.19: boot lands there
         std::strcpy(by_, "boot");
-        if (preset == 0 || preset == 9) { pend(int8_t(preset), now_us); pending_.power_on = true; }
+        // 0.5.21: the stored big mode's digit (0 / 2 / 9, big_mode.h), sent with source boot
+        if (big::is_digit(preset)) { pend(int8_t(preset), now_us); pending_.power_on = true; }
         ++seq_; ++version_;
     }
 
@@ -162,7 +164,7 @@ public:
             std::snprintf(a.out.toast, sizeof a.out.toast, "%s", toast_);
             return a;
         }
-        if (in == Input::Digit && (v.digit == 0 || v.digit == 9)) {
+        if (in == Input::Digit && big::is_digit(v.digit)) {   // 0 / 2 / 9: the big modes (0.5.21; 2 = 收集)
             a.to_mind = true;
             a.out.state = state_;
             pending_ = Pending{};                    // the newest 0 / 9 wins over a pending one (review 2026-11-15)
@@ -175,7 +177,9 @@ public:
             } else {
                 ++offline_inputs_;
                 pend(int8_t(v.digit), now_us);       // 0.4.96: sent when the link is up (robot half is done now)
-                toast(v.digit == 9 ? "OFFLINE: 9 WHEN ONLINE" : "OFFLINE: 0 WHEN ONLINE");
+                char t[28];
+                std::snprintf(t, sizeof t, "OFFLINE: %d WHEN ONLINE", v.digit);
+                toast(t);
             }
             std::snprintf(a.out.toast, sizeof a.out.toast, "%s", toast_);
             return a;
@@ -495,7 +499,7 @@ private:
     void queue_pending(int64_t now_us)
     {
         if (pending_.tries >= kPendingTries) { pending_ = Pending{}; return; }   // give up: say the digit again
-        pending_.seq = queue_.push(now_us, "quick", "digit", pending_.digit);
+        pending_.seq = queue_.push(now_us, pending_.power_on ? "boot" : "quick", "digit", pending_.digit);
         pending_.sent_us = 0;
         if (!pending_.seq) return;
         ++pending_.tries;

@@ -29,10 +29,13 @@ void player_report(const Report& r);
 // to mind over /mouth; digits 0 / 9 and 1 (and crowd's double tap = 1, 0.4.98) are sent to mind (a.to_mind).
 // a.out.toast is what the screen shows.
 Applied mode_apply(const char* source, modes::rules::Input input, const modes::rules::Value& value = {});
-// 0.4.96 (owner 2026-11-15: 0 = all paid off, 9 = all on, also without a computer): every digit 0 / 9 that
-// mode_apply takes, from any source, calls hook(digit == 9) after the mode lock, online or not. The hook must only
-// queue (it runs on the caller's task: ASR, the screen, httpd); collector.cpp sets it once at boot.
+// 0.4.96 (owner 2026-11-15: 0 = all paid off, 9 = all on, also without a computer): every big-mode digit (0 / 2 / 9
+// since 0.5.21, big_mode.h) that mode_apply takes, from any source, calls hook(digit != 0) after the mode lock,
+// online or not. The hook must only queue (it runs on the caller's task: the screen, httpd); collector.cpp sets it
+// once at boot.
 void set_senses_hook(void (*hook)(bool on));
+// 0.5.21: the digit owed to mind at power-on = the stored big mode's (default 9). Before init().
+void set_boot_digit(int digit);
 // 0.4.98 (owner 2026-11-15): crowd's tap ("look") holds its mode_report up to 0.8 s; mode_apply calls hook(token)
 // after the mode lock (the hook must only queue: collector.cpp hands it to m12_look) and mode_look_done(token),
 // from any task, lets that report go at once. A later input, the link dropping or the 0.8 s also let it go.

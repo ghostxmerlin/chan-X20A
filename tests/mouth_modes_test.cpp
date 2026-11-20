@@ -147,16 +147,16 @@ void power_on_crowd_and_nine()
     // Next link: boot report (crowd, only stop_speech: never talk_enter), then the 9 (source quick, fresh age).
     r.s.link_up(20 * kS);
     std::string out = r.drain(20 * kS + 300000);
-    std::string want = report(3, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(2, 300, 9);
+    std::string want = report(3, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(2, 300, 9, "boot");
     if (out != want) std::printf("got:\n%swant:\n%s", out.c_str(), want.c_str());
     assert(out == want && r.s.pending_digit() == 9);          // sent, not yet answered
     // mind busy: again 10 s later (not before), with a new seq.
     assert(answer(r, 2, "busy", 21 * kS) && r.s.pending_digit() == 9);
     assert(r.drain(30 * kS).empty());
-    assert(r.drain(31 * kS + 1) == digit_line(3, 0, 9));
+    assert(r.drain(31 * kS + 1) == digit_line(3, 0, 9, "boot"));
     // No answer at all for 10 s: again.
     assert(r.drain(41 * kS).empty());
-    assert(r.drain(41 * kS + 2) == digit_line(4, 0, 9));
+    assert(r.drain(41 * kS + 2) == digit_line(4, 0, 9, "boot"));
     // ok: done, and the answer still names the digit for the quick page.
     assert(answer(r, 4, "ok", 42 * kS) && r.s.pending_digit() == -1 && r.view().result_digit == 9);
     assert(r.drain(60 * kS).empty());
@@ -178,6 +178,25 @@ void power_on_crowd_and_nine()
     assert(a9.input_seq == 2 && z.s.pending_digit() == -1);
     assert(z.drain(6 * kS) == digit_line(2, 0, 9, "asr"));
     assert(answer(z, 1, "busy", 7 * kS) && z.drain(30 * kS).empty());
+
+    // 0.5.21 big modes (owner 2026-11-20): the power-on digit is the stored mode's (0 关 / 2 收集 / 9 智能), source boot.
+    Robot c(false);
+    c.s.boot(0, Mode::Crowd, 2);
+    assert(c.s.pending_digit() == 2);
+    c.s.link_up(3 * kS);
+    assert(c.drain(3 * kS) == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(1, 0, 2, "boot"));
+    // A big mode chosen later (the page / the screen, source quick): its digit goes to mind like 0 / 9.
+    const Applied a2 = c.digit(0, "quick", 4 * kS);
+    assert(a2.to_mind && a2.input_seq == 2 && c.s.pending_digit() == -1 && !std::strcmp(c.view().toast, "PRESET 0"));
+    assert(c.drain(4 * kS) == digit_line(2, 0, 0));
+    const Applied a3 = c.digit(2, "quick", 5 * kS);
+    assert(a3.to_mind && a3.input_seq == 3 && !std::strcmp(c.view().toast, "PRESET 2"));
+    assert(c.drain(5 * kS) == digit_line(3, 0, 2));
+    c.s.link_down();
+    const Applied a4 = c.digit(2, "quick", 6 * kS);       // offline: owed until the link is back
+    assert(a4.to_mind && !a4.input_seq && c.s.pending_digit() == 2 && !std::strcmp(c.view().toast, "OFFLINE: 2 WHEN ONLINE"));
+    c.s.link_up(7 * kS);
+    assert(c.drain(7 * kS) == report(3, "crowd", "boot", "null", "") + digit_line(4, 0, 2));
 
     // The default boot (no preset): crowd (Docking, owner 2026-11-18), nothing owed.
     Robot t(false);
@@ -428,7 +447,7 @@ void digit_one()
     // Docking: a double tap is 安静一下 (QUIET), not a digit
     Applied t = r.in(Input::DoubleTap, "touch");
     assert(!t.to_mind && t.reported && !std::strcmp(r.view().toast, "QUIET"));
-    assert(!r.digit(2).to_mind && !std::strcmp(r.view().toast, "NO ACTION"));
+    assert(!r.digit(3).to_mind && !std::strcmp(r.view().toast, "NO ACTION"));   // 2 is 收集 since 0.5.21
     // offline: nothing owed; the owner's 1 drops the power-on 9 still owed (review 2026-11-15: latest action wins)
     Robot o(false);
     o.s.boot(0, Mode::Crowd, 9);
@@ -445,7 +464,7 @@ void digit_one()
     Robot p(false);
     p.s.boot(0, Mode::Crowd, 9);
     p.feed(kHello);
-    assert(p.drain(0) == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(1, 0, 9));
+    assert(p.drain(0) == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\"") + digit_line(1, 0, 9, "boot"));
     p.digit(1, "touch", 1 * kS);
     assert(p.s.pending_digit() == -1 && p.drain(1 * kS) == digit_line(2, 0, 1, "touch"));
     assert(p.drain(30 * kS).empty());                                        // no 9 retry
