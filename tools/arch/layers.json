@@ -83,6 +83,7 @@
   "mind/library.py": 4,
   "mind/memory.py": 4,
   "mind/store.py": 4,
+  "mind/gallery.py": 4,
   "mind/records.py": 4,
   "mind/settings_store.py": 4,
   "mind/llm.py": 4,
