@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -527,6 +528,69 @@ class DeleteTest(unittest.TestCase):
                     b = b.replace(n, b"*" * len(n))
                 want.append(b.decode())
             self.assertEqual(got, "".join(want))
+
+    def test_bodies_and_sums_are_redacted_only_near_the_photos(self):
+        """C2: only bodies referenced by log rows with at in [from - 1 h, to + 48 h] (and those rows' sums) are
+        candidates, not the whole month."""
+        quote = "看到" + LOOK
+        frm, to = M1 + 5_000, M1 + 20_000
+        for i, (at, c) in enumerate([(frm - 2 * 3600_000, "2"), (frm - 3000_000, "3"), (to + 47 * 3600_000, "4"),
+                                     (to + 49 * 3600_000, "5")]):
+            self.db[self.log].insert_one({"_id": f"ear:2:{i}", "kind": "call.realtime", "at": at, "sum": quote,
+                                          "body": {"input": sha(c)}})
+            self.db[self.body].insert_one({"_id": sha(c), "text": quote})
+        self.db[self.body].insert_one({"_id": sha("6"), "text": quote})          # no row refers to it
+        out = self.run_delete()
+        text = {c: self.db[self.body].find_one({"_id": sha(c)})["text"] for c in "23456"}
+        self.assertEqual(text, {"2": quote, "3": f"看到{MARK}。{MARK}。好的", "4": f"看到{MARK}。{MARK}。好的",
+                                "5": quote, "6": quote})
+        sums = [self.db[self.log].find_one({"_id": f"ear:2:{i}"})["sum"] for i in range(4)]
+        self.assertEqual([s == quote for s in sums], [True, False, False, True])
+        self.assertEqual((out["bodies_redacted"], out["sums_redacted"]), (3, 3))   # + sha("1"); + ear:1:11
+
+    def test_a_file_that_cannot_be_removed_keeps_its_record(self):
+        """I6: file first, then its frames record; a file that cannot go keeps the record (retry later)."""
+        real, stuck = os.remove, str(Path(self.root) / self.paths["a"])
+
+        def remove(path, *a, **k):
+            if os.path.realpath(path) == os.path.realpath(stuck):
+                raise PermissionError(13, "denied")
+            return real(path, *a, **k)
+        with mock.patch("mind.gallery.os.remove", side_effect=remove):
+            out = self.run_delete()
+        self.assertEqual(self.ids("frames"), ["a", "c", "d"])
+        self.assertTrue(Path(stuck).exists())
+        self.assertFalse((Path(self.root) / self.paths["b"]).exists())
+        self.assertEqual((out["frames"], out["files"], out["files_failed"]), (1, 1, 1))
+        self.assertEqual(self.events[0][1]["extra"]["files_failed"], 1)
+
+    def test_a_failure_midway_is_still_logged_with_what_was_done(self):
+        """I6: gallery.delete is written even when the delete fails: error type and the counts so far."""
+        steps = []
+        with mock.patch.object(self.db["mind_scenes"], "delete_many", side_effect=RuntimeError("db down")):
+            with self.assertRaises(RuntimeError):
+                fp = gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)["fp"]
+                gallery.delete(self.db, self.root, ["a", "b"], fp, spool_dir=self.spool, emit=self.emit,
+                               step=lambda name, counts: steps.append(name))
+        self.assertEqual(len(self.events), 1)
+        kind, f = self.events[0]
+        self.assertEqual((kind, f["extra"]["error"], f["extra"]["log_rows"], f["extra"]["segments"]),
+                         ("gallery.delete", "RuntimeError", 4, 2))
+        self.assertNotIn("frames", f["extra"])
+        self.assertIn("没删完", f["sum"])
+        self.assertNotIn("db down", json.dumps(f, ensure_ascii=False))
+        self.assertEqual(steps, ["bodies", "redact", "spool", "logs", "records"])
+        self.assertEqual(self.ids("frames"), ["a", "b", "c", "d"])
+        self.assertTrue((Path(self.root) / self.paths["a"]).exists())
+
+    def test_steps_are_reported_in_order(self):
+        steps = []
+        fp = gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)["fp"]
+        out = gallery.delete(self.db, self.root, ["a", "b"], fp, spool_dir=self.spool, emit=self.emit,
+                             step=lambda name, counts: steps.append((name, dict(counts))))
+        self.assertEqual([n for n, _ in steps], ["bodies", "redact", "spool", "logs", "records", "files"])
+        self.assertEqual(steps[-1][1]["segments"], 2)
+        self.assertEqual(out["frames"], 2)
 
     def test_stale_plan_is_refused(self):
         fp = gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)["fp"]

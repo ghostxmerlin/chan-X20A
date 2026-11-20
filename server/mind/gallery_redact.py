@@ -45,23 +45,27 @@ def scrubber(frags):
     return scrub
 
 
-def redact(coll, field, frags, skip=()):
-    """Replace the fragments in the string field of coll's documents that contain one (Mongo $regex). -> count."""
+ONLY_CHUNK = 2000                     # ids per {_id: {$in}} query of redact(only=...)
+
+
+def redact(coll, field, frags, skip=(), *, only=None, at=None):
+    """Replace the fragments in the string field of coll's documents that contain one (Mongo $regex). only: just
+    these _ids (None = any); at: (lo, hi) just documents with at in [lo, hi]. -> count."""
+    if not frags or (only is not None and not only):
+        return 0
     scrub, done = scrubber(frags), set()
+    ids = sorted(only) if only is not None else None
+    chunks = [{"_id": {"$in": ids[i:i + ONLY_CHUNK]}} for i in range(0, len(ids), ONLY_CHUNK)] if ids is not None \
+        else [{"_id": {"$nin": list(skip)}} if skip else {}]
     for pattern in patterns(frags):
-        flt = {field: {"$regex": pattern}, **({"_id": {"$nin": list(skip)}} if skip else {})}
-        for d in coll.find(flt, {field: 1}):
-            new = scrub(d.get(field))
-            if new != d.get(field):
-                coll.update_one({"_id": d["_id"]}, {"$set": {field: new}})
-                done.add(d["_id"])
+        for chunk in chunks:
+            flt = {field: {"$regex": pattern}, **chunk, **({"at": {"$gte": at[0], "$lte": at[1]}} if at else {})}
+            for d in coll.find(flt, {field: 1}):
+                new = scrub(d.get(field))
+                if new != d.get(field):
+                    coll.update_one({"_id": d["_id"]}, {"$set": {field: new}})
+                    done.add(d["_id"])
     return len(done)
-
-
-def redact_bodies(db, frags, first_month):
-    """Replace the fragments in every remaining log body from the photos' first month on. -> bodies changed."""
-    names = sorted(n for n in db.list_collection_names() if re.fullmatch(r"logbody_\d{6}", n) and n[8:] >= first_month)
-    return sum(redact(db[n], "text", frags) for n in names) if frags else 0
 
 
 def _walk(v, scrub):

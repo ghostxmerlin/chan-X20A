@@ -320,61 +320,116 @@ def _drop_log_rows(db, month, rows):
     return n
 
 
-def _drop_files(root, paths):
-    """Delete the photo files whose real path is inside root/frames, then their folders once empty."""
-    done = skipped = 0
+def _drop_frames(root, rows, frames):
+    """Per photo: the file first (real path inside root/frames), then its frames record, then the folders once
+    empty. A file that cannot be removed (any OSError but "already gone") keeps its record, so the photo still
+    shows and can be deleted again; a path outside root/frames is never touched (its record goes). -> counts."""
+    out = {"frames": 0, "files": 0, "files_skipped": 0, "files_failed": 0}
     stop = os.path.realpath(os.path.join(root, "frames")) if root else None
-    for rel in paths:
-        full = _inside(root, rel, "frames")
-        if full is None:
-            skipped += 1
-            continue
-        try:
-            os.remove(full)
-            done += 1
-        except FileNotFoundError:
-            continue
-        folder = os.path.dirname(full)
-        while folder.startswith(stop + os.sep):
+    by_path = {}
+    for r in rows:
+        by_path.setdefault(r.get("path") if isinstance(r.get("path"), str) else None, []).append(r["_id"])
+    for rel, ids in by_path.items():
+        full = _inside(root, rel, "frames") if rel else None
+        if rel and full is None:
+            out["files_skipped"] += 1
+        elif full is not None:
             try:
-                os.rmdir(folder)                                 # only succeeds when empty
+                os.remove(full)
+                out["files"] += 1
+            except FileNotFoundError:
+                pass
             except OSError:
-                break
-            folder = os.path.dirname(folder)
-    return done, skipped
+                out["files_failed"] += 1
+                continue
+            folder = os.path.dirname(full)
+            while folder.startswith(stop + os.sep):
+                try:
+                    os.rmdir(folder)                             # only succeeds when empty
+                except OSError:
+                    break
+                folder = os.path.dirname(folder)
+        out["frames"] += frames.delete_many({"_id": {"$in": ids}}).deleted_count
+    return out
 
 
-def delete(db, root, ids, fp, *, spool_dir, emit):
-    """Delete the photos and everything written from them, if the plan is still the one the page showed (fp), else
-    Stale. Texts first, then records, files last. -> what was actually deleted where."""
+LOG_BEFORE_MS = 3600_000              # other log rows (and their bodies) this long before the photos may quote them
+LOG_AFTER_MS = 48 * 3600_000          # ... and this long after (the realtime context, chat, later segment calls)
+
+
+def _near_bodies(db, month, lo, hi, skip):
+    """The body shas referenced by the month's log rows with at in [lo, hi] that are not deleted (skip)."""
+    rows = db["log_" + month].find({"at": {"$gte": lo, "$lte": hi}, "body": {"$exists": True},
+                                    **({"_id": {"$nin": list(skip)}} if skip else {})}, {"body": 1})
+    return {v for r in rows if isinstance(r.get("body"), dict) for v in r["body"].values() if isinstance(v, str)}
+
+
+def prepare(db, ids, fp):
+    """Everything a delete of these photos removes, if the plan is still the one the page showed (fp), else Stale;
+    a bad id list is a ValueError. Read only: the API checks it before starting the delete job."""
     m = _collect(db, _check_ids(ids))
     if not _still_planned(fp, m):
         raise Stale("the delete plan changed")
-    h, logs = m["hit"], _logs(m["hit"])
-    out = {"bodies": sum(_drop_bodies(db, month, rows) for month, rows in logs.items())}
-    first_month = hello_log.month_of(m["from"]) if m["from"] is not None else "000000"
-    out["bodies_redacted"] = redact.redact_bodies(db, m["fragments"], first_month)
-    out["sums_redacted"] = sum(redact.redact(db["log_" + month], "sum", m["fragments"],
-                                       [r["_id"] for r in logs.get(month, [])]) for month in m["months"])
-    out["runs_redacted"] = redact.redact_runs(db, m["fragments"], m["from"], m["to"], [d["_id"] for d in h["mind_runs"]])
-    out["evidence_redacted"] = redact.redact_evidence(
-        db, sorted({d["minute"] for d in h["eye_minutes"] if isinstance(d.get("minute"), (int, float))}
-                   | set(m["photo_minutes"])), m["fragments"])
-    out["neighbours_redacted"] = redact.redact_neighbours(db, m["photo_minutes"], m["fragments"],
-                                                          {c: [d["_id"] for d in h[c]] for c in redact.NEIGHBOURS})
-    out["spool_redacted"] = redact.redact_spool(spool_dir, m["fragments"], m["from"], m["to"],
-                                                [r["_id"] for rows in logs.values() for r in rows])
-    out["log_rows"] = sum(_drop_log_rows(db, month, rows) for month, rows in logs.items())
-    for key, c in (("segments", "mind_segments"), ("scenes", "mind_scenes"), ("packages", "mind_packages"),
-                   ("runs", "mind_runs"), ("eye_minutes", "eye_minutes"), ("looks", "vision_looks"),
-                   ("frames", "frames")):
-        out[key] = db[c].delete_many({"_id": {"$in": [d["_id"] for d in h[c]]}}).deleted_count if h[c] else 0
-    out["files"], out["files_skipped"] = _drop_files(root, m["paths"])
+    return m
+
+
+def run(db, root, m, *, spool_dir, emit, step=None):
+    """Delete what prepare() collected: texts first (bodies, copies elsewhere, the spool), then the log rows and
+    records, each photo's file just before its frames record. step(name, counts) is called as each part starts.
+    gallery.delete is written also when it fails part way (error = exception type, counts so far), then the error is
+    raised again. -> what was actually deleted where."""
+    h, logs, out = m["hit"], _logs(m["hit"]), {}
+    frags, lo, hi = m["fragments"], m["from"], m["to"]
+    gone = {month: [r["_id"] for r in rows] for month, rows in logs.items()}
+    say = step or (lambda name, counts: None)
+    try:
+        say("bodies", out)
+        out["bodies"] = sum(_drop_bodies(db, month, rows) for month, rows in logs.items())
+        say("redact", out)
+        out["bodies_redacted"] = out["sums_redacted"] = 0
+        if lo is not None and frags:
+            wlo, whi = lo - LOG_BEFORE_MS, hi + LOG_AFTER_MS
+            for month in _months(wlo, whi):
+                out["bodies_redacted"] += redact.redact(db["logbody_" + month], "text", frags,
+                                                        only=_near_bodies(db, month, wlo, whi, gone.get(month)))
+                out["sums_redacted"] += redact.redact(db["log_" + month], "sum", frags, gone.get(month, []),
+                                                      at=(wlo, whi))
+        out["runs_redacted"] = redact.redact_runs(db, frags, lo, hi, [d["_id"] for d in h["mind_runs"]])
+        out["evidence_redacted"] = redact.redact_evidence(
+            db, sorted({d["minute"] for d in h["eye_minutes"] if isinstance(d.get("minute"), (int, float))}
+                       | set(m["photo_minutes"])), frags)
+        out["neighbours_redacted"] = redact.redact_neighbours(db, m["photo_minutes"], frags,
+                                                              {c: [d["_id"] for d in h[c]] for c in redact.NEIGHBOURS})
+        say("spool", out)
+        out["spool_redacted"] = redact.redact_spool(spool_dir, frags, lo, hi,
+                                                    [i for ids in gone.values() for i in ids])
+        say("logs", out)
+        out["log_rows"] = sum(_drop_log_rows(db, month, rows) for month, rows in logs.items())
+        say("records", out)
+        for key, c in (("segments", "mind_segments"), ("scenes", "mind_scenes"), ("packages", "mind_packages"),
+                       ("runs", "mind_runs"), ("eye_minutes", "eye_minutes"), ("looks", "vision_looks")):
+            out[key] = db[c].delete_many({"_id": {"$in": [d["_id"] for d in h[c]]}}).deleted_count if h[c] else 0
+        say("files", out)
+        out.update(_drop_frames(root, h["frames"], db["frames"]))
+    except Exception as e:
+        _record(emit, m, {**out, "error": type(e).__name__})
+        raise
+    _record(emit, m, out)
+    return out
+
+
+def _record(emit, m, out):
+    """The run log line of a delete: counts and the time span only, never a path or a text."""
     span = "" if m["from"] is None else "（{}–{}）".format(
         *(datetime.datetime.fromtimestamp(t / 1000, _BJ).strftime("%H:%M") for t in (m["from"], m["to"])))
-    emit("gallery.delete", by="page", sum=f"删除 {out['frames']} 张照片{span}",
-         extra={**out, "from": m["from"], "to": m["to"]})
-    return out
+    n = len(m["hit"]["frames"])
+    text = f"删除 {out['frames']} 张照片{span}" if "error" not in out else f"删除 {n} 张照片{span}没删完（出错）"
+    emit("gallery.delete", by="page", sum=text, extra={**out, "from": m["from"], "to": m["to"]})
+
+
+def delete(db, root, ids, fp, *, spool_dir, emit, step=None):
+    """prepare + run in one call. -> what was actually deleted where."""
+    return run(db, root, prepare(db, ids, fp), spool_dir=spool_dir, emit=emit, step=step)
 
 
 _redact_spool = redact.redact_spool              # the reviewer's spool bench calls it by this name
