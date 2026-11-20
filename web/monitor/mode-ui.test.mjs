@@ -6,127 +6,96 @@ const src=readFileSync(new URL('./public/mode-ui.js',import.meta.url),'utf8')
  .replace("from '/switches-ui.js'",`from '${new URL('./public/switches-ui.js',import.meta.url).href}'`);
 const ui=await import('data:text/javascript;base64,'+Buffer.from(src).toString('base64'));
 
-const snap=(over={})=>({seq:1,mode:'talk',dir:null,host:null,return_to:null,billing:true,since:1,by:'page',
- look:{eye:'laughing_man',pool:null,label:'TALK',color:'E040A0'},touch:{tap:'server',double:'server'},...over});
+const snap=(over={})=>({seq:1,mode:'crowd',dir:null,host:null,return_to:null,billing:true,since:1,by:'page',
+ look:{eye:'v14',pool:'lively',label:'DOCK',color:'30D060'},touch:{tap:'server',double:'server'},...over});
 const state=(over={},robot={connected:true,applied_seq:1})=>({snapshot:snap(over),robot,log:[]});
 
-// ---- step 1b: hello owns the mode ----
-const tele=(mode,over={})=>({online:true,fresh:{telemetry:true},boot:'b1',telemetry:{boot_id:'b1',seq:3,mode:{mode,dir:null,host:null,return_to:null,seq:7,by:'asr',since:5,...over}}});
+// ---- Docking only (owner 2026-11-20): hello reports its mode; the bar shows the fixed Docking badge ----
+const tele=(mode,over={})=>({online:true,fresh:{telemetry:true},boot:'b1',telemetry:{boot_id:'b1',seq:3,mode:{mode,dir:null,host:null,return_to:null,seq:7,by:'touch',since:5,...over}}});
 const robotOf=(m,over)=>ui.robotMode(tele(m,over));
 const hv=(m,over={},billing=true)=>ui.modeView({snapshot:snap({billing}),robot:{},log:[]},robotOf(m,over));
 
-test('hello telemetry: ok / unsupported (0.4.91, no mode) / offline',()=>{
+test('hello telemetry: ok / unsupported (no mode) / offline',()=>{
  assert.equal(robotOf('crowd').status,'ok');assert.equal(robotOf('crowd').boot,'b1');
- assert.equal(ui.robotMode({...tele('talk'),telemetry:{boot_id:'b1',seq:1,mode:'idle'}}).mode.mode,'idle');   // the id alone
+ assert.equal(ui.robotMode({...tele('crowd'),telemetry:{boot_id:'b1',seq:1,mode:'crowd'}}).mode.mode,'crowd');   // the id alone
+ assert.equal(robotOf('talk').status,'ok');                                   // an old firmware's mode is still a mode
  for(const t of [{boot_id:'b1',seq:1},{boot_id:'b1',seq:1,mode:{mode:'fly'}},{boot_id:'b1',seq:1,mode:null}])
-  assert.equal(ui.robotMode({...tele('talk'),telemetry:t}).status,'unsupported');
- for(const st of [null,{},{...tele('talk'),online:false},{...tele('talk'),fresh:{telemetry:false}},{...tele('talk'),telemetry:null}])
+  assert.equal(ui.robotMode({...tele('crowd'),telemetry:t}).status,'unsupported');
+ for(const st of [null,{},{...tele('crowd'),online:false},{...tele('crowd'),fresh:{telemetry:false}},{...tele('crowd'),telemetry:null}])
   assert.equal(ui.robotMode(st).status,'offline');
 });
-test('the bar shows hello\'s own mode, with the mind billing, and can switch',()=>{
- const v=hv('subtitle',{dir:'en_zh'});
- assert.deepEqual([v.known,v.source,v.canSwitch,v.mode,v.dir,v.label,v.color,v.seq,v.by,v.billing],
-  [true,'hello',true,'subtitle','en_zh','SUB EN>ZH','7C6CF0',7,'asr',true]);
+test('Docking only: the bar shows the Docking badge and has no mode buttons',()=>{
+ const v=hv('crowd');
+ assert.deepEqual([v.known,v.source,v.mode,v.name,v.label,v.color,v.seq,v.by,v.billing,v.oldMode],
+  [true,'hello','crowd','Docking','DOCK','30D060',7,'touch',true,null]);
  const h=ui.modeBarHtml(v,[]);
- assert.match(h,/hello 上的模式/);assert.doesNotMatch(h,/disabled/);
- assert.match(h,/data-mode="subtitle" data-dir="en_zh"[^>]*aria-pressed="true"/);
- assert.equal((h.match(/aria-pressed="true"/g)||[]).length,1);
- // mind's view of an older mode never wins over hello's own
- assert.equal(ui.modeView({snapshot:snap({mode:'idle'})},robotOf('crowd')).mode,'crowd');
+ assert.match(h,/class="mode-chip" data-color="30D060">DOCK</);assert.match(h,/>Docking</);
+ assert.doesNotMatch(h,/data-mode=|<button/);
+ assert.equal(ui.MODE_BUTTONS,undefined);assert.equal(ui.selectRequest,undefined);
 });
-test('no mode in hello\'s telemetry (0.4.91): shows mind\'s record, says 等 0.4.92, switching off',()=>{
- const r=ui.robotMode({...tele('talk'),telemetry:{boot_id:'b1',seq:1}});
- const v=ui.modeView(state({mode:'crowd',look:{label:'DOCK',color:'30D060'}}),r);
- assert.deepEqual([v.known,v.source,v.canSwitch,v.mode],[true,'mind',false,'crowd']);
- const h=ui.modeBarHtml(v,[]);
- assert.match(h,/hello 固件还不支持模式（等 0.4.92）/);
- assert.equal((h.match(/data-mode="[^"]*"[^>]*disabled/g)||[]).length,9);
- assert.equal(ui.lockedWhy(v),ui.NO_MODES);
- const q=ui.quickHtml(v);
- for(const n of [4,5,6,7,8])assert.match(q,new RegExp(`data-hello-preset="${n}"[^>]*disabled`));
- for(const n of [0,9])assert.doesNotMatch(q,new RegExp(`data-preset="${n}"[^>]*disabled`));     // mind's keys still work
- const none=ui.modeView(null,r);                                                               // mind down too
- assert.equal(none.known,false);assert.match(ui.modeBarHtml(none,[]),/等 0.4.92/);
+test('old firmware still reporting a removed mode: shown as Docking with a note naming it',()=>{
+ for(const [m,name] of [['talk','脱口秀'],['idle','IDLE'],['subtitle','字幕']]){
+  const v=hv(m);
+  assert.deepEqual([v.known,v.mode,v.label,v.oldMode],[true,'crowd','DOCK',m],m);
+  assert.match(ui.modeBarHtml(v,[]),new RegExp(`机器人还是旧固件：报的是「${name}」`),m);
+ }
 });
-test('hello offline: mind\'s last record, switching off, says why',()=>{
- const v=ui.modeView(state({mode:'idle',look:{label:'IDLE',color:'505050'}}),ui.robotMode(null));
- assert.deepEqual([v.source,v.canSwitch,v.mode],['mind',false,'idle']);
- assert.match(ui.modeBarHtml(v,[]),/hello 没连上：这是 mind 最后记下的/);
- assert.match(ui.modeBarHtml(v,[]),/title="hello 没连上：要等它连上才能切" disabled/);
+test('mind\'s record when hello is offline or has no mode',()=>{
+ const off=ui.modeView(state(),ui.robotMode(null));
+ assert.deepEqual([off.known,off.source,off.mode],[true,'mind','crowd']);
+ assert.match(ui.modeBarHtml(off,[]),/hello 没连上：这是 mind 最后记下的/);
+ const none=ui.modeView(state(),ui.robotMode({...tele('crowd'),telemetry:{boot_id:'b1',seq:1}}));
+ assert.equal(none.source,'mind');assert.match(ui.modeBarHtml(none,[]),new RegExp(ui.NO_MODES));
 });
-test('unknown (neither hello nor mind) says so, every button off',()=>{
+test('unknown (neither hello nor mind) says so',()=>{
  for(const st of [null,undefined,{},{snapshot:null},{snapshot:{mode:42}},{snapshot:{mode:'fly'}}]){
   const v=ui.modeView(st,null);assert.equal(v.known,false);
-  const h=ui.modeBarHtml(v,[]);
-  assert.match(h,/模式未知（hello 和情景服务都没连上）/);
-  assert.equal((h.match(/data-mode="[^"]*"[^>]*disabled/g)||[]).length,9);
+  assert.match(ui.modeBarHtml(v,[]),/模式未知（hello 和情景服务都没连上）/);
   assert.equal((ui.quickHtml(v).match(/disabled/g)||[]).length,11);       // billing + all ten keys
  }
  assert.match(ui.modeBarHtml(ui.modeView(null,null,'absent'),[]),/mind 还没有模式功能（等上线）/);
 });
-test('LOOK matches server/mind/mode_table.py (label and colour per mode)',()=>{
+test('LOOK matches server/mind/mode_table.py',()=>{
  const py=readFileSync(new URL('../../server/mind/mode_table.py',import.meta.url),'utf8');
  const table=py.slice(py.indexOf('MODES = {'),py.indexOf('_IDS = ('));
  const looks=[...table.matchAll(/'look': \{[^}]*'label': '([^']+)', 'color': '([0-9A-F]{6})'\}/g)].map(m=>[m[1],m[2]]);
- const ids=[...py.matchAll(/_IDS = \(([^)]*)\)/g)][0][1].match(/\w+/g);
- assert.deepEqual(Object.fromEntries(ids.map((id,i)=>[id,looks[i]])),ui.LOOK);
- assert.deepEqual(Object.keys(ui.LOOK),ids);
- assert.match(py,/'labels': \{'zh_en': 'SUB ZH>EN', 'en_zh': 'SUB EN>ZH'\}/);
+ assert.deepEqual(ui.LOOK,{crowd:looks[0]});
+ assert.match(py,/_IDS = \('crowd',\)/);
 });
-test('a click asks hello: /api/control action mode, select, with hello\'s boot',()=>{
- assert.deepEqual(ui.selectRequest('crowd',undefined,'b1'),{action:'mode',boot:'b1',input:'select',value:{mode:'crowd'}});
- assert.deepEqual(ui.selectRequest('subtitle','en_zh','b1'),{action:'mode',boot:'b1',input:'select',value:{mode:'subtitle',dir:'en_zh'}});
-});
-test('quick panel: 0 / 9 go to mind, 4-8 are hello selects, 1-3 are empty',()=>{
- const q=ui.quickHtml(hv('talk'));
- assert.equal((q.match(/data-preset=|data-hello-preset=/g)||[]).length,10);
+test('quick panel: only 0 and 9 (mind\'s) are live; 1-8 are empty',()=>{
+ const q=ui.quickHtml(hv('crowd'));
+ assert.equal((q.match(/data-preset=/g)||[]).length,10);
  for(const n of [0,9])assert.match(q,new RegExp(`data-preset="${n}"(?![^>]*disabled)`));
- for(const n of [1,2,3])assert.match(q,new RegExp(`data-preset="${n}"[^>]*disabled`));
- for(const n of [4,5,6,7,8])assert.match(q,new RegExp(`data-hello-preset="${n}"(?![^>]*disabled)`));
- assert.match(q,/data-hello-preset="7" title="进 字幕 中→英（hello 切）"/);
+ for(const n of [1,2,3,4,5,6,7,8])assert.match(q,new RegExp(`data-preset="${n}" title="空" disabled`));
+ assert.doesNotMatch(q,/data-hello-preset|提前写|连续说/);
  assert.match(q,/data-preset="9" title="花费全开"/);
- assert.deepEqual(ui.HELLO_PRESETS,{4:['idle'],5:['crowd'],6:['companion'],7:['subtitle','zh_en'],8:['subtitle','en_zh']});
 });
-test('quick panel: billing switch and the talk-show switches',()=>{
- const on=ui.quickHtml(hv('talk'));
+test('quick panel: the billing switch',()=>{
+ const on=ui.quickHtml(hv('crowd'));
  assert.match(on,/data-billing[^>]*aria-pressed="true"[^>]*title="点一下 = 预设 0 花费全关[^"]*"[^>]*>计费 全开</);assert.match(on,/上次整体：全开/);
- const off=ui.quickHtml(hv('talk',{},false));
+ const off=ui.quickHtml(hv('crowd',{},false));
  assert.match(off,/data-billing[^>]*aria-pressed="false"[^>]*title="点一下 = 预设 9 花费全开/);assert.match(off,/上次整体：全关（单个开关照样能开）/);
- const h=ui.quickHtml(hv('talk'),{prefetch:true,auto:false,family:false});
- assert.match(h,/提前写 开/);assert.match(h,/连续说 关/);assert.match(h,/家人声音 关/);
- assert.match(h,/<details class="mode-presets-box"><summary>预设 0–9<\/summary>/);
- assert.doesNotMatch(ui.quickHtml(hv('talk')),/mode-talk/);
- assert.match(ui.quickHtml(ui.modeView(null,robotOf('talk'))),/计费 未知/);   // hello known, mind down
-});
-test('event-driven and settings',()=>{
- assert.equal(hv('event').event,'waiting');assert.match(ui.modeBarHtml(hv('event'),[]),/class="mode-auto"[^>]*>AUTO</);
- assert.equal(hv('crowd',{host:'event'}).event,'hosting');
- const v=hv('settings',{return_to:'subtitle',dir:'zh_en'});
- assert.equal(v.returnTo,'subtitle');assert.match(ui.modeBarHtml(v,[]),/关了回到 字幕 中→英/);
+ assert.match(ui.quickHtml(ui.modeView(null,robotOf('crowd'))),/计费 未知/);   // hello known, mind down
 });
 test('the colour only travels as a checked data attribute (CSP: no style attributes)',()=>{
- const good=ui.modeBarHtml(hv('talk'),[]);
- assert.match(good,/data-color="E040A0"/);assert.doesNotMatch(good,/style=/);
+ const good=ui.modeBarHtml(hv('crowd'),[]);
+ assert.match(good,/data-color="30D060"/);assert.doesNotMatch(good,/style=/);
 });
 test('log rows: newest ten, readable, everything escaped',()=>{
- const rows=Array.from({length:12},(_,i)=>({at:i,source:'touch',input:'select',from:'talk',to:'crowd',code:'ok'}));
- rows.push({at:99,source:'<b>',input:'billing',value:false,from:'talk',to:'talk',code:'"><x'});
- const h=ui.modeBarHtml(hv('talk'),rows);
+ const rows=Array.from({length:12},(_,i)=>({at:i,source:'touch',input:'tap',from:'crowd',to:'crowd',code:'ok'}));
+ rows.push({at:99,source:'<b>',input:'billing',value:false,from:'crowd',to:'crowd',code:'"><x'});
+ const h=ui.modeBarHtml(hv('crowd'),rows);
  assert.equal((h.match(/<li/g)||[]).length,10);
- assert.match(h,/触摸 · 脱口秀 → Docking/);assert.doesNotMatch(h,/<b>|"><x/);
- assert.match(ui.logLine({at:1,source:'page',input:'billing',value:false,from:'talk',to:'talk',code:'ok'}),/计费 全关/);
- assert.match(ui.logLine({at:1,source:'asr',input:'digit',value:9,from:'talk',to:'talk',code:'ok'}),/预设 9/);
- assert.match(ui.logLine({at:1,source:'timeout',input:'timeout',from:'settings',to:'talk',code:'ok'}),/超时/);
- assert.match(ui.logLine({at:1,source:'asr',input:'forward',from:'talk',to:'talk',code:'too_soon'}),/太快了/);
+ assert.match(h,/触摸 · Docking（tap）/);assert.doesNotMatch(h,/<b>|"><x/);
+ assert.match(ui.logLine({at:1,source:'page',input:'billing',value:false,from:'crowd',to:'crowd',code:'ok'}),/计费 全关/);
+ assert.match(ui.logLine({at:1,source:'asr',input:'digit',value:9,from:'crowd',to:'crowd',code:'asr_off'}),/预设 9 · 语音口令已关/);
+ assert.match(ui.logLine({at:1,source:'page',input:'select',from:'crowd',to:'crowd',code:'removed_mode'}),/只有 Docking 模式/);
 });
 test('result and effect text',()=>{
  assert.equal(ui.resultText({code:'ok'}),'');
- assert.match(ui.resultText({code:'on_hello'}),/hello 上切/);
+ assert.match(ui.resultText({code:'removed_mode'}),/只有 Docking/);
  assert.equal(ui.resultText({code:'<x>'}),'<x>');          // plain text: the bar uses textContent
- assert.match(ui.effectsText(['stop_speech','talk_enter']),/提前写、连续说打开/);
- assert.doesNotMatch(ui.effectsText(['stop_speech','talk_enter'],false),/计费/);      // billing gates nothing
- assert.equal(ui.errorText(new Error('{"error":"只在脱口秀模式","code":"only_talk"}')),'只在脱口秀模式');
- assert.equal(ui.errorText(new Error('hello 固件还不支持模式（等 0.4.92）')),'hello 固件还不支持模式（等 0.4.92）');
+ assert.equal(ui.effectsText(['stop_speech']),'');
  assert.match(ui.errorText(Object.assign(new Error('x'),{name:'TimeoutError'})),/结果未确认/);
 });
 test('robot half of a preset uses the switch bar tiers; junk is dropped',()=>{
@@ -199,7 +168,7 @@ test('page files: modebar under the switch bar on both pages, no inline script o
 const res=(status,body)=>({ok:status>=200&&status<300,status,json:async()=>body,text:async()=>typeof body==='string'?body:JSON.stringify(body)});
 const modeReply=(over={})=>({snapshot:snap(over),robot:{connected:true,boot:'b1',conn:1,seq:7,at:1},log:[]});
 // fetch double: /api/mind/mode answers from a queue of (status, body), errors or deferred promises; /api/state from robotQ
-function fakeFetch(modeQueue,{robotQ=null,robot=tele('talk'),talk=res(200,{prefetch:{on:false},auto:{on:false}}),cfg=res(200,{speech:{round:{family:false}}})}={}){
+function fakeFetch(modeQueue,{robotQ=null,robot=tele('crowd'),talk=res(200,{prefetch:{on:false},auto:{on:false}}),cfg=res(200,{speech:{round:{family:false}}})}={}){
  const calls=[];
  const f=async(path,opts={})=>{calls.push([path,opts.method||'GET',opts.body]);
   if(path==='/api/mind/mode'){const next=modeQueue.length>1?modeQueue.shift():modeQueue[0];if(next instanceof Error)throw next;return typeof next==='function'?next():next;}
@@ -211,14 +180,14 @@ function fakeFetch(modeQueue,{robotQ=null,robot=tele('talk'),talk=res(200,{prefe
 }
 const model=(fetchFn,extra={})=>{const seen=[];const m=new ui.ModeModel({fetchFn,emit:v=>seen.push(v),...extra});m.seen=seen;return m;};
 
-test('poll reads hello and mind together; hello\'s mode wins, mind gives billing and the log',async()=>{
- const m=model(fakeFetch([res(200,{...modeReply({mode:'idle',billing:false}),log:[{at:1,source:'touch',input:'select',from:'talk',to:'crowd',code:'ok'}]})],{robot:tele('crowd')}));
+test('poll reads hello and mind together; hello\'s report wins, mind gives billing and the log',async()=>{
+ const m=model(fakeFetch([res(200,{...modeReply({billing:false}),log:[{at:1,source:'touch',input:'tap',from:'crowd',to:'crowd',code:'ok'}]})],{robot:tele('crowd')}));
  await m.poll();
  assert.deepEqual([m.view.mode,m.view.source,m.view.billing,m.state.log.length],['crowd','hello',false,1]);
  assert.equal(m.delay(),2000);
 });
 test('mind without /mode (404): asks mind once a minute, hello every poll',async()=>{
- let t=0;const f=fakeFetch([res(404,{error:'not found'})],{robot:tele('talk')});
+ let t=0;const f=fakeFetch([res(404,{error:'not found'})],{robot:tele('crowd')});
  const m=model(f,{now:()=>t});
  await m.poll();assert.equal(m.why,'absent');
  await m.poll();t=30000;await m.poll();
@@ -231,62 +200,28 @@ test('mind not reached and hello offline: unknown, normal pace',async()=>{
  for(const r of [res(503,'情景服务连接中'),res(502,'x'),new Error('net')]){
   const m=model(fakeFetch([r],{robot:{online:false}}));await m.poll();
   assert.equal(m.why,'down');assert.equal(m.view.known,false);assert.equal(m.delay(),2000);
-  assert.match(ui.modeBarHtml(m.view,[]),/模式未知（hello 和情景服务都没连上/);
  }
 });
-test('an older poll landing after a newer one is dropped (no old repaint, one modechange)',async()=>{
+test('an older poll landing after a newer one is dropped (one modechange)',async()=>{
  let releaseOld;const old=new Promise(r=>releaseOld=r);
- const m=model(fakeFetch([()=>old,res(200,modeReply())],{robotQ:[tele('talk',{seq:6}),tele('crowd',{seq:7})]}));
+ const m=model(fakeFetch([()=>old,res(200,modeReply())],{robotQ:[tele('crowd',{seq:6}),tele('crowd',{seq:7})]}));
  const a=m.poll(),b=m.poll();
- await b;assert.equal(m.view.mode,'crowd');
+ await b;assert.equal(m.view.seq,7);
  releaseOld(res(200,modeReply()));await a;
- assert.equal(m.view.mode,'crowd');
- assert.deepEqual(m.seen.map(v=>v.mode),['crowd']);
+ assert.equal(m.view.seq,7);assert.equal(m.seen.length,1);
 });
 test('modechange fires once per change, not on every poll',async()=>{
- const m=model(fakeFetch([res(200,modeReply())],{robotQ:[tele('talk'),tele('talk'),tele('idle',{seq:8})]}));
+ const m=model(fakeFetch([res(200,modeReply())],{robotQ:[tele('crowd'),tele('crowd'),tele('crowd',{seq:8})]}));
  await m.poll();await m.poll();await m.poll();
- assert.deepEqual(m.seen.map(v=>v.mode),['talk','idle']);
-});
-test('select posts to hello through /api/control and says so; nothing goes to mind\'s /mode',async()=>{
- const sent=[];const post=async(path,body)=>{sent.push([path,body]);return {accepted:true};};
- const m=model(fakeFetch([res(200,modeReply())]),{post});
- await m.poll();await m.select('subtitle','zh_en');
- assert.deepEqual(sent,[['/api/control',{action:'mode',boot:'b1',input:'select',value:{mode:'subtitle',dir:'zh_en'}}]]);
- assert.match(m.msg,/已发给 hello：字幕 中→英/);
- await m.helloPreset(5);
- assert.deepEqual(sent[1],['/api/control',{action:'mode',boot:'b1',input:'digit',value:5}]);   // hello's own digit rule
- assert.match(m.msg,/预设 5：已发给 hello（进 Docking/);
-});
-test('select while hello cannot switch sends nothing and says why',async()=>{
- const sent=[];const post=async(path,body)=>{sent.push(path);return {};};
- const m=model(fakeFetch([res(200,modeReply())],{robot:{...tele('talk'),telemetry:{boot_id:'b1',seq:1}}}),{post});
- await m.poll();await m.select('crowd');
- assert.deepEqual(sent,[]);assert.equal(m.msg,ui.NO_MODES);
-});
-test('a refused control shows the monitor\'s words',async()=>{
- const post=async()=>{throw new Error('机器人已重启，请根据新状态重新操作');};
- const m=model(fakeFetch([res(200,modeReply())]),{post});
- await m.poll();await m.select('crowd');
- assert.equal(m.msg,'机器人已重启，请根据新状态重新操作');
-});
-test('the line under the bar: kept right after the page\'s own click, cleared when hello changes later',async()=>{
- let t=0;
- const m=model(fakeFetch([res(200,modeReply())],{robotQ:[tele('talk'),tele('crowd',{seq:8}),tele('crowd',{seq:8}),tele('idle',{seq:9,by:'asr'})]}),
-  {post:async()=>({accepted:true}),now:()=>t});
- await m.poll();
- await m.select('crowd');                                  // its own poll already sees crowd
- assert.match(m.msg,/已发给 hello：Docking/);
- t=10000;await m.poll();assert.match(m.msg,/已发给 hello/); // same mode, nothing new
- await m.poll();assert.equal(m.msg,'');                     // hello's own word went to IDLE later: the old line goes
+ assert.equal(m.seen.length,2);
 });
 test('one action at a time; the buttons are locked while it runs',async()=>{
  let release;const post=()=>new Promise(r=>release=r);const painted=[];
  const m=model(fakeFetch([res(200,modeReply())]),{post,paint:()=>painted.push(m.pending)});
  await m.poll();
- const a=m.select('crowd');await Promise.resolve();assert.equal(m.pending,true);assert.equal(m.msg,'发送中…');
- await m.select('idle');                                   // ignored while pending
- release({accepted:true});await a;
+ const a=m.preset(9);await Promise.resolve();await Promise.resolve();assert.equal(m.pending,true);assert.equal(m.msg,'发送中…');
+ await m.preset(0);                                        // ignored while pending
+ release({snapshot:snap(),result:{code:'ok'},effects:[],robot:{}});await a;
  assert.equal(m.pending,false);assert.ok(painted.includes(true));
 });
 test('preset 0 / 9 and the billing switch (= preset 0 / 9) go to mind with the page post',async()=>{
@@ -298,37 +233,19 @@ test('preset 0 / 9 and the billing switch (= preset 0 / 9) go to mind with the p
  await m.poll();
  await m.preset(0);assert.deepEqual(sent[0],['/api/mind/preset',{n:0,source:'page'}]);assert.match(m.msg,/预设 0 花费全关/);
  await m.billing();assert.deepEqual(sent[1],['/api/mind/preset',{n:0,source:'page'}]);   // billing showed on: one click = 0
- assert.match(m.msg,/预设 0 花费全关/);
  m.view={...m.view,billing:false};await m.billing();
  assert.deepEqual(sent[2],['/api/mind/preset',{n:9,source:'page'}]);assert.match(m.msg,/预设 9 花费全开/);
 });
 test('the message line can be closed by hand (not while an action runs)',async()=>{
- const m=model(fakeFetch([res(200,modeReply())]),{post:async()=>({accepted:true})});
- await m.poll();await m.select('crowd');assert.notEqual(m.msg,'');
+ const m=model(fakeFetch([res(200,modeReply())]),{post:async()=>({snapshot:snap(),result:{code:'ok'},effects:[],robot:{}})});
+ await m.poll();await m.preset(9);assert.notEqual(m.msg,'');
  m.dismiss();assert.equal(m.msg,'');
-});
-test('talk readout: a slow older answer cannot overwrite a newer one',async()=>{
- let slow;const base=fakeFetch([res(200,modeReply())]);
- let n=0;const fetchFn=async(path,o)=>{if(path.startsWith('/api/mind/say/stats')&&n++===0)return new Promise(r=>slow=r);return base(path,o);};
- const m=model(fetchFn);
- const a=m.readTalk();
- await m.readTalk();assert.equal(m.talk.prefetch,false);
- slow(res(200,{prefetch:{on:true},auto:{on:true}}));await a;
- assert.equal(m.talk.prefetch,false);
 });
 test('hello\'s state can come from the bar\'s own event stream instead of /api/state',async()=>{
  const f=fakeFetch([res(200,modeReply())]);
- const m=model(f,{robotSource:()=>tele('companion')});
+ const m=model(f,{robotSource:()=>tele('crowd')});
  await m.poll();
- assert.equal(m.view.mode,'companion');assert.equal(f.calls.filter(c=>c[0]==='/api/state').length,0);
+ assert.equal(m.view.source,'hello');assert.equal(f.calls.filter(c=>c[0]==='/api/state').length,0);
  const js=readFileSync(new URL('./public/mode-ui.js',import.meta.url),'utf8');
  assert.match(js,/new EventSource\('\/api\/events\?camera=0&servo=0'\)/);
-});
-test('0.4.92 telemetry.mode: since_ms is an age, label comes from hello (ASCII, short)',()=>{
- const st={online:true,fresh:{telemetry:true},boot:'b1',receivedAt:100000,now:100500,
-  telemetry:{boot_id:'b1',seq:4,mode:{mode:'subtitle',dir:'zh_en',host:null,return_to:null,seq:3,label:'SUB ZH>EN',by:'touch',since_ms:2500,online:true}}};
- const v=ui.modeView(state(),ui.robotMode(st));
- assert.deepEqual([v.mode,v.dir,v.label,v.since,v.by,v.seq],['subtitle','zh_en','SUB ZH>EN',97500,'touch',3]);
- const odd=ui.modeView(state(),ui.robotMode({...st,telemetry:{...st.telemetry,mode:{...st.telemetry.mode,label:'<b>中文'}}}));
- assert.equal(odd.label,'SUB ZH>EN');                                    // not ASCII: the page's own table
 });

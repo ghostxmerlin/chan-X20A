@@ -11,24 +11,7 @@ const say=await import('data:text/javascript;base64,'+readFileSync(new URL('./pu
 
 const robot=(m,hearing)=>({online:true,fresh:{telemetry:true},boot:'b1',capabilities:{hearing:'supported'},
  telemetry:{boot_id:'b1',seq:3,hearing,mode:{mode:m,dir:null,host:null,return_to:null,seq:7,by:'asr',since:5}}});
-const viewOf=st=>mode.modeView(null,mode.robotMode(st));
 
-test('in chat with hearing off the bar says 对话要先开听觉',()=>{
- const st=robot('chat',{requested:false,state:'idle'});
- assert.equal(mode.chatHearingHint(viewOf(st),st),'对话要先开听觉');
- const h=mode.modeBarHtml(viewOf(st),[],mode.chatHearingHint(viewOf(st),st));
- assert.match(h,/<span class="mode-warn" role="note">对话要先开听觉<\/span>/);
-});
-test('no hint with hearing on, outside chat, or when hearing is unknown',()=>{
- const on=robot('chat',{requested:true,state:'listening'});
- assert.equal(mode.chatHearingHint(viewOf(on),on),'');
- const talk=robot('talk',{requested:false});
- assert.equal(mode.chatHearingHint(viewOf(talk),talk),'');
- for(const st of [{...robot('chat',{requested:false}),fresh:{telemetry:false}},{...robot('chat',{requested:false}),capabilities:{}},
-  {...robot('chat',null)}])
-  assert.equal(mode.chatHearingHint(viewOf(robot('chat',{})),st),'');
- assert.doesNotMatch(mode.modeBarHtml(viewOf(on),[]),/mode-warn/);
-});
 
 test('the last chat turn: heard -> reply, latency, model, cost',()=>{
  const h=say.chatTurnHtml({at:Date.now(),text:'今天几号',reply:'十四号，周五。',state:'answered',model:'gpt-6.1-terra',
@@ -55,7 +38,6 @@ test('every text in the chat card is escaped',()=>{
  const h=say.chatTurnHtml({at:1,text:bad,reply:bad,who:bad,model:bad,state:'answered',timings:{}});
  assert.doesNotMatch(h,/<img/);assert.equal((h.match(/&lt;img/g)||[]).length,4);
  assert.doesNotMatch(say.chatTurnHtml({at:1,text:'x',state:'skipped',skip:bad}),/<img/);
- assert.doesNotMatch(mode.modeBarHtml(viewOf(robot('chat',{})),[],bad),/<img/);
 });
 test('the say panel has the chat card; the proxy passes /chat/turns, not /chat/heard',async()=>{
  const index=readFileSync(new URL('./public/index.html',import.meta.url),'utf8');
