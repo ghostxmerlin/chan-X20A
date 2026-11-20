@@ -4,6 +4,7 @@ import copy
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 # the run/audit log (server/common/hello_log.py; ~/soul-mind/hello_log.py on the server): mind does `import hello_log`
@@ -35,7 +36,12 @@ def stop_log():
 
 def _get(doc, key):
     cur = doc
-    for part in key.split("."):
+    parts = key.split(".")
+    for i, part in enumerate(parts):
+        if isinstance(cur, list):          # Mongo: "a.b" over an array of documents -> the list of their b values
+            rest = ".".join(parts[i:])
+            vals = [v for v in (_get(x, rest) for x in cur if isinstance(x, dict)) if v is not _MISSING]
+            return vals if vals else _MISSING
         if not isinstance(cur, dict) or part not in cur:
             return _MISSING
         cur = cur[part]
@@ -209,7 +215,9 @@ class FakeCollection:
 
     def delete_many(self, flt):
         self._check()
-        self.docs = [d for d in self.docs if not _match(d, flt)]
+        kept = [d for d in self.docs if not _match(d, flt)]
+        n, self.docs = len(self.docs) - len(kept), kept
+        return SimpleNamespace(deleted_count=n)
 
     def create_index(self, keys, unique=False, **k):
         self.__dict__.setdefault("indexes", []).append((list(keys), unique))
@@ -224,6 +232,9 @@ class FakeDB:
         return self.collections.setdefault(name, FakeCollection())
 
     __getattr__ = __getitem__
+
+    def list_collection_names(self):
+        return list(self.collections)
 
     def add(self, collection, *docs):
         for d in docs:

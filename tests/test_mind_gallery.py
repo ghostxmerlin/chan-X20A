@@ -1,6 +1,8 @@
 """图库 reads (2026-11-20): server/mind/gallery.py over FakeDB and a temp recordings root."""
 import base64
 import datetime
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -110,6 +112,227 @@ class GalleryTest(unittest.TestCase):
         h = "0123456789abcdef01234567"
         self.assertEqual(gallery.oid(h), ObjectId(h))
         self.assertEqual(gallery.oid("a"), "a")
+
+
+M1 = ms(2026, 11, 20, 15, 30)                 # the minute of the two photos to delete (and one kept)
+M2 = M1 + 10 * 60_000                         # another minute: its photo, scene and segment stay
+LOOK = "桌上放着一杯冒着热气的绿茶。旁边有一本打开的书。好的"
+LOOK_FRAGS = ["桌上放着一杯冒着热气的绿茶", "旁边有一本打开的书"]
+MARK = "［图库已删除］"
+
+
+def sha(c):
+    return c * 64
+
+
+def jline(flow, bodies):
+    return json.dumps({"flow": flow, "bodies": bodies}, ensure_ascii=False, separators=(",", ":")) + "\n"
+
+
+class DeleteTest(unittest.TestCase):
+    """2 photos to delete (a, b in M1), 1 kept in the same minute (c), 1 kept in another minute (d)."""
+
+    def setUp(self):
+        self.db = FakeDB()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = str(Path(self.tmp.name) / "rec")
+        self.spool = str(Path(self.tmp.name) / "spool")
+        os.makedirs(self.spool)
+        self.paths = {}
+        for i, (id, at, day_dir) in enumerate([("a", M1 + 5_000, "x"), ("b", M1 + 20_000, "x"),
+                                               ("c", M1 + 40_000, "y"), ("d", M2 + 5_000, "y")]):
+            rel = f"frames/2026-11-20/{day_dir}/{at * 1000}-{i}.jpg"
+            (Path(self.root) / rel).parent.mkdir(parents=True, exist_ok=True)
+            (Path(self.root) / rel).write_bytes(b"\xff\xd8" + id.encode())
+            self.paths[id] = rel
+            self.db["frames"].insert_one({"_id": id, "session": day_dir, "seq": i, "t_us": at * 1000, "at": at,
+                                          "path": rel})
+        p = self.paths
+        self.db.add("vision_looks",
+                    {"_id": "la", "kind": "look", "lid": 1, "at": M1 + 6_000, "path": p["a"], "text": LOOK},
+                    {"_id": "ld", "kind": "look", "lid": 2, "at": M2 + 6_000, "path": p["d"], "text": "客厅里亮着一盏落地灯"})
+        self.db.add("eye_minutes",
+                    {"_id": "e1", "minute": M1, "version": 1, "source": "s",
+                     "frames": [{"seq": 0, "path": p["a"]}, {"seq": 2, "path": p["c"]}],
+                     "result": {"scene": "书房里的书桌前面坐着一个人", "people": [{"doing": "低头在笔记本上写字很认真"}]}},
+                    {"_id": "e0", "minute": M1 - 60_000, "version": 1, "frames": [{"seq": 1, "path": p["b"]}],
+                     "result": None},
+                    {"_id": "e2", "minute": M2, "version": 1, "frames": [{"seq": 3, "path": p["d"]}],
+                     "result": {"scene": "客厅沙发上没有人在"}})
+        self.db.add("mind_packages",
+                    {"_id": "p1", "minute": M1, "lane": "live", "version": 1, "package": {"eye": "x"}},
+                    {"_id": "p1r", "minute": M1, "lane": "rerun", "version": 1, "package": {"eye": "x"}},
+                    {"_id": "p2", "minute": M2, "lane": "live", "version": 1, "package": {"eye": "y"}})
+        self.db.add("mind_scenes",
+                    {"_id": "s1", "minute": M1, "lane": "live", "version": 1, "scene": {"text": "主人正在书房里安静地写东西"}},
+                    {"_id": "s1r", "minute": M1, "lane": "rerun", "version": 1, "scene": {"text": "重跑"}},
+                    {"_id": "s2", "minute": M2, "lane": "live", "version": 1, "scene": {"text": "主人离开了书桌去了客厅那边"}})
+        self.db.add("mind_runs",
+                    {"_id": "r1", "minute": M1, "lane": "live", "step": "fusion"},
+                    {"_id": "r1b", "minute": M1, "lane": "rerun", "step": "fusion"},
+                    {"_id": "r2", "minute": M2, "lane": "live", "step": "fusion"})
+        self.db.add("mind_segments",
+                    {"_id": "g1", "start": M1 - 600_000, "end": M1 + 120_000, "lane": "live", "version": 1,
+                     "summary": {"title": "下午在书桌前写作业的时间", "text": "主人一直在书桌前写字。期间喝了几口茶水休息", "confidence": 0.8}},
+                    {"_id": "g3", "start": M1 - 3600_000, "end": M1 + 30_000, "lane": "live", "version": 1,
+                     "summary": {"title": "还没结束的一个长段落", "text": "短", "confidence": 0.5}},
+                    {"_id": "g2", "start": M1 + 300_000, "end": M1 + 1200_000, "lane": "live", "version": 1,
+                     "summary": {"title": "后来去客厅休息的时间段", "text": "客厅里放着音乐很安静", "confidence": 0.7}})
+        self.log, self.body = "log_202611", "logbody_202611"
+        self.db.add(self.log,
+                    {"_id": "eye:1:1", "kind": "call.look", "at": M1 + 7_000, "svc": "ear", "sum": LOOK,
+                     "ref": {"path": p["a"], "lid": 1}, "body": {"system": sha("a"), "output": sha("b")}},
+                    {"_id": "eye:1:2", "kind": "call.eye", "at": M1 + 61_000, "svc": "eye", "sum": "ok",
+                     "ref": {"minute": M1}, "body": {"input": sha("c"), "output": sha("d")}},
+                    {"_id": "mind:1:1", "kind": "call.fusion", "at": M1 + 62_000, "svc": "mind",
+                     "ref": {"minute": M1, "lane": "live", "prompt": "v2"}, "body": {"params": sha("e")}},
+                    {"_id": "mind:1:2", "kind": "call.segment", "at": M1 + 130_000, "svc": "mind",
+                     "ref": {"minute": M1 + 60_000, "lane": "live"}},
+                    {"_id": "mind:1:3", "kind": "call.segment", "at": M1 + 1300_000, "svc": "mind",
+                     "ref": {"minute": M1 + 1200_000 + 60_000, "lane": "live"}},
+                    {"_id": "eye:1:3", "kind": "call.eye", "at": M2 + 61_000, "svc": "eye", "sum": "ok",
+                     "ref": {"minute": M2}, "body": {"system": sha("a"), "output": sha("f")}},
+                    {"_id": "ear:1:9", "kind": "call.realtime", "at": M1 + 90_000, "svc": "ear", "sum": "回答",
+                     "body": {"input": sha("1")}})
+        self.context = "你看到的：桌上放着一杯冒着热气的绿茶。主人说：好"
+        self.db.add(self.body, {"_id": sha("a"), "text": "系统提示"}, {"_id": sha("b"), "text": LOOK},
+                    {"_id": sha("c"), "text": "看图"}, {"_id": sha("d"), "text": "{}"}, {"_id": sha("e"), "text": "p"},
+                    {"_id": sha("f"), "text": "{}"}, {"_id": sha("1"), "text": self.context})
+        self.today = Path(self.spool) / "ear-20261120.jsonl"
+        self.today.write_text(jline({"_id": "ear:1:9", "kind": "call.realtime"}, {sha("1"): self.context})
+                              + jline({"_id": "ear:1:10", "kind": "svc.beat"}, {}), encoding="utf-8")
+        (Path(self.spool) / "ear-20261120.offset").write_text("12")
+        self.old = Path(self.spool) / "ear-20261101.jsonl"
+        self.old.write_text(jline({"_id": "x", "kind": "call.realtime"}, {sha("2"): self.context}), encoding="utf-8")
+        self.events = []
+
+    def emit(self, kind, **fields):
+        self.events.append((kind, fields))
+
+    def counts(self):
+        return {k: len(v.docs) for k, v in self.db.collections.items()}
+
+    def run_delete(self, ids=("a", "b")):
+        fp = gallery.plan(self.db, list(ids), spool_dir=self.spool)["fp"]
+        return gallery.delete(self.db, self.root, list(ids), fp, spool_dir=self.spool, emit=self.emit)
+
+    def ids(self, coll):
+        return sorted(d["_id"] for d in self.db[coll].docs)
+
+    def test_plan_counts_everything_and_is_read_only(self):
+        before = self.counts()
+        spool_before = (self.today.read_bytes(), self.old.read_bytes())
+        out = gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)
+        self.assertEqual(len(out["fp"]), 16)
+        self.assertEqual({k: out[k] for k in ("frames", "files", "looks", "eye_minutes", "packages", "scenes",
+                                               "runs", "log_rows", "from", "to")},
+                         {"frames": 2, "files": 2, "looks": 1, "eye_minutes": 2, "packages": 2, "scenes": 2,
+                          "runs": 2, "log_rows": 4, "from": M1 + 5_000, "to": M1 + 20_000})
+        self.assertEqual(sorted(out["segments"], key=lambda s: s["start"]),
+                         [{"start": M1 - 3600_000, "end": M1 + 30_000, "title": "还没结束的一个长段落"},
+                          {"start": M1 - 600_000, "end": M1 + 120_000, "title": "下午在书桌前写作业的时间"}])
+        after = self.counts()
+        self.assertEqual({k: after[k] for k in before}, before)
+        self.assertTrue(all(n == 0 for k, n in after.items() if k not in before))
+        self.assertEqual((self.today.read_bytes(), self.old.read_bytes()), spool_before)
+        self.assertEqual(gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)["fp"], out["fp"])
+        self.assertNotEqual(gallery.plan(self.db, ["a"], spool_dir=self.spool)["fp"], out["fp"])
+
+    def test_open_segment_overlaps_and_owns_later_segment_calls(self):
+        self.db["mind_segments"].insert_one({"_id": "g4", "start": M2 - 60_000, "end": None, "lane": "live",
+                                             "summary": {"title": "现在还在进行的段落", "text": "t"}})
+        out = gallery.plan(self.db, ["d"], spool_dir=self.spool)
+        self.assertEqual(sorted(s["title"] for s in out["segments"]), ["后来去客厅休息的时间段", "现在还在进行的段落"])
+        self.assertEqual(out["log_rows"], 2)                          # eye:1:3 + the segment call mind:1:3
+
+    def test_delete_removes_every_copy(self):
+        out = self.run_delete()
+        self.assertEqual(self.ids("frames"), ["c", "d"])
+        self.assertEqual(self.ids("vision_looks"), ["ld"])
+        self.assertEqual(self.ids("eye_minutes"), ["e2"])
+        self.assertEqual(self.ids("mind_packages"), ["p2"])
+        self.assertEqual(self.ids("mind_scenes"), ["s2"])
+        self.assertEqual(self.ids("mind_runs"), ["r2"])
+        self.assertEqual(self.ids("mind_segments"), ["g2"])
+        self.assertEqual(self.ids(self.log), ["ear:1:9", "eye:1:3", "mind:1:3"])
+        p = Path(self.root)
+        self.assertFalse((p / self.paths["a"]).exists())
+        self.assertFalse((p / self.paths["b"]).exists())
+        self.assertFalse((p / self.paths["a"]).parent.exists())       # folder x emptied -> removed
+        self.assertTrue((p / self.paths["c"]).exists())
+        self.assertTrue((p / self.paths["d"]).exists())
+        self.assertTrue((p / "frames").is_dir())
+        self.assertEqual({k: out[k] for k in ("frames", "files", "files_skipped", "looks", "eye_minutes", "packages",
+                                               "scenes", "segments", "runs", "log_rows")},
+                         {"frames": 2, "files": 2, "files_skipped": 0, "looks": 1, "eye_minutes": 2, "packages": 2,
+                          "scenes": 2, "segments": 2, "runs": 2, "log_rows": 4})
+
+    def test_shared_body_is_kept_unique_body_is_deleted(self):
+        out = self.run_delete()
+        self.assertEqual(self.ids(self.body), sorted([sha("a"), sha("f"), sha("1")]))
+        self.assertEqual(out["bodies"], 4)                             # b, c, d, e
+
+    def test_fragments_are_redacted_in_other_bodies_and_spool(self):
+        size = self.today.stat().st_size
+        old = self.old.read_bytes()
+        out = self.run_delete()
+        ctx = self.db[self.body].find_one({"_id": sha("1")})["text"]
+        self.assertEqual(ctx, f"你看到的：{MARK}。主人说：好")
+        self.assertEqual(out["bodies_redacted"], 1)
+        data = self.today.read_bytes()
+        self.assertEqual(len(data), size)
+        text = data.decode("utf-8", errors="replace")
+        for f in LOOK_FRAGS:
+            self.assertNotIn(f, text)
+        self.assertIn(b"*" * len(LOOK_FRAGS[0].encode()), data)
+        for line in data.splitlines():
+            json.loads(line)
+        self.assertEqual(out["spool_redacted"], 1)
+        self.assertEqual(self.old.read_bytes(), old)                   # outside the photos' days
+        self.assertEqual((Path(self.spool) / "ear-20261120.offset").read_text(), "12")
+
+    def test_stale_plan_is_refused(self):
+        fp = gallery.plan(self.db, ["a", "b"], spool_dir=self.spool)["fp"]
+        self.db["vision_looks"].insert_one({"_id": "la2", "kind": "look", "at": M1 + 9_000, "path": self.paths["a"],
+                                            "text": "又看了一眼"})
+        before, spool = self.counts(), self.today.read_bytes()
+        with self.assertRaises(gallery.Stale):
+            gallery.delete(self.db, self.root, ["a", "b"], fp, spool_dir=self.spool, emit=self.emit)
+        self.assertEqual(self.counts(), before)
+        self.assertEqual(self.today.read_bytes(), spool)
+        self.assertTrue((Path(self.root) / self.paths["a"]).exists())
+        self.assertEqual(self.events, [])
+
+    def test_outside_path_is_skipped(self):
+        out_file = Path(self.root).parent / "outside.jpg"
+        out_file.write_bytes(b"secret")
+        self.db["frames"].insert_one({"_id": "e", "at": M2 + 30_000, "path": "../outside.jpg"})
+        out = self.run_delete(["e"])
+        self.assertEqual(self.ids("frames"), ["a", "b", "c", "d"])
+        self.assertTrue(out_file.exists())
+        self.assertEqual((out["frames"], out["files"], out["files_skipped"]), (1, 0, 1))
+
+    def test_run_log_line_has_no_paths_or_text(self):
+        self.run_delete()
+        self.assertEqual(len(self.events), 1)
+        kind, fields = self.events[0]
+        self.assertEqual(kind, "gallery.delete")
+        self.assertEqual(fields["by"], "page")
+        self.assertEqual(fields["sum"], "删除 2 张照片（15:30–15:30）")
+        self.assertEqual(fields["extra"]["frames"], 2)
+        self.assertEqual((fields["extra"]["from"], fields["extra"]["to"]), (M1 + 5_000, M1 + 20_000))
+        blob = json.dumps(fields, ensure_ascii=False)
+        self.assertNotIn("frames/", blob)
+        for f in LOOK_FRAGS + ["书房里的书桌前面坐着一个人", "主人正在书房里安静地写东西", "下午在书桌前写作业的时间"]:
+            self.assertNotIn(f, blob)
+
+    def test_more_than_500_ids_is_refused(self):
+        with self.assertRaises(ValueError):
+            gallery.plan(self.db, [str(i) for i in range(501)], spool_dir=self.spool)
+        with self.assertRaises(ValueError):
+            gallery.delete(self.db, self.root, [str(i) for i in range(501)], "x", spool_dir=self.spool,
+                           emit=self.emit)
 
 
 if __name__ == "__main__":

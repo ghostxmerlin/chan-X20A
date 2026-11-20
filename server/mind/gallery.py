@@ -1,9 +1,18 @@
 """图库 reads (2026-11-20): the body camera's photos in hello.frames (files under recordings_root) browsed by day / hour /
 minute, with what the mind wrote about each one: the 看一眼 text (hello.vision_looks, same path), the minute's eye
-description (hello.eye_minutes) and the minute's scene (hello.mind_scenes, live lane). Read side only; no writes here."""
+description (hello.eye_minutes) and the minute's scene (hello.mind_scenes, live lane).
+
+The only writes: plan / delete, the owner's complete, irreversible delete of chosen photos (docs/superpowers/specs/
+2026-11-20-photo-library-design.md): the photo, every record written from it or its minute, its run log rows and
+their bodies, and the sentences derived from it wherever else they were copied (other log bodies, the log spool)."""
 import base64
 import datetime
+import hashlib
+import json
 import os
+import re
+
+from .runlog import hello_log
 
 try:
     from bson import ObjectId
@@ -97,13 +106,20 @@ def frames(db, lo, hi):
             for r in rows]
 
 
-def read_file(root, rel):
-    """A file under root (realpath-checked) -> bytes, or None."""
+def _inside(root, rel, sub=""):
+    """The real path of root/rel when it lies inside root/sub (symlinks and .. resolved), else None."""
     if not root or not isinstance(rel, str) or not rel:
         return None
-    base = os.path.realpath(root)
-    full = os.path.realpath(os.path.join(base, rel))
-    if not full.startswith(base + os.sep) or not os.path.isfile(full):
+    top = os.path.realpath(root)
+    base = os.path.realpath(os.path.join(top, sub)) if sub else top
+    full = os.path.realpath(os.path.join(top, rel))
+    return full if full.startswith(base + os.sep) else None
+
+
+def read_file(root, rel):
+    """A file under root (realpath-checked) -> bytes, or None."""
+    full = _inside(root, rel)
+    if full is None or not os.path.isfile(full):
         return None
     with open(full, "rb") as f:
         return f.read()
@@ -141,3 +157,222 @@ def detail(db, root, id):
             "looks": [{"at": d.get("at"), "text": d.get("text")} for d in looks],
             "eye": {"minute": minute, "text": "\n".join(texts(eye["result"]))} if eye else None,
             "scene": {"minute": minute, "text": "\n".join(texts(scene["scene"]))} if scene else None}
+
+
+# ---------------------------------------------------------------- complete delete (owner-triggered, irreversible)
+
+MAX_DELETE = 500
+MARK = "［图库已删除］"
+MIN_FRAGMENT = 8
+REGEX_BATCH = 200
+_BJ = datetime.timezone(datetime.timedelta(hours=8))
+_SPLIT = re.compile(r"[。！？；\n]")
+_SPOOL = re.compile(r"^.+-(\d{8})\.jsonl$")
+_DAY_MS = 86400_000
+
+
+class Stale(Exception):
+    """The delete plan changed since the page showed it (new data came in): show the new plan first."""
+
+
+def _check_ids(ids):
+    if not isinstance(ids, list) or len(ids) > MAX_DELETE:
+        raise ValueError(f"at most {MAX_DELETE} ids")
+    return [str(i) for i in ids]
+
+
+def _months(lo, hi):
+    """The log_ month suffixes (Beijing time) of every day in [lo, hi]."""
+    out, t = set(), lo
+    while t < hi:
+        out.add(hello_log.month_of(t))
+        t += _DAY_MS
+    out.add(hello_log.month_of(hi))
+    return sorted(out)
+
+
+def _fragments(looks, eyes, scenes, segs):
+    """The sentences (≥ 8 characters) of everything the mind wrote from these photos, longest first."""
+    strings = [d.get("text") for d in looks]
+    strings += [t for d in eyes for t in texts(d.get("result"))]
+    strings += [t for d in scenes for t in texts(d.get("scene"))]
+    strings += [(d.get("summary") or {}).get(k) for d in segs for k in ("title", "text")]
+    out = {p.strip() for s in strings if isinstance(s, str) for p in _SPLIT.split(s)}
+    return sorted((p for p in out if len(p) >= MIN_FRAGMENT), key=lambda p: (-len(p), p))
+
+
+def _collect(db, ids):
+    """Everything a delete of these photos removes: {collection: [docs]}, paths, minutes, fragments, fp."""
+    rows = list(db["frames"].find({"_id": _ids(ids)}))
+    paths = sorted({r["path"] for r in rows if r.get("path")})
+    ats = [r["at"] for r in rows if isinstance(r.get("at"), (int, float))]
+    minutes = sorted({_minute(a) for a in ats})
+    hit = {"frames": rows,
+           "vision_looks": list(db["vision_looks"].find({"path": {"$in": paths}})) if paths else [],
+           "eye_minutes": list(db["eye_minutes"].find({"$or": [{"minute": {"$in": minutes}},
+                                                               {"frames.path": {"$in": paths}}]})),
+           "mind_segments": []}
+    for c in ("mind_packages", "mind_scenes", "mind_runs"):
+        hit[c] = list(db[c].find({"minute": {"$in": minutes}}))
+    if minutes:
+        near = db["mind_segments"].find({"start": {"$lt": minutes[-1] + 60000}, "$or": [
+            {"end": None}, {"end": {"$exists": False}}, {"end": {"$gt": minutes[0]}}]})
+        hit["mind_segments"] = [s for s in near if any(
+            s["start"] < m + 60000 and (s.get("end") is None or s["end"] > m) for m in minutes)]
+        segs = [{"ref.minute": {"$gte": s["start"], **({} if s.get("end") is None else {"$lte": s["end"]})}}
+                for s in hit["mind_segments"]]
+        ors = [{"kind": {"$in": ["call.eye", "call.fusion"]}, "ref.minute": {"$in": minutes}}]
+        ors += [{"kind": "call.look", "ref.path": {"$in": paths}}] if paths else []
+        ors += [{"kind": "call.segment", **s} for s in segs]
+        starts = [s["start"] for s in hit["mind_segments"]]
+        for month in _months(min(minutes + starts), minutes[-1] + _DAY_MS):
+            found = list(db["log_" + month].find({"$or": ors}))
+            if found:
+                hit["log_" + month] = found
+    fp = hashlib.sha256(json.dumps({c: sorted(str(d.get("_id")) for d in docs) for c, docs in hit.items()},
+                                   sort_keys=True).encode()).hexdigest()[:16]
+    looks = [d for d in hit["vision_looks"] if d.get("kind", "look") == "look"]
+    return {"hit": hit, "paths": paths, "from": min(ats) if ats else None, "to": max(ats) if ats else None,
+            "fp": fp, "fragments": _fragments(looks, hit["eye_minutes"], hit["mind_scenes"], hit["mind_segments"])}
+
+
+def _logs(hit):
+    return {c[4:]: docs for c, docs in hit.items() if c.startswith("log_")}
+
+
+def plan(db, ids, *, spool_dir=None):
+    """The delete plan the page confirms (read only). spool_dir: accepted for the route's symmetry with delete; the
+    spool is only rewritten by delete."""
+    m = _collect(db, _check_ids(ids))
+    h = m["hit"]
+    return {"fp": m["fp"], "frames": len(h["frames"]), "files": len(m["paths"]), "looks": len(h["vision_looks"]),
+            "eye_minutes": len(h["eye_minutes"]), "packages": len(h["mind_packages"]), "scenes": len(h["mind_scenes"]),
+            "segments": [{"start": s.get("start"), "end": s.get("end"), "title": (s.get("summary") or {}).get("title")}
+                         for s in h["mind_segments"]],
+            "runs": len(h["mind_runs"]), "log_rows": sum(len(v) for v in _logs(h).values()),
+            "from": m["from"], "to": m["to"]}
+
+
+def _drop_bodies(db, month, rows):
+    """Delete the bodies of these log rows that no other row of the month still references. -> count."""
+    names, shas = set(), set()
+    for r in rows:
+        for name, sha in (r.get("body") or {}).items():
+            if isinstance(sha, str):
+                names.add(name)
+                shas.add(sha)
+    if not shas:
+        return 0
+    others = db["log_" + month].find({"_id": {"$nin": [r["_id"] for r in rows]},
+                                      "$or": [{f"body.{n}": {"$in": sorted(shas)}} for n in sorted(names)]})
+    used = {v for r in others for v in (r.get("body") or {}).values()}
+    gone = sorted(shas - used)
+    return db["logbody_" + month].delete_many({"_id": {"$in": gone}}).deleted_count if gone else 0
+
+
+def _redact_bodies(db, frags, first_month):
+    """Replace the fragments in every remaining log body from the photos' first month on. -> bodies changed."""
+    if not frags:
+        return 0
+    names = sorted(n for n in db.list_collection_names() if re.fullmatch(r"logbody_\d{6}", n) and n[8:] >= first_month)
+    done = set()
+    for name in names:
+        for i in range(0, len(frags), REGEX_BATCH):
+            pattern = "|".join(re.escape(f) for f in frags[i:i + REGEX_BATCH])
+            for d in db[name].find({"text": {"$regex": pattern}}):
+                text = d["text"]
+                for f in frags:
+                    text = text.replace(f, MARK)
+                if text != d["text"]:
+                    db[name].update_one({"_id": d["_id"]}, {"$set": {"text": text}})
+                    done.add((name, d["_id"]))
+    return len(done)
+
+
+def _redact_spool(spool_dir, frags, lo, hi):
+    """Overwrite the fragments' bytes with as many '*' in the spool files of the Beijing days [lo, hi + 1 day], in
+    place: the size never changes, so the process appending to today's file and the .offset files are unaffected. A
+    line is only changed when it is still valid JSON afterwards. -> lines changed."""
+    if not spool_dir or not frags or lo is None or not os.path.isdir(spool_dir):
+        return 0
+    day = lambda t: datetime.datetime.fromtimestamp(t / 1000, _BJ).strftime("%Y%m%d")     # noqa: E731
+    first, last = day(lo), day(hi + _DAY_MS)
+    needles = [json.dumps(f, ensure_ascii=False)[1:-1].encode() for f in frags]
+    changed = 0
+    for name in sorted(os.listdir(spool_dir)):
+        hit = _SPOOL.match(name)
+        if not hit or not first <= hit.group(1) <= last:
+            continue
+        with open(os.path.join(spool_dir, name), "r+b") as f:
+            data = f.read()
+            pos = 0
+            while True:
+                end = data.find(b"\n", pos)
+                if end < 0:                                      # a line still being written: left alone
+                    break
+                line = new = data[pos:end]
+                for n in needles:
+                    new = new.replace(n, b"*" * len(n))
+                if new != line and _valid(new):
+                    f.seek(pos)
+                    f.write(new)
+                    changed += 1
+                pos = end + 1
+    return changed
+
+
+def _valid(line):
+    try:
+        json.loads(line)
+        return True
+    except ValueError:
+        return False
+
+
+def _drop_files(root, paths):
+    """Delete the photo files whose real path is inside root/frames, then their folders once empty."""
+    done = skipped = 0
+    stop = os.path.realpath(os.path.join(root, "frames")) if root else None
+    for rel in paths:
+        full = _inside(root, rel, "frames")
+        if full is None:
+            skipped += 1
+            continue
+        try:
+            os.remove(full)
+            done += 1
+        except FileNotFoundError:
+            continue
+        folder = os.path.dirname(full)
+        while folder.startswith(stop + os.sep):
+            try:
+                os.rmdir(folder)                                 # only succeeds when empty
+            except OSError:
+                break
+            folder = os.path.dirname(folder)
+    return done, skipped
+
+
+def delete(db, root, ids, fp, *, spool_dir, emit):
+    """Delete the photos and everything written from them, if the plan is still the one the page showed (fp), else
+    Stale. Texts first, then records, files last. -> what was actually deleted where."""
+    m = _collect(db, _check_ids(ids))
+    if m["fp"] != fp:
+        raise Stale("the delete plan changed")
+    h, logs = m["hit"], _logs(m["hit"])
+    out = {"bodies": sum(_drop_bodies(db, month, rows) for month, rows in logs.items())}
+    first_month = hello_log.month_of(m["from"]) if m["from"] is not None else "000000"
+    out["bodies_redacted"] = _redact_bodies(db, m["fragments"], first_month)
+    out["spool_redacted"] = _redact_spool(spool_dir, m["fragments"], m["from"], m["to"])
+    out["log_rows"] = sum(db["log_" + month].delete_many({"_id": {"$in": [r["_id"] for r in rows]}}).deleted_count
+                          for month, rows in logs.items())
+    for key, c in (("segments", "mind_segments"), ("scenes", "mind_scenes"), ("packages", "mind_packages"),
+                   ("runs", "mind_runs"), ("eye_minutes", "eye_minutes"), ("looks", "vision_looks"),
+                   ("frames", "frames")):
+        out[key] = db[c].delete_many({"_id": {"$in": [d["_id"] for d in h[c]]}}).deleted_count if h[c] else 0
+    out["files"], out["files_skipped"] = _drop_files(root, m["paths"])
+    span = "" if m["from"] is None else "（{}–{}）".format(
+        *(datetime.datetime.fromtimestamp(t / 1000, _BJ).strftime("%H:%M") for t in (m["from"], m["to"])))
+    emit("gallery.delete", by="page", sum=f"删除 {out['frames']} 张照片{span}",
+         extra={**out, "from": m["from"], "to": m["to"]})
+    return out
