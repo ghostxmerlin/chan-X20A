@@ -101,8 +101,8 @@ struct Applied {
     uint32_t look_token = 0;        // the held report's seq
 };
 
-// The modes that show the stage dots: chat (0.4.93) and crowd (0.4.97, owner 2026-11-15: 围观 like chat).
-inline bool dots_mode(modes::rules::Mode m) { return m == modes::rules::Mode::Chat || m == modes::rules::Mode::Crowd; }
+// The modes that show the stage dots: crowd (0.4.97, owner 2026-11-15; chat, the other one, is gone since 0.5.19).
+inline bool dots_mode(modes::rules::Mode m) { return m == modes::rules::Mode::Crowd; }
 
 class ModeSession {
 public:
@@ -127,7 +127,7 @@ public:
     {
         const Outcome o = modes::rules::transition(state_, Input::Boot, Value{}, false);
         state_ = o.state; since_us_ = last_input_us_ = now_us;
-        if (start != modes::rules::Mode::None && start != state_.mode) state_ = modes::rules::detail::plain(start);
+        (void)start;                                   // Docking is the only mode since 0.5.19: boot lands there
         std::strcpy(by_, "boot");
         if (preset == 0 || preset == 9) { pend(int8_t(preset), now_us); pending_.power_on = true; }
         ++seq_; ++version_;
@@ -213,13 +213,8 @@ public:
         return a;
     }
 
-    // Main loop, a few times a second: settings with no input for 5 minutes goes back (input timeout).
-    bool tick(int64_t now_us, bool speaking)
-    {
-        if (state_.mode != modes::rules::Mode::Settings || now_us - last_input_us_ < kSettingsTimeoutUs) return false;
-        apply(now_us, "timeout", Input::Timeout, Value{}, speaking);
-        return true;
-    }
+    // Main loop: settings used to close itself after 5 minutes; there is no settings mode since 0.5.19 (Docking only).
+    bool tick(int64_t, bool) { return false; }
 
     // The ear's hello was accepted: reports and digits go up from now on, the current state first.
     void link_up(int64_t now_us = 0)
@@ -450,9 +445,7 @@ private:
         using modes::rules::Mode;
         uint8_t n = 0;
         if (from.mode == state_.mode && from.mode != Mode::None) return 0;
-        fx[n++] = Effect::StopSpeech;
-        if (from.mode == Mode::Talk) fx[n++] = Effect::TalkLeave;
-        if (state_.mode == Mode::Talk) fx[n++] = Effect::TalkEnter;
+        fx[n++] = Effect::StopSpeech;                    // no talk any more (0.5.19): no talk_leave / talk_enter
         return n;
     }
     static bool report_line(const Report& r, OutLine& out)

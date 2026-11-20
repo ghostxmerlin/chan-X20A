@@ -110,49 +110,19 @@ void strokes()
 
 void picker()
 {
-    // Nine tiles in mode-table order; the subtitle twice, with its direction.
-    const char* labels[] = {"TALK", "CHAT", "SET", "AUTO", "SUB ZH>EN", "SUB EN>ZH", "DOCK", "PAL", "IDLE"};
-    // 0.4.95: their Chinese names (mode_table.py names; IDLE has none there).
-    const char* names[] = {"脱口秀", "对话", "设置", "事件驱动", "字幕 中→英", "字幕 英→中", "Docking", "陪伴", "IDLE"};
-    for (size_t i = 0; i < kTiles; ++i) {
-        assert(!std::strcmp(tile_label(i), labels[i]));
-        assert(!std::strcmp(tile_name_zh(i), names[i]));
-        const Rect r = tile_rect(i);
-        assert(picker_hit(r.x + r.w / 2, r.y + r.h / 2) == int(i));
-        assert(picker_hit(r.x, r.y) == int(i) && picker_hit(r.x + r.w - 1, r.y + r.h - 1) == int(i));
-        assert(r.x >= 0 && r.x + r.w <= 320 && r.y >= kTitleH && r.y + r.h <= 237);   // above the ribbon
-    }
-    assert(tile_color(0) == 0xE040A0 && tile_color(4) == 0x7C6CF0 && tile_color(8) == 0x505050);
-    assert(picker_hit(10, 10) == -1 && picker_hit(106, 50) == -1 && picker_hit(50, 96) == -1);   // title, gaps
-    // Highlight: the current mode; subtitle only on its own direction.
-    State s; s.mode = Mode::Subtitle; s.dir = Dir::EnZh;
-    for (size_t i = 0; i < kTiles; ++i) assert(tile_current(i, s) == (i == 5));
-    s = State{};                                             // the boot mode: crowd = Docking (owner 2026-11-18)
-    assert(tile_current(6, s) && !tile_current(0, s));
-    s = collector::modes::rules::detail::plain(Mode::Talk);
-    assert(tile_current(0, s) && !tile_current(1, s));
-
-    // Taps go through the robot's own rules as select. From talk, each tile enters its mode.
-    for (size_t i = 0; i < kTiles; ++i) {
-        const State talk = collector::modes::rules::detail::plain(Mode::Talk);
-        const auto o = transition(talk, Input::Select, tile_value(i), false);
-        if (i == 0) { assert(o.state.mode == Mode::Idle); continue; }    // the current mode: leave it
-        assert(o.state.mode == kTileModes[i].mode && o.code == collector::modes::rules::Code::Ok);
-        if (kTileModes[i].mode == Mode::Subtitle) assert(o.state.dir == kTileModes[i].dir);
-        if (kTileModes[i].mode == Mode::Settings) assert(o.state.return_to == Mode::Talk);
-        assert(!std::strcmp(o.toast, tile_label(i)));
-    }
-    // The current subtitle direction leaves; the other direction switches.
-    State sub; sub.mode = Mode::Subtitle; sub.dir = Dir::ZhEn;
-    assert(transition(sub, Input::Select, tile_value(4), false).state.mode == Mode::Idle);
-    const auto sw = transition(sub, Input::Select, tile_value(5), false);
-    assert(sw.state.mode == Mode::Subtitle && sw.state.dir == Dir::EnZh);
-    // Settings picked again goes back where it came from.
-    State set; set.mode = Mode::Settings; set.return_to = Mode::Chat;
-    assert(transition(set, Input::Select, tile_value(2), false).state.mode == Mode::Chat);
-    // IDLE picked in IDLE: already.
-    State idle; idle.mode = Mode::Idle;
-    assert(transition(idle, Input::Select, tile_value(8), false).code == collector::modes::rules::Code::Already);
+    // One tile since collector-0.5.19 (owner 2026-11-20: Docking is the only mode), in the old grid's first slot.
+    assert(kTiles == 1 && kTileModes[0].mode == Mode::Crowd);
+    assert(!std::strcmp(tile_label(0), "DOCK") && !std::strcmp(tile_name_zh(0), "Docking") && tile_color(0) == 0x30D060);
+    const Rect r = tile_rect(0);
+    assert(picker_hit(r.x + r.w / 2, r.y + r.h / 2) == 0);
+    assert(picker_hit(r.x, r.y) == 0 && picker_hit(r.x + r.w - 1, r.y + r.h - 1) == 0);
+    assert(r.x >= 0 && r.x + r.w <= 320 && r.y >= kTitleH && r.y + r.h <= 237);   // above the ribbon
+    assert(picker_hit(10, 10) == -1 && picker_hit(106, 50) == -1 && picker_hit(160, 130) == -1);   // title, old slots
+    // Highlight: Docking is always the current mode.
+    assert(tile_current(0, State{}));
+    // A tap goes through the robot's own rules as select: Docking again = already, nothing changes.
+    const auto o = transition(State{}, Input::Select, tile_value(0), false);
+    assert(o.state == State{} && o.code == collector::modes::rules::Code::Already && !o.n_effects);
 }
 
 void quick()

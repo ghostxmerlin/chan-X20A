@@ -26,9 +26,8 @@ struct Robot {
     ModeSession s;
     JsonDocument doc;
     uint32_t bad = 0;
-    // Booted in talk: these tests were written for the old talk boot and drive talk's inputs from there. The real
-    // boot mode (crowd = Docking, owner 2026-11-18) is pinned in default_boot_is_docking().
-    explicit Robot(bool booted = true, Mode start = Mode::Talk) { if (booted) s.boot(0, start); }
+    // Booted in Docking, the only mode since collector-0.5.19 (owner 2026-11-20).
+    explicit Robot(bool booted = true) { if (booted) s.boot(0); }
     Text feed(const std::string& text)
     {
         const Text k = read_text(text.data(), text.size(), doc);
@@ -99,28 +98,21 @@ void boot_and_first_link()
 {
     Robot r;
     ModeView v = r.view();
-    assert(v.state.mode == Mode::Talk && v.seq == 1 && !std::strcmp(v.by, "boot") && !v.online);
-    assert(!std::strcmp(v.look.label, "TALK") && v.look.eye == collector::modes::Eye::LaughingMan);
+    assert(v.state.mode == Mode::Crowd && v.seq == 1 && !std::strcmp(v.by, "boot") && !v.online);
+    assert(!std::strcmp(v.look.label, "DOCK") && v.look.eye == collector::modes::Eye::V14);
     assert(r.drain().empty());                                               // nothing goes out before the hello
     r.feed(kHello);
     assert(r.view().online);
-    assert(r.drain() == report(2, "talk", "boot", "\"boot\"", "\"stop_speech\",\"talk_enter\""));
+    assert(r.drain() == report(2, "crowd", "boot", "\"boot\"", "\"stop_speech\""));
     assert(r.drain().empty());
     // The next link, nothing changed since boot: the state again, input null, by still "boot" (the last change).
     r.s.link_down(); r.feed(kHello);
-    assert(r.drain() == report(3, "talk", "boot", "null", ""));
-    // After a touch change, a re-link names touch.
-    r.in(Input::Pause, "touch");                                              // outside chat: not_in_mode, no report
-    r.in(Input::Backward, "touch");                                           // talk -> idle
-    r.drain();
-    r.s.link_down(); r.feed(kHello);
-    assert(r.drain() == report(5, "idle", "touch", "null", ""));
-
-    // A switch made before the first link: the boot report carries the state now and what mind must do.
-    Robot o;
-    assert(o.in(Input::Play).changed && o.view().state.mode == Mode::Chat && !std::strcmp(o.view().toast, "CHAT"));
-    o.feed(kHello);
-    assert(o.drain() == report(3, "chat", "boot", "\"boot\"", "\"stop_speech\""));
+    assert(r.drain() == report(3, "crowd", "boot", "null", ""));
+    // Inputs that do nothing in Docking (the old voice words, a removed mode) are not reported.
+    r.in(Input::Forward, "touch");
+    Value talk; talk.removed = true;
+    r.in(Input::Select, "page", talk);
+    assert(r.drain().empty() && !std::strcmp(r.view().toast, "DOCKING ONLY"));
 }
 
 // 0.4.96 power-on (owner 2026-11-15): hello starts in crowd (DOCK) and owes mind a 9: it goes behind the boot report
@@ -212,29 +204,18 @@ void inputs_become_reports()
     Robot r;
     r.feed(kHello);
     r.drain();
-    // Inside talk: tap = one round (no change, an effect); speaking: tap = stop.
+    // Docking's tap = listen (reported, no effect); speaking: tap = stop.
     Applied a = r.in(Input::Tap, "touch");
-    assert(!a.changed && a.reported && !std::strcmp(r.view().toast, "SAYING"));
+    assert(!a.changed && a.reported && !std::strcmp(r.view().toast, "LISTEN"));
     a = r.in(Input::Tap, "touch", Value{}, true);
     assert(a.reported && !std::strcmp(r.view().toast, "STOP"));
-    // play -> chat; in chat, tap is not implemented: nothing for mind.
-    a = r.in(Input::Play);
-    assert(a.changed && a.reported && r.view().state.mode == Mode::Chat && !std::strcmp(r.view().by, "asr"));
-    a = r.in(Input::Tap, "touch");
-    assert(!a.changed && !a.reported && !std::strcmp(r.view().toast, "NOT YET"));
-    // next outside talk: only_talk, no report.
+    // next: only_talk (there is no talk any more), no report; the old voice words: no_action, no report.
     assert(!r.in(Input::Next).reported && !std::strcmp(r.view().toast, "ONLY IN TALK"));
-    assert(r.drain() ==
-           report(3, "talk", "touch", "\"tap\"", "\"say_round\"") +
-           report(4, "talk", "touch", "\"tap\"", "\"stop_speech\"") +
-           report(5, "chat", "asr", "\"play\"", "\"stop_speech\",\"talk_leave\""));
-    // The page's select of subtitle: dir in the report; the source is whatever the caller says.
-    Value sel; sel.target = Mode::Subtitle; sel.dir = Dir::EnZh;
-    assert(r.in(Input::Select, "page", sel).changed);
-    assert(r.drain() == report(6, "subtitle", "page", "\"select\"", "\"stop_speech\"", "\"en_zh\""));
+    assert(!r.in(Input::Play).reported && !std::strcmp(r.view().toast, "NO ACTION"));
+    assert(r.drain() == report(3, "crowd", "touch", "\"tap\"", "") + report(4, "crowd", "touch", "\"tap\"", "\"stop_speech\""));
     // A source that is not a wire word is refused and changes nothing.
     const uint32_t seq = r.view().seq;
-    a = r.in(Input::Forward, "Bad Src");
+    a = r.in(Input::Tap, "Bad Src");
     assert(a.out.code == collector::modes::rules::Code::UnknownInput && !a.reported && r.view().seq == seq);
 }
 
@@ -243,31 +224,20 @@ void links()
     Robot r;
     r.feed(kHello);
     r.drain();
-    r.in(Input::Play);
-    r.drain();                                                               // mind knows: chat
-    // Offline: changes still apply on the robot; an effect-only input says OFFLINE.
+    // Offline: an input with an effect says OFFLINE and is not reported (the ear could not act on it later).
     r.s.link_down();
     assert(!r.view().online);
-    assert(r.in(Input::Forward).changed);                                   // chat -> talk
-    assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "OFFLINE"));
+    assert(!r.in(Input::Tap, "touch", Value{}, true).reported && !std::strcmp(r.view().toast, "OFFLINE"));
     assert(r.drain().empty());
-    // Back: one report (input null, by = the last change's source) with what mind needs to get from chat to talk.
+    // Back: the state again (input null, by = the last change's source: boot).
     r.feed(kHello);
-    assert(r.drain() == report(5, "talk", "asr", "null", "\"stop_speech\",\"talk_enter\""));
-    // Reconnect with nothing changed: the state again, no effects.
-    r.s.link_down(); r.feed(kHello);
-    assert(r.drain() == report(6, "talk", "asr", "null", ""));
-    // Reports not sent when the link drops are replaced by that report (from the last one mind got).
-    r.in(Input::Play);
-    r.in(Input::Pause);                                                      // chat -> idle
-    r.s.link_down(); r.feed(kHello);
-    assert(r.drain() == report(9, "idle", "asr", "null", "\"stop_speech\",\"talk_leave\""));
+    assert(r.drain() == report(3, "crowd", "boot", "null", ""));
     // A send that fails keeps the report at the front.
-    r.in(Input::Forward);
+    r.in(Input::Tap, "touch");
     OutLine l; uint32_t seq;
-    assert(r.s.next(0, l, seq) == ModeSession::Out::Report && seq == 10);
-    assert(r.s.next(0, l, seq) == ModeSession::Out::Report && seq == 10);
-    r.s.sent(ModeSession::Out::Report, 10);
+    assert(r.s.next(0, l, seq) == ModeSession::Out::Report && seq == 4);
+    assert(r.s.next(0, l, seq) == ModeSession::Out::Report && seq == 4);
+    r.s.sent(ModeSession::Out::Report, 4);
     assert(r.s.next(0, l, seq) == ModeSession::Out::None);
 }
 
@@ -315,13 +285,12 @@ void digits()
         deserializeJson(d, R"({"type":"mode_result","seq":3,"code":"ok","toast":"PRESET 0"})");
         assert(r.s.on_result(d.as<JsonObjectConst>(), 8 * kS) && r.view().result_digit == 0);
     }
-    // 4-8 are the robot's own: select through the rules, reported with input digit.
+    // 4-8 selected the removed modes: 5 (Docking) answers already, the others do nothing; nothing is reported.
     a = r.digit(7);
-    assert(!a.to_mind && a.changed && r.view().state.mode == Mode::Subtitle && r.view().state.dir == Dir::ZhEn);
-    assert(!std::strcmp(r.view().toast, "SUB ZH>EN"));
-    a = r.digit(2);
-    assert(!a.changed && !a.reported && !std::strcmp(r.view().toast, "NO ACTION"));
-    assert(r.drain() == report(3, "subtitle", "asr", "\"digit\"", "\"stop_speech\",\"talk_leave\"", "\"zh_en\""));
+    assert(!a.to_mind && !a.changed && !a.reported && !std::strcmp(r.view().toast, "NO ACTION"));
+    a = r.digit(5);
+    assert(!a.to_mind && !a.changed && !a.reported && !std::strcmp(r.view().toast, "ALREADY"));
+    assert(r.drain().empty());
     // A digit queue overflow while the link is slow drops the oldest (C1 queue).
     for (int i = 0; i < 9; ++i) r.digit(9);
     JsonDocument t;
@@ -331,57 +300,26 @@ void digits()
 
 void settings_timeout()
 {
+    // There is no settings mode since collector-0.5.19 (Docking only): the main loop's tick never fires an input.
     Robot r;
     r.feed(kHello);
     r.drain();
-    r.in(Input::Play, "asr", Value{}, false, 10 * kS);                   // chat
-    r.in(Input::Open, "asr", Value{}, false, 20 * kS);                   // settings, return_to chat
-    assert(r.view().state.mode == Mode::Settings && r.view().state.return_to == Mode::Chat);
-    assert(!r.s.tick(20 * kS + kSettingsTimeoutUs - 1, false));
-    r.in(Input::Tap, "touch", Value{}, false, 200 * kS);                 // any input restarts the 5 minutes
-    assert(!r.s.tick(20 * kS + kSettingsTimeoutUs, false));
-    assert(r.s.tick(200 * kS + kSettingsTimeoutUs, false));
-    assert(r.view().state.mode == Mode::Chat && !std::strcmp(r.view().by, "timeout") && !std::strcmp(r.view().toast, "CHAT"));
-    assert(!r.s.tick(900 * kS, false));                                    // only in settings
-    const std::string out = r.drain();
-    assert(out == report(3, "chat", "asr", "\"play\"", "\"stop_speech\",\"talk_leave\"") +
-                  report(4, "settings", "asr", "\"open\"", "\"stop_speech\"", "null", "\"chat\"") +
-                  report(5, "chat", "timeout", "\"timeout\"", "\"stop_speech\""));
+    for (int64_t t : {int64_t(0), kSettingsTimeoutUs, 10 * kSettingsTimeoutUs}) assert(!r.s.tick(t, false));
+    assert(r.drain().empty() && r.view().state.mode == Mode::Crowd);
 }
 
 void collapse()
 {
-    // Nine changes before the first report could go: the queue (boot report + 7) collapses into one, still the
-    // boot report, from "unknown"; the next change queues behind it.
+    // Nine reports before the first could go: the queue (boot report + 7) collapses into one, still the boot report;
+    // the 9th queues behind it.
     Robot r;
     r.feed(kHello);
-    for (int i = 0; i < 4; ++i) { r.in(Input::Play); r.in(Input::Pause); }   // chat, idle, chat, idle ...
-    assert(r.view().state.mode == Mode::Idle);
-    r.in(Input::Forward);                                                     // talk: the 9th report
-    assert(r.drain() == report(10, "idle", "boot", "\"pause\"", "\"stop_speech\"") +
-                        report(11, "talk", "asr", "\"forward\"", "\"stop_speech\",\"talk_enter\""));
-    // After the boot report: collapse from the last sent state, plus the newest input's own effects.
-    for (int i = 0; i < 8; ++i) r.in(Input::Tap, "touch");                   // 8 say_round reports
-    r.in(Input::DoubleTap, "touch");                                          // the 9th: prefetch_on
-    assert(r.drain() == report(20, "talk", "touch", "\"double_tap\"", "\"prefetch_on\""));
+    for (int i = 0; i < 8; ++i) r.in(Input::Tap, "touch");                   // 8 tap reports behind the boot report
+    const std::string out = r.drain();
+    assert(out.find("\"by\":\"boot\"") != std::string::npos && out.find("\"input\":\"tap\"") != std::string::npos);
     JsonDocument t;
     r.s.json(t.to<JsonObject>(), 0);
-    assert(t["reports_collapsed"] == 16 && t["reports_sent"] == 3 && t["reports_pending"] == 0);
-
-    // The report in flight survives a collapse: sent() still records it, and does not pop the new one.
-    Robot f;
-    f.feed(kHello);
-    f.drain();
-    f.in(Input::Play);
-    OutLine l; uint32_t seq;
-    assert(f.s.next(0, l, seq) == ModeSession::Out::Report && seq == 3);
-    for (int i = 0; i < 8; ++i) f.in(i % 2 ? Input::Play : Input::Pause);    // overflow while seq 3 is in flight
-    f.s.sent(ModeSession::Out::Report, 3);
-    // The collapse was computed from the last confirmed report (talk), so it repeats seq 3's effects: harmless.
-    assert(f.drain() == report(11, "chat", "asr", "\"play\"", "\"stop_speech\",\"talk_leave\""));
-    JsonDocument t2;
-    f.s.json(t2.to<JsonObject>(), 0);
-    assert(t2["reports_sent"] == 3 && t2["reports_collapsed"] == 8);
+    assert(t["reports_collapsed"].as<int>() > 0 && t["reports_pending"] == 0);
 }
 
 void telemetry_and_versions()
@@ -391,38 +329,31 @@ void telemetry_and_versions()
     auto bumped = [&] { const uint32_t n = r.view().version; const bool b = n != v; v = n; return b; };
     r.feed(kHello);                      assert(bumped());
     r.drain();                           assert(!bumped());   // sending changes nothing on the screen
-    r.in(Input::Forward);                assert(bumped());    // a toast (SAYING)
-    r.in(Input::Play);                   assert(bumped());
+    r.in(Input::Tap, "touch");           assert(bumped());    // a toast (LISTEN)
     r.s.link_down();                     assert(bumped());
     r.s.link_down();                     assert(!bumped());
 
     JsonDocument t;
     r.s.json(t.to<JsonObject>(), 5 * kS);
-    r.in(Input::Open, "page");                                  // change the session after json(): the doc keeps its copy
     std::string text;
     serializeJson(t, text);
-    assert(t["mode"] == "chat" && t["dir"].isNull() && t["host"].isNull() && t["return_to"].isNull());
-    assert(t["by"] == "asr" && t["label"] == "CHAT" && t["online"] == false && t["toast"] == "CHAT" && t["seq"] == 4);
-    assert(t["since_ms"] == 5000 && text.find("\"by\":\"asr\"") != std::string::npos);
-    t.clear();
-    r.s.json(t.to<JsonObject>(), 0);
-    assert(t["mode"] == "settings" && t["return_to"] == "chat" && t["by"] == "page" && t["label"] == "SET");
+    assert(t["mode"] == "crowd" && t["dir"].isNull() && t["host"].isNull() && t["return_to"].isNull());
+    assert(t["by"] == "boot" && t["label"] == "DOCK" && t["online"] == false && t["toast"] == "LISTEN");
+    assert(t["since_ms"] == 5000 && text.find("\"by\":\"boot\"") != std::string::npos);
 }
 }
 
 void chat_stages()
 {
-    // 0.4.93: the ear's chat stage is kept only in chat mode and cleared on leaving it.
+    // 0.4.93 / 0.4.97: the ear's chat stage (the dots) is kept in Docking, the only mode since 0.5.19.
     Robot r;
     JsonDocument& doc = r.doc;
     auto stage = [&](const std::string& text, int64_t now) {
         assert(read_text(text.data(), text.size(), doc) == Text::ChatStage);
         return r.s.on_chat_stage(doc.as<JsonObjectConst>(), text.size(), now);
     };
+    assert(collector::mouth::dots_mode(Mode::Crowd) && !collector::mouth::dots_mode(Mode::None));
     const std::string listen = R"({"type":"chat_stage","stage":"listen","at_ms":1763100000000})";
-    assert(!stage(listen, 1 * kS));                                          // talk: dropped
-    assert(r.view().chat.stage == collector::chat::Stage::Idle);
-    r.in(Input::Play);                                                       // chat
     const uint32_t v0 = r.view().version;
     assert(stage(listen, 2 * kS) && r.view().chat.stage == collector::chat::Stage::Listen && r.view().chat.at_us == 2 * kS);
     assert(r.view().version != v0);
@@ -435,22 +366,13 @@ void chat_stages()
     std::string big = R"({"type":"chat_stage","stage":"listen","pad":")" + std::string(200, 'x') + "\"}";
     assert(!stage(big, 5 * kS) && r.view().chat.stage == collector::chat::Stage::Idle);
     assert(stage(listen, 6 * kS));
-    // Leaving chat clears it; a stage outside chat is dropped; back in chat it starts idle.
-    const uint32_t seq = r.view().chat.seq;
-    r.in(Input::Pause);                                                      // idle
-    assert(r.view().chat.stage == collector::chat::Stage::Idle && r.view().chat.seq != seq);
-    assert(!stage(listen, 7 * kS));
-    r.in(Input::Play);
-    assert(r.view().chat.stage == collector::chat::Stage::Idle);
-    // A chat -> chat no-op (tap: not implemented) keeps the stage.
-    assert(stage(listen, 8 * kS));
+    // A tap (no mode change) keeps the stage.
     r.in(Input::Tap, "touch");
     assert(r.view().chat.stage == collector::chat::Stage::Listen);
     JsonDocument t;
-    r.s.json(t.to<JsonObject>(), 9 * kS);
+    r.s.json(t.to<JsonObject>(), 7 * kS);
     assert(t["chat_stage"]["stage"] == "listen" && t["chat_stage"]["age_ms"] == 1000);
-    assert(t["chat_stage"]["received"] == 5 && t["chat_stage"]["dropped"] == 2 && t["chat_stage"]["bad"] == 4);
-    // Review Minor 1: /mouth dropping (badge OFF) or coming back clears the stage, so no dot stays lit.
+    // /mouth dropping (badge OFF) or coming back clears the stage, so no dot stays lit.
     uint32_t seq2 = r.view().chat.seq;
     r.s.link_down();
     assert(r.view().chat.stage == collector::chat::Stage::Idle && r.view().chat.seq != seq2);
@@ -459,27 +381,9 @@ void chat_stages()
     seq2 = r.view().chat.seq;
     r.s.link_up();                                                           // a new handshake without a drop seen
     assert(r.view().chat.stage == collector::chat::Stage::Idle && r.view().chat.seq != seq2);
-    // tts.start in chat records when the speech began (Minor 4); outside chat it does nothing.
+    // tts.start records when the speech began.
     r.s.on_speech_start(11 * kS);
     assert(r.view().chat.speak_from_us == 11 * kS);
-    r.in(Input::Pause);
-    r.s.on_speech_start(12 * kS);
-    assert(r.view().chat.speak_from_us == 0);
-    // 0.4.97 (owner 2026-11-15): crowd shows the dots too; switching chat <-> crowd starts them idle.
-    Robot c;
-    c.digit(5);                                                              // crowd
-    assert(c.view().state.mode == Mode::Crowd && collector::mouth::dots_mode(Mode::Crowd));
-    auto cstage = [&](const std::string& text, int64_t now) {
-        assert(read_text(text.data(), text.size(), c.doc) == Text::ChatStage);
-        return c.s.on_chat_stage(c.doc.as<JsonObjectConst>(), text.size(), now);
-    };
-    assert(cstage(listen, 13 * kS) && c.view().chat.stage == collector::chat::Stage::Listen);
-    assert(cstage(R"({"type":"chat_stage","stage":"think"})", 14 * kS) && c.view().chat.stage == collector::chat::Stage::Think);
-    c.s.on_speech_start(15 * kS);
-    assert(c.view().chat.speak_from_us == 15 * kS);
-    c.in(Input::Play);                                                       // crowd -> chat: cleared
-    assert(c.view().chat.stage == collector::chat::Stage::Idle && c.view().chat.speak_from_us == 0);
-    assert(!collector::mouth::dots_mode(Mode::Talk) && !collector::mouth::dots_mode(Mode::Idle));
 }
 
 // 0.5.15 (owner 2026-11-19): crowd's tap = listen (toast LISTEN, reported with no effect: the ear opens its
@@ -490,27 +394,25 @@ void crowd_tap()
     Robot r;
     r.feed(kHello);
     r.drain();
-    Value v; v.digit = 5;
-    assert(r.in(Input::Digit, "asr", v).changed && r.view().state.mode == Mode::Crowd);
-    r.drain();
+    assert(r.view().state.mode == Mode::Crowd);                               // Docking from boot
     Applied a = r.in(Input::Tap, "touch");
     assert(!a.changed && a.reported && !a.out.n_effects && !a.look && !std::strcmp(r.view().toast, "LISTEN"));
     a = r.in(Input::Tap, "touch", Value{}, true);                             // while speaking: a stop
     assert(a.reported && a.out.has(collector::modes::rules::Effect::StopSpeech) && !std::strcmp(r.view().toast, "STOP"));
-    assert(r.drain() == report(4, "crowd", "touch", "\"tap\"", "") + report(5, "crowd", "touch", "\"tap\"", "\"stop_speech\""));
+    assert(r.drain() == report(3, "crowd", "touch", "\"tap\"", "") + report(4, "crowd", "touch", "\"tap\"", "\"stop_speech\""));
     Applied dt = r.in(Input::DoubleTap, "touch");
     assert(!dt.to_mind && dt.reported && !dt.changed && !dt.out.n_effects && !std::strcmp(r.view().toast, "QUIET"));
     dt = r.in(Input::DoubleTap, "touch", Value{}, true);
     assert(dt.reported && dt.out.has(collector::modes::rules::Effect::StopSpeech) && !std::strcmp(r.view().toast, "QUIET"));
-    assert(r.drain() == report(6, "crowd", "touch", "\"double_tap\"", "") + report(7, "crowd", "touch", "\"double_tap\"", "\"stop_speech\""));
+    assert(r.drain() == report(5, "crowd", "touch", "\"double_tap\"", "") + report(6, "crowd", "touch", "\"double_tap\"", "\"stop_speech\""));
     // Offline the tap cannot reach the ear: OFFLINE, no report.
     r.s.link_down();
     assert(!r.in(Input::Tap, "touch").reported && !std::strcmp(r.view().toast, "OFFLINE"));
 }
 
 // 0.4.98 (owner 2026-11-15, 能让hello在围观模式中闭嘴): digit 1 goes to mind like 0 / 9, but it is a toggle: offline it
-// is not owed for later (toast OFFLINE, nothing on the next link), and it never replaces a pending 0 / 9. Outside
-// crowd a double tap keeps its table meaning; digits 2 / 3 stay no_action.
+// is not owed for later (toast OFFLINE, nothing on the next link), and it never replaces a pending 0 / 9. A double tap
+// is Docking's 安静一下; digits 2 / 3 stay no_action.
 void digit_one()
 {
     Robot r;
@@ -523,9 +425,9 @@ void digit_one()
     deserializeJson(d, R"({"type":"mode_result","seq":1,"code":"ok","toast":"PRESET 1: DOCK QUIET"})");
     assert(r.s.on_result(d.as<JsonObjectConst>(), 2 * kS));
     assert(r.view().result_digit == 1 && !std::strcmp(r.view().toast, "PRESET 1: DOCK QUIET"));
-    // talk: a double tap is the table's prefetch_on, not a digit
+    // Docking: a double tap is 安静一下 (QUIET), not a digit
     Applied t = r.in(Input::DoubleTap, "touch");
-    assert(!t.to_mind && t.reported && t.out.has(collector::modes::rules::Effect::PrefetchOn));
+    assert(!t.to_mind && t.reported && !std::strcmp(r.view().toast, "QUIET"));
     assert(!r.digit(2).to_mind && !std::strcmp(r.view().toast, "NO ACTION"));
     // offline: nothing owed; the owner's 1 drops the power-on 9 still owed (review 2026-11-15: latest action wins)
     Robot o(false);
@@ -564,9 +466,7 @@ void tool_stage()
     Robot r;
     r.feed(kHello);
     r.drain();
-    r.digit(5, "asr", 0);                                                   // crowd
-    r.drain();
-    JsonDocument doc;
+    JsonDocument doc;                                                       // Docking from boot
     const std::string tool = R"({"type":"chat_stage","stage":"tool","at_ms":1})";
     deserializeJson(doc, tool);
     assert(r.s.on_chat_stage(doc.as<JsonObjectConst>(), tool.size(), 1 * kS));
@@ -582,11 +482,9 @@ void look_hold()
     r.s.set_look_hold(800000);
     r.feed(kHello);
     r.drain();
-    r.digit(5, "asr", 0);                                                   // crowd
-    assert(r.drain() == report(3, "crowd", "asr", "\"digit\"", "\"stop_speech\",\"talk_leave\""));
-    Applied a = r.in(Input::Tap, "touch", Value{}, false, 10 * kS);
+    Applied a = r.in(Input::Tap, "touch", Value{}, false, 10 * kS);            // Docking from boot
     assert(!a.look && a.reported && !r.s.holding_look());
-    assert(r.drain(10 * kS) == report(4, "crowd", "touch", "\"tap\"", ""));
+    assert(r.drain(10 * kS) == report(3, "crowd", "touch", "\"tap\"", ""));
 }
 
 int main()

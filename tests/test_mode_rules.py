@@ -10,8 +10,6 @@ VECTORS = ROOT / "tests/data/mode_vectors.json"
 
 
 class ModeRulesTest(unittest.TestCase):
-    # Docking only (2026-11-20): the vectors changed first (plan Task 1); fw/mode_rules.h follows in Task 7.
-    @unittest.expectedFailure
     def test_firmware_rules_replay_every_vector(self):
         with tempfile.TemporaryDirectory(prefix="chan-mode-rules-") as directory:
             binary = pathlib.Path(directory) / "mode-rules"

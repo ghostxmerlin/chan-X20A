@@ -55,12 +55,7 @@ void table(JsonObjectConst t)
         assert(row["pool"].isNull() ? d.pool == Pool::Default : (d.pool == Pool::Lively && row["pool"] == "lively"));
         assert(!std::strcmp(kTouch[static_cast<size_t>(d.tap)], row["tap"].as<const char*>()));
         assert(!std::strcmp(kTouch[static_cast<size_t>(d.dbl)], row["double"].as<const char*>()));
-        if (m == Mode::Subtitle) {
-            assert(!std::strcmp(kSubtitleLabels[1], row["labels"]["zh_en"].as<const char*>()));
-            assert(!std::strcmp(kSubtitleLabels[2], row["labels"]["en_zh"].as<const char*>()));
-        } else {
-            assert(row["labels"].isNull());
-        }
+        assert(row["labels"].isNull());
         ++n;
     }
     assert(n == kModeCount);
@@ -91,44 +86,39 @@ void vector(JsonArrayConst v, size_t i)
     }
 }
 
-// Things the vectors do not reach: unknown digits, look(), the id helpers.
+// Things the vectors do not reach: unknown digits, removed-mode selects, look(), the id helpers.
 void extras()
 {
-    // owner 2026-11-18: the default state is the boot mode, crowd (Docking, badge DOCK); boot from anywhere lands
-    // there with stop_speech only (talk_leave when it was talk), never talk_enter.
+    // Docking only (2026-11-20): the default state is Docking (badge DOCK); boot and long keep it, stop_speech only.
     const State boot_default;
-    assert(boot_default.mode == Mode::Crowd && !std::strcmp(label(boot_default), "DOCK"));
-    State talk; talk.mode = Mode::Talk;
-    for (size_t m = 0; m < kModeCount; ++m) {
-        State st; st.mode = Mode(m);
-        if (st.mode == Mode::Subtitle) st.dir = Dir::ZhEn;
-        if (st.mode == Mode::Settings) st.return_to = Mode::Talk;
-        const Outcome o = transition(st, Input::Boot, Value{}, false);
-        assert(o.state == boot_default && o.code == Code::Ok && o.has(Effect::StopSpeech) && !o.has(Effect::TalkEnter));
-        assert(o.has(Effect::TalkLeave) == (st.mode == Mode::Talk) && o.n_effects == (st.mode == Mode::Talk ? 2 : 1));
+    assert(boot_default.mode == Mode::Crowd && !std::strcmp(label(boot_default), "DOCK") && kModeCount == 1);
+    for (Input in : {Input::Boot, Input::Long}) {
+        const Outcome o = transition(boot_default, in, Value{}, false);
+        assert(o.state == boot_default && o.code == Code::Ok && o.n_effects == 1 && o.has(Effect::StopSpeech));
+        assert(!std::strcmp(o.toast, "STOP"));
     }
     Value v;
     for (int d : {-1, 0, 9, 10}) {
         v.digit = d;
-        const Outcome o = transition(talk, Input::Digit, v, false);
-        assert(o.code == Code::UnknownInput && o.state == talk && !o.n_effects && !std::strcmp(o.toast, "NO EFFECT"));
+        const Outcome o = transition(boot_default, Input::Digit, v, false);
+        assert(o.code == Code::UnknownInput && o.state == boot_default && !o.n_effects && !std::strcmp(o.toast, "NO EFFECT"));
     }
     JsonDocument doc;
-    deserializeJson(doc, "[12, 4, \"4\", {\"mode\":\"crowd\"}]");
+    deserializeJson(doc, "[12, 4, \"4\", {\"mode\":\"crowd\"}, {\"mode\":\"talk\"}, {\"mode\":\"party\"}]");
     assert(value_from(Input::Digit, doc[0]).digit == -1 && value_from(Input::Digit, doc[1]).digit == 4);
     assert(value_from(Input::Digit, doc[2]).digit == -1);
-    assert(value_from(Input::Select, doc[3]).target == Mode::Crowd);
+    assert(value_from(Input::Select, doc[3]).target == Mode::Crowd && !value_from(Input::Select, doc[3]).removed);
+    assert(value_from(Input::Select, doc[4]).target == Mode::None && value_from(Input::Select, doc[4]).removed);
+    assert(value_from(Input::Select, doc[5]).target == Mode::None && !value_from(Input::Select, doc[5]).removed);
+    const Outcome r = transition(boot_default, Input::Select, value_from(Input::Select, doc[4]), false);
+    assert(r.code == Code::RemovedMode && !std::strcmp(code_id(r.code), "removed_mode") && !std::strcmp(r.toast, "DOCKING ONLY"));
     assert(input_from("billing") == Input::Unknown && input_from(nullptr) == Input::Unknown);
     assert(!std::strcmp(input_id(Input::DoubleTap), "double_tap") && !std::strcmp(input_id(Input::Unknown), "unknown"));
+    assert(mode_from("talk") == Mode::None && mode_from("crowd") == Mode::Crowd);
 
-    State sub; sub.mode = Mode::Subtitle; sub.dir = Dir::EnZh;
-    const Snapshot s = look(sub, 7);
-    assert(s.seq == 7 && !std::strcmp(s.mode, "subtitle") && !std::strcmp(s.dir, "en_zh") && !std::strcmp(s.label, "SUB EN>ZH"));
-    assert(s.eye == Eye::PageSubtitle && s.color == 0x7C6CF0 && s.tap == TouchAct::None);
-    const Snapshot t = look(talk, 1);
-    assert(!std::strcmp(t.mode, "talk") && !std::strcmp(t.dir, "") && t.eye == Eye::LaughingMan && !std::strcmp(t.label, "TALK"));
-    State set; set.mode = Mode::Settings; set.return_to = Mode::Subtitle; set.dir = Dir::ZhEn;
-    assert(!std::strcmp(look(set, 2).label, "SET"));
+    const Snapshot s = look(boot_default, 7);
+    assert(s.seq == 7 && !std::strcmp(s.mode, "crowd") && !std::strcmp(s.dir, "") && !std::strcmp(s.label, "DOCK"));
+    assert(s.eye == Eye::V14 && s.pool == Pool::Lively && s.color == 0x30D060 && s.tap == TouchAct::Server);
 }
 }
 
@@ -144,7 +134,7 @@ int main(int argc, char** argv)
     assert(!err);
     table(doc["table"].as<JsonObjectConst>());
     const JsonArrayConst vectors = doc["vectors"].as<JsonArrayConst>();
-    assert(vectors.size() > 1000);
+    assert(vectors.size() >= 80);                 // one state since 2026-11-20 (86 vectors)
     size_t i = 0;
     for (JsonArrayConst v : vectors) vector(v, i++);
     extras();

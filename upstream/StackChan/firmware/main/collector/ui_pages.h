@@ -135,15 +135,11 @@ struct Rect {
 constexpr int kTitleH = 28;
 constexpr Rect kBack{0, 0, 140, kTitleH};    // "< Back" (the top-right corner is the mode badge's)
 
-// ---- Mode picker: 3 x 3 tiles, the eight modes with subtitle twice (mode_table labels / colours). ----
+// ---- Mode picker: one tile since collector-0.5.19 (owner 2026-11-20: Docking is the only mode), in the first slot of
+// the old 3 x 3 grid (mode_table label / colour). ----
 struct Tile { modes::rules::Mode mode; modes::rules::Dir dir; };
-constexpr size_t kTiles = 9;
-inline constexpr Tile kTileModes[kTiles] = {
-    {modes::rules::Mode::Talk, modes::rules::Dir::None}, {modes::rules::Mode::Chat, modes::rules::Dir::None},
-    {modes::rules::Mode::Settings, modes::rules::Dir::None}, {modes::rules::Mode::Event, modes::rules::Dir::None},
-    {modes::rules::Mode::Subtitle, modes::rules::Dir::ZhEn}, {modes::rules::Mode::Subtitle, modes::rules::Dir::EnZh},
-    {modes::rules::Mode::Crowd, modes::rules::Dir::None}, {modes::rules::Mode::Companion, modes::rules::Dir::None},
-    {modes::rules::Mode::Idle, modes::rules::Dir::None}};
+constexpr size_t kTiles = 1;
+inline constexpr Tile kTileModes[kTiles] = {{modes::rules::Mode::Crowd, modes::rules::Dir::None}};
 constexpr int kTileX[3] = {8, 112, 216}, kTileY[3] = {34, 100, 166}, kTileW = 96, kTileH = 60;
 inline Rect tile_rect(size_t i) { return Rect{kTileX[i % 3], kTileY[i / 3], kTileW, kTileH}; }
 // The tile under (x, y), or -1 (gaps and the title bar).
@@ -155,20 +151,20 @@ inline int picker_hit(int x, int y)
 inline const char* tile_label(size_t i)
 {
     const Tile& t = kTileModes[i];
-    return t.mode == modes::rules::Mode::Subtitle ? modes::rules::kSubtitleLabels[size_t(t.dir)] : modes::rules::def(t.mode).label;
+    return modes::rules::def(t.mode).label;
 }
 // The tile's Chinese name (mode_table names; subtitle with its direction), for the CJK font; tile_label() stands in.
 inline const char* tile_name_zh(size_t i)
 {
     const Tile& t = kTileModes[i];
-    return t.mode == modes::rules::Mode::Subtitle ? ui_text::kSubtitleNames[size_t(t.dir)] : ui_text::mode_name(t.mode);
+    return ui_text::mode_name(t.mode);
 }
 inline uint32_t tile_color(size_t i) { return modes::rules::def(kTileModes[i].mode).color; }
 // Highlighted: the current mode (subtitle: its direction too).
 inline bool tile_current(size_t i, const modes::rules::State& s)
 {
     const Tile& t = kTileModes[i];
-    return s.mode == t.mode && (t.mode != modes::rules::Mode::Subtitle || s.dir == t.dir);
+    return s.mode == t.mode;
 }
 // What a tap on tile i asks the rules: select {mode, dir}. The rules decide: another mode = enter it; the current
 // one = leave it (to IDLE, settings back to where it came from); the other subtitle direction = switch.
