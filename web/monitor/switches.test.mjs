@@ -248,3 +248,26 @@ test('点屏幕聊天: on by default; says when a chat runs; the other two do no
  v=sw.switchView(robot(),true,{enabled:false},{...st,realtime_answer_all:{on:true},realtime_status:{...st.realtime_status,chat:true}});
  assert.match(v.all.detail,/正在聊/);
 });
+
+// 0.5.21 (owner 2026-11-20, hat off): 拍头感应 is the robot's own setting; 灯 is mind's switch for 鹿野's set_light tool.
+test('head pat switch reads the robot and toggles through the robot control', ()=>{
+ const r=robot();r.capabilities.head_pat='supported';r.telemetry.head_touch={pat_enabled:true,pat_count:3,last_gesture:'double_tap'};
+ const v=sw.switchView(r,true,{enabled:false});
+ assert.deepEqual([v.pat.known,v.pat.on,v.pat.can],[true,true,true]);assert.match(v.pat.detail,/拍一下/);
+ assert.deepEqual(sw.toggleRequest('pat',r,true),{kind:'control',body:{action:'head_pat',enabled:false,boot:'b1'}});
+ const old=sw.switchView(robot(),true,{enabled:false});
+ assert.deepEqual([old.pat.known,old.pat.can],[false,false]);assert.match(old.pat.detail,/固件/);
+ assert.equal(sw.switchView(r,false,{enabled:false}).pat.can,false);   // stale: no toggling
+});
+test('light switch is mind\'s, default on when the switch says nothing', ()=>{
+ const on=sw.switchView(robot(),true,{enabled:false},{light:{on:true}});
+ assert.deepEqual([on.light.known,on.light.on],[true,true]);
+ assert.deepEqual(sw.toggleRequest('light',robot(),{light:{on:true}}),{kind:'switch',body:{name:'light',on:false}});
+ assert.equal(sw.switchView(robot(),true,{enabled:false},{}).light.known,false);
+});
+test('light test colours go to the robot as r g b', ()=>{
+ assert.deepEqual(sw.lightRequest('blue',{boot:'b1'}),{action:'light',r:0,g:0,b:255,boot:'b1'});
+ assert.deepEqual(sw.lightRequest('off',{boot:'b1'}),{action:'light',r:0,g:0,b:0,boot:'b1'});
+ assert.equal(sw.LIGHT_COLOURS.length>=4,true);
+ assert.throws(()=>sw.lightRequest('mauve',{boot:'b1'}));
+});

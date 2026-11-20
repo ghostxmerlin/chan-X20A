@@ -280,3 +280,16 @@ test('mode: Docking is the only mode (2026-11-20): the page never asks hello to 
   await assert.rejects(c.execute(req),e=>e.status===400&&/只有 Docking 模式/.test(e.message),JSON.stringify(req));
  assert.equal(calls.length,0);
 });
+test('head pat toggle and light colours need 0.5.21 and exact arguments',async()=>{
+ const {m,c,calls}=fixture();
+ await assert.rejects(c.execute({action:'head_pat',enabled:false,boot:'boot-a'}));
+ await assert.rejects(c.execute({action:'light',r:0,g:0,b:255,boot:'boot-a'}));
+ m.info.capabilities.head_pat='supported';m.info.capabilities.body_light='supported';
+ await c.execute({action:'head_pat',enabled:false,boot:'boot-a'});
+ assert.deepEqual(calls[0],['/v1/control',{target:'head_pat',enabled:false}].concat(calls[0].slice(2)));
+ await c.execute({action:'light',r:0,g:0,b:255,boot:'boot-a'});
+ assert.deepEqual(calls[1][1],{target:'light',r:0,g:0,b:255});
+ for(const bad of [{action:'head_pat',enabled:'no',boot:'boot-a'},{action:'light',r:256,g:0,b:0,boot:'boot-a'},
+  {action:'light',r:0,g:0,boot:'boot-a'},{action:'light',r:1.5,g:0,b:0,boot:'boot-a'}]) await assert.rejects(c.execute(bad));
+ assert.equal(calls.length,2);
+});

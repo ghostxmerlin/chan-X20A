@@ -1,8 +1,8 @@
 import {hearingBody} from './hearing.mjs';
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
-const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'],mic_gain:['value'],m12_mode:['mode'],m12:['enabled'],m12_learn:['name'],m12_forget:['name'],m12_faces:[],m12_who:[],m12_ping:[],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_turn:['duration_ms'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
+const fields = {interaction:['mode','enabled'],voice:['clip_id'],volume:['value'],mic_gain:['value'],m12_mode:['mode'],m12:['enabled'],m12_learn:['name'],m12_forget:['name'],m12_faces:[],m12_who:[],m12_ping:[],motor:['enabled'],yaw:['delta_deg'],yaw_center:['slot'],yaw_turn:['duration_ms'],yaw_step:['delta_deg','speed','path'],pitch:['angle_deg'],camera:['enabled'],head_pat:['enabled'],light:['r','g','b'],servo_refresh:['axis'],servo_restore:['axis'],servo_eeprom:['axis','p','d','i','punch','dead_cw','dead_ccw','max_torque'],servo_runtime:['axis','goal_time_ms','goal_speed','spring_stiffness','spring_damping','hold_min_ms','hold_max_ms','tolerance_deg'],wifi_scan:[],wifi_reconnect:[],wifi_add:['ssid','password','preferred'],wifi_remove:['ssid'],wifi_prefer:['ssid']};
 // Every JSON control reaches the robot through one endpoint; `target` selects the feature.
-const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',mic_gain:'mic_gain',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_turn:'yaw_turn',yaw_step:'yaw_step',pitch:'pitch',camera:'camera'};
+const targets = {interaction:'interaction',voice:'voice_play',volume:'volume',mic_gain:'mic_gain',m12_mode:'m12_mode',m12:'m12_view',motor:'remote',yaw:'yaw_step',yaw_center:'yaw_step',yaw_turn:'yaw_turn',yaw_step:'yaw_step',pitch:'pitch',camera:'camera',head_pat:'head_pat',light:'light'};
 const route = '/v1/control';
 Object.assign(fields,{eyes_configure:['request_id','enabled','style'],eyes_play:['request_id','state'],eyes_stop:['request_id']});
 Object.assign(fields,{hearing_config:['url','token'],hearing_import:[],hearing_listen:['enabled'],hearing_enroll:['name','replace'],hearing_cancel:[],hearing_forget:['name']});
@@ -16,7 +16,8 @@ export class Controls {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(fields,input.action)) fail(400,'未知控制操作');
     const keys=['action','boot',...fields[input.action]];
     if (Object.keys(input).length !== keys.length || !keys.every(k=>Object.hasOwn(input,k))) fail(400,'控制参数无效');
-    if (['interaction','m12','motor','camera'].includes(input.action) && typeof input.enabled !== 'boolean') fail(400,'启用状态必须是布尔值');
+    if (['interaction','m12','motor','camera','head_pat'].includes(input.action) && typeof input.enabled !== 'boolean') fail(400,'启用状态必须是布尔值');
+    if (input.action==='light' && !['r','g','b'].every(k=>Number.isInteger(input[k])&&input[k]>=0&&input[k]<=255)) fail(400,'颜色须为 r g b 0–255 的整数');
     if (input.action==='interaction' && !['tracking','recognition','advanced'].includes(input.mode)) fail(400,'未知交互模式');
     // m12d: detection on/off only; identification goes through m12_learn / m12_who / m12_forget / m12_faces.
     if (input.action==='m12_mode' && !['standby','face_detector'].includes(input.mode)) fail(400,'未知 M12 模式');
@@ -67,6 +68,8 @@ export class Controls {
       return {target:'eyes',op:input.action.slice(5),...body,...(input.action==='eyes_play'?{mode:'once'}:{})};
     }
     if (input.action==='camera' && m.info?.capabilities?.camera_control!=='supported') fail(409,'当前固件尚未支持相机开关');
+    if (input.action==='head_pat' && m.info?.capabilities?.head_pat!=='supported') fail(409,'固件过旧：拍头感应需要 collector-0.5.21');
+    if (input.action==='light' && m.info?.capabilities?.body_light!=='supported') fail(409,'固件过旧：机身灯需要 collector-0.5.21');
     if (input.action==='yaw' && m.info?.capabilities?.yaw_step_45!=='supported') fail(409,'当前固件尚未支持 45° 左右步进');
     if (input.action==='yaw_turn' && m.info?.capabilities?.yaw_turn!=='supported') fail(409,'当前固件尚未支持定时转身');
     if (input.action==='yaw_step' && m.info?.capabilities?.yaw_step_diagnostics!=='supported') fail(409,'当前固件尚未支持步进诊断参数');
@@ -110,7 +113,7 @@ export class Controls {
       const result=await this.monitor.client.control(route,body,input.boot,()=>this.validate(input));
       if(result.accepted!==true) fail(502,'设备没有确认接收请求');
       this.monitor.event('control',`网页 ${input.action} 请求已接收，执行状态以遥测为准`);
-      return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='yaw_turn'?'定时转身请求已接收，约 180° 仅为估计；执行状态见转身状态':input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='mic_gain'?`麦克风增益已设为 ${input.value} dB 并保存，立即生效`:input.action.startsWith('m12_')&&input.action!=='m12_mode'?`已发送 ${input.action.slice(4)}，结果见认人库`:input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':input.action==='mode'?'已发给 hello，它切了会报上来':'设备已接收请求，执行状态见下方'};
+      return {...result,message:input.action.startsWith('wifi_')?(input.action==='wifi_add'?'网络已保存，正在重连；状态见上方':input.action==='wifi_scan'?'扫描已开始，结果稍后显示':'已接收，状态见上方'):input.action.startsWith('servo_')?'舵机参数请求已排队；结果以“舵机参数”对话框状态为准':input.action==='camera'?(input.enabled?'已请求开启机身相机并保存；画面以遥测为准':'已请求关闭机身相机并保存'):input.action==='head_pat'?(input.enabled?'拍头感应已打开并保存':'拍头感应已关闭并保存'):input.action==='light'?'灯的颜色已发出（只在这次开机内有效）':input.action==='yaw_turn'?'定时转身请求已接收，约 180° 仅为估计；执行状态见转身状态':input.action==='pitch'?'仰角已保存并排队，执行状态见下方':input.action==='mic_gain'?`麦克风增益已设为 ${input.value} dB 并保存，立即生效`:input.action.startsWith('m12_')&&input.action!=='m12_mode'?`已发送 ${input.action.slice(4)}，结果见认人库`:input.action==='interaction'&&input.mode==='advanced'?'预留意图已接收；高级语音尚未实现':input.action==='mode'?'已发给 hello，它切了会报上来':'设备已接收请求，执行状态见下方'};
     } catch(error) {
       const known=error.status>=400 && error.status<500;
       const message=known ? (error.status===409?'设备拒绝本次操作，请检查最新状态':error.message) : '请求结果未确认；请查看实时状态，本次不会自动重发';

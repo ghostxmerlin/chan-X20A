@@ -91,7 +91,16 @@ export function switchView(robot,fresh,mind,switches=null){
    nOn&&nAvail!==false&&nRunning===null&&'纪要状态未知'].filter(Boolean).join('；');
   cost=paying.length?'正在花钱：'+paying.join(' + ')+(unknown?'；'+unknown:''):unknown||'现在不花钱';
  }
- return {hearing,vision,mind:m,notes,meet,all,turn,intent,cost};
+ // 拍头感应 (0.5.21, owner 2026-11-20): the robot's own setting (NVS, default on); unknown on older firmware
+ const ht=t.head_touch||{},pSup=robot?.capabilities?.head_pat==='supported',pKnown=pSup&&typeof ht.pat_enabled==='boolean';
+ const pat={known:pKnown,on:pKnown&&ht.pat_enabled===true,can:pKnown&&!!fresh,
+  detail:!pSup?'要 0.5.21 固件':!pKnown?'状态未知':ht.pat_enabled?`拍一下 = 单击，两下 = 双击，连着拍 = 抗议${ht.pat_count?` · 已拍 ${ht.pat_count} 回`:''}`:'关着：拍头没反应'};
+ // 灯 (owner 2026-11-20): mind's switch, whether 鹿野 may use set_light; the page's test colours work either way
+ const lsw=switches?.light,lKnown=!!lsw&&typeof lsw.on==='boolean',lOn=lKnown&&lsw.on===true;
+ const bl=t.body_light||{};
+ const light={known:lKnown,on:lOn,can:lKnown,
+  detail:(!lKnown?'开关未连接':lOn?'鹿野可以开灯、换颜色':'鹿野不能用灯')+(bl.on?` · 现在亮着 rgb(${bl.r},${bl.g},${bl.b})`:'')};
+ return {hearing,vision,mind:m,notes,meet,all,turn,intent,pat,light,cost};
 }
 
 // The pause (2026-11-17, server/mind/pause.py): mind pauses the paid items when nobody has been there for
@@ -175,13 +184,22 @@ export function toggleRequest(which,robot,mindOrFresh){
  if(which==='all')return {kind:'switch',body:{name:'realtime_answer_all',on:!(mindOrFresh?.realtime_answer_all?.on!==false)}};
  if(which==='intent')return {kind:'switch',body:{name:'realtime_intent',on:mindOrFresh?.realtime_intent?.on!==true}};   // unknown = off (owner 2026-11-20)
  if(which==='turn')return {kind:'switch',body:{name:'realtime_smart_turn',on:mindOrFresh?.realtime_smart_turn?.on!==true}};
+ if(which==='light')return {kind:'switch',body:{name:'light',on:mindOrFresh?.light?.on!==true}};
+ if(which==='pat')return {kind:'control',body:{action:'head_pat',enabled:robot?.telemetry?.head_touch?.pat_enabled!==true,boot:robot?.boot}};
  const v=switchView(robot,mindOrFresh,null);
  if(which==='hearing')return {kind:'control',body:{action:'hearing_listen',enabled:!v.hearing.on,boot:robot?.boot}};
  return {kind:'control',body:{action:'m12',enabled:!v.vision.on,boot:robot?.boot}};
 }
 
-const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'Docking',all:'点屏幕聊天',turn:'智能断句',intent:'工具分类器'};
-const TOGGLES=['mind','notes','meet','all','turn','intent'];
+const NAMES={hearing:'听觉',vision:'视觉',mind:'情景',notes:'纪要',meet:'Docking',all:'点屏幕聊天',turn:'智能断句',intent:'工具分类器',pat:'拍头感应',light:'灯'};
+const TOGGLES=['mind','notes','meet','all','turn','intent','pat','light'];
+// 灯 test colours (0.5.21): straight to the robot's body LEDs, not through 鹿野
+export const LIGHT_COLOURS=[['red','红',[255,0,0]],['green','绿',[0,255,0]],['blue','蓝',[0,0,255]],['white','白',[255,255,255]],['off','关灯',[0,0,0]]];
+export function lightRequest(key,robot){
+ const c=LIGHT_COLOURS.find(([k])=>k===key);
+ if(!c)throw new Error('未知颜色');
+ return {action:'light',r:c[2][0],g:c[2][1],b:c[2][2],boot:robot?.boot};
+}
 const LEVELS=[['off','关'],['local','本地'],['tingwu','听悟']];
 const VLEVELS=[['off','关'],['upload','上传'],['recognize','识别']];
 const MLEVELS=[['off','关'],['clips','录音'],['tts','TTS']];
@@ -202,6 +220,7 @@ export class SwitchBar{
   const mouth='<div class="switch switch-group" id="sw-mouth" role="group" aria-label="嘴"><b>嘴</b><span id="sw-mouth-state">—</span>'+
    MLEVELS.map(([k,label])=>`<button id="sw-mouth-${k}" aria-pressed="false" disabled>${label}</button>`).join('')+'<small id="sw-mouth-detail">—</small></div>';
   root.innerHTML=hearing+vision+mouth+TOGGLES.map(k=>`<button class="switch" id="sw-${k}" aria-pressed="false" disabled><b>${NAMES[k]}</b><span id="sw-${k}-state">—</span><small id="sw-${k}-detail">—</small></button>`).join('')+
+   '<div class="switch switch-group" id="sw-light-test" role="group" aria-label="试灯"><b>试灯</b>'+LIGHT_COLOURS.map(([k,label])=>`<button id="sw-light-${k}" disabled>${label}</button>`).join('')+'</div>'+
    '<span id="sw-pause" class="switch-pause" role="status">—</span><span id="sw-cost" class="switch-cost" role="status">—</span>';
   for(const [k] of LEVELS)doc.getElementById('sw-hearing-'+k).addEventListener('click',()=>this.setLevel(k));
   for(const [k] of VLEVELS)doc.getElementById('sw-vision-'+k).addEventListener('click',()=>this.setVision(k));
@@ -212,6 +231,9 @@ export class SwitchBar{
   doc.getElementById('sw-all').addEventListener('click',()=>this.toggle('all'));
   doc.getElementById('sw-turn').addEventListener('click',()=>this.toggle('turn'));
   doc.getElementById('sw-intent').addEventListener('click',()=>this.toggle('intent'));
+  doc.getElementById('sw-pat').addEventListener('click',()=>this.toggle('pat'));
+  doc.getElementById('sw-light').addEventListener('click',()=>this.toggle('light'));
+  for(const [k] of LIGHT_COLOURS)doc.getElementById('sw-light-'+k).addEventListener('click',()=>this.testLight(k));
   this.pollMind();setInterval(()=>this.pollMind(),5000);
   if(pollRobot){this.pollRobot();setInterval(()=>this.pollRobot(),2000);}
  }
@@ -227,13 +249,20 @@ export class SwitchBar{
  render(robot,fresh){this.robot=robot;this.fresh=fresh;this.paint();}
  async toggle(which){
   if(this.pending)return;
-  const req=toggleRequest(which,this.robot,which==='mind'?this.mind:which==='notes'||which==='meet'||which==='all'||which==='turn'||which==='intent'?this.switches:this.fresh);
+  const req=toggleRequest(which,this.robot,which==='mind'?this.mind:which==='notes'||which==='meet'||which==='all'||which==='turn'||which==='intent'||which==='light'?this.switches:this.fresh);
   this.pending=which;this.msg='';this.paint();
   try{
    if(req.kind==='mind'){const r=await postJson('/api/mind/switch',req.body);this.mind={...(this.mind||{}),enabled:r.enabled};}
    else if(req.kind==='switch')this.switches=await postJson('/api/mind/switches',req.body);
    else await postJson('/api/control',req.body);
   }catch(e){this.msg=`${NAMES[which]}：${e.name==='TimeoutError'?'结果未确认，请看状态':e.message}`;}
+  this.pending=null;this.paint();
+ }
+ async testLight(key){
+  if(this.pending)return;
+  this.pending='light-test';this.msg='';this.paint();
+  try{await postJson('/api/control',lightRequest(key,this.robot));}
+  catch(e){this.msg=`试灯：${e.name==='TimeoutError'?'结果未确认':e.message}`;}
   this.pending=null;this.paint();
  }
  async setLevel(level){
@@ -298,6 +327,8 @@ export class SwitchBar{
    $('sw-'+k+'-state').textContent=this.pending===k?'发送中…':!s.known?'未知':s.on?'开':'关';
    $('sw-'+k+'-detail').textContent=s.detail;
   }
+  const lightReady=!!this.fresh&&this.robot?.capabilities?.body_light==='supported';
+  for(const [k] of LIGHT_COLOURS)$('sw-light-'+k).disabled=!!this.pending||!lightReady;
   const pv=pauseView(this.switches),pe=$('sw-pause');
   pe.textContent=pv.paused?pv.text+' · '+pv.spend:pv.spend;pe.classList.toggle('paused',pv.paused);pe.classList.toggle('warn',pv.cls==='warn');
   const cost=pv.paused?'暂停中：付费项都停着（开关保持原样）':v.cost;
