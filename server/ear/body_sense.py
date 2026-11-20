@@ -24,7 +24,7 @@ import time
 
 import ear_log
 
-EV_ZH = {"picked_up": "被拿起来了", "put_down": "被放下了", "shaken": "被晃了几下", "near": "有东西靠得很近",
+EV_ZH = {"picked_up": "被拿起来了", "put_down": "被放下了", "shaken": "被晃了几下", "patted": "被连着拍了好几下头", "near": "有东西靠得很近",
          "far": "靠近的东西走开了"}
 SUM_FIELDS = ("n", "pitch", "roll", "acc_g", "dev_g", "gyro", "moved", "prox", "prox_base", "prox_max", "lux")
 FLAGS = ("still", "held", "self", "near")

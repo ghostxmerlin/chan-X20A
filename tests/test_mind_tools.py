@@ -625,3 +625,17 @@ class ModelCallerTest(unittest.TestCase):
         self.assertEqual(t.call("a", {}, caller="qwen")["error"]["code"], "not_available")
         self.assertTrue(t.call("a", {}, caller="page")["ok"])
 
+
+
+class LightToolTest(unittest.TestCase):
+    """0.5.21 (owner 2026-11-20): set_light goes to the ear only while the page's 灯 switch is on."""
+    def test_light_switch_gates_set_light(self):
+        asked, on = [], [True]
+        impls = tool_impls.ear_tools(lambda n, a: asked.append((n, a)) or {"done": "light"}, light_on=lambda: on[0])
+        self.assertEqual(impls["set_light"]({"color": "蓝"}), {"done": "light"})
+        on[0] = False
+        with self.assertRaises(ToolError) as e:
+            impls["set_light"]({"color": "红"})
+        self.assertEqual(e.exception.code, "switch_off")
+        self.assertEqual(asked, [("set_light", {"color": "蓝"})])
+        self.assertIn("set_light", [t["name"] for t in load_registry()["tools"]])

@@ -146,7 +146,10 @@ class RobotAsksTest(unittest.IsolatedAsyncioTestCase):
                  ("nod", {}, "nod", {"times": 2}),
                  ("shake_head", {"times": 1}, "shake", {"times": 1}),
                  ("set_volume", {"step": -10}, "volume", {"step": -10}),
-                 ("set_volume", {"level": 60}, "volume", {"level": 60})]
+                 ("set_volume", {"level": 60}, "volume", {"level": 60}),
+                 ("set_light", {"color": "#0078ff"}, "light", {"r": 0, "g": 120, "b": 255}),
+                 ("set_light", {"color": "off"}, "light", {"r": 0, "g": 0, "b": 0}),
+                 ("set_light", {"color": "红色"}, "light", {"r": 255, "g": 0, "b": 0})]
         for name, args, do, sent in cases:
             self.t[0] += 10
             code, data = await self.ask(name, args)

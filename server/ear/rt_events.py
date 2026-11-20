@@ -51,8 +51,10 @@ class EventsMixin:
         return True
 
     def body_event(self, ev, fields=None):
-        """A body-sense event (body_sense.py). shaken: hello says one line about it (see SHAKEN_SAY_S). -> True if queued."""
-        if ev != "shaken" or not self.armed() or self.cfg.answer_all:   # 点屏幕聊天: no line of its own
+        """A body-sense event (body_sense.py). shaken / patted (a head-pat burst, 0.5.21): hello says one line about it,
+        both sharing SHAKEN_SAY_S. Owner 2026-11-20: not held by 点屏幕聊天 (the pending line opens the session). -> True
+        if queued."""
+        if ev not in ("shaken", "patted") or not self.armed():
             return False
         now = self.clock()
         if self._last_shaken_say is not None and now - self._last_shaken_say < SHAKEN_SAY_S:
@@ -60,7 +62,7 @@ class EventsMixin:
         if self._greet is not None and self._greet.get("kind") != "body":
             return False                               # a greeting waiting goes first
         self._last_shaken_say = now
-        self._greet = {"at": now, "kind": "body", "pick": None, "text": SHAKEN_TEXT}
+        self._greet = {"at": now, "kind": "body", "pick": None, "text": PATTED_TEXT if ev == "patted" else SHAKEN_TEXT}
         self.stats["shaken_said"] += 1
         if self.state == "closed" and self.want():
             self._open(now, "body")

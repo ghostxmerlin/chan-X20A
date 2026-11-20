@@ -12,6 +12,7 @@ A small asyncio HTTP/1.1 reader (no new dependency); one request per connection,
 import asyncio
 import hmac
 import json
+import re
 import time
 
 import ear_log
@@ -343,6 +344,25 @@ class Asks:
             raise AskError("bad_args", "给 level（10..100）或 step（-30..30）其中一个")
         return await self._robot("volume", {"level": level} if level is not None else {"step": step}, args.get("_trace"))
 
+    # 0.5.21 (owner 2026-11-20): the body's 12 RGB LEDs. color: "#RRGGBB", a few Chinese / English colour names, or off.
+    LIGHT_NAMES = {"off": (0, 0, 0), "关": (0, 0, 0), "关灯": (0, 0, 0), "红": (255, 0, 0), "红色": (255, 0, 0),
+                   "red": (255, 0, 0), "绿": (0, 255, 0), "绿色": (0, 255, 0), "green": (0, 255, 0), "蓝": (0, 0, 255),
+                   "蓝色": (0, 0, 255), "blue": (0, 0, 255), "白": (255, 255, 255), "白色": (255, 255, 255),
+                   "white": (255, 255, 255), "黄": (255, 200, 0), "黄色": (255, 200, 0), "yellow": (255, 200, 0),
+                   "紫": (160, 0, 255), "紫色": (160, 0, 255), "purple": (160, 0, 255), "粉": (255, 80, 160),
+                   "粉色": (255, 80, 160), "pink": (255, 80, 160), "橙": (255, 100, 0), "橙色": (255, 100, 0),
+                   "orange": (255, 100, 0), "青": (0, 200, 200), "青色": (0, 200, 200), "cyan": (0, 200, 200)}
+
+    async def set_light(self, args):
+        c = str(args.get("color") or "").strip().lower()
+        rgb = self.LIGHT_NAMES.get(c)
+        if rgb is None and re.fullmatch(r"#?[0-9a-f]{6}", c):
+            h = c.lstrip("#")
+            rgb = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        if rgb is None:
+            raise AskError("bad_args", "color 给 #RRGGBB、颜色名（红 / 绿 / 蓝 / 白 / 黄 / 紫 / 粉 / 橙 / 青）或 off")
+        return await self._robot("light", {"r": rgb[0], "g": rgb[1], "b": rgb[2]}, args.get("_trace"))
+
     async def face_learn_propose(self, args):
         name = str(args.get("name") or "").strip()
         if not name or len(name.encode()) > 32:
@@ -364,7 +384,7 @@ class Asks:
     NAMES = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "set_length", "set_quiet", "set_role",
              "set_debug", "debug_alert",
              "express_eyes", "show_word", "play_clip", "turn_head", "face_front", "turn_around", "tracking", "nod",
-             "shake_head", "set_volume", "face_learn_propose", "robot_status", "set_voice", "test_turn")
+             "shake_head", "set_volume", "face_learn_propose", "robot_status", "set_voice", "test_turn", "set_light")
 
     async def handle(self, name, args):
         if name not in self.NAMES:

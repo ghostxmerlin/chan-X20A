@@ -615,7 +615,7 @@ EAR_TOOLS = ("who_is_here", "look_now", "web_search", "say", "stop_speaking", "s
              "set_debug",                         # 调试模式 (2026-11-19, the ear owns it)
              # the robot's tools over the ear's /mouth command line (collector-0.5.10); face_learn_propose is C level
              "express_eyes", "show_word", "play_clip", "turn_head", "face_front", "turn_around", "tracking", "nod",
-             "shake_head", "set_volume", "face_learn_propose", "robot_status")
+             "shake_head", "set_volume", "face_learn_propose", "robot_status", "set_light")
 EAR_ASK_URL = os.environ.get("SOUL_EAR_ASK_URL") or "http://127.0.0.1:52743/ask"  # 2026-11-19 night: a second stack (the Mac stand-in) has its own
 
 
@@ -641,8 +641,16 @@ def ear_asker(token, url=EAR_ASK_URL, timeout=32):
     return ask
 
 
-def ear_tools(ask):
-    return {name: (lambda args, _n=name: ask(_n, args)) for name in EAR_TOOLS}
+def ear_tools(ask, light_on=lambda: True):
+    """light_on() -> the 灯 switch (owner 2026-11-20: the page decides whether 鹿野 may use the body LEDs)."""
+    out = {name: (lambda args, _n=name: ask(_n, args)) for name in EAR_TOOLS}
+
+    def set_light(args):
+        if not light_on():
+            raise ToolError("switch_off", "观察台上「灯」关着：现在不能用灯")
+        return ask("set_light", args)
+    out["set_light"] = set_light
+    return out
 
 
 # ---- L2: live data (free sources, 2026-11-18 server test) and a cross-checked search ----

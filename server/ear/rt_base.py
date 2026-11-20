@@ -275,6 +275,7 @@ TOUCH_S = 20.0
 # owner 2026-11-19 "我刚才使劲摇晃了机器人，没有任何反应": being shaken hard (body_sense shaken) is an event hello answers in
 # one line of her own (queued like a greeting: waits for quiet, none in 安静 / 少插话), at most once per SHAKEN_SAY_S.
 SHAKEN_SAY_S = 60.0
+PATTED_TEXT = "[事件] 有人连着拍了你的头好几下：照你的性格自然地抗议一句（嫌烦、喊疼、问他干嘛都行），一句话就够，不提传感器，每次换个说法。"
 SHAKEN_TEXT = "[事件] 你刚被人用力晃了几下：照你的性格自然地说一句（抗议、喊晕、问他干嘛都行），一句话就够，不提传感器，每次换个说法。"
 CALLED_ANSWER_WAIT_S = 2.5
 CALL_RE = re.compile(r"^\W*(providence|普罗维登斯|神意)\W*", re.I)

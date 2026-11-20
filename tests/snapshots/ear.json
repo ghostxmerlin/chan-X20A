@@ -735,6 +735,7 @@
   "face_learn_propose",
   "robot_status",
   "set_voice",
-  "test_turn"
+  "test_turn",
+  "set_light"
  ]
 }

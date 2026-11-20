@@ -20,7 +20,8 @@
   "shake_head",
   "set_volume",
   "face_learn_propose",
-  "robot_status"
+  "robot_status",
+  "set_light"
  ],
  "registry": [
   [
@@ -402,6 +403,15 @@
    "robot",
    [
     "times"
+   ]
+  ],
+  [
+   "set_light",
+   "live",
+   "A",
+   "robot",
+   [
+    "color"
    ]
   ],
   [

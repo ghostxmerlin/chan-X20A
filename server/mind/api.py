@@ -235,11 +235,12 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
                 "today_calls": sum(r["calls"] for r in out if r["day"] == today)}
 
     SWITCHES = ("tingwu", "eye", "notes", "realtime")    # spec 2026-11-11 §3; realtime: 围观 voice session (2026-11-14)
-    TOGGLES = ("realtime_tools", "realtime_smart_turn", "realtime_intent", "realtime_answer_all")   # 点屏幕聊天: on by default    # 千问用工具 (L6 2026-11-18): Docking's Qwen may call tools;
+    TOGGLES = ("realtime_tools", "realtime_smart_turn", "realtime_intent", "realtime_answer_all", "light")   # 点屏幕聊天: on by default    # 千问用工具 (L6 2026-11-18): Docking's Qwen may call tools;
     # 智能断句 (owner 2026-11-19 night): Docking's turn detection smart_turn_v2 (on) / server_vad (off)
     # 工具分类器 (owner 2026-11-19 night): the ear's local tool classifier (preload + tool gate) judges / judges nothing
     TOGGLE_DEFAULTS = {"realtime_smart_turn": False, "realtime_intent": False,  # no document = the ear's default: off (owner 2026-11-20)
-                       "realtime_answer_all": True}   # owner 2026-11-19 night: "暂时退回全手动"
+                       "realtime_answer_all": True,   # owner 2026-11-19 night: "暂时退回全手动"
+                       "light": True}                 # 灯: 鹿野 may use the body LEDs (owner 2026-11-20)
     MOUTH_MODES = ("off", "clips", "tts")    # 嘴: emotion clips (default) or soul-tts, never both (user 2026-11-11)
 
     def mouth_mode():
@@ -304,7 +305,7 @@ def make_server(store, token, host="127.0.0.1", port=52740, ctx=None):
         ledger=(lambda day: log_query.ledger(db, day)) if log_query is not None else None,
         settings_fn=lambda: current_settings()[0], registry=registry,
         flows=(lambda lo, hi, kinds, limit: log_query.flows(db, lo, hi, kinds=kinds, limit=limit)) if log_query is not None else None)
-        | tool_impls.ear_tools(ear_ask) | {"set_voice": set_voice_kept}
+        | tool_impls.ear_tools(ear_ask, light_on=lambda: switches()["light"]["on"]) | {"set_voice": set_voice_kept}
         | tool_impls.live_tools(ear_search=lambda q: ear_ask("web_search", {"query": q}), llm_env=ctx.get("env"),
                                 chat=_llm.chat, tz=current_settings()[0].get("tz") or "Asia/Shanghai")
         | (daily_tools(ctx["daily"]) if ctx.get("daily") else {})

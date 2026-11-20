@@ -418,7 +418,6 @@ class AnswerAllTest(HubBase):
         self.hub.set_answer_all(True)
         self.hub.set_debug(True)
         self.assertEqual(self.hub.debug_alert("看一下电压"), "not_in_chat")
-        self.assertFalse(self.hub.body_event("shaken"))
         self.hub._queue_greet(self.hub.clock())
         self.assertIsNone(self.hub._greet)
 
@@ -2531,6 +2530,26 @@ class ToolBusyTest(HubBase):
         self.assertEqual(self.hub.stats["tool_interrupted"], 1)
         release.set()
         await settle(30)
+
+
+class BodyEventsInTapModeTest(HubBase):
+    """Owner 2026-11-20: shaking and head-pat protests are not held by 点屏幕聊天: hello says her line anyway."""
+    async def test_shaken_in_tap_mode_opens_a_session_and_says_it(self):
+        self.hub.set_answer_all(True)
+        self.assertTrue(self.hub.body_event("shaken", {"peak_g": 1.2}))
+        ws = await self.open_ready()
+        self.hub.step()
+        await settle(10)
+        sent = [m for m in ws.sent if m["type"] == "conversation.item.create"]
+        self.assertIn("用力晃了几下", json.dumps(sent[-1], ensure_ascii=False))
+
+    async def test_patted_is_a_protest_sharing_the_shake_cooldown(self):
+        self.hub.set_answer_all(True)
+        self.assertTrue(self.hub.body_event("patted"))
+        self.assertIn("拍", self.hub._greet["text"])
+        self.assertFalse(self.hub.body_event("shaken"))                    # one line a minute for both
+        self.t[0] += self.rl.SHAKEN_SAY_S + 1
+        self.assertTrue(self.hub.body_event("shaken"))
 
 
 class ShakenSayTest(HubBase):

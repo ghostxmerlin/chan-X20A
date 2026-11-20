@@ -101,7 +101,7 @@ HELLO_TIMEOUT_S = 10
 REPLACED = 4000                                     # soul-tts: "replaced by new connection"
 MIND = os.environ.get("SOUL_MIND_URL") or "http://127.0.0.1:52740"
 REPORT_FIELDS = ("seq", "mode", "dir", "host", "return_to", "by", "input", "effects")
-OWNER_BY = ("asr", "touch", "select", "quick")         # a report from one of these with an input = an owner's input
+OWNER_BY = ("asr", "touch", "select", "quick", "head")   # head: a pat (0.5.21)         # a report from one of these with an input = an owner's input
 STATE_FIELDS = ("mode", "dir", "host", "return_to")           # hello's mode state in a report (run log robot.state)
 STAGE_DEBOUNCE_S = 0.3
 STAGE_INFLIGHT = 4

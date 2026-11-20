@@ -82,5 +82,18 @@ class OldFirmware(unittest.TestCase):
         self.assertEqual(out['snapshot']['mode'], 'crowd')
 
 
+
+class HeadSource(unittest.TestCase):
+    """Owner 2026-11-20: a head pat is a tap from the source "head" (collector-0.5.21)."""
+    def test_head_is_a_source(self):
+        self.assertIn('head', modes.SOURCES)
+        new, res, _ = modes.transition(dict(CROWD), 'tap', None, source='head')
+        self.assertEqual((new, res['code']), (CROWD, 'ok'))
+        ms = ModeStore(FakeDB(), clock_ms=lambda: 1000)
+        out = ms.report({'seq': 1, 'mode': 'crowd', 'dir': None, 'host': None, 'return_to': None, 'by': 'head',
+                         'input': 'tap', 'effects': []}, boot='b1', now_ms=1001)
+        self.assertEqual(out['snapshot']['mode'], 'crowd')
+
+
 if __name__ == '__main__':
     unittest.main()

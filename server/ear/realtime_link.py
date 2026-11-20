@@ -247,7 +247,8 @@ class RealtimeHub(MannerMixin, EventsMixin, InterruptMixin, SkillsMixin, ToolsMi
 
     def want(self):
         # 点屏幕聊天: no session outside a chat a tap opened (collect only)
-        return self.armed() and self.link() is not None and not (self.cfg.answer_all and not self.chat_on())
+        body_line = self._greet is not None and self._greet.get("kind") == "body"   # shaken / patted: said anyway
+        return self.armed() and self.link() is not None and not (self.cfg.answer_all and not self.chat_on() and not body_line)
 
     def chat_on(self, now=None):
         """点屏幕聊天: a tap opened a chat; it lasts while someone talks or hello speaks / runs a tool, CHAT_IDLE_S after

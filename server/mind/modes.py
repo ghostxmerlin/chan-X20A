@@ -16,7 +16,7 @@ from .mode_table import MODES, DIRECTIONS, SUBTITLE_DIRS, REMOVED_MODES
 
 INPUTS = ('forward', 'backward', 'play', 'pause', 'open', 'close', 'start', 'stop', 'next', 'previous',
           'digit', 'tap', 'double_tap', 'long', 'direction', 'select', 'billing', 'boot', 'timeout')
-SOURCES = ('asr', 'touch', 'select', 'quick', 'dualkey', 'page', 'boot', 'timeout')
+SOURCES = ('asr', 'touch', 'select', 'quick', 'dualkey', 'page', 'boot', 'timeout', 'head')   # head: a pat (0.5.21)
 # talk_enter (owner 14): every entry into talk = 提前写 on + 连续说 on + 家人声音 off; boot no longer is one (it lands
 # in crowd, owner 2026-11-18). Billing gates nothing since the owner's 2026-11-14 evening ruling ('billing_off'
 # stays in CODES only as a known word, never produced).

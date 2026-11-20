@@ -1381,6 +1381,38 @@
    }
   },
   {
+   "name": "set_light",
+   "title": "机身灯",
+   "group": "move",
+   "level": "A",
+   "runs_on": "robot",
+   "status": "live",
+   "description": "把机身底座的 12 颗彩灯设成一种颜色，或关掉（有人让你开灯、关灯、换颜色时用）。",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "color": {
+      "type": "string",
+      "description": "#RRGGBB，或颜色名：红 / 绿 / 蓝 / 白 / 黄 / 紫 / 粉 / 橙 / 青，关灯给 off"
+     }
+    },
+    "required": [
+     "color"
+    ]
+   },
+   "returns": "accepted",
+   "source": "collector-0.5.21：底座 IO 扩展芯片的 12 颗 RGB 灯（摘了帽子才露出来）",
+   "latency": "<100 ms",
+   "cost": "无",
+   "needs": [
+    "新固件"
+   ],
+   "notes": "观察台「灯」开关关着时不能用（主人 2026-11-20）",
+   "example": {
+    "color": "蓝"
+   }
+  },
+  {
    "name": "shake_head",
    "title": "摇头",
    "group": "move",
