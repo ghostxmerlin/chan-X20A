@@ -1,0 +1,32 @@
+/* 现在的架构 (arch.html, 2026-11-21): layers.css tokens + the problem marks. The monitor's CSP drops inline styles. */
+svg .ar.hot { stroke: var(--warn); stroke-width: 2; }
+svg .ar.hot.dash { stroke-dasharray: 5 3; }
+svg .head.hot { fill: var(--warn); }
+svg .badge { fill: var(--warn); }
+svg .bn { font-size: 12px; font-weight: 700; fill: #fff; text-anchor: middle; }
+svg .row { font-size: 12px; fill: currentColor; }
+svg .row.bad { fill: var(--warn); font-weight: 700; }
+svg .row.dim { fill: var(--muted); }
+svg .lw { font-size: 11px; fill: var(--warn); font-weight: 700; }
+svg .lw.m { text-anchor: middle; }
+svg .bandname { font-size: 13px; font-weight: 700; fill: var(--muted); }
+svg .lane { fill: var(--soft); stroke: none; }
+svg .node.inner { fill: var(--soft); stroke: var(--line); stroke-width: 1; }
+.probs { display: flex; flex-direction: column; gap: 10px; }
+.prob { display: grid; grid-template-columns: 30px 1fr; gap: 10px; background: var(--surface); border: 1px solid var(--line);
+  border-left: 4px solid var(--warn); border-radius: 8px; padding: 12px 14px; }
+.prob.minor { border-left-color: var(--muted); }
+.prob .no { width: 24px; height: 24px; border-radius: 50%; background: var(--warn); color: #fff; font-weight: 700;
+  font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.prob.minor .no { background: var(--muted); }
+.prob h3 { margin: 0 0 4px; }
+.prob p { color: var(--fg); font-size: 14px; }
+.prob .ev { color: var(--muted); font-size: 13px; margin-top: 4px; }
+table.days { border-collapse: collapse; width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  overflow: hidden; font-size: 14px; font-variant-numeric: tabular-nums; }
+table.days th, table.days td { padding: 7px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+table.days th { color: var(--muted); font-weight: 600; font-size: 13px; background: var(--soft); }
+table.days td.n { text-align: right; }
+table.days td.hot { color: var(--warn); font-weight: 700; }
+table.days tr.cut td { border-top: 2px solid var(--accent); }
+.tag { display: inline-block; font-size: 12px; padding: 0 6px; border-radius: 4px; background: var(--accent); color: #fff; margin-left: 6px; }

@@ -362,6 +362,16 @@ class AnswerAllTest(HubBase):
         self.hub.set_answer_all(False)
         self.assertEqual(self.hub.cfg.turn, "smart_turn_v2")   # ... and applies when it is off again
 
+    async def test_the_chat_drops_the_en_rule_with_no_voice_chosen(self):
+        # 2026-11-20 23:16 (Mac body): no voice switch yet = persona None; the replacement ran on "" and the
+        # instructions fell back to the default persona, 「只回嗯」 rule included, so a TV in the room got 嗯 after 嗯
+        self.assertIsNone(self.hub.persona)
+        ws = await self.chat()
+        s = ws.sent[0]["session"]["instructions"]
+        self.assertNotIn("先分清是不是在跟你说话", s)
+        self.assertNotIn("只回一个字「嗯」", s)
+        self.assertIn("听到的每句话都当作是在跟你说的", s)
+
     async def bare_en(self, ws):
         self.speak(5)
         self.speak(2, speaking=False)

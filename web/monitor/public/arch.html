@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>现在的架构</title>
+  <link rel="stylesheet" href="/layers.css">
+  <link rel="stylesheet" href="/arch.css">
+</head>
+<body>
+<header><div class="wrap">
+  <div class="top-row">
+    <h1>现在的架构 · 出问题的地方</h1>
+    <span class="links"><a href="/layers.html">重构方案</a><a href="/log.html">日志</a><a href="/">← 观察台</a></span>
+  </div>
+  <p class="goal">2026-11-21 整理。红色编号是出问题的地方，下面逐条说明。<b>情景、纪要、记忆这条线（右边）没有问题</b>；问题都在耳朵这边：事件和回答挤在同一个千问会话里。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>谁把什么交给谁</h2>
+<figure>
+<div class="svgbox"><svg viewBox="0 0 1000 610" role="img" aria-label="机器人的感官进耳朵和 mind；mind 定时写情景、纪要、记忆，拼成背景交给耳朵；耳朵把人设、规则、背景拼成一份提示词，和人的声音、事件一起进同一个千问会话，回复过闸门后放出来">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+
+  <!-- lanes -->
+  <rect x="10" y="10" width="195" height="590" rx="10" class="lane"/>
+  <rect x="222" y="10" width="503" height="590" rx="10" class="lane"/>
+  <rect x="735" y="10" width="255" height="590" rx="10" class="lane"/>
+  <text x="24" y="32" class="bandname">机器人</text>
+  <text x="236" y="32" class="bandname">耳朵（服务器 · 实时）：做回答</text>
+  <text x="749" y="32" class="bandname">mind（服务器 · 定时）：写情景</text>
+
+  <!-- robot -->
+  <rect x="25" y="80" width="165" height="44" rx="8" class="node robot"/><text x="107" y="107" class="t">话筒</text>
+  <rect x="25" y="140" width="165" height="44" rx="8" class="node robot"/><text x="107" y="167" class="t">摄像头</text>
+  <rect x="25" y="200" width="165" height="44" rx="8" class="node robot"/><text x="107" y="227" class="t">M12 人脸</text>
+  <rect x="25" y="260" width="165" height="44" rx="8" class="node robot"/><text x="107" y="287" class="t">机身传感器 · 触摸</text>
+  <rect x="25" y="320" width="165" height="44" rx="8" class="node robot"/><text x="107" y="347" class="t">语音模块</text>
+  <rect x="25" y="530" width="165" height="44" rx="8" class="node robot"/><text x="107" y="557" class="t">喇叭（嘴）</text>
+
+  <!-- ear, left column -->
+  <rect x="245" y="80" width="175" height="56" rx="8" class="node"/>
+  <text x="332" y="102" class="t">听</text><text x="332" y="122" class="s">识别 · 听悟 · 声纹 · 声音</text>
+  <rect x="245" y="150" width="175" height="44" rx="8" class="node"/>
+  <text x="332" y="170" class="t">视觉爆发</text><text x="332" y="186" class="xs">叫它看时一张张看</text>
+  <rect x="245" y="215" width="175" height="150" rx="8" class="node hot"/>
+  <text x="332" y="238" class="t">事件（各写各的）</text>
+  <text x="257" y="262" class="row">认出主人 → 打招呼</text>
+  <text x="257" y="282" class="row">点一下 → 打招呼</text>
+  <text x="257" y="302" class="row">被晃 / 拍头 → 喊一句</text>
+  <text x="257" y="322" class="row">调试提醒（来自 mind）</text>
+  <text x="257" y="342" class="row">补救重问 / 看图回答</text>
+  <text x="257" y="358" class="row dim">「好久不见」= 10 分钟</text>
+
+  <!-- ear, right column -->
+  <rect x="460" y="80" width="220" height="165" rx="8" class="node"/>
+  <text x="570" y="102" class="t">提示词（一整份）</text>
+  <text x="474" y="126" class="row">人设（luye.md）</text>
+  <text x="474" y="146" class="row bad">规则：收到“[事件]…”时…</text>
+  <text x="474" y="166" class="row">【背景】← mind</text>
+  <text x="474" y="186" class="row">【刚才的对话】</text>
+  <text x="474" y="206" class="row">【你的眼睛】人脸·注视·身体</text>
+  <text x="474" y="226" class="row">打开的技能</text>
+  <rect x="460" y="280" width="220" height="80" rx="8" class="node"/>
+  <text x="570" y="304" class="t">千问实时会话</text>
+  <text x="570" y="324" class="s">声音进 → 文字 + 声音出</text>
+  <text x="570" y="344" class="s">会话里存着全部历史</text>
+  <rect x="460" y="400" width="220" height="56" rx="8" class="node"/>
+  <text x="570" y="422" class="t">闸门</text><text x="570" y="442" class="s">挡标记 / 挡只回嗯 / 挡重复</text>
+
+  <!-- mind -->
+  <rect x="750" y="80" width="220" height="50" rx="8" class="node"/>
+  <text x="860" y="101" class="t">识图</text><text x="860" y="119" class="xs">照片 → 每分钟画面</text>
+  <rect x="750" y="145" width="220" height="50" rx="8" class="node"/>
+  <text x="860" y="166" class="t">写情景</text><text x="860" y="184" class="xs">每分钟 · 此刻情景 / 在聊 / 声音</text>
+  <rect x="750" y="210" width="220" height="50" rx="8" class="node"/>
+  <text x="860" y="231" class="t">写纪要</text><text x="860" y="249" class="xs">每分钟 · 一段对话的标题和纪要</text>
+  <rect x="750" y="275" width="220" height="50" rx="8" class="node"/>
+  <text x="860" y="296" class="t">记忆</text><text x="860" y="314" class="xs">每 10 分钟 · 你记得</text>
+  <rect x="750" y="350" width="220" height="56" rx="8" class="node contract"/>
+  <text x="860" y="373" class="t">拼【背景】</text><text x="860" y="393" class="xs">现在·地点·情景·纪要·记忆·认识的人</text>
+  <rect x="750" y="445" width="220" height="50" rx="8" class="node"/>
+  <text x="860" y="466" class="t">调试模式</text><text x="860" y="484" class="xs">发现问题 → 要提醒</text>
+
+  <!-- robot -> ear / mind -->
+  <path d="M190,102 H243" class="ar" marker-end="url(#ah)"/>
+  <path d="M190,155 H212 V48 H860 V78" class="ar" marker-end="url(#ah)"/>
+  <text x="530" y="43" class="l">照片（有变化才传，最快 10 秒一张）</text>
+  <path d="M190,172 H243" class="ar" marker-end="url(#ah)"/>
+  <path d="M190,222 H243" class="ar" marker-end="url(#ah)"/>
+  <path d="M190,282 H243" class="ar" marker-end="url(#ah)"/>
+  <path d="M190,342 H243" class="ar" marker-end="url(#ah)"/>
+  <text x="218" y="337" class="l">叫名字</text>
+
+  <!-- ear internal -->
+  <path d="M420,118 H452 V300 H458" class="ar" marker-end="url(#ah)"/>
+  <text x="448" y="295" class="l">声音</text>
+  <path d="M420,180 H436 V206 H458" class="ar" marker-end="url(#ah)"/>
+  <path d="M570,245 V278" class="ar" marker-end="url(#ah)"/>
+  <text x="578" y="266" class="l v">每次有变化就整份重发</text>
+  <path d="M420,322 H458" class="ar hot" marker-end="url(#ahr)"/>
+  <path d="M570,360 V398" class="ar" marker-end="url(#ah)"/>
+  <path d="M570,456 V552 H192" class="ar" marker-end="url(#ah)"/>
+  <text x="380" y="546" class="l">没被挡的才放出来</text>
+  <path d="M680,428 H692 V340 H682" class="ar hot dash" marker-end="url(#ahr)"/>
+
+  <!-- ear -> mind (via the database) -->
+  <path d="M420,92 H432 V62 H738 V235 H748" class="ar dash" marker-end="url(#ah)"/>
+  <text x="585" y="57" class="l">说话、声音的记录（经数据库）</text>
+
+  <!-- mind internal -->
+  <path d="M860,130 V143" class="ar" marker-end="url(#ah)"/>
+  <path d="M970,170 H982 V378 H972" class="ar" marker-end="url(#ah)"/>
+  <path d="M970,235 H982 M970,300 H982" class="ar"/>
+  <path d="M750,378 H708 V165 H682" class="ar" marker-end="url(#ah)"/>
+  <text x="728" y="372" class="l">60 秒</text>
+  <path d="M750,470 H332 V367" class="ar" marker-end="url(#ah)"/>
+  <text x="650" y="465" class="l">调试提醒</text>
+
+  <!-- problem marks -->
+  <circle cx="440" cy="322" r="10" class="badge"/><text x="440" y="326" class="bn">1</text>
+  <text x="440" y="383" class="lw m">“[事件]…”当成人说的话</text>
+  <circle cx="668" cy="141" r="10" class="badge"/><text x="668" y="145" class="bn">2</text>
+  <circle cx="692" cy="384" r="10" class="badge"/><text x="692" y="388" class="bn">3</text>
+  <circle cx="408" cy="233" r="10" class="badge"/><text x="408" y="237" class="bn">4</text>
+  <circle cx="668" cy="442" r="9" class="node inner"/><text x="668" y="446" class="xs">5</text>
+  <circle cx="668" cy="296" r="9" class="node inner"/><text x="668" y="300" class="xs">6</text>
+</svg></div>
+<figcaption>实线：数据直接交过去；虚线：先写进数据库再读。红色：出问题的地方。灰色小圈：次要问题。</figcaption>
+</figure>
+
+<h2>出问题的地方</h2>
+<div class="probs">
+  <div class="prob"><div class="no">1</div><div>
+    <h3>事件伪装成「有人说的话」，塞进回答的会话</h3>
+    <p>打招呼、点一下打招呼、被晃、拍头、调试提醒、补救重问、看图回答，都是往同一个千问会话里塞一句「[事件]……」，当作用户说的话，再让它回复。千问分不清哪些是人说的、哪些是我们下的指令。</p>
+    <p class="ev">证据：11-19 16:35 真的发了一次招呼事件，它把事件原文「[事件] 主人（Dave）出现在你面前了，打个招呼。」念了回来。这个做法从 11-14 围观第一版就有（提交 c6722d4），不是重构带来的。</p>
+  </div></div>
+  <div class="prob"><div class="no">2</div><div>
+    <h3>人设后面写着事件规则，带「[事件]…」原句</h3>
+    <p>这些规则每次都整份发出去，没有事件的时候也在。千问把原句当成回答念出来，名字自己从背景或眼睛里填（Mac 上填 Dave，机器人上填劳埃德）。</p>
+    <p class="ev">证据：「[事件] 你刚被人用力晃了几下」正好停在规则的引号处，真正的被晃事件后面还有半句。11-16 到 11-20 一共 44 次（机器人 38、Mac 6）。</p>
+  </div></div>
+  <div class="prob"><div class="no">3</div><div>
+    <h3>被挡的那句还留在千问的会话历史里</h3>
+    <p>闸门只是在本地不播，千问那边还记着这句话，接下来就照着自己的上一句抄。</p>
+    <p class="ev">证据：机器人 11-20 21:03:38 起，连续 15 句都是同一句；Mac 23:34 那四句都停在同一个逗号。</p>
+  </div></div>
+  <div class="prob"><div class="no">4</div><div>
+    <h3>事件没有统一的来源、过滤和记录</h3>
+    <p>每种事件各写各的，没有统一的分类、冷却和版本。「好久不见」只看 10 分钟；认出主人的人、视觉和听觉的决定性事件、写情景纪要时要立刻通知的事，都还没有。</p>
+  </div></div>
+  <div class="prob minor"><div class="no">5</div><div>
+    <h3>点屏幕聊天时，被挡以后不补救</h3>
+    <p>这种模式下每句都要答，一旦被挡，人听到的就是沉默。</p>
+  </div></div>
+  <div class="prob minor"><div class="no">6</div><div>
+    <h3>转写按「当前那个回复」对号，不按回复编号</h3>
+    <p>两个回复重叠时，可能把一句话记到另一个回复上。这次没有发生，是个隐患。</p>
+  </div></div>
+</div>
+
+<h2>重构不是起因：按天数「[事件]」被念出来的次数</h2>
+<table class="days">
+  <thead><tr><th>日期</th><th>回复数</th><th>念出「[事件]」</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>11-16</td><td class="n">505</td><td class="n hot">4</td><td>18:01–18:02，「主人又出现了，短招呼」</td></tr>
+    <tr><td>11-17</td><td class="n">64</td><td class="n">0</td><td></td></tr>
+    <tr><td>11-18</td><td class="n">509</td><td class="n">0</td><td>技能测试时念过一次（代码注释里记着）</td></tr>
+    <tr><td>11-19</td><td class="n">212</td><td class="n hot">11</td><td>全部在 09:32–17:00，那时重构还没上线</td></tr>
+    <tr class="cut"><td>11-19 晚</td><td class="n"></td><td class="n"></td><td>重构上线（18:00–19:04）<span class="tag">重构</span></td></tr>
+    <tr><td>11-20</td><td class="n">169</td><td class="n hot">23</td><td>机器人；Mac 另有 6 次</td></tr>
+  </tbody>
+</table>
+<p class="muted">数据来自两套服务器的运行日志（11-16 开始有）。11-19 晚那批重构提交只搬代码、不改行为，有前后快照对比。</p>
+
+</main>
+<footer class="wrap muted">只读页面，内容是 2026-11-21 手工整理的，不会自动更新。</footer>
+</body>
+</html>

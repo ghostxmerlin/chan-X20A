@@ -501,7 +501,9 @@ ANSWER_ALL_RULE = "- 听到的每句话都当作是在跟你说的，正常回�
 
 
 def answer_all_persona(persona):
-    return str(persona or "").replace(ADDRESSEE_RULES, ANSWER_ALL_RULE)
+    # no voice chosen = persona None: replace in the default persona, else instructions() falls back to PERSONA with
+    # the 「只回嗯」 rule intact and 全答 plays every 嗯 (Mac body 2026-11-20 23:16: a TV answered 嗯 nine times)
+    return str(persona or PERSONA).replace(ADDRESSEE_RULES, ANSWER_ALL_RULE)
 
 
 def instructions(context_text=None, seen=None, recent=None, looks=None, scene=None, length=None, role=None, manner=None,

@@ -47,6 +47,8 @@ export function createMonitorServer(monitor, controls = new Controls(monitor,{lo
     ['/funnel.html', ['funnel.html', 'text/html; charset=utf-8']], ['/funnel-ui.js', ['funnel-ui.js', 'text/javascript; charset=utf-8']],
     ['/docking.html', ['docking.html', 'text/html; charset=utf-8']], ['/docking-ui.js', ['docking-ui.js', 'text/javascript; charset=utf-8']],
     ['/layers.html', ['layers.html', 'text/html; charset=utf-8']], ['/layers.css', ['layers.css', 'text/css; charset=utf-8']],
+    // 2026-11-21: 现在的架构 with the problem marks (static)
+    ['/arch.html', ['arch.html', 'text/html; charset=utf-8']], ['/arch.css', ['arch.css', 'text/css; charset=utf-8']],
     ['/code.html', ['code.html', 'text/html; charset=utf-8']], ['/code-ui.js', ['code-ui.js', 'text/javascript; charset=utf-8']],
     ['/bodies.html', ['bodies.html', 'text/html; charset=utf-8']], ['/bodies-ui.js', ['bodies-ui.js', 'text/javascript; charset=utf-8']], ['/bodies.css', ['bodies.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer((req, res) => {
